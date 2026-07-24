@@ -9,7 +9,9 @@
 (require 'mevedel-agents)
 (require 'mevedel-reminders)
 (require 'mevedel-skills-core)
+(require 'mevedel-system)
 (require 'mevedel-tools)
+(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -192,7 +194,10 @@
         (mevedel-define-agent delegator-test
           :description "Capability bundle test."
           :tools ((:tool "Agent"))
-          :system-prompt "Delegate.")
+          :system-components
+          '((role :text "Delegate.")
+            workspace-config
+            environment))
         (let ((tools
                (test-mevedel-agents--resolved-tool-names
                 "delegator-test")))
@@ -202,102 +207,112 @@
     (setq mevedel-agent--registry
           (assoc-delete-all "delegator-test" mevedel-agent--registry))))
 
-(mevedel-deftest mevedel-agent-skill-tool-capable-p/test
-  (:before-each (test-mevedel-agents--restore-builtins))
-  ,test
-  (test)
-  :doc "skill roster follows resolved Skill/ListSkills availability"
-  (dolist (name '("worker" "explorer"))
-    (should (mevedel-agent-skill-tool-capable-p
-             (mevedel-agent-get name))))
-  (dolist (name '("verifier" "reviewer"))
-    (should-not (mevedel-agent-skill-tool-capable-p
-                 (mevedel-agent-get name))))
-
-  :doc "does not mutate a partial registry while resolving agent tools"
-  (unwind-protect
-      (progn
-        (mevedel-tool-clear-registry)
-        (mevedel-tool-register
-         (mevedel-tool--create
-          :name "Read" :category "mevedel" :groups '(read)))
-        (should-not (mevedel-agent-skill-tool-capable-p
-                     (mevedel-agent-get "explorer")))
-        (should-not (mevedel-tool-get "Skill")))
-    (mevedel-tool-clear-registry)
-    (test-mevedel-agents--restore-builtins)))
-
-(mevedel-deftest mevedel-define-agent/explicit-skill-prompt/test
+(mevedel-deftest mevedel-define-agent/system-components/test
   (:before-each
    (test-mevedel-agents--restore-builtins)
-   (setq mevedel-agent--registry nil)
    :after-each
-   (setq mevedel-agent--registry nil)
    (test-mevedel-agents--restore-builtins))
   ,test
   (test)
-  :doc "explicit system-prompt agents with Skill tools receive skills section"
-  (mevedel-define-agent explicit-skill-agent
-    :description "explicit"
-    :tools ((:tool "Skill"))
-    :system-prompt (lambda () "Agent explicit base")
-    :include-workspace-config nil
-    :include-memory nil
-    :include-environment nil)
-  (let* ((ws (mevedel-workspace--create
-              :type 'test :id "agent-skills" :root "/tmp/agent-skills"
-              :name "agent-skills"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
-         (agent (mevedel-agent-get "explicit-skill-agent"))
-         (prompt nil))
-    (setf (mevedel-session-skills session)
-          (list (mevedel-skill--create
-                 :name "agent-helper"
-                 :description "helps explicit prompt agents"
-                 :model-invocable-p t
-                 :active-p t)))
-    (with-temp-buffer
-      (setq-local mevedel--session session)
-      (setq prompt (funcall (mevedel-agent-system-prompt agent))))
-    (should (string-match-p "Agent explicit base" prompt))
-    (should (string-match-p "## Skills" prompt))
-    (should (string-match-p "agent-helper" prompt)))
+  :doc "rejects removed and unknown definition keys"
+  (should-error
+   (macroexpand
+    '(mevedel-define-agent stale-profile-agent
+       :system-prompt "Removed API")))
 
-  :doc "explicit system-prompt skill roster follows extra resolved tools"
-  (let ((mevedel-agent-extra-tool-specs
-         '((explicit-extra-agent (:tool "Skill")))))
-    (mevedel-define-agent explicit-extra-agent
-      :description "explicit extra"
-      :tools nil
-      :system-prompt (lambda () "Agent extra base")
-      :include-workspace-config nil
-      :include-memory nil
-      :include-environment nil)
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "agent-extra-skills"
-                :root "/tmp/agent-extra-skills"
-                :name "agent-extra-skills"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           (agent (mevedel-agent-get "explicit-extra-agent"))
-           prompt)
-      (setf (mevedel-session-skills session)
-            (list (mevedel-skill--create
-                   :name "extra-helper"
-                   :description "helps extra prompt agents"
-                   :model-invocable-p t
-                   :active-p t)))
-      (with-temp-buffer
-        (setq-local mevedel--session session)
-        (setq prompt (funcall (mevedel-agent-system-prompt agent))))
-      (should (string-match-p "Agent extra base" prompt))
-      (should (string-match-p "## Skills" prompt))
-      (should (string-match-p "extra-helper" prompt)))))
+  :doc "built-in roles freeze their explicit context and tone matrix"
+  (let* ((root-dir (file-name-as-directory
+                    (make-temp-file "mevedel-agent-profile-" t)))
+         (agents-md (file-name-concat root-dir "AGENTS.md"))
+         (memory-dir (file-name-concat root-dir ".mevedel" "memory"))
+         (memory-file (file-name-concat memory-dir "MEMORY.md"))
+         (mevedel-memory-dirs '(".mevedel/memory/"))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "agent-profiles"))
+         (session (mevedel-session-create "main" ws))
+         prompts)
+    (unwind-protect
+        (progn
+          (make-directory memory-dir t)
+          (write-region "Documented project command." nil agents-md)
+          (write-region "Private remembered fact." nil memory-file)
+          (setf (mevedel-session-skills session)
+                (list (mevedel-skill--create
+                       :name "agent-helper"
+                       :description "helps profile agents"
+                       :model-invocable-p t
+                       :active-p t)))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (dolist (name '("worker" "explorer" "verifier" "reviewer"))
+              (setf (alist-get name prompts nil nil #'equal)
+                    (mevedel-agent-system-prompt
+                     (mevedel-agent-freeze (mevedel-agent-get name))))))
+          (dolist (prompt (mapcar #'cdr prompts))
+            (should (string-match-p "Documented project command" prompt))
+            (should (string-match-p "## Environment" prompt))
+            (should (string-match-p "Tool orchestration" prompt)))
+          (dolist (name '("worker" "explorer" "verifier"))
+            (should (string-match-p
+                     "Reporting style"
+                     (alist-get name prompts nil nil #'equal))))
+          (should-not
+           (string-match-p
+            "Reporting style"
+            (alist-get "reviewer" prompts nil nil #'equal)))
+          (should
+           (string-match-p
+            "Private remembered fact"
+            (alist-get "worker" prompts nil nil #'equal)))
+          (dolist (name '("explorer" "verifier" "reviewer"))
+            (should-not
+             (string-match-p
+              "Private remembered fact"
+              (alist-get name prompts nil nil #'equal))))
+          (dolist (name '("worker" "explorer"))
+            (should
+             (string-match-p
+              "agent-helper"
+              (alist-get name prompts nil nil #'equal))))
+          (dolist (name '("verifier" "reviewer"))
+            (should-not
+             (string-match-p
+              "agent-helper"
+              (alist-get name prompts nil nil #'equal)))))
+      (mevedel-workspace-clear-registry)
+      (delete-directory root-dir t)))
+
+  :doc "custom agents declare the same ordered components directly"
+  (let* ((root-dir (file-name-as-directory
+                    (make-temp-file "mevedel-custom-profile-" t)))
+         (agents-md (file-name-concat root-dir "AGENTS.md"))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "custom-profile"))
+         (session (mevedel-session-create "main" ws)))
+    (unwind-protect
+        (progn
+          (write-region "Custom workspace context." nil agents-md)
+          (mevedel-define-agent custom-profile-agent
+            :description "custom"
+            :tools nil
+            :system-components
+            '((role :text "Custom role")
+              workspace-config
+              environment))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (let ((prompt
+                   (funcall
+                    (mevedel-agent-system-prompt
+                     (mevedel-agent-get "custom-profile-agent")))))
+              (should (string-match-p "Custom role" prompt))
+              (should (string-match-p "Custom workspace context" prompt))
+              (should (string-match-p "## Environment" prompt)))))
+      (setq mevedel-agent--registry
+            (assoc-delete-all "custom-profile-agent"
+                              mevedel-agent--registry))
+      (mevedel-workspace-clear-registry)
+      (delete-directory root-dir t))))
 
 
 (provide 'test-mevedel-agents)

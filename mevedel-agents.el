@@ -69,12 +69,8 @@
 (defvar mevedel--session)
 
 ;; `mevedel-system'
-(declare-function mevedel-system-build-agent-prompt
-                  "mevedel-system"
-                  (base-prompt &rest keys))
-(declare-function mevedel-system-render-agent-prompt-file
-                  "mevedel-system" (relative-path &optional replacements))
-(defvar mevedel-system--tone-prompt)
+(declare-function mevedel-system-build-prompt
+                  "mevedel-system" (profile &rest keys))
 
 
 ;;
@@ -217,17 +213,6 @@ cold session resume."
             (mevedel-agent-frozen-p frozen) t)
       frozen)))
 
-(defun mevedel-agent-skill-tool-capable-p (agent)
-  "Return non-nil when AGENT's resolved active tools include skills."
-  (when agent
-    (let* ((specs (mevedel-agent--declared-specs agent))
-           (resolved
-            (ignore-errors (mevedel-tool-resolve specs))))
-      (cl-some (lambda (tool)
-                 (member (mevedel-tool-name tool)
-                         '("Skill" "ListSkills")))
-               (plist-get resolved :active)))))
-
 (defmacro mevedel-define-agent (name &rest keys)
   "Define a mevedel agent NAME with declarative KEYS.
 
@@ -235,13 +220,7 @@ KEYS is a plist with the following recognized keys:
 
   :description    STRING    -- agent description
   :tools          LIST      -- tool specs for `mevedel-tool-resolve-gptel'
-  :system-prompt  FUNCTION  -- function returning system prompt string
-  :prompt-file    STRING    -- load prompt body from file (relative to
-                               mevedel source dir).  Mutually exclusive
-                               with `:system-prompt'.  Template expansion
-                               uses gptel-agent's `{{VAR}}' infrastructure
-                               at runtime, and the result is passed through
-                               `mevedel-system-build-agent-prompt'.
+  :system-components LIST   -- ordered prompt profile components
   :max-turns      INTEGER   -- max conversation turns (nil = unlimited)
   :reminders      LIST      -- list of `mevedel-reminder' structs used as
                                templates; cloned per invocation for
@@ -249,90 +228,37 @@ KEYS is a plist with the following recognized keys:
   :hooks          LIST      -- declarative hook rules scoped to this agent.
                                Local `Stop' entries are treated as
                                `SubagentStop'
-  :include-workspace-config BOOLEAN -- include AGENTS.md
-  :include-memory BOOLEAN -- include configured memory indexes
-  :include-environment BOOLEAN -- include environment section
 
 Creates a `mevedel-agent' struct and registers it in
 `mevedel-agent--registry'."
   (declare (indent 1))
+  (unless (zerop (% (length keys) 2))
+    (error "Agent definition keys must form a plist: %s" name))
+  (let ((remaining keys))
+    (while remaining
+      (unless (memq (car remaining)
+                    '(:description :tools :system-components
+                      :max-turns :reminders :hooks))
+        (error "Unknown agent definition key: %s" (car remaining)))
+      (setq remaining (cddr remaining))))
   (let* ((name-str (symbol-name name))
-         (prompt-file (plist-get keys :prompt-file))
-         (explicit-sp (plist-get keys :system-prompt))
+         (system-components (plist-get keys :system-components))
          (tool-specs (plist-get keys :tools))
-         (_ (when (and prompt-file explicit-sp)
-              (error "Cannot combine :prompt-file and :system-prompt for agent %s"
-                     name-str)))
-         (_ (when prompt-file
-              (let ((path (expand-file-name
-                           prompt-file
-                           mevedel-tool-registry--source-dir)))
-                (unless (file-exists-p path)
-                  (error "Agent prompt file not found: %s" path)))))
-         (include-workspace-config
-          (if (plist-member keys :include-workspace-config)
-              (plist-get keys :include-workspace-config)
-            t))
-         (include-memory
-          (if (plist-member keys :include-memory)
-              (plist-get keys :include-memory)
-            t))
-         (include-environment
-          (if (plist-member keys :include-environment)
-              (plist-get keys :include-environment)
-            t))
          (hooks (plist-get keys :hooks))
          (system-prompt-form
-          (cond
-           (prompt-file
+          (when system-components
             `(lambda ()
                (require 'mevedel-system)
-               (mevedel-system-build-agent-prompt
-                (mevedel-system-render-agent-prompt-file
-                 ,prompt-file
-                 (list (cons "TONE_PROMPT"
-                             mevedel-system--tone-prompt)))
-                :workspace-config ,include-workspace-config
-                :memory ,include-memory
-                :environment ,include-environment
+               (mevedel-system-build-prompt
+                (list :workspace-aware t
+                      :components ,system-components)
                 :workspace (and mevedel--session
                                 (mevedel-session-workspace mevedel--session))
                 :working-directory
                 (and mevedel--session
                      (mevedel-session-working-directory mevedel--session))
                 :session mevedel--session
-                :refresh-buffer (current-buffer)
-                :skills (mevedel-agent-skill-tool-capable-p
-                         (mevedel-agent-get ,name-str)))))
-           (explicit-sp
-            `(lambda ()
-               (let ((prompt ,explicit-sp))
-                 (let ((body (cond
-                              ((functionp prompt) (funcall prompt))
-                              ((stringp prompt) prompt)
-                              (t (error "Invalid agent system prompt: %S"
-                                        prompt)))))
-                   (if (mevedel-agent-skill-tool-capable-p
-                        (mevedel-agent-get ,name-str))
-                       (progn
-                         (require 'mevedel-system)
-                         (mevedel-system-build-agent-prompt
-                          body
-                          :workspace-config ,include-workspace-config
-                          :memory ,include-memory
-                          :environment ,include-environment
-                          :workspace
-                          (and mevedel--session
-                               (mevedel-session-workspace mevedel--session))
-                          :working-directory
-                          (and mevedel--session
-                               (mevedel-session-working-directory
-                                mevedel--session))
-                          :session mevedel--session
-                          :refresh-buffer (current-buffer)
-                          :skills t))
-                     body)))))
-           (t explicit-sp))))
+                :refresh-buffer (current-buffer))))))
     `(let ((agent (mevedel-agent--create
                    :name ,name-str
                    :description ,(plist-get keys :description)
@@ -544,7 +470,14 @@ delegation authority."
           (:tool "Agent")
           (:deferred web)
           (:deferred elisp))
-  :prompt-file "agents/worker.md"
+  :system-components
+  '((role :file "agents/worker.md")
+    report-tone
+    tool-orchestration
+    workspace-config
+    memory
+    environment
+    skills)
   :max-turns 50)
 
 (mevedel-define-agent explorer
@@ -562,9 +495,13 @@ modifies files."
           (:deferred code)
           (:deferred web)
           (:deferred elisp))
-  :prompt-file "agents/explorer.md"
-  :include-workspace-config nil
-  :include-memory nil
+  :system-components
+  '((role :file "agents/explorer.md")
+    report-tone
+    tool-orchestration
+    workspace-config
+    environment
+    skills)
   :max-turns 30)
 
 (defun mevedel-agents--register-verifier ()
@@ -578,8 +515,12 @@ review.  Cannot edit, write, or create files."
             (:tool "Ask")
             (:tool "ToolSearch")
             (:deferred elisp))
-    :prompt-file "agents/verifier.md"
-    :include-memory nil
+    :system-components
+    '((role :file "agents/verifier.md")
+      report-tone
+      tool-orchestration
+      workspace-config
+      environment)
     :max-turns 20))
 
 (mevedel-agents--register-verifier)
@@ -590,8 +531,11 @@ review.  Cannot edit, write, or create files."
     :description "Dedicated code review agent.  Read-only -- inspects diffs and \
 returns prioritized structured findings as JSON."
     :tools (read code (:tool "Bash"))
-    :prompt-file "agents/reviewer.md"
-    :include-memory nil
+    :system-components
+    '((role :file "agents/reviewer.md")
+      tool-orchestration
+      workspace-config
+      environment)
     :max-turns 12))
 
 (mevedel-agents--register-reviewer)

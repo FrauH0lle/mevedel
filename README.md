@@ -1048,14 +1048,16 @@ summary prompt, and segment-rotation contract.
 
 ## Project Instructions and Memory
 
-mevedel checks the workspace root for an `AGENTS.md` file. If found, its
-contents are appended to the system prompt as `## Workspace Configuration`,
-enabling per-project LLM behavior customization that can be checked into
-version control. `AGENTS.local.md` is loaded after `AGENTS.md` for private
-checkout-specific guidance.
+Workspace-aware prompt profiles check each directory from the workspace root to
+the session working directory for `AGENTS.md`. Matching contents are included
+as `## Workspace Configuration`, enabling scoped project behavior customization
+that can be checked into version control. `AGENTS.local.md` is loaded after
+`AGENTS.md` in each directory for private checkout-specific guidance.
 
-In addition, the first 200 lines of each configured memory index are included in
-every system prompt. The default memory roots are `.mevedel/memory/`,
+When a prompt profile selects memory, the first 200 lines of each configured
+memory index are included. Main, revise, tutor, and worker profiles select it;
+Explorer, verifier, reviewer, guardian, and compaction do not. The default
+memory roots are `.mevedel/memory/`,
 `.agents/memory/`, `~/.mevedel/memory/`, and `~/.agents/memory/`.
 `MEMORY.md` is an index; durable memory bodies live in linked topic files with
 frontmatter that classifies them as user, feedback, project, or reference

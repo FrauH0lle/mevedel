@@ -34,6 +34,8 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 - Find a better folder for the tool description markdown files
 - Ensure all tools have the examples and their descriptions in markdown files
 - Should agents default to fork_turns `none`?
+- Revisit provider prompt-cache optimization after ordered prompt profiles have
+  usage data; avoid hard-coding unstable pricing assumptions.
 - Glob and Grep have issues in agents with bwrap sandbox
 
 

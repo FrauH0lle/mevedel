@@ -19,6 +19,7 @@
 (require 'mevedel-plan-mode)
 (require 'mevedel-permission-log)
 (require 'mevedel-sandbox)
+(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -1454,6 +1455,63 @@ the decision log identifies complete confinement bypass authority"
          (lambda (guidance)
            (setq result guidance))))
       (should (equal expected result))))
+
+  :doc "adds scoped project context without main-session instructions"
+  (require 'gptel nil t)
+  (let* ((root-dir (file-name-as-directory
+                    (make-temp-file "mevedel-guardian-profile-" t)))
+         (subdir (file-name-concat root-dir "packages" "api"))
+         (memory-dir (file-name-concat root-dir ".mevedel" "memory"))
+         (mevedel-memory-dirs '(".mevedel/memory/"))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "guardian-profile"))
+         (session (mevedel-session-create "main" ws subdir))
+         (mevedel-permission-guardian-timeout 60)
+         captured-system)
+    (unwind-protect
+        (progn
+          (make-directory subdir t)
+          (make-directory memory-dir t)
+          (write-region
+           "Run npx @emacs-eask/cli test for project checks."
+           nil (file-name-concat root-dir "AGENTS.md"))
+          (write-region
+           "API-local guardian context."
+           nil (file-name-concat subdir "AGENTS.local.md"))
+          (write-region
+           "Guardian must not receive this memory."
+           nil (file-name-concat memory-dir "MEMORY.md"))
+          (cl-letf
+              (((symbol-function 'mevedel-model-resolve-workload)
+                (lambda (&rest _)
+                  '(:backend workload-backend :model workload-model)))
+               ((symbol-function 'gptel-request)
+                (lambda (_prompt &rest args)
+                  (setq captured-system (plist-get args :system))
+                  (funcall
+                   (plist-get args :callback)
+                   "{\"risk\":\"medium\",\"recommendation\":\"proceed\",\"reason\":\"Runs documented project tests.\"}"
+                   nil))))
+            (mevedel-tool-exec--bash-guardian-model-async
+             "npx @emacs-eask/cli test"
+             (list :session session
+                   :workspace ws
+                   :working-directory subdir
+                   :dangerous nil
+                   :unparseable nil)
+             #'ignore))
+          (should (string-match-p "npx @emacs-eask/cli test" captured-system))
+          (should (string-match-p "API-local guardian context" captured-system))
+          (should (string-match-p "## Environment" captured-system))
+          (should (string-match-p
+                   (regexp-quote (file-name-as-directory subdir))
+                   captured-system))
+          (should-not (string-match-p "Task execution protocol" captured-system))
+          (should-not (string-match-p "Persistent memory" captured-system))
+          (should-not (string-match-p "Guardian must not receive" captured-system))
+          (should-not (string-match-p "## Skills" captured-system)))
+      (mevedel-workspace-clear-registry)
+      (delete-directory root-dir t)))
 
   :doc "uses guardian workload tier for the gptel request"
   (require 'gptel nil t)

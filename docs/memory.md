@@ -129,8 +129,8 @@ corresponding index entry.
 The persistent memory section is produced by `mevedel-system.el` from
 `prompts/system/memory-policy.md`.
 
-For normal sessions, memory is included after workspace configuration
-(`AGENTS.md`) and before environment details. The prompt cache key
+For main, revise, and tutor sessions, memory is included after workspace
+configuration (`AGENTS.md`) and before environment details. The prompt cache key
 includes configured memory index metadata and the current date so the
 generated age annotation can refresh daily even when the files are
 unchanged.
@@ -139,9 +139,10 @@ If no configured `MEMORY.md` exists, the prompt includes an empty-index
 notice that tells the model to create topic files and link them from the
 chosen root's `MEMORY.md`.
 
-Agents can opt out. `mevedel-define-agent` supports
-`:include-memory nil`, and several utility agents disable memory so they
-do not inherit main-agent context unnecessarily.
+Agent profiles select memory explicitly. The bundled worker includes it;
+Explorer, verifier, reviewer, guardian, and compaction profiles do not. Custom
+agents include the `memory` component only when their role needs durable
+memory context.
 
 ## Staleness
 

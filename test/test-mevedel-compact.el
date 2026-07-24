@@ -3768,7 +3768,21 @@ missing or zero prompt-side usage cannot become the active baseline"
     (should (string-match-p "<previous-summary>" prompt))
     (should (string-match-p "old summary" prompt))
     (should (string-match-p "## Additional Instructions" prompt))
-    (should (string-match-p "focus tests" prompt))))
+    (should (string-match-p "focus tests" prompt)))
+
+  :doc "uses an isolated single-component profile"
+  (let (captured-profile)
+    (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+               (lambda (&rest _) "Compaction role"))
+              ((symbol-function 'mevedel-system-build-prompt)
+               (lambda (profile &rest _)
+                 (setq captured-profile profile)
+                 "Compaction role")))
+      (should (equal "Compaction role" (mevedel--compact-prompt)))
+      (should-not (plist-get captured-profile :workspace-aware))
+      (should
+       (equal '((role :text "Compaction role"))
+              (plist-get captured-profile :components))))))
 
 (mevedel-deftest mevedel--compact-skills-section ()
   ,test

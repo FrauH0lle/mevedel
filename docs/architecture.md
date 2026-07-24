@@ -141,11 +141,31 @@ request-only application is dynamically scoped. The built-ins are
 Dispatch resolves session values, tier values, workload values, then explicit
 Agent policy or request-owning skill policy. Skill preset entries use
 `$skill-name` workload symbols and are consumed before request realization.
-System prompt assembled
-dynamically from Markdown-backed parts. Static content is emitted first
-for provider prefix-cache reuse: base prompt, workspace config
-(AGENTS.md plus optional AGENTS.local.md), persistent memory,
-environment, then the dynamic skill roster.
+System prompts are assembled dynamically from ordered profiles in
+`mevedel-system.el`. `mevedel-define-prompt-component` registers reusable
+Markdown, literal text, or dynamic producers.
+`mevedel-define-prompt-profile` selects components, and the profile list is the
+render order; inline `(NAME :file PATH)` and `(NAME :text STRING)` entries keep
+one-off role content local. Blank components are omitted. Workspace-aware
+profiles must explicitly contain `workspace-config` and `environment`, which
+the renderer validates before dispatch.
+
+The built-in selection is deliberate:
+
+| Consumer | Role/tone/context |
+| --- | --- |
+| Main / revise | Own role, shared main tone, tool orchestration, workspace config, memory, environment, skills, Goal |
+| Tutor | Tutor role/tone, tool orchestration, workspace config, memory, environment, skills, Goal |
+| Worker | Worker role, report tone, tool orchestration, workspace config, memory, environment, skills |
+| Explorer | Explorer role, report tone, tool orchestration, workspace config, environment, skills |
+| Verifier | Verifier role, report tone, tool orchestration, workspace config, environment |
+| Reviewer | Reviewer role, tool orchestration, workspace config, environment |
+| Bash guardian | Guardian role, workspace config, environment |
+| Compaction | Rendered compaction role only |
+
+The shared tool-orchestration component asks models to batch independent tool
+calls within a bounded stage and keep dependencies, waits, approvals, and
+conflicting mutations sequential. It does not encode provider pricing.
 
 `mevedel-view-stream.el` isolates gptel stream advice, incremental-render
 scheduling, pending-tool live rows, and foreground request-progress state.
@@ -190,7 +210,7 @@ owns value-free audit records, dispatch-result tracking, and redacted
 telemetry. `mevedel-tool-registry.el` owns the schema declarations and lowers
 the internal `path` type to a provider-facing string.
 
-`mevedel-system-build-prompt` checks each directory from workspace root
+The `workspace-config` component checks each directory from workspace root
 to the session working directory for `AGENTS.md`. `AGENTS.local.md`,
 when present, is loaded after the shared file in that same directory.
 Matching files are included from broadest to closest scope as
@@ -201,8 +221,8 @@ ones.
 
 Memory indexes are read from configured `.mevedel/memory/` and
 `.agents/memory/` roots, both workspace-local and user-global. The first
-200 lines of each present `MEMORY.md` are included in every system
-prompt via `mevedel-system--memory-prompt`, with a last-updated age
+200 lines of each present `MEMORY.md` are included when a profile selects
+the `memory` component, with a last-updated age
 annotation. Durable memory bodies live in linked topic files under the
 same root, using `user`, `feedback`, `project`, or `reference`
 frontmatter. `MEMORY.md` should contain one-line links only.

@@ -2,17 +2,10 @@
 
 ;;; Commentary:
 
-;; System prompt assembly.  The full prompt is composed from several
-;; string constants (tone, task protocol, tool usage guidance,
-;; delegation rules) plus dynamic sections built at request time:
-;; persistent memory, environment info, and the workspace-level
-;; AGENTS.md / AGENTS.local.md files if present.
-;; A separate tutor-base-prompt drives the tutoring preset.
-;;
-;; Prompt sections are registered as named producers so static, keyed,
-;; and per-request parts have a single assembly path.  This keeps the
-;; public system prompt API stable while making the prompt shape auditable
-;; and ready for provider-specific multi-part messages.
+;; System prompts are assembled from ordered profiles.  Profiles choose
+;; reusable named components or inline file/text components; their list
+;; order is the rendered order.  Dynamic components receive request-time
+;; workspace, directory, session, and buffer context.
 
 ;;; Code:
 
@@ -20,9 +13,6 @@
   (require 'cl-lib))
 
 (require 'subr-x)
-
-;; `gptel-agent'
-(declare-function gptel-agent-read-file "ext:gptel-agent" (agent-file &optional templates metadata-only))
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-active-context "mevedel-goal" (session))
@@ -97,182 +87,150 @@ REPLACEMENTS is an alist of (NAME . VALUE), where NAME is a string."
    (mevedel-system--read-prompt-file relative-path)
    replacements))
 
-(defun mevedel-system-render-agent-prompt-file (relative-path &optional replacements)
-  "Return agent prompt file RELATIVE-PATH with REPLACEMENTS applied.
-
-This uses `gptel-agent' Markdown/Org parsing so mevedel agent files
-share the same template behavior as native `gptel-agent' definitions."
-  (let ((path (mevedel-system--prompt-path relative-path)))
-    (unless (file-readable-p path)
-      (error "Prompt file not found: %s" path))
-    (or
-     (when (and (member (file-name-extension path) '("md" "org"))
-                (require 'gptel-agent nil t))
-       (when-let* ((entry (gptel-agent-read-file path replacements))
-                   (plist (cdr entry)))
-         (plist-get plist :system)))
-     (mevedel-system-render-template
-      (mevedel-system--read-prompt-file relative-path)
-      replacements))))
-
-(defconst mevedel-system--tone-prompt
-  (mevedel-system-render-prompt-file "prompts/system/tone.md")
-  "Static tone prompt shared by main, tutor, and agent prompts.")
-
-(defconst mevedel-system--base-prompt
-  (mevedel-system-render-prompt-file
-   "prompts/system/base.md"
-   `(("TONE_PROMPT" . ,mevedel-system--tone-prompt)))
-  "Static base prompt for normal mevedel sessions.")
-
-(defconst mevedel-system--tutor-base-prompt
-  (mevedel-system-render-prompt-file
-   "prompts/system/tutor.md"
-   `(("TONE_PROMPT" . ,mevedel-system--tone-prompt)))
-  "Static base prompt for tutor mevedel sessions.")
-
-
 ;;
-;;; Prompt section registry
+;;; Prompt component and profile registries
 
 (cl-defstruct (mevedel-system-context
                (:constructor mevedel-system-context--create))
-  "Request-time context passed to prompt section producers."
-  base-prompt
+  "Request-time context passed to prompt component producers."
   workspace
   working-directory
   session
   refresh-buffer)
 
-(cl-defstruct (mevedel-system-prompt-section
-               (:constructor mevedel-system-prompt-section--create))
-  "A named prompt section.
-
-NAME is the section identifier.  ORDER controls assembly order.  PRODUCER
-is called with a `mevedel-system-context' and returns a string or nil.
-CACHE is nil, `global', `keyed', or t.  `global' and t share one cached
-value across contexts.  `keyed' caches per value returned by CACHE-KEY."
+(cl-defstruct (mevedel-system-prompt-component
+               (:constructor mevedel-system-prompt-component--create))
+  "A named system prompt component."
   name
-  order
+  file
+  text
   producer
   cache
   cache-key)
 
-(defvar mevedel-system--prompt-sections nil
-  "Registered prompt sections.")
+(defvar mevedel-system--prompt-components nil
+  "Alist mapping names to reusable prompt components.")
 
-(defvar mevedel-system--prompt-section-cache (make-hash-table :test #'equal)
-  "Memoized prompt section values keyed by section name and cache key.")
+(defvar mevedel-system--prompt-profiles nil
+  "Alist mapping names to ordered prompt profile plists.")
 
-(defconst mevedel-system--prompt-cache-miss (make-symbol "mevedel-prompt-cache-miss")
-  "Sentinel for missing prompt section cache entries.")
+(defvar mevedel-system--prompt-component-cache (make-hash-table :test #'equal)
+  "Memoized prompt component values keyed by component name and cache key.")
 
-(defun mevedel-system--register-prompt-section (name props)
-  "Register prompt section NAME with PROPS."
-  (let ((producer (plist-get props :producer))
-        (cache (plist-get props :cache))
-        (cache-key (plist-get props :cache-key)))
-    (unless (functionp producer)
-      (error "Prompt section :producer must be a function"))
+(defconst mevedel-system--prompt-cache-miss
+  (make-symbol "mevedel-prompt-cache-miss")
+  "Sentinel for missing prompt component cache entries.")
+
+(defun mevedel-system--register-prompt-component (name props)
+  "Register reusable prompt component NAME from PROPS."
+  (let* ((sources (delq nil
+                        (mapcar (lambda (key)
+                                  (and (plist-member props key) key))
+                                '(:file :text :producer))))
+         (file (plist-get props :file))
+         (text (plist-get props :text))
+         (producer (plist-get props :producer))
+         (cache (plist-get props :cache))
+         (cache-key (plist-get props :cache-key)))
+    (unless (= (length sources) 1)
+      (error "Prompt component requires exactly one source: %s" name))
+    (when (and (plist-member props :file) (not (stringp file)))
+      (error "Prompt component :file must be a string: %s" name))
+    (when (and (plist-member props :text) (not (stringp text)))
+      (error "Prompt component :text must be a string: %s" name))
+    (when (and (plist-member props :producer) (not (functionp producer)))
+      (error "Prompt component :producer must be a function: %s" name))
+    (unless (memq cache '(nil global keyed))
+      (error "Invalid prompt component cache mode: %s" cache))
     (when (and (eq cache 'keyed)
                (not (functionp cache-key)))
-      (error "Keyed prompt section requires :cache-key"))
-    (mevedel-system-clear-prompt-section-cache name)
-    (setq mevedel-system--prompt-sections
-          (cons
-           (mevedel-system-prompt-section--create
-            :name name
-            :order (or (plist-get props :order) 100)
-            :producer producer
-            :cache cache
-            :cache-key cache-key)
-           (let (sections)
-             (dolist (section mevedel-system--prompt-sections
-                              (nreverse sections))
-               (unless (eq name (mevedel-system-prompt-section-name section))
-                 (push section sections)))))))
+      (error "Keyed prompt component requires :cache-key: %s" name))
+    (mevedel-system-clear-prompt-component-cache name)
+    (setf (alist-get name mevedel-system--prompt-components)
+          (mevedel-system-prompt-component--create
+           :name name
+           :file file
+           :text text
+           :producer producer
+           :cache cache
+           :cache-key cache-key)))
   name)
 
-(defmacro mevedel-define-prompt-section (name &rest props)
-  "Define prompt section NAME.
+(defmacro mevedel-define-prompt-component (name &rest props)
+  "Define reusable prompt component NAME from PROPS.
 
-Recognized PROPS:
-
-- `:order' integer ordering key.
-- `:producer' function called with a `mevedel-system-context'.
-- `:cache' nil, `global', `keyed', or t.
-- `:cache-key' function called with context for keyed sections."
-  `(mevedel-system--register-prompt-section
+Exactly one of `:file', `:text', or `:producer' is required.  Producers
+receive a `mevedel-system-context'.  `:cache' may be `global', `keyed',
+or nil; keyed components also require a `:cache-key' function."
+  `(mevedel-system--register-prompt-component
     ',name
     (list ,@props)))
 
-(defun mevedel-system-clear-prompt-section-cache (&optional name)
-  "Clear memoized prompt section values.
+(defun mevedel-system--register-prompt-profile (name props)
+  "Register ordered prompt profile NAME from PROPS."
+  (setf (alist-get name mevedel-system--prompt-profiles) props)
+  name)
 
-When NAME is nil, clear all prompt section cache entries."
+(defmacro mevedel-define-prompt-profile (name &rest props)
+  "Define prompt profile NAME from PROPS.
+
+`:workspace-aware' declares whether the profile requires explicit
+`workspace-config' and `environment' components.  `:components' is the
+ordered component list."
+  `(mevedel-system--register-prompt-profile
+    ',name
+    (list ,@props)))
+
+(defun mevedel-system-clear-prompt-component-cache (&optional name)
+  "Clear memoized prompt component values.
+
+When NAME is nil, clear all prompt component cache entries."
   (if (null name)
-      (clrhash mevedel-system--prompt-section-cache)
+      (clrhash mevedel-system--prompt-component-cache)
     (let (keys)
       (maphash
        (lambda (key _value)
          (when (eq (car-safe key) name)
            (push key keys)))
-       mevedel-system--prompt-section-cache)
+       mevedel-system--prompt-component-cache)
       (dolist (key keys)
-        (remhash key mevedel-system--prompt-section-cache)))))
+        (remhash key mevedel-system--prompt-component-cache)))))
 
-(defun mevedel-system--prompt-sections-sorted ()
-  "Return prompt sections sorted by ascending order."
-  (sort (copy-sequence mevedel-system--prompt-sections)
-        (lambda (a b)
-          (< (mevedel-system-prompt-section-order a)
-             (mevedel-system-prompt-section-order b)))))
-
-(defun mevedel-system--section-cache-key (section context)
-  "Return cache key for SECTION and CONTEXT, or nil when uncached."
-  (let ((cache (mevedel-system-prompt-section-cache section))
-        (name (mevedel-system-prompt-section-name section)))
+(defun mevedel-system--component-cache-key (component context)
+  "Return cache key for COMPONENT and CONTEXT, or nil when uncached."
+  (let ((cache (mevedel-system-prompt-component-cache component))
+        (name (mevedel-system-prompt-component-name component)))
     (pcase cache
       ('global (list name :global))
       ('keyed (list name
-                    (funcall (mevedel-system-prompt-section-cache-key section)
+                    (funcall (mevedel-system-prompt-component-cache-key
+                              component)
                              context)))
-      ('nil nil)
-      (_ (and cache (list name :global))))))
+      ('nil nil))))
 
-(defun mevedel-system--render-section (section context)
-  "Return rendered SECTION for CONTEXT."
-  (let ((key (mevedel-system--section-cache-key section context)))
-    (if (null key)
-        (funcall (mevedel-system-prompt-section-producer section) context)
-      (let ((cached (gethash key mevedel-system--prompt-section-cache
+(defun mevedel-system--render-component-value (component context)
+  "Return COMPONENT's uncached value for CONTEXT."
+  (cond
+   ((mevedel-system-prompt-component-file component)
+    (mevedel-system-render-prompt-file
+     (mevedel-system-prompt-component-file component)))
+   ((mevedel-system-prompt-component-producer component)
+    (funcall (mevedel-system-prompt-component-producer component) context))
+   (t (mevedel-system-prompt-component-text component))))
+
+(defun mevedel-system--render-component (component context)
+  "Return rendered COMPONENT for CONTEXT."
+  (let ((key (mevedel-system--component-cache-key component context)))
+    (if (not key)
+        (mevedel-system--render-component-value component context)
+      (let ((cached (gethash key mevedel-system--prompt-component-cache
                              mevedel-system--prompt-cache-miss)))
         (if (not (eq cached mevedel-system--prompt-cache-miss))
             cached
-          (let ((value (funcall (mevedel-system-prompt-section-producer section)
-                                context)))
-            (puthash key value mevedel-system--prompt-section-cache)
+          (let ((value (mevedel-system--render-component-value
+                        component context)))
+            (puthash key value mevedel-system--prompt-component-cache)
             value))))))
-
-(defun mevedel-system-prompt-section-report (&optional base-prompt workspace working-directory)
-  "Return audit data for BASE-PROMPT, WORKSPACE, and WORKING-DIRECTORY."
-  (let* ((context (mevedel-system--make-context
-                   (or base-prompt mevedel-system--base-prompt)
-                   workspace working-directory)))
-    (mapcar
-     (lambda (section)
-       (let* ((key (mevedel-system--section-cache-key section context))
-              (cached (and key
-                           (not (eq (gethash key mevedel-system--prompt-section-cache
-                                             mevedel-system--prompt-cache-miss)
-                                    mevedel-system--prompt-cache-miss))))
-              (value (mevedel-system--render-section section context)))
-         (list :name (mevedel-system-prompt-section-name section)
-               :order (mevedel-system-prompt-section-order section)
-               :cache (mevedel-system-prompt-section-cache section)
-               :cached cached
-               :chars (if (stringp value) (length value) 0))))
-     (mevedel-system--prompt-sections-sorted))))
 
 
 ;;
@@ -546,29 +504,19 @@ present."
    "\n\n"))
 
 (defun mevedel-system--make-context
-    (base-prompt workspace working-directory &optional session refresh-buffer)
+    (workspace working-directory &optional session refresh-buffer)
   "Return normalized prompt context."
   (let* ((workspace (or workspace (mevedel-workspace)))
          (working-directory
           (mevedel-system--working-directory
            workspace working-directory session)))
     (mevedel-system-context--create
-     :base-prompt base-prompt
      :workspace workspace
      :working-directory working-directory
      :session session
      :refresh-buffer refresh-buffer)))
 
-(mevedel-define-prompt-section base
-  :order 10
-  :cache 'keyed
-  :cache-key (lambda (context)
-               (mevedel-system-context-base-prompt context))
-  :producer (lambda (context)
-              (mevedel-system-context-base-prompt context)))
-
-(mevedel-define-prompt-section workspace-config
-  :order 20
+(mevedel-define-prompt-component workspace-config
   :cache 'keyed
   :cache-key #'mevedel-system--workspace-config-cache-key
   :producer (lambda (context)
@@ -576,103 +524,208 @@ present."
                (mevedel-system-context-workspace context)
                (mevedel-system-context-working-directory context))))
 
-(mevedel-define-prompt-section memory
-  :order 30
+(mevedel-define-prompt-component memory
   :cache 'keyed
   :cache-key #'mevedel-system--memory-cache-key
   :producer (lambda (context)
               (funcall mevedel-system--memory-prompt
                        (mevedel-system-context-workspace context))))
 
-(mevedel-define-prompt-section environment
-  :order 40
+(mevedel-define-prompt-component environment
   :producer (lambda (context)
               (mevedel-system--environment-prompt
                (mevedel-system-context-workspace context)
                (mevedel-system-context-working-directory context))))
 
-(mevedel-define-prompt-section skills
-  :order 50
+(mevedel-define-prompt-component skills
   :producer #'mevedel-system--skills-prompt)
 
-(mevedel-define-prompt-section active-goal
-  :order 60
+(mevedel-define-prompt-component active-goal
   :producer (lambda (context)
               (when (fboundp 'mevedel-goal-active-context)
                 (when-let* ((session (mevedel-system-context-session context)))
                   (mevedel-goal-active-context session)))))
 
+(mevedel-define-prompt-component main-role
+  :file "prompts/system/base.md")
+
+(mevedel-define-prompt-component tutor-role
+  :file "prompts/system/tutor.md")
+
+(mevedel-define-prompt-component revise-role
+  :file "prompts/system/revise.md")
+
+(mevedel-define-prompt-component main-tone
+  :file "prompts/tones/main.md")
+
+(mevedel-define-prompt-component report-tone
+  :file "prompts/tones/report.md")
+
+(mevedel-define-prompt-component tutor-tone
+  :file "prompts/tones/tutor.md")
+
+(mevedel-define-prompt-component tool-orchestration
+  :file "prompts/system/tool-orchestration.md")
+
+(mevedel-define-prompt-component bash-guardian-role
+  :file "prompts/permissions/bash-guardian-system.md")
+
+(mevedel-define-prompt-profile main
+  :workspace-aware t
+  :components '(main-role
+                main-tone
+                tool-orchestration
+                workspace-config
+                memory
+                environment
+                skills
+                active-goal))
+
+(mevedel-define-prompt-profile revise
+  :workspace-aware t
+  :components '(revise-role
+                main-tone
+                tool-orchestration
+                workspace-config
+                memory
+                environment
+                skills
+                active-goal))
+
+(mevedel-define-prompt-profile tutor
+  :workspace-aware t
+  :components '(tutor-role
+                tutor-tone
+                tool-orchestration
+                workspace-config
+                memory
+                environment
+                skills
+                active-goal))
+
+(mevedel-define-prompt-profile bash-guardian
+  :workspace-aware t
+  :components '(bash-guardian-role workspace-config environment))
+
 
 ;;
 ;;; System prompt builder
 
-(defun mevedel-system-render-sections
-    (base-prompt &optional workspace working-directory session refresh-buffer)
-  "Return rendered prompt sections for BASE-PROMPT.
+(defun mevedel-system--profile (profile)
+  "Return PROFILE's plist, resolving a registered profile symbol."
+  (cond
+   ((symbolp profile)
+    (or (alist-get profile mevedel-system--prompt-profiles)
+        (error "Unknown prompt profile: %s" profile)))
+   ((and (listp profile) (keywordp (car profile))) profile)
+   (t (error "Malformed prompt profile: %S" profile))))
 
-WORKSPACE and WORKING-DIRECTORY are normalized the same way as
-`mevedel-system-build-prompt'."
-  (let ((context (mevedel-system--make-context
-                  base-prompt workspace working-directory
-                  session refresh-buffer)))
+(defun mevedel-system--inline-component (entry)
+  "Return a transient component for inline profile ENTRY."
+  (unless (and (listp entry)
+               (= (length entry) 3)
+               (symbolp (car entry))
+               (memq (cadr entry) '(:file :text)))
+    (error "Malformed inline prompt component: %S" entry))
+  (let ((value (caddr entry)))
+    (unless (stringp value)
+      (error "Inline prompt component value must be a string: %S" entry))
+    (mevedel-system-prompt-component--create
+     :name (car entry)
+     :file (and (eq (cadr entry) :file) value)
+     :text (and (eq (cadr entry) :text) value))))
+
+(defun mevedel-system--profile-components (profile)
+  "Validate PROFILE and return its ordered component objects."
+  (let* ((profile (mevedel-system--profile profile))
+         (workspace-aware (plist-get profile :workspace-aware))
+         (entries (plist-get profile :components))
+         names
+         components)
+    (unless (and (plist-member profile :workspace-aware)
+                 (memq workspace-aware '(nil t))
+                 (plist-member profile :components)
+                 (listp entries))
+      (error "Malformed prompt profile: %S" profile))
+    (dolist (entry entries)
+      (let* ((component
+              (cond
+               ((symbolp entry)
+                (or (alist-get entry mevedel-system--prompt-components)
+                    (error "Unknown prompt component: %s" entry)))
+               (t (mevedel-system--inline-component entry))))
+             (name (mevedel-system-prompt-component-name component)))
+        (when (memq name names)
+          (error "Duplicate prompt component: %s" name))
+        (push name names)
+        (push component components)))
+    (when workspace-aware
+      (dolist (required '(workspace-config environment))
+        (unless (memq required entries)
+          (error "Workspace-aware profile requires component: %s"
+                 required))))
+    (nreverse components)))
+
+(cl-defun mevedel-system--profile-state
+  (profile &key workspace working-directory session refresh-buffer)
+  "Return rendered component state for PROFILE and request context."
+  (let ((components (mevedel-system--profile-components profile))
+        (context (mevedel-system--make-context
+                  workspace working-directory session refresh-buffer)))
     (mapcar
-     (lambda (section)
-       (mevedel-system--render-section section context))
-     (mevedel-system--prompt-sections-sorted))))
+     (lambda (component)
+       (let* ((key (mevedel-system--component-cache-key component context))
+              (cached
+               (and key
+                    (not (eq
+                          (gethash key mevedel-system--prompt-component-cache
+                                   mevedel-system--prompt-cache-miss)
+                          mevedel-system--prompt-cache-miss))))
+              (value (mevedel-system--render-component component context)))
+         (list :component component :value value :cached cached)))
+     components)))
 
-(defun mevedel-system-render-named-sections
-    (base-prompt section-names &optional workspace working-directory
-                 session refresh-buffer)
-  "Return rendered prompt SECTION-NAMES for BASE-PROMPT.
+(cl-defun mevedel-system-build-prompt
+    (profile &key workspace working-directory session refresh-buffer)
+  "Build the system prompt selected by PROFILE.
 
-SECTION-NAMES is a list of prompt section symbols.  Sections are still
-rendered in their registered order; unknown names are ignored."
-  (let ((context (mevedel-system--make-context
-                  base-prompt workspace working-directory
-                  session refresh-buffer))
-        (wanted (copy-sequence section-names)))
-    (delq nil
-          (mapcar
-           (lambda (section)
-             (when (memq (mevedel-system-prompt-section-name section) wanted)
-               (mevedel-system--render-section section context)))
-           (mevedel-system--prompt-sections-sorted)))))
+PROFILE is a registered profile symbol or an anonymous profile plist.
+Components render in their listed order.  Blank values are omitted.
+WORKSPACE, WORKING-DIRECTORY, SESSION, and REFRESH-BUFFER supply
+request-time context to dynamic components."
+  (apply
+   #'mevedel-system--join-parts
+   (mapcar (lambda (state) (plist-get state :value))
+           (mevedel-system--profile-state
+            profile
+            :workspace workspace
+            :working-directory working-directory
+            :session session
+            :refresh-buffer refresh-buffer))))
 
-(defun mevedel-system-build-prompt
-    (base-prompt &optional workspace working-directory session refresh-buffer)
-  "Build the full request-time system prompt from BASE-PROMPT.
-
-WORKSPACE specifies the workspace context for configuration, memory, and
-environment sections.  If nil, use the current buffer's workspace.
-WORKING-DIRECTORY specifies the session cwd for layered instructions and
-environment data.  SESSION and REFRESH-BUFFER provide session-scoped
-dynamic prompt sections such as skills.
-Static content is emitted first and dynamic content last to improve
-provider prefix-cache reuse."
-  (apply #'mevedel-system--join-parts
-         (mevedel-system-render-sections
-          base-prompt workspace working-directory session refresh-buffer)))
-
-(cl-defun mevedel-system-build-agent-prompt
-    (base-prompt &key workspace working-directory
-                 session refresh-buffer
-                 (workspace-config t) (memory t) (environment t) skills)
-  "Build a system prompt for an agent from BASE-PROMPT.
-
-The agent prompt is always emitted as the `base' section.  The keyword
-flags WORKSPACE-CONFIG, MEMORY, ENVIRONMENT, and SKILLS control whether
-the normal dynamic sections are appended for WORKSPACE and
-WORKING-DIRECTORY.  This lets utility agents keep a narrow identity
-prompt while still receiving environment details."
-  (let ((sections (append '(base)
-                          (when workspace-config '(workspace-config))
-                          (when memory '(memory))
-                          (when environment '(environment))
-                          (when skills '(skills)))))
-    (apply #'mevedel-system--join-parts
-           (mevedel-system-render-named-sections
-            base-prompt sections workspace working-directory
-            session refresh-buffer))))
+(cl-defun mevedel-system-prompt-component-report
+    (profile &key workspace working-directory session refresh-buffer)
+  "Return ordered audit data for PROFILE in the supplied context."
+  (mapcar
+   (lambda (state)
+     (let* ((component (plist-get state :component))
+            (value (plist-get state :value)))
+       (list
+        :name (mevedel-system-prompt-component-name component)
+        :source (cond
+                 ((mevedel-system-prompt-component-file component) 'file)
+                 ((mevedel-system-prompt-component-producer component)
+                  'producer)
+                 (t 'text))
+        :cache (mevedel-system-prompt-component-cache component)
+        :cached (plist-get state :cached)
+        :chars (if (stringp value) (length value) 0))))
+   (mevedel-system--profile-state
+    profile
+    :workspace workspace
+    :working-directory working-directory
+    :session session
+    :refresh-buffer refresh-buffer)))
 
 (provide 'mevedel-system)
 ;;; mevedel-system.el ends here

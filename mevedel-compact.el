@@ -147,6 +147,8 @@
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-system'
+(declare-function mevedel-system-build-prompt
+                  "mevedel-system" (profile &rest keys))
 (declare-function mevedel-system-render-prompt-file
                   "mevedel-system" (relative-path &optional replacements))
 
@@ -987,29 +989,34 @@ When NO-PROPERTIES is non-nil, strip text properties from copied text."
 PREVIOUS-SUMMARY selects update mode when non-nil.  INSTRUCTIONS are
 manual user instructions.  SESSION supplies invoked skill records."
   (require 'mevedel-system)
-  (mevedel-system-render-prompt-file
-   "prompts/compaction/summary.md"
-   `(("MODE_INSTRUCTIONS" .
-      ,(if previous-summary
-           (concat
-            "Update the anchored summary below using the conversation history above.\n"
-            "The previous summary is authoritative retained context from older compacted history. "
-            "Do NOT replace it with only the recent conversation.\n"
-            "Your output must merge BOTH sources: keep still-true details from the previous summary, "
-            "remove stale or contradicted details, and add new facts from the recent conversation.\n"
-            "Retire satisfied requests from the previous summary when the recent history proves them complete; "
-            "keep only their resulting state, outcome, or evidence under Progress/Done.\n"
-            "If the recent conversation is a separate completed task, preserve the older completed "
-            "task under Progress/Critical Context/Relevant Files instead of dropping it.\n\n"
-            "<previous-summary>\n" previous-summary "\n</previous-summary>\n")
-         "Create a new anchored summary from the conversation history above.\n"))
-     ("SKILLS_INVOKED" . ,(mevedel--compact-skills-section session))
-     ("ADDITIONAL_INSTRUCTIONS" .
-      ,(when (and instructions (not (string-blank-p instructions)))
-         (concat "## Additional Instructions\n" instructions "\n\n")))
-     ("PREVIOUS_SUMMARY_RULE" .
-      ,(when previous-summary
-         "- Do not discard previous-summary details merely because they are not repeated in the recent conversation.\n")))))
+  (let ((role
+         (mevedel-system-render-prompt-file
+          "prompts/compaction/summary.md"
+          `(("MODE_INSTRUCTIONS" .
+             ,(if previous-summary
+                  (concat
+                   "Update the anchored summary below using the conversation history above.\n"
+                   "The previous summary is authoritative retained context from older compacted history. "
+                   "Do NOT replace it with only the recent conversation.\n"
+                   "Your output must merge BOTH sources: keep still-true details from the previous summary, "
+                   "remove stale or contradicted details, and add new facts from the recent conversation.\n"
+                   "Retire satisfied requests from the previous summary when the recent history proves them complete; "
+                   "keep only their resulting state, outcome, or evidence under Progress/Done.\n"
+                   "If the recent conversation is a separate completed task, preserve the older completed "
+                   "task under Progress/Critical Context/Relevant Files instead of dropping it.\n\n"
+                   "<previous-summary>\n" previous-summary
+                   "\n</previous-summary>\n")
+                "Create a new anchored summary from the conversation history above.\n"))
+            ("SKILLS_INVOKED" . ,(mevedel--compact-skills-section session))
+            ("ADDITIONAL_INSTRUCTIONS" .
+             ,(when (and instructions (not (string-blank-p instructions)))
+                (concat "## Additional Instructions\n" instructions "\n\n")))
+            ("PREVIOUS_SUMMARY_RULE" .
+             ,(when previous-summary
+                "- Do not discard previous-summary details merely because they are not repeated in the recent conversation.\n"))))))
+    (mevedel-system-build-prompt
+     `(:workspace-aware nil
+       :components ((role :text ,role))))))
 
 (defun mevedel--compact-buffer-active-p (buf)
   "Return non-nil if BUF has an active gptel request."

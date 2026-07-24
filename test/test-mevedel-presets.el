@@ -19,6 +19,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-hooks)
 (require 'mevedel-view)
+(require 'mevedel-workspace)
 (require 'mevedel-compact)
 (require 'mevedel-presets)
 
@@ -217,7 +218,25 @@
             validation-tool
             (list :task_name "role_probe"
                   :message "Inspect only."
-                  :role role))))))))
+                  :role role)))))))
+
+  :doc "selects main, revise, and tutor prompt profiles"
+  (let ((mevedel-preset--registry nil)
+        (gptel--known-presets nil))
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (let ((main (funcall (plist-get
+                          (gptel-get-preset 'mevedel-discuss)
+                          :system)))
+          (revise (funcall (plist-get
+                            (gptel-get-preset 'mevedel-revise)
+                            :system)))
+          (tutor (funcall (plist-get
+                           (gptel-get-preset 'mevedel-tutor)
+                           :system))))
+      (should (string-match-p "Task execution protocol" main))
+      (should (string-match-p "revising a previous implementation" revise))
+      (should (string-match-p "NEVER PROVIDE SOLUTIONS" tutor)))))
 
 (mevedel-deftest mevedel-preset--variable-for-key
   ()
@@ -681,7 +700,8 @@
     (mevedel-define-agent test-analyst
       :description "A test agent"
       :tools (read code)
-      :system-prompt #'ignore
+      :system-components
+      '((role :text "Test analyst") workspace-config environment)
       :max-turns 20)
     (let ((agent (mevedel-agent-get "test-analyst")))
       (should agent)
@@ -689,7 +709,9 @@
       (should (equal "A test agent" (mevedel-agent-description agent)))
       (should (equal '(read code) (mevedel-agent-tools agent)))
       (should (functionp (mevedel-agent-system-prompt agent)))
-      (should-not (funcall (mevedel-agent-system-prompt agent)))
+      (should (string-match-p
+               "Test analyst"
+               (funcall (mevedel-agent-system-prompt agent))))
       (should (= 20 (mevedel-agent-max-turns agent)))))
 
   :doc "mevedel-agent-get accepts symbol or string"
@@ -707,7 +729,8 @@
     (mevedel-define-agent spec-agent
       :description "For spec test"
       :tools (read)
-      :system-prompt (lambda () "system"))
+      :system-components
+      '((role :text "system") workspace-config environment))
     (let* ((agent (mevedel-agent-get "spec-agent"))
            (spec (mevedel-agent-to-gptel-spec agent)))
       (should (equal "spec-agent" (car spec)))
