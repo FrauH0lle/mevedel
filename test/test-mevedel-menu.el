@@ -700,6 +700,77 @@
       (mevedel-menu--refresh-plan-approval session)
       (should (eq session rendered)))))
 
+(mevedel-deftest mevedel-menu-open-implementation-model ()
+  ,test
+  (test)
+  :doc "opens a proposal-local implementation model surface"
+  (let (prefix scope)
+    (cl-letf (((symbol-function 'transient-setup)
+               (lambda (value &rest args)
+                 (setq prefix value
+                       scope (plist-get args :scope)))))
+      (mevedel-menu-open-implementation-model
+       "Fast:fast-model" 'high #'ignore))
+    (should (eq 'mevedel-menu--implementation-model prefix))
+    (should (equal "Fast:fast-model" (plist-get scope :model-provider)))
+    (should (eq 'high (plist-get scope :reasoning-effort)))
+    (should (eq #'ignore (plist-get scope :update)))))
+
+(mevedel-deftest mevedel-menu--select-implementation-model ()
+  ,test
+  (test)
+  :doc "updates only proposal scope and resets unsupported effort"
+  (mevedel-menu-test--with-model-backends
+    (mevedel-menu-test--with-buffers
+      (let ((scope '(:model-provider "Fast:fast-model"
+                     :reasoning-effort high))
+            update)
+        (with-current-buffer data-buf
+          (setq-local gptel-backend (gptel-get-backend "Fast")
+                      gptel-model 'fast-model
+                      gptel-reasoning-effort 'high))
+        (setf (plist-get scope :update)
+              (lambda (provider effort)
+                (setq update (list provider effort))))
+        (cl-letf (((symbol-function 'transient-scope)
+                   (lambda (&rest _) scope))
+                  ((symbol-function 'completing-read)
+                   (lambda (&rest _) "Balanced:balanced-model")))
+          (mevedel-menu--select-implementation-model))
+        (should (equal '("Balanced:balanced-model" nil) update))
+        (should (equal "Balanced:balanced-model"
+                       (plist-get scope :model-provider)))
+        (should-not (plist-get scope :reasoning-effort))
+        (with-current-buffer data-buf
+          (should (equal "Fast" (gptel-backend-name gptel-backend)))
+          (should (eq 'fast-model gptel-model))
+          (should (eq 'high gptel-reasoning-effort)))
+        (should-not (mevedel-session-model-provider session))))))
+
+(mevedel-deftest mevedel-menu--select-implementation-effort ()
+  ,test
+  (test)
+  :doc "effort selection updates the proposal without changing the session"
+  (mevedel-menu-test--with-model-backends
+    (let ((old-effort (get 'balanced-model :reasoning-effort))
+          (scope '(:model-provider "Balanced:balanced-model"
+                   :reasoning-effort nil))
+          update)
+      (unwind-protect
+          (progn
+            (put 'balanced-model :reasoning-effort '(member low high))
+            (setf (plist-get scope :update)
+                  (lambda (provider effort)
+                    (setq update (list provider effort))))
+            (cl-letf (((symbol-function 'transient-scope)
+                       (lambda (&rest _) scope))
+                      ((symbol-function 'completing-read)
+                       (lambda (&rest _) "high")))
+              (mevedel-menu--select-implementation-effort))
+            (should (equal '("Balanced:balanced-model" high) update))
+            (should (eq 'high (plist-get scope :reasoning-effort))))
+        (put 'balanced-model :reasoning-effort old-effort)))))
+
 (mevedel-deftest mevedel-menu--select-model ()
   ,test
   (test)

@@ -37,7 +37,7 @@
   (test)
   (dolist (symbol '(mevedel-skills--drain-pending-context
                     mevedel-skills-commit-invoked-records
-                    mevedel-skills--transform-apply-model-override
+                    mevedel-skills--transform-apply-request-model-policy
                     mevedel-skills--parse-arguments
                     mevedel-skills--substitute-vars
                     mevedel-skills--run-body-injections-async
@@ -180,27 +180,75 @@
       (mevedel-skills--drain-pending-context request)
       (should (null (mevedel-request-skill-permission-rules request))))))
 
-(mevedel-deftest mevedel-skills--transform-apply-model-override ()
+(mevedel-deftest mevedel-skills--transform-apply-request-model-policy ()
   ,test
   (test)
   :doc "pending slash tier sets prompt-buffer backend and model locals"
   (mevedel-skills-test--with-model-backends
-    (let ((mevedel-model-tiers
+    (let* ((session (mevedel-skills-test--make-session))
+           (mevedel-model-tiers
            '((fast :provider "Fast:fast-model")
              (balanced :provider "Balanced:balanced-model")
              (strong)))
+          (mevedel-model-workloads '((planning :tier balanced)))
           (chat (generate-new-buffer " *skill-model-chat*")))
       (unwind-protect
           (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
             (with-current-buffer chat
-              (setq-local mevedel-skills--pending-request-context
+              (setf (mevedel-session-plan-mode session) t)
+              (setq-local mevedel--session session
+                          mevedel-skills--pending-request-context
                           (list :model (mevedel-model-tier-selector 'fast))))
             (with-temp-buffer
               (setq-local gptel-backend (gptel-get-backend "Balanced"))
               (setq-local gptel-model 'balanced-model)
-              (mevedel-skills--transform-apply-model-override fsm)
+              (mevedel-skills--transform-apply-request-model-policy fsm)
               (should (equal "Fast" (gptel-backend-name gptel-backend)))
               (should (eq 'fast-model gptel-model))))
+        (kill-buffer chat))))
+
+  :doc "Plan root requests use planning while retained agents keep their base"
+  (mevedel-skills-test--with-model-backends
+    (let* ((session (mevedel-skills-test--make-session))
+           (mevedel-model-tiers
+            '((fast :provider "Fast:fast-model")
+              (balanced :provider "Balanced:balanced-model")))
+           (mevedel-model-workloads '((planning :tier fast)))
+           (chat (generate-new-buffer " *planning-model-chat*")))
+      (unwind-protect
+          (progn
+            (setf (mevedel-session-plan-mode session) t)
+            (with-current-buffer chat
+              (setq-local mevedel--session session
+                          gptel-backend (gptel-get-backend "Balanced")
+                          gptel-model 'balanced-model))
+            (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+              (with-temp-buffer
+                (mevedel-skills--transform-apply-request-model-policy fsm)
+                (should (eq 'fast-model gptel-model)))
+              (with-current-buffer chat
+                (setq-local mevedel--agent-invocation t))
+              (with-temp-buffer
+                (mevedel-skills--transform-apply-request-model-policy fsm)
+                (should (eq 'balanced-model gptel-model)))))
+        (kill-buffer chat))))
+
+  :doc "invalid planning policy fails before request realization"
+  (mevedel-skills-test--with-model-backends
+    (let* ((session (mevedel-skills-test--make-session))
+           (mevedel-model-workloads
+            '((planning :tier fast :provider "Fast:fast-model")))
+           (chat (generate-new-buffer " *invalid-planning-model-chat*")))
+      (unwind-protect
+          (progn
+            (setf (mevedel-session-plan-mode session) t)
+            (with-current-buffer chat
+              (setq-local mevedel--session session))
+            (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+              (with-temp-buffer
+                (should-error
+                 (mevedel-skills--transform-apply-request-model-policy fsm)
+                 :type 'user-error))))
         (kill-buffer chat))))
 
   :doc "pending concrete provider sets prompt-buffer backend and model locals"
@@ -216,7 +264,7 @@
             (with-temp-buffer
               (setq-local gptel-backend (gptel-get-backend "Fast"))
               (setq-local gptel-model 'fast-model)
-              (mevedel-skills--transform-apply-model-override fsm)
+              (mevedel-skills--transform-apply-request-model-policy fsm)
               (should (equal "Balanced" (gptel-backend-name gptel-backend)))
               (should (eq 'balanced-model gptel-model))))
         (kill-buffer chat))))
@@ -238,7 +286,7 @@
                                    "Fast:fast-model")
                                   :effort 'high)))
               (with-temp-buffer
-                (mevedel-skills--transform-apply-model-override fsm)
+                (mevedel-skills--transform-apply-request-model-policy fsm)
                 (should (eq 'fast-model gptel-model))
                 (should (eq 'high gptel-reasoning-effort)))))
         (put 'gptel-reasoning-effort 'custom-type old-custom)

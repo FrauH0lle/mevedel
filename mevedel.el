@@ -144,7 +144,7 @@
                   "mevedel-skills-core" ())
 
 ;; `mevedel-skills-invoke'
-(declare-function mevedel-skills--transform-apply-model-override
+(declare-function mevedel-skills--transform-apply-request-model-policy
                   "mevedel-skills-invoke" (fsm))
 (declare-function mevedel-skills--transform-expand-inline-attachments
                   "mevedel-skills-invoke" (fsm))
@@ -542,12 +542,12 @@ always prompt for the session name."
   ;; Define gptel presets
   (mevedel--define-presets)
 
-  ;; Apply slash/inline skill model overrides before compaction so the
-  ;; threshold uses the request's effective context window.  This only
-  ;; mutates prompt-buffer locals, so no prompt text is lost if
-  ;; compaction rebuilds the prompt buffer next.
+  ;; Apply the root request's workload and skill overrides before
+  ;; compaction so the threshold uses the effective context window.
+  ;; This only mutates prompt-buffer locals, so no prompt text is lost
+  ;; if compaction rebuilds the prompt buffer next.
   (add-hook 'gptel-prompt-transform-functions
-            #'mevedel-skills--transform-apply-model-override -100)
+            #'mevedel-skills--transform-apply-request-model-policy -100)
 
   ;; Substitute view-derived text only in gptel's temporary request buffer.
   (add-hook 'gptel-prompt-transform-functions
@@ -630,9 +630,9 @@ always prompt for the session name."
   (remove-hook 'gptel-prompt-transform-functions
                #'mevedel-skills--transform-expand-inline-attachments)
 
-  ;; Remove skill model override transform
+  ;; Remove root request model policy transform
   (remove-hook 'gptel-prompt-transform-functions
-               #'mevedel-skills--transform-apply-model-override)
+               #'mevedel-skills--transform-apply-request-model-policy)
 
   ;; Remove view request-input substitution
   (remove-hook 'gptel-prompt-transform-functions

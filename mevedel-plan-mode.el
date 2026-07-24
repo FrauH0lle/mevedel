@@ -22,7 +22,8 @@
                   "mevedel-interaction-prompt" (key))
 
 ;; `mevedel-menu'
-(declare-function mevedel-menu-open "mevedel-menu" (area))
+(declare-function mevedel-menu-open-implementation-model
+                  "mevedel-menu" (provider effort update))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-current-provider-label
@@ -226,6 +227,12 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
         :context 'current
         :execution 'direct
         :mode (or (mevedel-session-permission-mode session) 'ask)
+        :model-provider
+        (progn
+          (require 'mevedel-models)
+          (mevedel-model-current-provider-label))
+        :reasoning-effort
+        (and (boundp 'gptel-reasoning-effort) gptel-reasoning-effort)
         :goal-token-budget
         (mevedel-plan-mode--effective-goal-budget (current-buffer))
         :skills nil
@@ -464,8 +471,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
            (interactive)
            (require 'mevedel-models)
            (let ((accepted (copy-tree selection))
-                 (provider
-                  (mevedel-model-current-provider-label chat-buffer)))
+                 (provider (plist-get selection :model-provider)))
              (when (eq (plist-get accepted :location) 'worktree)
                (plist-put accepted :branch
                           (mevedel-plan-mode--read-worktree-branch entry)))
@@ -473,12 +479,6 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                (user-error "Select a registered model before implementing"))
              (unless (mevedel-model-resolve-provider provider t)
                (user-error "Select a registered model before implementing"))
-             (plist-put accepted :model-provider provider)
-             (plist-put
-              accepted :reasoning-effort
-              (with-current-buffer chat-buffer
-                (and (boundp 'gptel-reasoning-effort)
-                     gptel-reasoning-effort)))
              (settle (list :accept t :selection accepted))))
          (cycle-mode ()
            (interactive)
@@ -535,7 +535,16 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
          (open-model ()
            (interactive)
            (require 'mevedel-menu)
-           (mevedel-menu-open 'model))
+           (mevedel-menu-open-implementation-model
+            (plist-get selection :model-provider)
+            (plist-get selection :reasoning-effort)
+            (lambda (provider effort)
+              (plist-put selection :model-provider provider)
+              (plist-put selection :reasoning-effort effort)
+              (mevedel-plan--metadata-put
+               (plist-get entry :session) :selection selection)
+              (mevedel-plan-approval-render
+               (plist-get entry :session)))))
          (toggle-skill ()
            (interactive)
            (mevedel-plan-mode--toggle-skill entry))
@@ -621,13 +630,9 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                     (propertize
                      (format
                       "%s · effort %s"
-                      (progn
-                        (require 'mevedel-models)
-                        (mevedel-model-current-provider-label chat-buffer))
-                      (with-current-buffer chat-buffer
-                        (or (and (boundp 'gptel-reasoning-effort)
-                                 gptel-reasoning-effort)
-                            "default")))
+                      (plist-get selection :model-provider)
+                      (or (plist-get selection :reasoning-effort)
+                          "default"))
                      'font-lock-face 'bold)
                     "\n"
                     (mevedel--prompt-key "s")
@@ -733,6 +738,8 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                (stringp (nth 2 proposal-id))
                (equal hash (nth 2 proposal-id))
                (mevedel-plan-handoff-selection-valid-p selection)
+               (stringp (plist-get selection :model-provider))
+               (plist-member selection :reasoning-effort)
                (stringp plan)
                (equal hash (mevedel-plan-hash plan)))))
     (cond
@@ -746,7 +753,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
            (mevedel-session-plan-mode session)
            (eq (plist-get metadata :status) 'proposed)
            (not valid))
-      (mevedel-plan-mode--demote-proposal session nil)
+      (mevedel-plan-mode--demote-proposal session t)
       nil))))
 
 ;;

@@ -576,6 +576,65 @@
     (force-mode-line-update t)
     (message "mevedel: reasoning effort set to %s" (or effort "default"))))
 
+(defun mevedel-menu--implementation-model-description ()
+  "Return the proposal-local implementation model description."
+  (let ((scope (transient-scope)))
+    (format "Implementation model: %s · effort %s"
+            (plist-get scope :model-provider)
+            (or (plist-get scope :reasoning-effort) "default"))))
+
+(defun mevedel-menu--update-implementation-model (scope provider effort)
+  "Update proposal SCOPE to PROVIDER and EFFORT."
+  (plist-put scope :model-provider provider)
+  (plist-put scope :reasoning-effort effort)
+  (funcall (plist-get scope :update) provider effort))
+
+(defun mevedel-menu--select-implementation-model ()
+  "Select the proposal's implementation model without changing the session."
+  (interactive)
+  (let ((candidates (mevedel-menu--model-candidates)))
+    (unless candidates
+      (user-error "No registered gptel models"))
+    (let* ((scope (transient-scope))
+           (label (completing-read "Implementation model: "
+                                   candidates nil t))
+           (provider (cdr (assoc label candidates)))
+           (effort (plist-get scope :reasoning-effort))
+           (model (plist-get provider :model)))
+      (unless (memq effort (mevedel-model-supported-efforts model))
+        (setq effort nil))
+      (mevedel-menu--update-implementation-model scope label effort))))
+
+(defun mevedel-menu--select-implementation-effort ()
+  "Select the proposal's implementation reasoning effort."
+  (interactive)
+  (let* ((scope (transient-scope))
+         (provider
+          (progn
+            (require 'mevedel-models)
+            (mevedel-model-resolve-provider
+             (plist-get scope :model-provider))))
+         (candidates
+          (cons "default"
+                (mapcar
+                 #'symbol-name
+                 (mevedel-model-supported-efforts
+                  (plist-get provider :model)))))
+         (choice (completing-read "Implementation effort: "
+                                  candidates nil t))
+         (effort (unless (string= choice "default") (intern choice))))
+    (mevedel-menu--update-implementation-model
+     scope (plist-get scope :model-provider) effort)))
+
+(defun mevedel-menu-open-implementation-model (provider effort update)
+  "Open proposal-local model selection for PROVIDER and EFFORT.
+Call UPDATE with the selected provider label and effort."
+  (transient-setup
+   'mevedel-menu--implementation-model nil nil
+   :scope (list :model-provider provider
+                :reasoning-effort effort
+                :update update)))
+
 ;;
 ;;; Commands
 
@@ -920,6 +979,19 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive)
   (mevedel-menu--context)
   (transient-setup 'mevedel-menu--model))
+
+(transient-define-prefix mevedel-menu--implementation-model ()
+  "Proposal-local implementation model surface."
+  [:description mevedel-menu--implementation-model-description
+   ["Implementation model"
+    :pad-keys t
+    ("RET" "Select model" mevedel-menu--select-implementation-model
+     :transient t)
+    ("e" "Select effort" mevedel-menu--select-implementation-effort
+     :transient t)]
+   ["Navigation"
+    :pad-keys t
+    ("b" "Back" transient-quit-one)]])
 
 (transient-define-prefix mevedel-menu--goal ()
   "Goal cockpit surface."

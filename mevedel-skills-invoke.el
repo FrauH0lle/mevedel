@@ -113,6 +113,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-invoked-skills
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-directive-uuid)
@@ -250,22 +251,26 @@ The stash plist keys map onto request/session state:
       (mevedel-skills-commit-invoked-records session skills))
     (setq-local mevedel-skills--pending-request-context nil)))
 
-(defun mevedel-skills--transform-apply-model-override (fsm)
-  "Pre-realize transform: apply skill model overrides to prompt locals.
+(defun mevedel-skills--transform-apply-request-model-policy (fsm)
+  "Pre-realize transform: apply the root request policy to prompt locals.
 
 FSM is the active gptel request state machine.
 
 gptel realizes request payloads from the temp prompt buffer's
-buffer-local `gptel-backend' and `gptel-model'.  Applying the override
-here lets cross-backend skill pins build backend-correct request data.
-Model and effort policy never changes after this realization boundary."
+buffer-local `gptel-backend' and `gptel-model'.  Root Plan requests use
+the `planning' workload; a leading user skill may override its model or
+effort.  Retained child-agent requests own their policy and are excluded.
+Policy never changes after this realization boundary."
   (let* ((info (gptel-fsm-info fsm))
          (chat-buffer (plist-get info :buffer)))
     (when (and chat-buffer (buffer-live-p chat-buffer))
       (let ((policy
              (with-current-buffer chat-buffer
                (mevedel-model-resolve-workload
-               nil
+                (and mevedel--session
+                     (not (bound-and-true-p mevedel--agent-invocation))
+                     (mevedel-session-plan-mode mevedel--session)
+                     'planning)
                 (plist-get mevedel-skills--pending-request-context :model)
                 (plist-get mevedel-skills--pending-request-context :effort)))))
         (setq-local gptel-backend (plist-get policy :backend))

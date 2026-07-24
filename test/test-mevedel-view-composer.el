@@ -1931,15 +1931,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                             gptel-reasoning-effort 'low
                             gptel-prompt-transform-functions
                             (cons
-                             #'mevedel-skills--transform-apply-model-override
+                             #'mevedel-skills--transform-apply-request-model-policy
                              gptel-prompt-transform-functions))
                 (mevedel-skills-install session data-buf))
               (let ((transform
                      (symbol-function
-                      'mevedel-skills--transform-apply-model-override)))
+                      'mevedel-skills--transform-apply-request-model-policy)))
                 (cl-letf
                     (((symbol-function
-                       'mevedel-skills--transform-apply-model-override)
+                       'mevedel-skills--transform-apply-request-model-policy)
                       (lambda (fsm)
                         (funcall transform fsm)
                         (setq effective
@@ -2351,6 +2351,56 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (= 1 settlements))
           (should (= 0 hooks))
           (should (= 0 dispatches)))))))
+
+(mevedel-deftest mevedel-view-send/plan-model-policy ()
+  ,test
+  (test)
+  :doc "Plan root requests use planning policy without changing session policy"
+  (mevedel-skills-test--with-model-backends
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-skills-test--make-session))
+             (mevedel-model-tiers
+              '((fast :provider "Fast:fast-model")
+                (balanced :provider "Balanced:balanced-model")))
+             (mevedel-model-workloads '((planning :tier fast)))
+             effective)
+        (setf (mevedel-session-plan-mode session) t)
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session
+                      gptel-backend (gptel-get-backend "Balanced")
+                      gptel-model 'balanced-model
+                      gptel-prompt-transform-functions
+                      (list
+                       #'mevedel-skills--transform-apply-request-model-policy
+                       (lambda (_fsm)
+                         (push (list (gptel-backend-name gptel-backend)
+                                     gptel-model)
+                               effective)))))
+        (cl-letf (((symbol-function 'gptel-send)
+                   (lambda (&rest _)
+                     (mevedel-view-test--dry-run-request-data))))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "Plan this change")
+            (mevedel-view-send))
+          (setq mevedel-model-workloads '((planning :tier balanced)))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "Revise the plan")
+            (mevedel-view-send))
+          (setf (mevedel-session-plan-mode session) nil)
+          (setq mevedel-model-workloads '((planning :tier fast)))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "Implement normally")
+            (mevedel-view-send)))
+        (should (equal '(("Fast" fast-model)
+                         ("Balanced" balanced-model)
+                         ("Balanced" balanced-model))
+                       (nreverse effective)))
+        (with-current-buffer data-buf
+          (should (equal "Balanced" (gptel-backend-name gptel-backend)))
+          (should (eq 'balanced-model gptel-model)))))))
 
 (mevedel-deftest mevedel-view--forward-input-now ()
   ,test
