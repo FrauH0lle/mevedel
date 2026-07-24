@@ -299,6 +299,27 @@
                  (lambda (_group _signal) 0)))
         (should (mevedel-execution--group-live-p record))))))
 
+(mevedel-deftest mevedel-execution--signal-record ()
+  ,test
+  (test)
+  :doc "uses native Windows process-group controls"
+  (let ((record (mevedel-execution--record-create :process 'process))
+        (native-comp-enable-subr-trampolines nil)
+        (system-type 'windows-nt)
+        calls)
+    (cl-letf (((symbol-function 'process-live-p) (lambda (_process) t))
+              ((symbol-function 'interrupt-process)
+               (lambda (process current-group)
+                 (push (list 'interrupt process current-group) calls)))
+              ((symbol-function 'kill-process)
+               (lambda (process current-group)
+                 (push (list 'kill process current-group) calls)))
+              ((symbol-function 'signal-process)
+               (lambda (&rest args) (push (cons 'signal args) calls))))
+      (mevedel-execution--signal-record record 'INT)
+      (mevedel-execution--signal-record record 'KILL))
+    (should (equal '((kill process t) (interrupt process t)) calls))))
+
 (mevedel-deftest mevedel-execution--utf8-prefix ()
   ,test
   (test)

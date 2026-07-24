@@ -28,6 +28,32 @@
 ;;
 ;;; Ownership and teardown
 
+(mevedel-deftest mevedel-execution--discard-record ()
+  ,test
+  (test)
+  :doc "releases runtime state before invoking teardown callbacks"
+  (let* ((session (mevedel-session--create :name "discard-order"))
+         teardown-after-cleanup-p
+         (record
+          (mevedel-execution--record-create
+           :finished-p t
+           :origin (mevedel-execution--origin-create :session session)
+           :teardown-function
+           (lambda ()
+             (setq teardown-after-cleanup-p
+                   (not
+                    (gethash
+                     'record
+                     (mevedel-execution--state-records
+                      (mevedel-session-execution-state session))))))
+           :token 'record)))
+    (puthash
+     'record record
+     (mevedel-execution--state-records
+      (mevedel-execution--state-for-session session)))
+    (mevedel-execution--discard-record record 'session-ended)
+    (should teardown-after-cleanup-p)))
+
 (mevedel-deftest mevedel-execution-stop-owner ()
   ,test
   (test)

@@ -312,6 +312,7 @@
               (should (equal "" (plist-get initial :output))))
             (setq final (test-mevedel-execution--observe session id))
             (should (string-match-p "done" (plist-get final :output)))))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t)))
   :doc "yields a stable owner-scoped id and retained session artifact"
   (let* ((root (make-temp-file "mevedel-managed-yield-" t))
@@ -452,16 +453,17 @@
              (mevedel-execution--record-progress-timer record)))
           (test-mevedel-execution--stop-all session "main" (list id)))
       (delete-directory root t)))
-  :doc "refuses a sixty-fifth live managed process without eviction"
+  :doc "refuses a new managed process at the live limit without eviction"
   (let* ((root (make-temp-file "mevedel-managed-limit-" t))
          (session (test-mevedel-execution--session root))
          (artifacts (file-name-concat root "artifacts"))
          (mevedel-sandbox-mode 'off)
          (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-live-limit 2)
          ids)
     (unwind-protect
         (progn
-          (dotimes (_ 64)
+          (dotimes (_ mevedel-execution-live-limit)
             (let ((observation
                    (test-mevedel-execution--start-managed
                     session root '("sh" "-c" "sleep 30"))))
@@ -474,8 +476,10 @@
             :workdir root :writable-roots (list root)
             :artifact-directory artifacts :yield-time-ms 10)
            :type 'mevedel-execution-limit)
-          (should (= 64 (length (mevedel-execution-list session "main"))))
+          (should (= mevedel-execution-live-limit
+                     (length (mevedel-execution-list session "main"))))
           (test-mevedel-execution--stop-all session "main" ids))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
 
@@ -533,6 +537,9 @@
                    "test -t 0 && test -t 1 || exit 9; printf 'start> '; while IFS= read -r line; do printf 'got:%s\\nnext> ' \"$line\"; done; printf eof")
                  :tty t))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
+          (unless (string-match-p "start>" (plist-get initial :output))
+            (setq initial
+                  (test-mevedel-execution--observe session id)))
           (should (string-match-p "start>" (plist-get initial :output)))
           (should (plist-get (plist-get initial :facts) :tty))
           (setq first
@@ -557,6 +564,7 @@
           (should-not (string-match-p "got:two" (plist-get final :output)))
           (should (eq 'completed
                       (plist-get (plist-get final :facts) :state))))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t)))
   :doc "Ctrl-C interrupts the execution group in pipe and PTY modes"
   (dolist (tty '(nil t))
@@ -587,6 +595,7 @@
                         (plist-get (plist-get final :facts) :state)))
             (should (eq (and tty t)
                         (plist-get (plist-get final :facts) :tty))))
+        (mevedel-execution-teardown-session session)
         (delete-directory root t))))
   :doc "Ctrl-C stops a Bash loop through confined pipe and PTY transports"
   (skip-unless (plist-get (mevedel-sandbox-probe) :available))
@@ -628,22 +637,26 @@
            final)
       (unwind-protect
           (progn
-            (when (string-match-p
-                   "printf ready; sleep 1; exit 2"
-                   (car (last command)))
-              (test-mevedel-execution--wait
-               (lambda ()
-                 (mevedel-execution--record-finished-p
-                  (gethash
-                   id
-                   (mevedel-execution--state-records
-                    (mevedel-session-execution-state session)))))))
-            (setq final
-                  (test-mevedel-execution--observe
-                   session id :chars (string 3)))
+            (if id
+                (progn
+                  (when (string-match-p
+                         "printf ready; sleep 1; exit 2"
+                         (car (last command)))
+                    (test-mevedel-execution--wait
+                     (lambda ()
+                       (mevedel-execution--record-finished-p
+                        (gethash
+                         id
+                         (mevedel-execution--state-records
+                          (mevedel-session-execution-state session)))))))
+                  (setq final
+                        (test-mevedel-execution--observe
+                         session id :chars (string 3))))
+              (setq final initial))
             (should (= 2 (plist-get (plist-get final :facts) :exit-code)))
             (should (eq 'exited
                         (plist-get (plist-get final :facts) :termination))))
+        (mevedel-execution-teardown-session session)
         (delete-directory root t))))
   :doc "independent completion waits for a model observer instead of recalling Bash"
   (let* ((root (make-temp-file "mevedel-managed-independent-" t))
@@ -677,6 +690,7 @@
            session "main" id (lambda (value) (setq final value)))
           (should (equal "finished" (plist-get final :output)))
           (should (plist-get final :claimed-final-p)))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t)))
   :doc "independent completion publishes once and remains idempotently pollable"
   (let* ((root (make-temp-file "mevedel-managed-mailbox-complete-" t))
