@@ -283,7 +283,9 @@ compaction.
 
 The summary prompt lives in `prompts/compaction/summary.md` and is
 rendered by `mevedel--compact-prompt` with request-specific template
-values. The generated summary is an anchored Markdown document with
+values, then passed through an isolated single-component prompt profile.
+It does not receive workspace configuration, environment, memory, skills, or
+main/agent role content. The generated summary is an anchored Markdown document with
 fixed sections:
 
 - Goal

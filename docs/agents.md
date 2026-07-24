@@ -108,16 +108,19 @@ surfaces: the parent Agent tool row records that hook context was supplied,
 and the child transcript stores the full hook context on the initial
 prompt.
 
-Agent prompts are built from the agent's own prompt file plus selected
-system sections. `:include-workspace-config`, `:include-memory`,
-and `:include-environment` control whether AGENTS.md, persistent memory,
-and environment details are appended. The skills prompt section is
-derived from the resolved agent tool set: agents with `Skill` or
-`ListSkills` receive the model-facing active skill roster. Utility agents
-can therefore avoid inheriting main-agent boilerplate while still
-receiving environment context. Built-in policy gives worker and explorer
-agents `Skill` and `ListSkills` plus the skills prompt section; verifier and
-reviewer agents remain skill-free.
+Agent definitions declare an ordered `:system-components` list. Entries are
+registered prompt component symbols or inline `(NAME :file PATH)` /
+`(NAME :text STRING)` components. Every agent profile is workspace-aware, so
+`workspace-config` and `environment` must be present explicitly. There are no
+per-section inclusion flags and no automatic skills inference: selecting
+`memory` or `skills` is part of the role definition.
+
+The built-ins all receive scoped `AGENTS.md` / `AGENTS.local.md` and
+environment context without inheriting the main coding-assistant role. Worker
+also receives memory; Explorer, verifier, and reviewer do not. Worker and
+Explorer select the active skills roster and expose `Skill` / `ListSkills`;
+verifier and reviewer remain skill-free. Worker, Explorer, and verifier share
+the reporting tone, while reviewer relies on its strict output contract.
 
 ## Asynchronous agent lifecycle
 

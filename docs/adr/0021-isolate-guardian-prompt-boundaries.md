@@ -1,5 +1,7 @@
 # Isolate guardian prompt boundaries
 
+Status: superseded by ADR 0070
+
 Both model-backed guardians use a dedicated trusted system message and receive
 the material under review only as untrusted user content. They do not inherit
 the session's coding-assistant prompt or ambient transcript, tools, memories,

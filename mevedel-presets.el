@@ -83,10 +83,7 @@
 ;; `mevedel-system'
 (declare-function mevedel-system-build-prompt
                   "mevedel-system"
-                  (base-prompt &optional workspace working-directory
-                               session refresh-buffer))
-(defvar mevedel-system--base-prompt)
-(defvar mevedel-system--tutor-base-prompt)
+                  (profile &rest keys))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-category "mevedel-tool-registry" (cl-x) t)
@@ -385,8 +382,9 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
     :agents (worker explorer reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
-               mevedel-system--base-prompt nil nil
-               mevedel--session (current-buffer))))
+               'main
+               :session mevedel--session
+               :refresh-buffer (current-buffer))))
 
   ;; Full editing preset for implementation
   (mevedel-define-preset mevedel-implement
@@ -402,14 +400,19 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
     :agents (worker explorer reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
-               mevedel-system--base-prompt nil nil
-               mevedel--session (current-buffer))))
+               'main
+               :session mevedel--session
+               :refresh-buffer (current-buffer))))
 
   ;; Revision preset with previous patch context
   (mevedel-define-preset mevedel-revise
     :description "Revise previous implementation with full context"
     :parents (mevedel-implement)
-    :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation.")
+    :system (lambda ()
+              (mevedel-system-build-prompt
+               'revise
+               :session mevedel--session
+               :refresh-buffer (current-buffer))))
 
   ;; Tutoring preset - guides through hints, never provides solutions
   (mevedel-define-preset mevedel-tutor
@@ -426,8 +429,9 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
     :agents (worker explorer reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
-               mevedel-system--tutor-base-prompt nil nil
-               mevedel--session (current-buffer)))))
+               'tutor
+               :session mevedel--session
+               :refresh-buffer (current-buffer)))))
 
 ;;
 ;;; Request-time preset setup

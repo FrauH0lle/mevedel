@@ -165,8 +165,8 @@
 (defvar mevedel--workspace)
 
 ;; `mevedel-system'
-(declare-function mevedel-system-render-prompt-file
-                  "mevedel-system" (relative-path &optional replacements))
+(declare-function mevedel-system-build-prompt
+                  "mevedel-system" (profile &rest keys))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
@@ -1298,8 +1298,12 @@ guidance or nil."
                    (system-prompt
                     (progn
                       (require 'mevedel-system)
-                      (mevedel-system-render-prompt-file
-                       "prompts/permissions/bash-guardian-system.md")))
+                      (mevedel-system-build-prompt
+                       'bash-guardian
+                       :workspace (plist-get context :workspace)
+                       :working-directory
+                       (plist-get context :working-directory)
+                       :session (plist-get context :session))))
                    (prompt
                     (format
                      "Bash source:\n```bash\n%s\n```\n\nDeterministic analysis and confinement evidence:\n```text\n%s\n```"
@@ -1389,7 +1393,13 @@ suspicious Bash."
 (defun mevedel-tool-exec--bash-guardian-context
     (command &optional permission-context)
   "Return guardian context for COMMAND and PERMISSION-CONTEXT."
-  (let* ((analysis (mevedel-tool-exec--analyze-bash command))
+  (let* ((session (or (plist-get permission-context :session)
+                      (and (boundp 'mevedel--session) mevedel--session)))
+         (workspace (or (plist-get permission-context :workspace)
+                        (and session (mevedel-session-workspace session))))
+         (working-directory
+          (and session (mevedel-session-working-directory session)))
+         (analysis (mevedel-tool-exec--analyze-bash command))
          (commands (mevedel-tool-exec--bash-command-names analysis))
          (buckets (mevedel-tools--bash-buckets permission-context))
          (request (plist-get permission-context :sandbox-request))
@@ -1418,7 +1428,10 @@ suspicious Bash."
                        (eq (plist-get (cdr rule) :action) 'allow))
              collect pattern)))))
     (require 'mevedel-sandbox)
-    (list :analysis analysis
+    (list :session session
+          :workspace workspace
+          :working-directory working-directory
+          :analysis analysis
           :class (plist-get analysis :class)
           :dangerous (eq (plist-get analysis :class) 'dangerous)
           :commands commands

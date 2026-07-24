@@ -23,49 +23,29 @@
           "helpers"))
 
 
-;;
-;;; Tone prompt (string constant)
-
-(mevedel-deftest mevedel-system--tone-prompt
-  (:doc "`mevedel-system--tone-prompt' includes tone and critical-thinking sections")
-  (progn
-    (should (stringp mevedel-system--tone-prompt))
-    (should (string-match-p "Tone and style" mevedel-system--tone-prompt))
-    (should (string-match-p "Critical thinking" mevedel-system--tone-prompt))
-    (should (string-match-p "em dashes" mevedel-system--tone-prompt))
-    (should (string-match-p "fenced code blocks" mevedel-system--tone-prompt))
-    (should (string-match-p "Markdown structure" mevedel-system--tone-prompt))
-    (should (string-match-p "repeating the path noisily" mevedel-system--tone-prompt))))
+(defun test-mevedel-system--profile (role)
+  "Return a workspace-aware test profile with ROLE."
+  `(:workspace-aware t
+    :components ((role :text ,role)
+                 workspace-config memory environment skills)))
 
 
 ;;
-;;; Base prompt (string constant)
+;;; Built-in profiles
 
-(mevedel-deftest mevedel-system--base-prompt
-  (:doc "`mevedel-system--base-prompt' includes task protocol and tool guidance")
-  (progn
-    (should (stringp mevedel-system--base-prompt))
-    (should (string-match-p "Tone and style" mevedel-system--base-prompt))
-    (should (string-match-p "Task execution protocol" mevedel-system--base-prompt))
-    (should (string-match-p "Using your tools" mevedel-system--base-prompt))
-    (should (string-match-p "path/to/file\\.ext:123" mevedel-system--base-prompt))
-    (should (string-match-p "update item statuses" mevedel-system--base-prompt))
-    (should (string-match-p "Frontend work" mevedel-system--base-prompt))
-    (should (string-match-p "explorer" mevedel-system--base-prompt))
-    (should (string-match-p "/goal" mevedel-system--base-prompt))))
-
-
-;;
-;;; Tutor prompt (string constant)
-
-(mevedel-deftest mevedel-system--tutor-base-prompt
-  (:doc "`mevedel-system--tutor-base-prompt' requires GetHints/RecordHint workflow")
-  (progn
-    (should (stringp mevedel-system--tutor-base-prompt))
-    (should (string-match-p "NEVER PROVIDE SOLUTIONS" mevedel-system--tutor-base-prompt))
-    (should (string-match-p "GetHints" mevedel-system--tutor-base-prompt))
-    (should (string-match-p "RecordHint" mevedel-system--tutor-base-prompt))
-    (should (string-match-p "Socratic" mevedel-system--tutor-base-prompt))))
+(mevedel-deftest mevedel-system-build-prompt/built-ins
+  (:doc "built-in profiles select their own roles and tones")
+  (let ((main (mevedel-system-build-prompt 'main))
+        (revise (mevedel-system-build-prompt 'revise))
+        (tutor (mevedel-system-build-prompt 'tutor)))
+    (should (string-match-p "Task execution protocol" main))
+    (should (string-match-p "Tone and style" main))
+    (should (string-match-p "Tool orchestration" main))
+    (should (string-match-p "revising a previous implementation" revise))
+    (should (string-match-p "Tone and style" revise))
+    (should (string-match-p "NEVER PROVIDE SOLUTIONS" tutor))
+    (should (string-match-p "Tutoring style" tutor))
+    (should-not (string-match-p "Tone and style" tutor))))
 
 
 ;;
@@ -101,7 +81,9 @@
   :doc "includes base prompt, memory section, and environment info"
   (let* ((ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj"))
-         (prompt (mevedel-system-build-prompt "BASE PROMPT CONTENT" ws)))
+         (prompt (mevedel-system-build-prompt
+                  (test-mevedel-system--profile "BASE PROMPT CONTENT")
+                  :workspace ws)))
     (should (string-match-p "BASE PROMPT CONTENT" prompt))
     (should (string-match-p "Persistent memory" prompt))
     (should (string-match-p "## Environment" prompt))
@@ -114,7 +96,9 @@
          (ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj")))
     (write-region "Use bun, not npm." nil agents-md)
-    (let ((prompt (mevedel-system-build-prompt "BASE" ws)))
+    (let ((prompt (mevedel-system-build-prompt
+                   (test-mevedel-system--profile "BASE")
+                   :workspace ws)))
       (should (string-match-p "## Workspace Configuration" prompt))
       (should (string-match-p "Use bun, not npm\\." prompt))))
 
@@ -127,7 +111,9 @@
     (make-directory memory-dir t)
     (write-region "Workspace guidance." nil agents-md)
     (write-region "Remembered fact." nil memory-file)
-    (let* ((prompt (mevedel-system-build-prompt "BASE" ws))
+    (let* ((prompt (mevedel-system-build-prompt
+                    (test-mevedel-system--profile "BASE")
+                    :workspace ws))
            (base-pos (string-match-p "BASE" prompt))
            (config-pos (string-match-p "Workspace guidance\\." prompt))
            (memory-pos (string-match-p "Remembered fact\\." prompt))
@@ -148,7 +134,10 @@
     (setf (mevedel-session-skills session) (list skill))
     (with-temp-buffer
       (let* ((prompt (mevedel-system-build-prompt
-                      "BASE" ws nil session (current-buffer)))
+                      (test-mevedel-system--profile "BASE")
+                      :workspace ws
+                      :session session
+                      :refresh-buffer (current-buffer)))
              (env-pos (string-match-p "## Environment" prompt))
              (skills-pos (string-match-p "## Skills" prompt)))
         (should (string-match-p "^- review-spec: Review a spec$" prompt))
@@ -170,7 +159,11 @@
     (setf (mevedel-session-skills session) (list skill))
     (with-temp-buffer
       (let ((prompt (mevedel-system-build-prompt
-                     "BASE" ws root-dir session (current-buffer))))
+                     (test-mevedel-system--profile "BASE")
+                     :workspace ws
+                     :working-directory root-dir
+                     :session session
+                     :refresh-buffer (current-buffer))))
         (should-not (string-match-p "## Skills" prompt)))))
 
   :doc "ignores CLAUDE.md when AGENTS.md is absent"
@@ -178,7 +171,9 @@
          (ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj")))
     (write-region "Claude-specific guidance." nil claude-md)
-    (let ((prompt (mevedel-system-build-prompt "BASE" ws)))
+    (let ((prompt (mevedel-system-build-prompt
+                   (test-mevedel-system--profile "BASE")
+                   :workspace ws)))
       (should-not (string-match-p "## Workspace Configuration" prompt))
       (should-not (string-match-p "Claude-specific guidance" prompt))))
 
@@ -189,7 +184,9 @@
               'project root-dir root-dir "sysproj")))
     (write-region "AGENTS wins." nil agents-md)
     (write-region "CLAUDE loses." nil claude-md)
-    (let ((prompt (mevedel-system-build-prompt "BASE" ws)))
+    (let ((prompt (mevedel-system-build-prompt
+                   (test-mevedel-system--profile "BASE")
+                   :workspace ws)))
       (should (string-match-p "AGENTS wins" prompt))
       (should-not (string-match-p "CLAUDE loses" prompt))))
 
@@ -200,7 +197,9 @@
               'project root-dir root-dir "sysproj")))
     (write-region "Shared guidance." nil agents-md)
     (write-region "Private guidance." nil local-md)
-    (let* ((prompt (mevedel-system-build-prompt "BASE" ws))
+    (let* ((prompt (mevedel-system-build-prompt
+                    (test-mevedel-system--profile "BASE")
+                    :workspace ws))
            (shared-pos (string-match-p "Shared guidance\\." prompt))
            (private-pos (string-match-p "Private guidance\\." prompt)))
       (should shared-pos)
@@ -216,7 +215,10 @@
     (make-directory module-dir t)
     (write-region "Root guidance." nil root-agents)
     (write-region "Module guidance." nil module-agents)
-    (let* ((prompt (mevedel-system-build-prompt "BASE" ws module-dir))
+    (let* ((prompt (mevedel-system-build-prompt
+                    (test-mevedel-system--profile "BASE")
+                    :workspace ws
+                    :working-directory module-dir))
            (root-pos (string-match-p "Root guidance\\." prompt))
            (module-pos (string-match-p "Module guidance\\." prompt)))
       (should root-pos)
@@ -236,7 +238,10 @@
     (write-region "Root local." nil root-local)
     (write-region "Module shared." nil module-agents)
     (write-region "Module local." nil module-local)
-    (let* ((prompt (mevedel-system-build-prompt "BASE" ws module-dir))
+    (let* ((prompt (mevedel-system-build-prompt
+                    (test-mevedel-system--profile "BASE")
+                    :workspace ws
+                    :working-directory module-dir))
            (root-shared-pos (string-match-p "Root shared\\." prompt))
            (root-local-pos (string-match-p "Root local\\." prompt))
            (module-shared-pos (string-match-p "Module shared\\." prompt))
@@ -260,7 +265,10 @@
     (write-region "Root Claude guidance." nil root-claude)
     (write-region "Module AGENTS guidance." nil module-agents)
     (write-region "Module Claude loses." nil module-claude)
-    (let ((prompt (mevedel-system-build-prompt "BASE" ws module-dir)))
+    (let ((prompt (mevedel-system-build-prompt
+                   (test-mevedel-system--profile "BASE")
+                   :workspace ws
+                   :working-directory module-dir)))
       (should (string-match-p "Module AGENTS guidance\\." prompt))
       (should-not (string-match-p "Root Claude guidance\\." prompt))
       (should-not (string-match-p "Module Claude loses\\." prompt))))
@@ -268,76 +276,24 @@
   :doc "omits Workspace Configuration when neither file exists"
   (let* ((ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj"))
-         (prompt (mevedel-system-build-prompt "BASE" ws)))
+         (prompt (mevedel-system-build-prompt
+                  (test-mevedel-system--profile "BASE")
+                  :workspace ws)))
     (should-not (string-match-p "## Workspace Configuration" prompt)))
 
   :doc "does not reuse a different base prompt from the section cache"
   (let* ((ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj"))
-         (_prompt-one (mevedel-system-build-prompt "BASE ONE" ws))
-         (prompt-two (mevedel-system-build-prompt "BASE TWO" ws)))
+         (_prompt-one
+          (mevedel-system-build-prompt
+           (test-mevedel-system--profile "BASE ONE")
+           :workspace ws))
+         (prompt-two
+          (mevedel-system-build-prompt
+           (test-mevedel-system--profile "BASE TWO")
+           :workspace ws)))
     (should (string-match-p "BASE TWO" prompt-two))
     (should-not (string-match-p "BASE ONE" prompt-two))))
-
-(mevedel-deftest mevedel-system-build-agent-prompt
-  (:before-each (mevedel-workspace-clear-registry)
-   :after-each (mevedel-workspace-clear-registry)
-   :vars* ((root-dir (file-name-as-directory
-                      (make-temp-file "mevedel-agent-sys-" t)))
-           (mevedel-memory-dirs '(".mevedel/memory/")))
-   :after-each (delete-directory root-dir t))
-  ,test
-  (test)
-  :doc "can omit workspace configuration and memory while keeping environment"
-  (let* ((agents-md (file-name-concat root-dir "AGENTS.md"))
-         (memory-dir (file-name-concat root-dir ".mevedel" "memory"))
-         (memory-file (file-name-concat memory-dir "MEMORY.md"))
-         (ws (mevedel-workspace-get-or-create
-              'project root-dir root-dir "sysproj")))
-    (make-directory memory-dir t)
-    (write-region "Workspace guidance." nil agents-md)
-    (write-region "Remembered fact." nil memory-file)
-    (let ((prompt (mevedel-system-build-agent-prompt
-                   "AGENT BASE" :workspace ws
-                   :workspace-config nil
-                   :memory nil
-                   :environment t)))
-      (should (string-match-p "AGENT BASE" prompt))
-      (should (string-match-p "## Environment" prompt))
-      (should-not (string-match-p "Workspace guidance" prompt))
-      (should-not (string-match-p "Remembered fact" prompt))))
-
-  :doc "can include the parent session skills roster for skill-capable agents"
-  (let* ((ws (mevedel-workspace-get-or-create
-              'project root-dir root-dir "sysproj"))
-         (session (mevedel-session-create "main" ws))
-         (skill (mevedel-skill--create
-                 :name "domain-modeling"
-                 :description "Sharpen terminology"
-                 :active-p t
-                 :model-invocable-p t)))
-    (setf (mevedel-session-skills session) (list skill))
-    (with-temp-buffer
-      (let ((prompt (mevedel-system-build-agent-prompt
-                     "AGENT BASE" :workspace ws
-                     :session session
-                     :refresh-buffer (current-buffer)
-                     :workspace-config nil
-                     :memory nil
-                     :environment nil
-                     :skills t)))
-        (should (string-match-p "AGENT BASE" prompt))
-        (should (string-match-p "^- domain-modeling: Sharpen terminology$"
-                                prompt))))
-    (with-temp-buffer
-      (let ((prompt (mevedel-system-build-agent-prompt
-                     "AGENT BASE" :workspace ws
-                     :session session
-                     :workspace-config nil
-                     :memory nil
-                     :environment nil)))
-        (should-not (string-match-p "## Skills" prompt))))))
-
 
 ;;
 ;;; Persistent memory
@@ -461,7 +417,6 @@
   (let* ((ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj"))
          (context (mevedel-system-context--create
-                   :base-prompt "BASE"
                    :workspace ws
                    :working-directory root-dir))
          key-one key-two)
@@ -477,124 +432,106 @@
 
 
 ;;
-;;; Prompt section registry
+;;; Prompt profiles
 
-(mevedel-deftest mevedel-system-render-sections
+(mevedel-deftest mevedel-system-build-prompt/profile
   (:before-each (mevedel-workspace-clear-registry)
    :vars* ((root-dir (file-name-as-directory
-                      (make-temp-file "mevedel-section-" t))))
+                      (make-temp-file "mevedel-profile-" t))))
    :after-each (progn
                  (mevedel-workspace-clear-registry)
                  (delete-directory root-dir t)))
   ,test
   (test)
-  :doc "renders registered sections in order"
-  (let ((mevedel-system--prompt-sections nil)
-        (mevedel-system--prompt-section-cache (make-hash-table :test #'equal))
-        (ws (mevedel-workspace-get-or-create
-             'project root-dir root-dir "sysproj")))
-    (mevedel-define-prompt-section later
-      :order 20
-      :producer (lambda (_context) "later"))
-    (mevedel-define-prompt-section earlier
-      :order 10
-      :producer (lambda (_context) "earlier"))
-    (should (equal (mevedel-system-render-sections "BASE" ws)
-                   '("earlier" "later"))))
+  :doc "renders registered and inline components in exact profile order"
+  (let ((mevedel-system--prompt-components nil)
+        (mevedel-system--prompt-profiles nil)
+        (mevedel-system--prompt-component-cache
+         (make-hash-table :test #'equal))
+        (mevedel-system--source-dir root-dir)
+        (prompt-file (file-name-concat root-dir "role.md")))
+    (write-region "from file" nil prompt-file)
+    (mevedel-define-prompt-component registered-text :text "registered")
+    (mevedel-define-prompt-component blank
+      :producer (lambda (_context) " \n"))
+    (mevedel-define-prompt-profile sample
+      :workspace-aware nil
+      :components '(registered-text
+                    (role :file "role.md")
+                    blank
+                    (tail :text "inline")))
+    (should
+     (equal (mevedel-system-build-prompt 'sample)
+            "registered\n\nfrom file\n\ninline")))
 
-  :doc "memoizes keyed sections until their cache key changes"
-  (let ((mevedel-system--prompt-sections nil)
-        (mevedel-system--prompt-section-cache (make-hash-table :test #'equal))
+  :doc "memoizes keyed producers and invalidates them on re-registration"
+  (let ((mevedel-system--prompt-components nil)
+        (mevedel-system--prompt-profiles nil)
+        (mevedel-system--prompt-component-cache
+         (make-hash-table :test #'equal))
         (cache-key 'same)
-        (calls 0)
-        (ws (mevedel-workspace-get-or-create
-             'project root-dir root-dir "sysproj")))
-    (mevedel-define-prompt-section cached
-      :order 10
+        (calls 0))
+    (mevedel-define-prompt-component cached
       :cache 'keyed
       :cache-key (lambda (_context) cache-key)
       :producer (lambda (_context)
                   (setq calls (1+ calls))
                   (format "call-%d" calls)))
-    (should (equal (mevedel-system-render-sections "BASE" ws)
-                   '("call-1")))
-    (should (equal (mevedel-system-render-sections "BASE" ws)
-                   '("call-1")))
+    (mevedel-define-prompt-profile sample
+      :workspace-aware nil
+      :components '(cached))
+    (should (equal (mevedel-system-build-prompt 'sample) "call-1"))
+    (should (equal (mevedel-system-build-prompt 'sample) "call-1"))
     (should (= calls 1))
     (setq cache-key 'changed)
-    (should (equal (mevedel-system-render-sections "BASE" ws)
-                   '("call-2")))
-    (should (= calls 2)))
+    (should (equal (mevedel-system-build-prompt 'sample) "call-2"))
+    (mevedel-define-prompt-component cached
+      :producer (lambda (_context) "replacement"))
+    (should (equal (mevedel-system-build-prompt 'sample) "replacement")))
 
-  :doc "invalidates cached section values when a section is re-registered"
-  (let ((mevedel-system--prompt-sections nil)
-        (mevedel-system--prompt-section-cache (make-hash-table :test #'equal))
-        (old-calls 0)
-        (new-calls 0)
-        (ws (mevedel-workspace-get-or-create
-             'project root-dir root-dir "sysproj")))
-    (mevedel-define-prompt-section reloadable
-      :order 10
-      :cache 'keyed
-      :cache-key (lambda (_context) 'same)
-      :producer (lambda (_context)
-                  (setq old-calls (1+ old-calls))
-                  "old"))
-    (should (equal (mevedel-system-render-sections "BASE" ws)
-                   '("old")))
-    (should (equal (mevedel-system-render-sections "BASE" ws)
-                   '("old")))
-    (should (= old-calls 1))
-    (mevedel-define-prompt-section reloadable
-      :order 10
-      :cache 'keyed
-      :cache-key (lambda (_context) 'same)
-      :producer (lambda (_context)
-                  (setq new-calls (1+ new-calls))
-                  "new"))
-    (should (equal (mevedel-system-render-sections "BASE" ws)
-                   '("new")))
-    (should (equal (mevedel-system-render-sections "BASE" ws)
-                   '("new")))
-    (should (= old-calls 1))
-    (should (= new-calls 1)))
+  :doc "rejects unknown, duplicate, malformed, and incomplete profiles"
+  (let ((mevedel-system--prompt-components nil)
+        (mevedel-system--prompt-profiles nil)
+        (mevedel-system--prompt-component-cache
+         (make-hash-table :test #'equal)))
+    (mevedel-define-prompt-component role :text "role")
+    (mevedel-define-prompt-component workspace-config :text "config")
+    (mevedel-define-prompt-component environment :text "environment")
+    (should-error
+     (mevedel-define-prompt-component invalid-file :file nil))
+    (should-error
+     (mevedel-define-prompt-component invalid-cache
+       :cache 'forever
+       :text "cached"))
+    (dolist (profile
+             '((:workspace-aware nil :components (missing))
+               (:workspace-aware nil :components (role role))
+               (:workspace-aware nil :components ((role :text "a" :file "b")))
+               (:workspace-aware t :components (role environment))
+               (:workspace-aware t
+                :components ((workspace-config :text "fake config")
+                             (environment :text "fake environment")))))
+      (should-error (mevedel-system-build-prompt profile)))))
 
-  :doc "recomputes uncached sections on each render"
-  (let ((mevedel-system--prompt-sections nil)
-        (mevedel-system--prompt-section-cache (make-hash-table :test #'equal))
-        (calls 0)
-        (ws (mevedel-workspace-get-or-create
-             'project root-dir root-dir "sysproj")))
-    (mevedel-define-prompt-section uncached
-      :order 10
-      :producer (lambda (_context)
-                  (setq calls (1+ calls))
-                  (format "call-%d" calls)))
-    (should (equal (mevedel-system-render-sections "BASE" ws)
-                   '("call-1")))
-    (should (equal (mevedel-system-render-sections "BASE" ws)
-                   '("call-2")))
-    (should (= calls 2))))
-
-
-;;
-;;; Prompt templates
-
-(mevedel-deftest mevedel-system-render-agent-prompt-file
-  (:vars* ((root-dir (file-name-as-directory
-                      (make-temp-file "mevedel-agent-template-" t))))
-   :after-each (delete-directory root-dir t))
-  ,test
-  (test)
-  :doc "expands agent prompt templates through the shared renderer"
-  (let ((mevedel-system--source-dir root-dir)
-        (prompt-file (file-name-concat root-dir "agent.md")))
-    (write-region "Agent start\n{{TONE_PROMPT}}\nAgent end\n" nil prompt-file)
-    (let ((prompt (mevedel-system-render-agent-prompt-file
-                   "agent.md" '(("TONE_PROMPT" . "Tone body")))))
-      (should (string-match-p "Agent start" prompt))
-      (should (string-match-p "Tone body" prompt))
-      (should-not (string-match-p "{{TONE_PROMPT}}" prompt)))))
+(mevedel-deftest mevedel-system-prompt-component-report
+  (:doc "reports components in profile order and whether cache was warm")
+  (let ((mevedel-system--prompt-components nil)
+        (mevedel-system--prompt-profiles nil)
+        (mevedel-system--prompt-component-cache
+         (make-hash-table :test #'equal)))
+    (mevedel-define-prompt-component cached
+      :cache 'global
+      :producer (lambda (_context) "cached text"))
+    (mevedel-define-prompt-profile sample
+      :workspace-aware nil
+      :components '((role :text "role text") cached))
+    (let ((cold (mevedel-system-prompt-component-report 'sample)))
+      (should (equal (mapcar (lambda (entry) (plist-get entry :name)) cold)
+                     '(role cached)))
+      (should-not (plist-get (cadr cold) :cached)))
+    (let ((warm (mevedel-system-prompt-component-report 'sample)))
+      (should (plist-get (cadr warm) :cached))
+      (should (= (plist-get (car warm) :chars) 9)))))
 
 (provide 'test-mevedel-system)
 ;;; test-mevedel-system.el ends here
