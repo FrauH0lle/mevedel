@@ -924,11 +924,10 @@ incremental refresh."
 This command is installed only on display text keymaps; direct calls from
 the editable composer signal instead of settling queued interactions."
   (interactive (list last-nonmenu-event))
-  (let* ((event-pos (mevedel-view--event-position event))
-         (pos (or event-pos (point)))
+  (when (mevedel-view--event-position event)
+    (mouse-set-point event))
+  (let* ((pos (point))
          (activate (get-text-property pos 'mevedel-view-zone-activate)))
-    (when event-pos
-      (mouse-set-point event))
     (cond
      ((mevedel-view--position-in-input-region-p pos)
       (user-error "No actionable fragment at point"))

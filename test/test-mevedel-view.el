@@ -46,6 +46,41 @@
 (declare-function gptel-menu "ext:gptel-transient" ())
 (declare-function org-entry-put "org" (pom property value))
 
+
+;;
+;;; Activation
+
+(mevedel-deftest mevedel-view-activate-at-point
+  (:doc "mouse activation reads properties from the clicked window")
+  (let ((target (generate-new-buffer " *test-click-target*"))
+        opened)
+    (unwind-protect
+        (progn
+          (with-current-buffer target
+            (insert "xagent")
+            (put-text-property
+             2 7 'mevedel-view-agent-path "/root/test"))
+          (cl-letf
+              (((symbol-function 'mevedel-view--event-position)
+                (lambda (&optional _event) 2))
+               ((symbol-function 'mouse-set-point)
+                (lambda (_event)
+                  (set-buffer target)
+                  (goto-char 2)))
+               ((symbol-function 'mevedel-view--position-in-input-region-p)
+                (lambda (_position) nil))
+               ((symbol-function 'mevedel-view-open-agent-transcript-at-point)
+                (lambda (&optional _event)
+                  (setq opened
+                        (get-text-property
+                         (point) 'mevedel-view-agent-path)))))
+            (with-temp-buffer
+              (mevedel-view-activate-at-point 'mouse)))
+          (should (equal "/root/test" opened)))
+      (when (buffer-live-p target)
+        (kill-buffer target)))))
+
+
 ;;
 ;;; Rendering
 
