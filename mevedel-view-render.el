@@ -1758,9 +1758,7 @@ RAW is an optional precomputed expanded tool segment text."
                   (append
                    facts
                    (list :status 'success
-                         :live-execution-p t
-                         :timeout-seconds
-                         (plist-get event :timeout-seconds))))
+                         :live-execution-p t)))
               (or terminal-render-data call-render-data)))
            (tool (mevedel-tool-get name))
            (custom (and tool

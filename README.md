@@ -716,11 +716,6 @@ helper execution remain unknown and therefore prompt outside `full-auto`.
 **Dangerous commands** (`mevedel-bash-dangerous-commands`): command names that
 contribute the `dangerous` class (e.g., `rm`, `sudo`, `dd`, `chmod`, `curl`).
 
-**Bash timeout** (`mevedel-bash-timeout`): maximum seconds a Bash command may
-run before mevedel terminates it. Defaults to 120 seconds; `timeout_seconds`
-can override it per Bash call. Bash runs as a login shell (`bash -lc`), and
-login initialization is covered by the same output capture and timeout.
-
 **Child confinement** (`mevedel-sandbox-mode`): Bash and batch Eval use
 Bubblewrap on Linux when available. Mevedel finds `bwrap` through the current
 executable path and probes the real namespace profile before first use. Each
@@ -950,7 +945,6 @@ Useful commands:
 | `mevedel-sandbox-mode`                     | Child confinement (`auto` / `required` / `off`).                          |
 | `mevedel-protected-paths`                  | Protected path globs mapped to `read-only` or `inaccessible`.             |
 | `mevedel-bash-dangerous-commands`          | Command names classified as dangerous by Bash analysis.                  |
-| `mevedel-bash-timeout`                     | Seconds before a Bash command is terminated; nil disables timeouts.      |
 | `mevedel-permission-guardian`              | Add advisory Bash risk guidance to permission prompts.                   |
 | `mevedel-permission-guardian-timeout`      | Seconds to wait for Bash guardian guidance before showing the prompt.    |
 | `mevedel-eval-expression-display-limit`    | Lines of an `Eval` expression to show in the confirmation prompt.        |

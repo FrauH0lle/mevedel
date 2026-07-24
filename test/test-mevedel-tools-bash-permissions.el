@@ -2103,11 +2103,10 @@ default Bash keeps bare dot inspection automatic"
   (test)
   :doc "formats shared live and terminal row metadata"
   (should
-   (equal "running · 2.5s · 3 lines · 42 bytes · timeout 30s · exec-1"
+   (equal "running · 2.5s · 3 lines · 42 bytes · exec-1"
           (mevedel-tool-exec-format-execution-metadata
            '(:state running :wall-time-seconds 2.5
-             :output-lines 3 :output-bytes 42 :execution-id "exec-1")
-           30))))
+             :output-lines 3 :output-bytes 42 :execution-id "exec-1")))))
 
 (mevedel-deftest mevedel-tool-exec--observation-envelope ()
   ,test
@@ -2542,87 +2541,6 @@ default Bash keeps bare dot inspection automatic"
                    (car (split-string result "\n" t))))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
-  :doc "terminates command after per-call timeout and returns partial output"
-  (let ((result nil)
-        (done nil)
-        (mevedel-bash-timeout 30)
-        (mevedel-execution--child-kill-delay 0.1))
-    (test-bash-permissions--call-bash
-     (lambda (r)
-       (setq result (test-bash-permissions--handler-result r)
-             done t))
-     (list :command "echo started; sleep 5; echo done"
-           :timeout_seconds 1))
-    (with-timeout (6 (error "Timed out"))
-      (while (not done)
-        (accept-process-output nil 0.1)))
-    (should (string-match-p "termination=\"timed-out\"" result))
-    (should (string-match-p "started" result))
-    (unless (eq system-type 'windows-nt)
-      (should-not (string-match-p "\ndone\n" result))))
-  :doc "uses default Bash timeout when per-call timeout is absent"
-  (let ((result nil)
-        (done nil)
-        (mevedel-bash-timeout 1)
-        (mevedel-execution--child-kill-delay 0.1))
-    (test-bash-permissions--call-bash
-     (lambda (r)
-       (setq result (test-bash-permissions--handler-result r)
-             done t))
-     (list :command "echo default-started; sleep 5; echo default-done"))
-    (with-timeout (6 (error "Timed out"))
-      (while (not done)
-        (accept-process-output nil 0.1)))
-    (should (string-match-p "termination=\"timed-out\"" result))
-    (should (string-match-p "default-started" result))
-    (unless (eq system-type 'windows-nt)
-      (should-not (string-match-p "\ndefault-done\n" result))))
-  :doc "applies the command timeout while login initialization runs"
-  (let* ((home (make-temp-file "mevedel-bash-login-timeout-" t))
-         (profile (file-name-concat home ".bash_profile"))
-         (process-environment (copy-sequence process-environment))
-         (mevedel-execution--child-kill-delay 0.1)
-         result done)
-    (unwind-protect
-        (progn
-          (with-temp-file profile
-            (insert "printf login-started; sleep 5\n"))
-          (setenv "HOME" home)
-          (test-bash-permissions--call-bash
-           (lambda (r)
-             (setq result (test-bash-permissions--handler-result r)
-                   done t))
-           (list :command "printf command-ran" :timeout_seconds 1))
-          (with-timeout (5 (error "Timed out"))
-            (while (not done)
-              (accept-process-output nil 0.1)))
-          (should (string-match-p "termination=\"timed-out\"" result))
-          (should (string-match-p "login-started" result))
-          (should-not (string-prefix-p "login-startedcommand-ran" result)))
-      (delete-directory home t)))
-  :doc "rejects non-positive per-call timeout"
-  (should-error
-   (test-bash-permissions--call-bash
-    #'ignore
-    (list :command "echo never" :timeout_seconds 0))
-   :type 'error)
-  :doc "rejects invalid per-call timeout even when default is disabled"
-  (let ((mevedel-bash-timeout nil))
-    (should-error
-     (test-bash-permissions--call-bash
-      #'ignore
-      (list :command "echo never" :timeout_seconds 0))
-     :type 'error)
-    (should-error
-     (test-bash-permissions--call-bash
-      #'ignore
-      (list :command "echo never" :timeout_seconds "bad"))
-     :type 'error))
-  :doc "nil default disables even per-call timeout"
-  (let ((mevedel-bash-timeout nil))
-    (should (null (mevedel-tool-exec--bash-timeout-seconds
-                   (list :timeout_seconds 1)))))
-
 (mevedel-deftest mevedel-tool-exec--sandbox-writable-roots ()
   ,test
   (test)
@@ -2904,14 +2822,34 @@ default Bash keeps bare dot inspection automatic"
          (yield (seq-find (lambda (arg)
                             (equal "yield_time_ms" (plist-get arg :name)))
                           args))
+         (timeout (seq-find (lambda (arg)
+                              (equal "timeout_seconds"
+                                     (plist-get arg :name)))
+                            args))
          (tty (seq-find (lambda (arg)
                           (equal "tty" (plist-get arg :name)))
                         args)))
     (should (equal "integer" (plist-get yield :type)))
+    (should-not timeout)
     (should (equal "boolean" (plist-get tty :type)))
     (should (plist-get tty :optional))
     (dolist (name '("WriteStdin" "ListExecutions" "StopExecution"))
       (should (mevedel-tool-get name))))
+  :doc "execution control inherits authority without becoming read-only"
+  (mevedel-tool-exec--register)
+  (dolist (name '("WriteStdin" "StopExecution"))
+    (let ((tool (mevedel-tool-get name)))
+      (should-not (mevedel-tool-read-only-p tool))
+      (dolist (mode '(ask auto full-auto))
+        (should
+         (eq 'allow
+             (mevedel-check-permission
+              name :tool-struct tool :content nil :mode mode))))
+      (let ((mevedel-permission-rules `((,name :action deny))))
+        (should
+         (eq 'deny
+             (mevedel-check-permission
+              name :tool-struct tool :content nil :mode 'full-auto))))))
   :doc "registers Eval mode and preserve_ui optional arguments"
   (mevedel-tool-exec--register)
   (let* ((tool (mevedel-tool-get "Eval"))
@@ -3287,13 +3225,6 @@ default Bash keeps bare dot inspection automatic"
     (should (equal "Bash: ls -la" (plist-get plist :header)))
     (should (equal body (plist-get plist :body)))
     (should (eq 'sh-mode (plist-get plist :body-mode))))
-
-  :doc "marks timeout results as errors"
-  (let ((plist (mevedel-tool-exec--render-bash
-                "Bash" '(:command "sleep 5")
-                "partial output"
-                '(:status error :termination timed-out))))
-    (should (eq 'error (plist-get plist :status))))
 
   :doc "hides the model-only execution envelope from expanded bodies"
   (let ((plist

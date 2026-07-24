@@ -191,7 +191,7 @@
           (should (eq 'false
                       (plist-get (plist-get final :facts) :outcome))))
       (delete-directory root t)))
-  :doc "emits throttled progress with tail, counters, timeout, and yielded id"
+  :doc "emits throttled progress with tail, counters, and yielded id"
   (let* ((root (make-temp-file "mevedel-managed-progress-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
@@ -210,7 +210,7 @@
                 (test-mevedel-execution--start-managed
                  session root
                  '("sh" "-c" "printf start; sleep .65; printf end")
-                 :timeout 3 :tool-args '(:command "progress")
+                 :tool-args '(:command "progress")
                  :tool-use-id "call-progress"
                  :data-buffer origin-buffer))
           (let ((id (plist-get (plist-get initial :facts) :execution-id)))
@@ -243,8 +243,7 @@
                 (should (string-match-p "start" (plist-get event :output-tail)))
                 (should (equal id (plist-get facts :execution-id)))
                 (should (> (plist-get facts :output-bytes) 0))
-                (should (> (plist-get facts :output-lines) 0))
-                (should (= 3 (plist-get event :timeout-seconds)))))))
+                (should (> (plist-get facts :output-lines) 0))))))
       (delete-directory root t)))
   :doc "retains one oversized pre-yield artifact with a head-and-tail preview"
   (let* ((root (make-temp-file "mevedel-managed-oversized-" t))
@@ -386,7 +385,7 @@
           (test-mevedel-execution--stop-all
            session "main" (list yielded-id)))
       (delete-directory root t)))
-  :doc "timeout and output caps remain active after yielding"
+  :doc "output caps remain active after yielding"
   (let* ((root (make-temp-file "mevedel-managed-limits-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
@@ -398,8 +397,7 @@
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root
-                 '("sh" "-c" "printf before; sleep .05; head -c 10000 /dev/zero | tr '\\0' x")
-                 :timeout 5))
+                 '("sh" "-c" "printf before; sleep .05; head -c 10000 /dev/zero | tr '\\0' x")))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
           (setq final (test-mevedel-execution--observe session id))
           (should (eq 'output-limit
@@ -407,28 +405,7 @@
           (should (= 64 (plist-get (plist-get final :facts)
                                    :output-bytes)))
           (should (file-exists-p
-                   (plist-get (plist-get final :facts) :output-path)))
-          (dolist (tty '(nil t))
-            (let ((mevedel-execution-output-limit 4096)
-                  timeout-initial timeout-final timeout-id)
-              (setq timeout-initial
-                    (test-mevedel-execution--start-managed
-                     session root
-                     '("sh" "-c" "printf before-timeout; sleep 30")
-                     :timeout 0.1 :tty tty))
-              (setq timeout-id
-                    (plist-get
-                     (plist-get timeout-initial :facts) :execution-id))
-              (setq timeout-final
-                    (test-mevedel-execution--observe session timeout-id))
-              (should (eq 'timed-out
-                          (plist-get (plist-get timeout-final :facts)
-                                     :termination)))
-              (should (eq (and tty t)
-                          (plist-get (plist-get timeout-final :facts) :tty)))
-              (should (string-match-p
-                       "before-timeout" (plist-get timeout-initial :output)))
-              (should (equal "" (plist-get timeout-final :output))))))
+                   (plist-get (plist-get final :facts) :output-path))))
       (delete-directory root t)))
   :doc "cleans descendants when the managed shell exits"
   (let* ((root (make-temp-file "mevedel-managed-descendant-" t))
@@ -621,7 +598,7 @@
              session root
              '("bash" "-lc"
                "trap 'printf \"interrupted\\n\"; exit 130' INT; while :; do printf 'heartbeat\\n'; sleep 1; done")
-             :timeout 120 :tty tty))
+             :tty tty))
            (id (plist-get (plist-get initial :facts) :execution-id))
            final)
       (unwind-protect

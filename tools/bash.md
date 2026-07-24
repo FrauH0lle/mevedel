@@ -15,12 +15,12 @@ editing files. Use the provided file tools instead: `Read`, `Write`,
   default when the platform sandbox is available
 - Permission fields apply only to their invocation. Start each new command with
   the default sandbox; never copy an earlier call's additional permissions
-- Commands time out by default; use `timeout_seconds` for commands that need a
-  longer positive timeout
 - Bash waits up to `yield_time_ms` (10 seconds by default) and returns an
   `execution_id` when the command is still running. Use `WriteStdin` with empty
   `chars` to poll unread output, `ListExecutions` to list your yielded commands,
   and `StopExecution` to stop one
+- Managed commands have no automatic timeout. Use the native `timeout` command
+  when a command itself needs a deadline
 - Pipe-mode stdin is closed. Set `tty=true` only for prompts, REPLs, or commands
   whose terminal behavior is required; PTY stdin stays writable
 - `WriteStdin` sends ordinary input only to PTY executions. A single Ctrl-C

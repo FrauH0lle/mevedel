@@ -1006,7 +1006,6 @@ preserve the default zero-success/nonzero-failure rule."
            (mevedel-execution--record-origin record)))
          :tool-use-id (mevedel-execution--origin-tool-use-id
                        (mevedel-execution--record-origin record))
-         :timeout-seconds (mevedel-execution--record-timeout record)
          :facts (mevedel-execution--facts record))
    properties))
 
@@ -1381,7 +1380,7 @@ it briefly so repeated owner polls return the same result."
                  (mevedel-execution--observation record))))))
 
 (defun mevedel-execution--arm-managed-timers (record)
-  "Arm RECORD's yield and optional timeout clocks."
+  "Arm RECORD's progress and yield clocks."
   (when (and mevedel-execution-event-functions
              (mevedel-execution--origin-tool-use-id
               (mevedel-execution--record-origin record)))
@@ -1395,10 +1394,7 @@ it briefly so repeated owner polls return the same result."
     (setf (mevedel-execution--record-yield-timer record)
           (run-at-time
            (/ yield-time-ms 1000.0)
-           nil #'mevedel-execution--yield-managed record)))
-  (when-let* ((timeout (mevedel-execution--record-timeout record)))
-    (setf (mevedel-execution--record-timeout-timer record)
-          (run-at-time timeout nil #'mevedel-execution--time-out record))))
+           nil #'mevedel-execution--yield-managed record))))
 
 (defun mevedel-execution--launch-managed (record command)
   "Launch managed RECORD with raw COMMAND."
@@ -1505,7 +1501,7 @@ it briefly so repeated owner polls return the same result."
 (cl-defun mevedel-execution-start-bash
     (callback &key session data-buffer owner owner-context request
               command workdir
-              writable-roots timeout
+              writable-roots
               additional-permissions sandbox-permissions artifact-directory
               outcome-function read-only-p tool-args tool-use-id tty
               (yield-time-ms 10000))
@@ -1560,7 +1556,7 @@ terminal settlement."
              :spool-path
              (make-temp-file
               (file-name-concat artifact-directory "execution-") nil ".log")
-             :started-at (float-time) :timeout timeout :token id
+             :started-at (float-time) :token id
              :tty-p (and tty t) :workdir workdir
              :yield-time-ms yield-time-ms)))
       (puthash id record (mevedel-execution--state-records state))
@@ -1593,7 +1589,6 @@ terminal settlement."
          :command-hash (and command-text
                             (secure-hash 'sha256 command-text))
          :tty (and tty t)
-         :timeout-seconds timeout
          :yield-time-ms yield-time-ms))
       (mevedel-execution--notify-state-change record)
       (let ((lease
@@ -1737,7 +1732,6 @@ after WAIT-MS while the process remains live."
       (list :owner (mevedel-execution--origin-owner origin)
             :yielded (and (mevedel-execution--record-yielded-p record) t)
             :started-at (mevedel-execution--record-started-at record)
-            :timeout-seconds (mevedel-execution--record-timeout record)
             :output-tail
             (or (mevedel-execution--record-output-tail record) "")
             :artifact-path (mevedel-execution--record-spool-path record)
