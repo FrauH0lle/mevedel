@@ -10,13 +10,17 @@ supplies its own configuration rather than intersecting its tools with the
 delegator's. Children are created below the caller, so recursive delegation
 forms paths such as `/root/implementation/tests`.
 
-`fork_turns` defaults to `all`. `all` copies the complete effective parent
-conversation, `none` starts without parent history, and a positive decimal
+`fork_turns` defaults to `none`, so the complete initial `message` is the
+child's sole assigned task and no parent dialogue is copied. Explicit `all`
+copies the complete effective parent conversation, and a positive decimal
 string such as `"3"` copies the anchored summary plus the three most recent
-live turns. The copy retains gptel's user/response/tool span properties and is
-taken from the current post-compaction buffer only. Archived raw segments are
-never reconstructed. The initial task is appended after this immutable
-snapshot; parent turns added later are not synchronized into the child.
+live turns. The copy retains gptel's user/response/tool span properties,
+including actionable user instructions, and is taken from the current
+post-compaction buffer only. Callers use non-`none` forks only when the child
+must inspect parent dialogue and identify that dialogue as background in the
+initial task. Archived raw segments are never reconstructed. The initial task
+is appended after this immutable snapshot; parent turns added later are not
+synchronized into the child.
 
 At spawn, mevedel materializes the role's dynamic instructions and effective
 tools, then captures the exact request backend, model, reasoning effort,

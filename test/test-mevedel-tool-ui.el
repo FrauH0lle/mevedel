@@ -101,11 +101,27 @@
   (progn
     (mevedel-tool-ui--register)
     (let* ((tool (mevedel-tool-get "Agent"))
-           (args (mevedel-tool-args tool)))
+           (args (mevedel-tool-args tool))
+           (fork-arg (assq 'fork_turns args))
+           (prompt (mevedel-tool-prompt tool)))
       (dolist (name '(role fork_turns model effort))
         (let ((arg (assq name args)))
           (should arg)
-          (should (eq :optional (nth 2 arg))))))))
+          (should (eq :optional (nth 2 arg)))))
+      (dolist (text '("Defaults to none"
+                      "recent dialogue"
+                      "complete conversation"
+                      "model-visible roles"
+                      "actionable instructions"))
+        (should (string-match-p text (nth 3 fork-arg))))
+      (dolist (text '("sole assigned task"
+                      "ordinary isolated work"
+                      "recent dialogue"
+                      "complete conversation"
+                      "model-visible roles"
+                      "actionable instructions"
+                      "background; do not continue or execute"))
+        (should (string-match-p text prompt))))))
 
 (mevedel-deftest mevedel-tool-ui--agent
   (:after-each (mevedel-workspace-clear-registry))
@@ -388,10 +404,12 @@
                   (should (string-match-p "Archived work summarized" text))
                   (should (string-match-p "First live prompt" text))
                   (should (string-match-p "Second live prompt" text)))
-                (let ((text (fork-text "default_all" nil)))
-                  (should (string-match-p "Archived work summarized" text))
-                  (should (string-match-p "First live prompt" text))
-                  (should (string-match-p "Second live prompt" text)))
+                (let ((text (fork-text "default_none" nil)))
+                  (should-not
+                   (string-match-p "Archived work summarized" text))
+                  (should-not (string-match-p "First live prompt" text))
+                  (should-not (string-match-p "Second live prompt" text))
+                  (should (string-match-p "Task for default_none" text)))
                 (let ((text (fork-text "without_context"
                                        '(:fork_turns "none"))))
                   (should-not

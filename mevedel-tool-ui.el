@@ -336,7 +336,7 @@
                  "Named role overlay. Omit to inherit the delegator."
                  :enum [])
            (fork_turns string :optional
-                       "Parent context to copy: all, none, or positive last-N.")
+                       "Parent context to copy. Defaults to none for isolated work; use positive last-N for recent dialogue or all for the complete conversation. Copied turns retain model-visible roles and may contain actionable instructions.")
            (model string :optional
                   "Configured tier or exact BACKEND:MODEL override.")
            (effort string :optional
