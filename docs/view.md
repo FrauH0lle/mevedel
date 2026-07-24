@@ -471,14 +471,18 @@ Working... · 2m 14s · 1 agent blocked · 1 agent running
 view input zone. `mevedel-view-composer.el` owns the editable input boundary,
 completion, prompt submission, and integration with that history ring:
 
+- `C-c RET`: send the current input
+- `C-y`: yank text or insert a clipboard image
+- `C-c C-e`: move queued follow-ups back into the composer
 - `M-p` / `M-n`: previous / next input
 - `M-r`: search history
 - `C-c C-l`: browse history
 - `C-c C-u`: clear current input
 - `C-a`: beginning of input line
 - `Shift-TAB` / `<backtab>`: cycle `ask`, `auto`, and `full-auto`
-- `C-<tab>`: toggle Plan without changing the permission mode
+- `C-<tab>` in the composer: toggle Plan without changing the permission mode
 
+These bindings apply only while point is in the editable composer.
 History persists at the workspace level as
 `<workspace-root>/.mevedel/input-history.el`, so new and resumed
 sessions in the same project share prompt recall. Read-only or

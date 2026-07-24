@@ -824,23 +824,6 @@
 ;;
 ;;; View command wiring
 
-(mevedel-deftest mevedel-view-cycle-permission-mode-keymap
-  (:doc "binds backtab spellings to permission mode cycling")
-  ,test
-  (test)
-
-  :doc "backtab is bound"
-  (should (eq (lookup-key mevedel-view-mode-map (kbd "<backtab>"))
-              #'mevedel-view-cycle-permission-mode))
-
-  :doc "S-TAB is bound"
-  (should (eq (lookup-key mevedel-view-mode-map (kbd "S-TAB"))
-              #'mevedel-view-cycle-permission-mode))
-
-  :doc "control TAB toggles Plan"
-  (should (eq (lookup-key mevedel-view-mode-map (kbd "C-<tab>"))
-              #'mevedel-view-toggle-plan-mode)))
-
 (mevedel-deftest mevedel-view-mode-map ()
   ,test
   (test)
@@ -848,9 +831,7 @@
   (should (eq (lookup-key mevedel-view-mode-map (kbd "C-c C-o"))
               #'mevedel-menu))
   (should-not (eq (lookup-key mevedel-view-mode-map (kbd "C-c C-m"))
-                  #'mevedel-menu))
-  (should (eq (lookup-key mevedel-view-mode-map (kbd "C-c RET"))
-              #'mevedel-view-send)))
+                  #'mevedel-menu)))
 
 
 
