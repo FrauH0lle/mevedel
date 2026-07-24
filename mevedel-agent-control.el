@@ -614,11 +614,11 @@ rewrite after the complete registry has been repaired."
 (defun mevedel-agent-control--normalize-fork-turns (value)
   "Normalize model-facing context fork VALUE.
 
-Nil defaults to `all'.  The only explicit forms are \"all\", \"none\", and
+Nil defaults to `none'.  The only explicit forms are \"all\", \"none\", and
 positive decimal strings."
   (cond
-   ((or (null value) (equal value "all")) 'all)
-   ((equal value "none") 'none)
+   ((or (null value) (equal value "none")) 'none)
+   ((equal value "all") 'all)
    ((and (stringp value)
          (string-match-p "\\`[1-9][0-9]*\\'" value))
     (string-to-number value))

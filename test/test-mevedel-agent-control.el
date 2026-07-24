@@ -1082,7 +1082,7 @@
   (test)
   :doc "normalizes supported context fork modes before reserving a path"
   (progn
-    (should (eq 'all (mevedel-agent-control--normalize-fork-turns nil)))
+    (should (eq 'none (mevedel-agent-control--normalize-fork-turns nil)))
     (should (eq 'all (mevedel-agent-control--normalize-fork-turns "all")))
     (should (eq 'none (mevedel-agent-control--normalize-fork-turns "none")))
     (should (= 12 (mevedel-agent-control--normalize-fork-turns "12")))
