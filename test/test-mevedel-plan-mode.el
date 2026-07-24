@@ -7,6 +7,7 @@
 (require 'gptel-request)
 (require 'gptel-agent-tools)
 (require 'mevedel-chat)
+(require 'mevedel-menu)
 (require 'mevedel-plan)
 (require 'mevedel-plan-handoff)
 (require 'mevedel-plan-mode)
@@ -123,19 +124,25 @@
       (should (eq 'plan-exit outcome)))))
 
 (mevedel-deftest mevedel-plan-mode--default-selection
-  (:doc "defaults to Here, Current, Direct, Mode, and the effective Goal budget")
+  (:doc "defaults to implementation axes, model snapshot, and Goal budget")
   ,test
   (test)
-  (let ((session (mevedel-session--create
-                  :name "test" :permission-mode 'auto)))
-    (with-temp-buffer
-      (setq-local mevedel-goal-token-budget 1234)
-      (should (equal '(:location here :context current
-                       :execution direct :mode auto
-                       :goal-token-budget 1234
-                       :skills nil :instructions nil)
-                     (mevedel-plan-mode--default-selection session))))
-    (should (eq 'auto (mevedel-session-permission-mode session)))))
+  (mevedel-skills-test--with-model-backends
+    (let ((session (mevedel-session--create
+                    :name "test" :permission-mode 'auto)))
+      (with-temp-buffer
+        (setq-local mevedel-goal-token-budget 1234
+                    gptel-backend (gptel-get-backend "Balanced")
+                    gptel-model 'balanced-model
+                    gptel-reasoning-effort 'high)
+        (should (equal '(:location here :context current
+                         :execution direct :mode auto
+                         :model-provider "Balanced:balanced-model"
+                         :reasoning-effort high
+                         :goal-token-budget 1234
+                         :skills nil :instructions nil)
+                       (mevedel-plan-mode--default-selection session))))
+      (should (eq 'auto (mevedel-session-permission-mode session))))))
 
 (mevedel-deftest mevedel-plan-mode--invalidate-proposal
   (:doc "demotes an actionable proposal while preserving its selection")
@@ -197,10 +204,14 @@
                    :name "test" :permission-mode 'auto))
          (data-buffer (generate-new-buffer " *plan-approval-data*"))
          (view-buffer (generate-new-buffer " *plan-approval-view*"))
-         (selection (mevedel-plan-mode--default-selection session))
+         (selection
+          (let ((value (mevedel-plan-mode--default-selection session)))
+            (plist-put value :model-provider "OpenAI:gpt-5")
+            (plist-put value :reasoning-effort 'low)
+            value))
          (entry (mevedel-plan-mode--approval-entry
                  "# Plan" data-buffer session selection))
-         descriptor outcome rerendered)
+         descriptor outcome rerendered model-opened model-update)
     (unwind-protect
         (progn
           (with-current-buffer data-buffer
@@ -208,7 +219,7 @@
           (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
                    (lambda (_buffer) view-buffer))
                   ((symbol-function 'mevedel-model-current-provider-label)
-                   (lambda (&optional _buffer) "OpenAI:gpt-5"))
+                   (lambda (&optional _buffer) "Other:ambient"))
                   ((symbol-function 'mevedel-model-resolve-provider)
                    (lambda (&rest _) t))
                   ((symbol-function 'mevedel-view--fontify-as)
@@ -221,6 +232,10 @@
                    (lambda (_overlay value) (setq outcome value)))
                   ((symbol-function 'mevedel-plan-approval-render)
                    (lambda (&rest _) (setq rerendered t)))
+                  ((symbol-function 'mevedel-menu-open-implementation-model)
+                   (lambda (provider effort update)
+                     (setq model-opened (list provider effort)
+                           model-update update)))
                   ((symbol-function 'mevedel-plan-mode--read-worktree-branch)
                    (lambda (_entry) "plan/topic"))
                   ((symbol-function 'gptel-agent--block-bg)
@@ -233,7 +248,7 @@
                             "Context     Current — full planning transcript"
                             "Execution   Direct — one implementation turn"
                             "Mode        Auto"
-                            "Model       OpenAI:gpt-5 · effort high"
+                            "Model       OpenAI:gpt-5 · effort low"
                             "Skills      None"
                             "Instructions None"))
               (should (string-match-p text body)))
@@ -272,6 +287,16 @@
                         (lookup-key keymap (kbd "<tab>"))))
             (should-not (lookup-key keymap (kbd "b")))
             (should-not (string-match-p "Budget" body))
+            (call-interactively (lookup-key keymap (kbd "M")))
+            (should (equal '("OpenAI:gpt-5" low) model-opened))
+            (funcall model-update "Other:implementation" nil)
+            (should (equal "Other:implementation"
+                           (plist-get selection :model-provider)))
+            (should (eq selection
+                        (plist-get (mevedel-session-plan-metadata session)
+                                   :selection)))
+            (should-not (mevedel-session-model-provider session))
+            (funcall model-update "OpenAI:gpt-5" 'low)
             (call-interactively (lookup-key keymap (kbd "e")))
             (should (eq 'goal (plist-get selection :execution)))
             (should rerendered)
@@ -300,19 +325,21 @@
             (should (eq 'full-auto (plist-get selection :mode)))
             (should (eq 'auto (mevedel-session-permission-mode session)))
             (call-interactively (lookup-key keymap (kbd "RET")))
-            (should (equal '(:accept t
-                             :selection (:location worktree :context fresh
-                                         :execution goal :mode full-auto
-                                         :goal-token-budget nil
-                                         :skills nil :instructions nil
-                                         :branch "plan/topic"
-                                         :model-provider "OpenAI:gpt-5"
-                                         :reasoning-effort high))
-                           outcome)))))
+            (should (plist-get outcome :accept))
+            (let ((accepted (plist-get outcome :selection)))
+              (should (eq 'worktree (plist-get accepted :location)))
+              (should (eq 'fresh (plist-get accepted :context)))
+              (should (eq 'goal (plist-get accepted :execution)))
+              (should (eq 'full-auto (plist-get accepted :mode)))
+              (should (equal "plan/topic" (plist-get accepted :branch)))
+              (should (equal "OpenAI:gpt-5"
+                             (plist-get accepted :model-provider)))
+              (should (eq 'low
+                          (plist-get accepted :reasoning-effort)))))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
-  :doc "keeps approval pending when the current model is unregistered"
+  :doc "keeps approval pending when the selected model is unregistered"
   (let* ((session (mevedel-session--create :name "test"))
          (data-buffer (generate-new-buffer " *plan-model-data*"))
          (view-buffer (generate-new-buffer " *plan-model-view*"))
@@ -321,10 +348,10 @@
                  "# Plan" data-buffer session selection))
          descriptor outcome)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+        (progn
+          (plist-put selection :model-provider "Missing:model")
+          (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
                    (lambda (_buffer) view-buffer))
-                  ((symbol-function 'mevedel-model-current-provider-label)
-                   (lambda (&optional _buffer) "Missing:model"))
                   ((symbol-function 'mevedel-model-resolve-provider)
                    (lambda (&rest _) nil))
                   ((symbol-function 'mevedel-view--fontify-as)
@@ -342,7 +369,7 @@
            (call-interactively
             (lookup-key (plist-get descriptor :keymap) (kbd "RET")))
            :type 'user-error)
-          (should-not outcome))
+          (should-not outcome)))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
@@ -758,6 +785,8 @@
          (hash (mevedel-plan-hash plan))
          (selection '(:location here :context current
                       :execution goal :mode auto
+                      :model-provider "OpenAI:gpt-5"
+                      :reasoning-effort nil
                       :goal-token-budget 1357))
          (session
           (mevedel-session--create
@@ -790,6 +819,52 @@
             (with-current-buffer view-buf
               (should (equal "> first\nsecond"
                              (mevedel-view--input-text))))))
+      (delete-directory save-dir t)))
+
+  :doc "demotes persisted proposals without an implementation model snapshot"
+  (let* ((save-dir (make-temp-file "mevedel-plan-restore-old-" t))
+         (path (file-name-concat save-dir "plans" "current.md"))
+         (plan "# Old proposal")
+         (hash (mevedel-plan-hash plan))
+         (session
+          (mevedel-session--create
+           :name "test" :save-path save-dir :plan-mode t
+           :plan-metadata
+           (list :path "plans/current.md" :hash hash :status 'proposed
+                 :proposal-id (list 1 2 hash)
+                 :selection '(:location here :context current
+                              :execution direct :mode ask)))))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory path) t)
+          (write-region plan nil path nil 'silent)
+          (should-not
+           (mevedel-plan-mode-restore-pending-approval session))
+          (should (eq 'draft
+                      (plist-get (mevedel-session-plan-metadata session)
+                                 :status)))
+          (should-not
+           (plist-member (mevedel-session-plan-metadata session)
+                         :selection))
+          (mevedel-skills-test--with-model-backends
+            (with-temp-buffer
+              (setq-local mevedel--session session
+                          gptel-backend (gptel-get-backend "Balanced")
+                          gptel-model 'balanced-model
+                          gptel-reasoning-effort 'high)
+              (insert "<proposed_plan>\n# Replacement\n</proposed_plan>\n")
+              (add-text-properties (point-min) (point-max) '(gptel response))
+              (cl-letf (((symbol-function 'mevedel-plan-approval-render)
+                         #'ignore))
+                (mevedel-plan-mode--post-response (point-min) (point-max)))
+              (let ((replacement
+                     (plist-get (mevedel-session-plan-metadata session)
+                                :selection)))
+                (should (equal "Balanced:balanced-model"
+                               (plist-get replacement :model-provider)))
+                (should (eq 'high
+                            (plist-get replacement
+                                       :reasoning-effort)))))))
       (delete-directory save-dir t)))
 
   :doc "demotes a proposed artifact whose durable identity no longer agrees"

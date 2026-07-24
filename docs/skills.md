@@ -339,11 +339,13 @@ prepared output, model output, child prompts and results, and model-supplied
 arguments are likewise never interpreted as new user `$skill` mentions.
 
 A plan with exactly one leading inline command lets that command select the
-model and effort of the request that the composer has not yet realized. A
-stack of two or more distinct inline commands retains the session model and
-effort; every stacked command's frontmatter and preset-side skill policy is
-ignored without choosing a winner. Instruction mentions also retain session
-policy, including when the mentioned skill normally has `context: fork`.
+model and effort of the request that the composer has not yet realized. This
+overrides the root consumer's workload, such as `planning` during Plan mode.
+A stack of two or more distinct inline commands retains that consumer
+workload; every stacked command's frontmatter and preset-side skill policy is
+ignored without choosing a winner. Instruction mentions also retain the
+consumer workload, including when the mentioned skill normally has
+`context: fork`.
 
 Ordinarily, queued prompts retain their original bound text. Queueing performs
 no body preparation and runs no prompt hook. When an entry becomes the next
@@ -364,7 +366,9 @@ the preparation token so late callbacks cannot dispatch.
 The model-side `Skill` tool and internal callers use the same normalized
 preparation outcomes. Model failures remain ordinary tool errors, and fork
 dispatch uses the shared agent runtime rather than a skill-specific recursion
-or scheduling limit. `ListSkills` mirrors the active, enabled,
+or scheduling limit. Model-side inline Skill invocation does not change the
+root request model policy; forked skills and retained agents resolve their own
+workloads. `ListSkills` mirrors the active, enabled,
 model-invocable roster and can query dormant path-scoped skills.
 
 ## Review and Verify Commands

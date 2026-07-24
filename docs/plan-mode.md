@@ -13,6 +13,26 @@ completed Goal is historical and does not block it.
 including implementation requests, remain planning input until the user exits
 Plan or accepts a proposal.
 
+## Planning model policy
+
+Every root Plan request resolves the current preset's `planning` workload at
+request realization. The resolved backend, model, and effort are local to that
+request; the session's ordinary model policy and chat buffer remain unchanged.
+Changing the preset therefore affects the next Plan request. Missing workload
+fields inherit the session policy, while an invalid workload fails before
+dispatch.
+
+For example:
+
+```elisp
+(:model-workloads ((planning :tier strong)))
+```
+
+A single leading user-invoked inline skill may override the planning model or
+effort for that request. Instruction skills and model-side Skill calls do not.
+Retained agents keep their own workload policies. Plan Summary preparation
+continues to use the `compaction` workload.
+
 ## Tool boundary
 
 Plan requests omit `Write`, `Edit`, and `MkDir`. The pipeline denies those
@@ -47,16 +67,17 @@ The approval interaction has these axes:
 - Execution: Direct or Goal.
 - Budget: a positive Goal token limit, or Unlimited.
 - Mode: Ask, Auto, or Full-auto.
-- Model: the ambient session backend/model and reasoning effort.
+- Model: the proposal-local implementation backend/model and reasoning effort.
 - Skills: canonical user-invocable skills attached to implementation.
 - Instructions: free-form multiline implementation-only guidance.
 
 Keys are `l` for Location, `c` for Context, `e` for Execution, `m` or `TAB`
-for Mode, `M` for the shared model/effort cockpit, `s` to toggle skills, `i`
-to edit implementation instructions, and—when Goal is selected—`b` for
-Budget. The instructions editor saves with `C-c C-c` and cancels with
-`C-c C-k`. `RET` accepts, `f` opens an editable feedback draft, `q` hides the
-approval, and `C-g` cancels.
+for Mode, `M` for the proposal-local Implementation model selector, `s` to
+toggle skills, `i` to edit implementation instructions, and—when Goal is
+selected—`b` for Budget. The ordinary `/model` cockpit remains session-level.
+The instructions editor saves with `C-c C-c` and cancels with `C-c C-k`.
+`RET` accepts, `f` opens an editable feedback draft, `q` hides the approval,
+and `C-g` cancels.
 Selecting Worktree while Current is selected changes the context to Fresh. A
 dirty source checkout is not copied or stashed; Worktree starts at `HEAD`.
 
@@ -73,11 +94,12 @@ blocked, paused, or budget-limited. When Goal is selected, the approval shows
 the proposal's target token budget. `b` accepts a positive integer; empty input
 means Unlimited. The setting starts from the effective session default, stays
 local to the pending proposal, survives Execution toggles and revised
-proposals, and applies only on acceptance. Cancellation or Plan exit discards
-the selection, including skills and implementation instructions. Model and
-effort are ambient session settings: changes through `M` affect later Plan
-turns and are not reverted by cancellation. Acceptance snapshots the exact
-backend/model and effort for every implementation target and retry.
+proposals, and applies only on acceptance. The first proposal snapshots the
+session model and effort into the same persisted selection. `M` changes only
+that implementation snapshot; choosing a model that cannot support the
+selected effort resets effort to its default. Cancellation or Plan exit leaves
+the session model unchanged. Acceptance applies the stored snapshot to every
+implementation target and retry.
 
 ## Acceptance and recovery
 
@@ -139,4 +161,6 @@ that target's kickoff. Paused kickoff-owned input remains held until resume.
 Plan activity, proposal identity, selection, artifact descriptors, and retry
 state persist in session metadata. Resume reconstructs an approval only when
 Plan is active, metadata says `proposed`, and the current artifact still
-matches its recorded hash. Drafts never reactivate automatically.
+matches its recorded hash. Persisted proposals without an implementation model
+snapshot are demoted instead of migrated. Drafts never reactivate
+automatically.
