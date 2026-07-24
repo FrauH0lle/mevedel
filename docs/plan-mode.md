@@ -2,11 +2,11 @@
 
 Plan mode is a sticky planning workflow independent of the session's stored
 `ask`, `auto`, or `full-auto` permission mode. Enter it with `/plan`,
-`/plan PROMPT`, the cockpit, or `C-<tab>`. `Shift-TAB` continues to cycle only
-`ask` -> `auto` -> `full-auto` -> `ask`, including while Plan is active. The
-composer displays both dimensions as `[Plan · MODE]`. A session with an
-unfinished Goal cannot enter Plan; a completed Goal is historical and does not
-block it.
+`/plan PROMPT`, the cockpit, or `C-<tab>` in the composer. `Shift-TAB` in
+the composer continues to cycle only `ask` -> `auto` -> `full-auto` -> `ask`,
+including while Plan is active. The composer displays both dimensions as
+`[Plan · MODE]`. A session with an unfinished Goal cannot enter Plan; a
+completed Goal is historical and does not block it.
 
 `/plan PROMPT` enters Plan and sends `PROMPT` through the ordinary
 `UserPromptSubmit` and skill-preparation transaction. Ordinary follow-up turns,

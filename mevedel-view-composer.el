@@ -262,8 +262,16 @@
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add "mevedel-view-history"
 		  (input))
+(declare-function mevedel-view-history-beginning-of-line
+		  "mevedel-view-history" (&optional arg))
+(declare-function mevedel-view-history-browse "mevedel-view-history" ())
+(declare-function mevedel-view-history-clear-input
+		  "mevedel-view-history" ())
 (declare-function mevedel-view-history-load "mevedel-view-history"
 		  (&optional session))
+(declare-function mevedel-view-history-next "mevedel-view-history" ())
+(declare-function mevedel-view-history-previous "mevedel-view-history" ())
+(declare-function mevedel-view-history-search "mevedel-view-history" ())
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-rebuild
@@ -473,6 +481,26 @@ chrome; everything at or below it belongs to the input zone.  The input
 zone starts with the read-only prompt prefix, followed by the editable
 composer body.")
 
+(defvar-keymap mevedel-view--composer-keymap
+  :doc "Keymap active over the editable composer body."
+  "C-<tab>" #'mevedel-view-toggle-plan-mode
+  "C-c RET" #'mevedel-view-send
+  "C-c C-e" #'mevedel-view-edit-last-queued-message
+  "C-c C-l" #'mevedel-view-history-browse
+  "C-c C-u" #'mevedel-view-history-clear-input
+  "C-y" #'mevedel-view-yank-dwim
+  "M-n" #'mevedel-view-history-next
+  "M-p" #'mevedel-view-history-previous
+  "M-r" #'mevedel-view-history-search
+  "<backtab>" #'mevedel-view-cycle-permission-mode
+  "S-TAB" #'mevedel-view-cycle-permission-mode)
+
+(define-key mevedel-view--composer-keymap
+            [remap move-beginning-of-line]
+            #'mevedel-view-history-beginning-of-line)
+
+(defvar-local mevedel-view--composer-keymap-overlay nil
+  "Overlay that gives the editable composer its local keymap.")
 
 
 (defvar-local mevedel-view--skill-argument-hint-overlay nil
@@ -843,7 +871,13 @@ ARG is passed through from the interactive prefix."
               #'mevedel-view--refresh-skill-argument-hint-after-change
               nil t)
     (add-hook 'kill-buffer-hook
-              #'mevedel-view--cancel-pending-skill-submission nil t)))
+              #'mevedel-view--cancel-pending-skill-submission nil t)
+    (setq mevedel-view--composer-keymap-overlay
+          (make-overlay
+           (mevedel-view--input-start) (point-max)
+           (current-buffer) nil t))
+    (overlay-put mevedel-view--composer-keymap-overlay
+                 'keymap mevedel-view--composer-keymap)))
 
 ;;
 ;;; Input forwarding
@@ -1002,7 +1036,11 @@ follows `mevedel-view--input-marker'."
                  (set-marker-insertion-type
                   mevedel-view--interaction-marker interaction-type))
                (set-marker-insertion-type
-                mevedel-view--input-marker input-type)))))))))
+                mevedel-view--input-marker input-type)))
+           (when (overlayp mevedel-view--composer-keymap-overlay)
+             (move-overlay
+              mevedel-view--composer-keymap-overlay
+              (mevedel-view--input-start) (point-max)))))))))
 
 (defun mevedel-view-cycle-permission-mode ()
   "Cycle the current session's permission mode from the view buffer."

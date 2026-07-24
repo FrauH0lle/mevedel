@@ -400,6 +400,62 @@
         (should (equal "> first\nsecond"
                        (mevedel-view--input-text)))))))
 
+(mevedel-deftest mevedel-view-composer-keymap
+  (:doc "Composer commands are bound only inside editable input")
+  ,test
+  (test)
+  (let ((bindings
+         '(("C-<tab>" . mevedel-view-toggle-plan-mode)
+           ("<backtab>" . mevedel-view-cycle-permission-mode)
+           ("S-TAB" . mevedel-view-cycle-permission-mode)
+           ("C-c RET" . mevedel-view-send)
+           ("C-c C-l" . mevedel-view-history-browse)
+           ("C-c C-u" . mevedel-view-history-clear-input)
+           ("C-c C-e" . mevedel-view-edit-last-queued-message)
+           ("C-y" . mevedel-view-yank-dwim)
+           ("M-p" . mevedel-view-history-previous)
+           ("M-n" . mevedel-view-history-next)
+           ("M-r" . mevedel-view-history-search)
+           ("C-a" . mevedel-view-history-beginning-of-line)
+           ("C-z" . mevedel-view-history-beginning-of-line)))
+        (was-enabled tab-bar-mode))
+    (unwind-protect
+        (progn
+          (tab-bar-mode 1)
+          (mevedel-view-test--with-buffers
+            (with-current-buffer view-buf
+              (use-local-map (copy-keymap (current-local-map)))
+              (local-set-key (kbd "C-z") #'move-beginning-of-line)
+              (goto-char (mevedel-view--input-start))
+              (dolist (binding bindings)
+                (should
+                 (eq (key-binding (kbd (car binding)))
+                     (cdr binding))))
+              (insert "draft")
+              (goto-char (+ (mevedel-view--input-start) 2))
+              (should
+               (eq (key-binding (kbd "C-<tab>"))
+                   #'mevedel-view-toggle-plan-mode))
+              (mevedel-view-refresh-input-prompt)
+              (should
+               (eq (key-binding (kbd "C-<tab>"))
+                   #'mevedel-view-toggle-plan-mode))
+              (goto-char (point-min))
+              (dolist (binding bindings)
+                (should-not
+                 (eq (key-binding (kbd (car binding)))
+                     (cdr binding))))
+              (mevedel-view--setup view-buf data-buf)
+              (goto-char (mevedel-view--input-start))
+              (should
+               (eq (key-binding (kbd "C-<tab>"))
+                   #'mevedel-view-toggle-plan-mode))
+              (goto-char (point-min))
+              (should
+               (eq (key-binding (kbd "C-<tab>"))
+                   #'tab-next)))))
+      (tab-bar-mode (if was-enabled 1 -1)))))
+
 (mevedel-deftest mevedel-view-refresh-input-prompt
   (:doc "updates the prompt prefix without disturbing draft input")
   ,test

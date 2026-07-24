@@ -132,28 +132,12 @@
                   "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-initialize
                   "mevedel-view-composer" ())
-(declare-function mevedel-view-cycle-permission-mode
-                  "mevedel-view-composer" ())
-(declare-function mevedel-view-toggle-plan-mode
-                  "mevedel-view-composer" ())
-(declare-function mevedel-view-edit-last-queued-message
-                  "mevedel-view-composer" ())
-(declare-function mevedel-view-send "mevedel-view-composer" ())
-(declare-function mevedel-view-yank-dwim
-                  "mevedel-view-composer" (&optional arg))
+(defvar mevedel-view--composer-keymap-overlay)
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-history'
-(declare-function mevedel-view-history-beginning-of-line
-                  "mevedel-view-history" (&optional arg))
-(declare-function mevedel-view-history-browse "mevedel-view-history" ())
-(declare-function mevedel-view-history-clear-input
-                  "mevedel-view-history" ())
-(declare-function mevedel-view-history-next "mevedel-view-history" ())
-(declare-function mevedel-view-history-previous "mevedel-view-history" ())
 (declare-function mevedel-view-history-save "mevedel-view-history"
                   (&optional view-buffer))
-(declare-function mevedel-view-history-search "mevedel-view-history" ())
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-clear
@@ -477,17 +461,9 @@ above `mevedel-view--input-marker'."
 (defvar-keymap mevedel-view-mode-map
   :doc "Keymap for `mevedel-view-mode'."
   "C-g" #'mevedel-view-abort
-  "C-c RET" #'mevedel-view-send
   "C-c C-k" #'mevedel-view-abort
   "C-c C-o" #'mevedel-menu
-  "C-c C-l" #'mevedel-view-history-browse
-  "C-c C-u" #'mevedel-view-history-clear-input
-  "C-c C-e" #'mevedel-view-edit-last-queued-message
-  "C-c C-q" #'mevedel-view-clear-queued-messages
-  "C-y" #'mevedel-view-yank-dwim
-  "M-p" #'mevedel-view-history-previous
-  "M-n" #'mevedel-view-history-next
-  "M-r" #'mevedel-view-history-search)
+  "C-c C-q" #'mevedel-view-clear-queued-messages)
 
 (defun mevedel-view--display-fragment-keymap (&rest maps)
   "Return a composed display-fragment keymap from MAPS.
@@ -505,16 +481,6 @@ navigation and activation fallbacks."
      "<return>" #'mevedel-view-activate-at-point
      "RET" #'mevedel-view-activate-at-point)
    mevedel-tool-task--status-keymap))
-
-(define-key mevedel-view-mode-map
-            [remap move-beginning-of-line]
-            #'mevedel-view-history-beginning-of-line)
-(define-key mevedel-view-mode-map (kbd "<backtab>")
-            #'mevedel-view-cycle-permission-mode)
-(define-key mevedel-view-mode-map (kbd "S-TAB")
-            #'mevedel-view-cycle-permission-mode)
-(define-key mevedel-view-mode-map (kbd "C-<tab>")
-            #'mevedel-view-toggle-plan-mode)
 
 (defun mevedel-view--enforce-ephemeral (&rest _)
   "Keep the current view buffer out of Emacs save machinery."
@@ -588,6 +554,8 @@ view.  When `:preserve-data-view-buffer' is non-nil, leave DATA-BUF's
   (require 'mevedel-view-render)
   (require 'mevedel-view-stream)
   (with-current-buffer view-buf
+    (when (overlayp mevedel-view--composer-keymap-overlay)
+      (delete-overlay mevedel-view--composer-keymap-overlay))
     (mevedel-view-mode)
     (mevedel-view--enforce-ephemeral)
     (setq-local mevedel--data-buffer data-buf)
