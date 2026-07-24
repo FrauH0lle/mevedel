@@ -493,7 +493,8 @@
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root
-                 '("sh" "-c" "printf one; sleep 1; printf two")))
+                 '("sh" "-c" "printf one; sleep 1; printf two")
+                 :yield-time-ms 250))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
           (should (equal "one" (plist-get initial :output)))
           (should-error
@@ -616,17 +617,20 @@
   :doc "keeps trapped and late Ctrl-C exit status distinct from signals"
   (dolist (command '(("sh" "-c"
                       "trap 'exit 2' INT; printf ready; while :; do sleep 1; done")
-                     ("sh" "-c" "printf ready; sleep .05; exit 2")))
+                     ("sh" "-c" "printf ready; sleep 1; exit 2")))
     (let* ((root (make-temp-file "mevedel-managed-exit-two-" t))
            (session (test-mevedel-execution--session root))
            (mevedel-sandbox-mode 'off)
            (initial
-            (test-mevedel-execution--start-managed session root command))
+            (test-mevedel-execution--start-managed
+             session root command :yield-time-ms 250))
            (id (plist-get (plist-get initial :facts) :execution-id))
            final)
       (unwind-protect
           (progn
-            (when (string-match-p "sleep .05" (car (last command)))
+            (when (string-match-p
+                   "printf ready; sleep 1; exit 2"
+                   (car (last command)))
               (test-mevedel-execution--wait
                (lambda ()
                  (mevedel-execution--record-finished-p

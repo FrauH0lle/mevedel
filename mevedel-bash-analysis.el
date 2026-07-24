@@ -17,6 +17,9 @@
 (declare-function mevedel-bash-policy-read-only-p
                   "mevedel-bash-policy" (argv))
 
+;; `shell'
+(defvar shell-file-name-quote-list)
+
 ;; `treesit'
 (declare-function treesit-language-available-p "treesit" (language &optional detail))
 (declare-function treesit-node-check "treesit" (node property))
@@ -55,6 +58,13 @@ user authority may still permit a matching command."
   '("case" "coproc" "do" "done" "elif" "else" "esac" "fi" "for"
     "function" "if" "in" "select" "then" "time" "until" "while")
   "Shell control-flow words rejected by the fallback parser.")
+
+(defun mevedel-bash-analysis--split-command (source)
+  "Split SOURCE using Bash quoting rules on every platform."
+  (require 'shell)
+  (let ((shell-file-name-quote-list
+         '(?\| ?& ?< ?> ?\( ?\) ?\; ?\s ?$ ?* ?! ?\" ?' ?` ?# ?\\)))
+    (split-string-shell-command source)))
 
 
 ;;
@@ -96,12 +106,11 @@ user authority may still permit a matching command."
   "Return best-effort literal path resources visible in SOURCE.
 This intentionally does not evaluate expansions.  Its purpose is to preserve
 protected-path checks even when unsupported syntax prevents argv extraction."
-  (require 'shell)
   (let (resources)
     (dolist (fragment
              (cons source (mevedel-bash-analysis--substitution-fragments source)))
       (let ((words (condition-case nil
-                       (split-string-shell-command fragment)
+                       (mevedel-bash-analysis--split-command fragment)
                      (error (split-string fragment "[[:space:]]+" t)))))
         (dolist (raw words)
           (let ((word raw))
@@ -281,12 +290,11 @@ quotes or escaped with a backslash do not close the substitution."
 
 (defun mevedel-bash-analysis--candidate-command (fragment)
   "Return a normalized possible command from FRAGMENT, or nil."
-  (require 'shell)
   (let ((candidate (string-trim fragment)))
     (setq candidate (replace-regexp-in-string "\\`[({[:space:]]+" "" candidate))
     (setq candidate (replace-regexp-in-string "[)}[:space:]]+\\'" "" candidate))
     (let ((argv (condition-case nil
-                    (split-string-shell-command candidate)
+                    (mevedel-bash-analysis--split-command candidate)
                   (error nil))))
       (while (and argv
                   (mevedel-bash-analysis--assignment-word-p (car argv)))
@@ -470,11 +478,10 @@ quotes or escaped with a backslash do not close the substitution."
 
 (defun mevedel-bash-analysis--argv (segments)
   "Return (COMMANDS REASONS) parsed from SEGMENTS."
-  (require 'shell)
   (let (commands reasons)
     (dolist (segment segments)
       (condition-case nil
-          (let ((argv (split-string-shell-command segment)))
+          (let ((argv (mevedel-bash-analysis--split-command segment)))
             (cond
              ((null argv)
               (push "A command is empty" reasons))

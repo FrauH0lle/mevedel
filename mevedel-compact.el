@@ -1222,12 +1222,12 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
        buffer-file-name
        (progn
          (require 'mevedel-session-persistence)
-         (string=
-          (expand-file-name buffer-file-name)
-          (expand-file-name
-           (mevedel-session-persistence--segment-path
-            (mevedel-session-save-path mevedel--session)
-            (mevedel-session-current-segment mevedel--session)))))))
+         (require 'mevedel-utilities)
+         (mevedel--same-file-p
+          buffer-file-name
+          (mevedel-session-persistence--segment-path
+           (mevedel-session-save-path mevedel--session)
+           (mevedel-session-current-segment mevedel--session))))))
 
 (defun mevedel--compact-auto-eligible-p ()
   "Return non-nil when automatic compaction may run in this buffer."
