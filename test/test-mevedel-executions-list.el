@@ -70,7 +70,11 @@
                                       (mevedel-cockpit-surface-header-line)))
               (should (string-match-p
                        ">>> ready"
-                       (mevedel-executions-list--details item nil)))))
+                       (mevedel-executions-list--details item nil)))
+              (should-not
+               (string-match-p
+                "Timeout:"
+                (mevedel-executions-list--details item nil)))))
       (when-let* ((buffer (get-buffer mevedel-executions-list-buffer-name)))
         (kill-buffer buffer))
       (when (buffer-live-p view) (kill-buffer view))

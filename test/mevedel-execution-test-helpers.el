@@ -57,7 +57,7 @@
 
 (cl-defun test-mevedel-execution--start-managed
     (session root command &key (owner "main") owner-context data-buffer
-             outcome-function tty timeout tool-args tool-use-id
+             outcome-function tty tool-args tool-use-id
              (yield-time-ms 10))
   "Start managed COMMAND for SESSION at ROOT and return its first observation."
   (let (observation)
@@ -69,7 +69,7 @@
      :artifact-directory (file-name-concat root "artifacts")
      :outcome-function outcome-function
      :tool-args tool-args :tool-use-id tool-use-id
-     :timeout timeout :tty tty :yield-time-ms yield-time-ms)
+     :tty tty :yield-time-ms yield-time-ms)
     (test-mevedel-execution--wait (lambda () observation))
     observation))
 

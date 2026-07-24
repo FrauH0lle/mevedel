@@ -61,7 +61,7 @@
 
 ;; `mevedel-tool-exec'
 (declare-function mevedel-tool-exec-format-execution-metadata
-                  "mevedel-tool-exec" (facts timeout-seconds))
+                  "mevedel-tool-exec" (facts))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--cancel-scheduled-render "mevedel-view" ())
@@ -1044,7 +1044,6 @@ POSITION may be an integer or marker."
            facts
            (list :status (mevedel-view-stream--execution-status facts)
                  :live-execution-p nil
-                 :timeout-seconds (plist-get event :timeout-seconds)
                  :sandbox-facts
                  (copy-tree
                   (plist-get (plist-get event :observation) :sandbox-facts))
@@ -1295,7 +1294,6 @@ RENDER-DATA is retained in the hidden transcript audit record."
      mevedel-view--execution-events tool-use-id
      (list :type 'progress
            :facts (copy-tree (plist-get event :facts))
-           :timeout-seconds (plist-get event :timeout-seconds)
            :output-tail (plist-get event :output-tail))
      'mevedel-view--execution-event-entries)))
 
@@ -1321,8 +1319,7 @@ RENDER-DATA is retained in the hidden transcript audit record."
               (concat
                (mevedel-view--tool-status-string "Bash" args)
                " — "
-               (mevedel-tool-exec-format-execution-metadata
-                facts (plist-get event :timeout-seconds))
+               (mevedel-tool-exec-format-execution-metadata facts)
                (and (stringp tail)
                     (not (string-empty-p tail))
                     (concat "\n" tail))))

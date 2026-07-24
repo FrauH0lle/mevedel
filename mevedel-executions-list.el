@@ -106,7 +106,7 @@
         (sandbox (plist-get item :sandbox-facts)))
     (format
      (concat "Execution: %s\nOwner: %s\nCommand: %s\nMode: %s\n"
-             "Elapsed: %s\nOutput: %d bytes, %d lines\nTimeout: %s\n"
+             "Elapsed: %s\nOutput: %d bytes, %d lines\n"
              "Artifact: %s\n%s\n\nLive output tail:\n%s")
      (plist-get item :execution-id)
      (plist-get item :owner)
@@ -116,7 +116,6 @@
       (or (plist-get item :wall-time-seconds) 0))
      (or (plist-get item :output-bytes) 0)
      (or (plist-get item :output-lines) 0)
-     (or (plist-get item :timeout-seconds) "none")
      (or (plist-get item :artifact-path) "none")
      (if sandbox
          (mevedel-sandbox-status-text sandbox)

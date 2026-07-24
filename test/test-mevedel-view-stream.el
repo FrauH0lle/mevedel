@@ -259,7 +259,6 @@
                     :owner "main"
                     :tool-use-id "call-live"
                     :tool-args '(:command "printf run")
-                    :timeout-seconds 30
                     :output-tail "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7"
                     :facts '(:execution-id "exec-000001" :state running
                              :wall-time-seconds 2.5 :output-bytes 9
@@ -300,7 +299,7 @@
                     :owner "main"
                     :tool-use-id "call-live"
                     :tool-args '(:command "printf run")
-                    :timeout-seconds 30 :whole-output "whole head\nwhole tail"
+                    :whole-output "whole head\nwhole tail"
                     :observation
                     '(:sandbox-summary
                       (:attempt-count 1 :started-count 1 :refused-count 0

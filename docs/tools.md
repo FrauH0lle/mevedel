@@ -425,42 +425,42 @@ the model which path or expression fields to narrow before retrying.
 ## Managed Bash execution
 
 Bash source runs through `bash -lc`, so login-shell initialization contributes
-to the same output and timeout as the requested command. Commands are
-terminated after `mevedel-bash-timeout` seconds by default (120 seconds). A
-Bash call may pass `timeout_seconds` to request a longer or shorter positive
-timeout for that invocation. On Unix, Emacs places each child in a dedicated
-process group, and mevedel sends TERM followed by KILL to the whole group. On
-Windows it terminates the direct child. The result includes partial combined
-stdout/stderr and structured termination facts.
+to the requested command's output. Managed Bash has no automatic timeout; use
+the native `timeout` command when the command itself needs a deadline. On Unix,
+Emacs places each child in a dedicated process group, and mevedel sends TERM
+followed by KILL to the whole group. On Windows it terminates the direct child.
+The result includes partial combined stdout/stderr and structured termination
+facts.
 
 Bash waits up to `yield_time_ms` (10 seconds by default, 250-30000ms). A command
 that finishes first returns normally and discards its temporary spool when all
 output fits inline. A command still running at the boundary returns its unread
 output, an opaque owner-scoped execution ID, and a retained session artifact.
-Its timeout and 64 MiB output cap continue running after yield. Pipe-mode stdin
-is closed from spawn. Explicit `tty=true` instead allocates a PTY and retains
-writable stdin without changing the captured owner, workdir, confinement, or
-resource grants. `WriteStdin` sends ordinary input only to PTYs. Unconfined
-Ctrl-C is written through PTYs or signals pipe-mode process groups; confined
-Ctrl-C instead signals the foreground process group once across Bubblewrap's
-session boundary.
+The 64 MiB output cap continues running after yield. Pipe-mode stdin is closed
+from spawn. Explicit `tty=true` instead allocates a PTY and retains writable
+stdin without changing the captured owner, workdir, confinement, or resource
+grants. `WriteStdin` sends ordinary input only to PTYs. Unconfined Ctrl-C is
+written through PTYs or signals pipe-mode process groups; confined Ctrl-C
+instead signals the foreground process group once across Bubblewrap's session
+boundary.
 Every observation returns only the newly unread output. `ListExecutions`
 exposes only the caller's yielded handles, and `StopExecution` terminates only
-a handle owned by that caller. Terminal facts record PTY mode and preserve the
-raw process exit or signal status. Canonical lifecycle state distinguishes
-`queued`, `running`,
+a handle owned by that caller. Input and stop inherit that execution authority
+without another prompt, while explicit deny rules and permission hooks still
+apply. Terminal facts record PTY mode and preserve the raw process exit or
+signal status. Canonical lifecycle state distinguishes `queued`, `running`,
 `stopping`, and `completed`; Interrupt rejects queued work that has not started,
 while Stop cancels it. There is no chunk ID: each observation advances one
-private unread cursor and returns canonical execution facts separately from
-the raw output. Unread ranges beyond 2000 characters use the shared newline-aware,
+private unread cursor and returns canonical execution facts separately from the
+raw output. Unread ranges beyond 2000 characters use the shared newline-aware,
 equal head-and-tail preview while the retained artifact remains complete.
 
 Managed executions publish transient progress after two seconds, at most four
 times per second. The existing Bash row shows the last five output lines, elapsed
-time, line and byte counts, configured timeout, and the execution ID once the
-command has yielded. These progress updates live only in bounded view state and
-never create transcript turns. Events carry the originating data buffer and
-durable tool-use ID, so the matching main or agent view is selected directly.
+time, line and byte counts, and the execution ID once the command has yielded.
+These progress updates live only in bounded view state and never create
+transcript turns. Events carry the originating data buffer and durable tool-use
+ID, so the matching main or agent view is selected directly.
 Terminal settlement replaces the original row's hidden render-data side channel
 in the authoritative transcript with the bounded whole-artifact head-and-tail
 preview plus exit, outcome, duration, omitted-output facts, and any noteworthy

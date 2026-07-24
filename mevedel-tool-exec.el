@@ -757,16 +757,6 @@ REQUEST may supply exact additive filesystem grants for this invocation."
 ;;
 ;;; Command Execution
 
-(defcustom mevedel-bash-timeout 120
-  "Maximum seconds a Bash command may run before it is terminated.
-
-The timeout starts once the process is spawned.  Bash tool calls may
-override this default with `timeout_seconds'.  Set to nil to disable
-Bash command timeouts."
-  :type '(choice (integer :tag "Timeout in seconds")
-                 (const :tag "Disabled" nil))
-  :group 'mevedel)
-
 (defcustom mevedel-permission-guardian nil
   "Whether to annotate Bash permission prompts with risk guidance.
 
@@ -2037,22 +2027,6 @@ direct non-workspace uses."
                       (mevedel-workspace-root workspace)))))
     (file-name-as-directory (or session-dir root default-directory))))
 
-(defun mevedel-tool-exec--bash-timeout-seconds (args)
-  "Return the effective Bash timeout in seconds for ARGS."
-  (let ((override (plist-get args :timeout_seconds)))
-    (cond
-     ((and override (not (integerp override)))
-      (error "Parameter timeout_seconds must be an integer"))
-     ((and (integerp override) (<= override 0))
-      (error "Parameter timeout_seconds must be positive"))
-     ((null mevedel-bash-timeout) nil)
-     ((integerp override) override)
-     ((and (integerp mevedel-bash-timeout)
-           (> mevedel-bash-timeout 0))
-      mevedel-bash-timeout)
-     (t
-      (error "Variable mevedel-bash-timeout must be nil or a positive integer")))))
-
 (defun mevedel-tool-exec--bash-yield-time-ms (input)
   "Return the validated Bash yield time in milliseconds from INPUT."
   (let* ((milliseconds
@@ -2155,8 +2129,8 @@ direct non-workspace uses."
            attributes))))
     (format "<bash-execution %s/>" (string-join (nreverse attributes) " "))))
 
-(defun mevedel-tool-exec-format-execution-metadata (facts timeout-seconds)
-  "Return compact UI metadata for execution FACTS and TIMEOUT-SECONDS."
+(defun mevedel-tool-exec-format-execution-metadata (facts)
+  "Return compact UI metadata for execution FACTS."
   (string-join
    (delq nil
          (list
@@ -2168,7 +2142,6 @@ direct non-workspace uses."
             (format "%d lines" (or (plist-get facts :output-lines) 0)))
           (when (plist-member facts :output-bytes)
             (format "%d bytes" (or (plist-get facts :output-bytes) 0)))
-          (and timeout-seconds (format "timeout %ss" timeout-seconds))
           (plist-get facts :execution-id)))
    " · "))
 
@@ -2251,8 +2224,7 @@ stopped command's outcome."
 
 (defun mevedel-tool-exec--bash (callback args)
   "Execute a Bash command and return its output.
-CALLBACK receives the result envelope.  ARGS is a plist with :command
-and optional :timeout_seconds."
+CALLBACK receives the result envelope.  ARGS is a plist with :command."
   (let ((command (plist-get args :command))
         (tty (plist-get args :tty)))
     (unless (stringp command)
@@ -2268,7 +2240,6 @@ and optional :timeout_seconds."
             (and (boundp 'mevedel--agent-invocation)
                  mevedel--agent-invocation))
            (owner (mevedel-current-origin))
-           (timeout (mevedel-tool-exec--bash-timeout-seconds args))
            (yield-time-ms
             (unless (plist-get args :wait-for-completion-p)
               (mevedel-tool-exec--bash-yield-time-ms args)))
@@ -2290,7 +2261,6 @@ and optional :timeout_seconds."
        :command (list "bash" "-lc" command)
        :workdir workdir
        :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
-       :timeout timeout
        :outcome-function
        (lambda (exit-code termination)
          (mevedel-tool-exec--bash-outcome analysis exit-code termination))
@@ -2604,7 +2574,7 @@ Header shows a truncated first line of the command; body fontifies as
            (metadata
             (and state
                  (mevedel-tool-exec-format-execution-metadata
-                  render-data (plist-get render-data :timeout-seconds)))))
+                  render-data))))
       (list :header (concat (format "%s: %s" (or name "Bash") first-line)
                             (and metadata (format " (%s)" metadata)))
             :body body
@@ -2651,8 +2621,6 @@ Header shows a truncated first line of the command; body fontifies as
     :handler #'mevedel-tool-exec--bash
     :args ((command string :required
                    "The Bash command to execute from the session working directory. Can include pipes and standard shell operators.")
-           (timeout_seconds integer :optional
-                            "Optional timeout in seconds. Defaults to `mevedel-bash-timeout' (120 seconds). Must be positive.")
            (yield_time_ms integer :optional
                           "Milliseconds to wait before yielding a still-running command. Defaults to 10000; range 250-30000.")
            (tty boolean :optional
@@ -2702,6 +2670,7 @@ Header shows a truncated first line of the command; body fontifies as
     :async-p t
     :max-result-size 30000
     :groups (eval)
+    :check-permission (lambda (_tool _args) 'allow)
     :renderer #'mevedel-tool-exec--render-bash)
 
   (mevedel-define-tool
@@ -2721,6 +2690,7 @@ Header shows a truncated first line of the command; body fontifies as
     :async-p t
     :max-result-size 30000
     :groups (eval)
+    :check-permission (lambda (_tool _args) 'allow)
     :renderer #'mevedel-tool-exec--render-bash)
 
   (mevedel-define-tool
