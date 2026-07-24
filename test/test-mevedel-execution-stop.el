@@ -253,6 +253,7 @@
           (test-mevedel-execution--wait
            (lambda () (zerop (mevedel-execution-count-user session))))
           (should (= 2 (length callbacks))))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
 (provide 'test-mevedel-execution-stop)

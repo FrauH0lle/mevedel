@@ -346,6 +346,13 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
          ((and confined-p
                (eq signal 'INT)
                (mevedel-execution--signal-confined-group record signal)))
+         ((and (eq system-type 'windows-nt)
+               (eq signal 'INT)
+               (process-live-p process))
+          (interrupt-process process t))
+         ((and (eq system-type 'windows-nt)
+               (process-live-p process))
+          (kill-process process t))
          ((and (eq signal 'INT)
                (mevedel-execution--record-tty-p record)
                (process-live-p process))
@@ -1857,12 +1864,12 @@ after WAIT-MS while the process remains live."
         (when-let* ((preparation
                     (mevedel-execution--record-sandbox-preparation record)))
           (mevedel-sandbox-cleanup preparation))))
+    (mevedel-execution--release-scheduler record)
+    (mevedel-execution--cleanup-record record)
     (when-let* ((function
                 (mevedel-execution--record-teardown-function record)))
       (setf (mevedel-execution--record-teardown-function record) nil)
       (ignore-errors (funcall function)))
-    (mevedel-execution--release-scheduler record)
-    (mevedel-execution--cleanup-record record)
     (when managed-live-p
       (mevedel-execution--notify-state-change record))))
 
