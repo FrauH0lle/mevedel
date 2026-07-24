@@ -8,9 +8,56 @@ Use the inbox for ideas that have not been investigated yet. Promote an
 item to a detailed entry when its scope and current status are understood.
 Remove items when they are implemented, obsolete, or no longer valuable.
 
-/goal Resolve the tickets in .scratch/guardian-prompts-and-plan-revision/tickets.md. Use $implement to do that. Review after each ticket and run
-  $ponytail:ponytail-review
-    and $thermo-nuclear-code-quality-review additionally. Resolve issues found by the reviews and review again. Repeat if required.
+/goal Resolve every ticket in `.scratch/plan-and-goal-redesign/issues/` on the
+current branch. Use $implement once for the complete ticket set, treating
+individual tickets as milestones rather than separate skill invocations. Process
+tickets in dependency order. Follow `AGENTS.md`, including the no-backwards-
+compatibility policy.
+
+For each ticket, satisfy its acceptance criteria, make the smallest root-cause
+change, update affected callers/tests/docs, run focused verification, and commit
+the completed ticket. Do not run the full review suite between ordinary tickets.
+
+After all tickets are implemented, perform one cumulative review cycle over the
+complete starting-commit-to-HEAD diff:
+
+1. Complete $implement ’s required code review and resolve its actionable
+   findings.
+2. Run $ponytail:ponytail-review , apply justified simplifications, then run
+   $thermo-nuclear-code-quality-review on the resulting leaner implementation.
+3. Consolidate duplicate findings and fix all correctness/spec failures and
+   high-confidence maintainability blockers in one pass.
+4. Rerun only a reviewer whose unresolved findings remain or whose review domain
+was materially affected by the fixes. Recheck those findings specifically; do
+not restart all four reviews automatically.
+5. Do not iterate on subjective or non-blocking preferences indefinitely. Record
+   any rejected finding with a concise rationale.
+
+After review fixes, clean stale bytecode, compile without warnings, and run the
+full test suite once.
+
+Complete the Goal only when every ticket’s acceptance criteria are satisfied,
+all required commits exist, final compilation and tests pass, and no actionable
+review blocker remains. If progress is genuinely blocked, stop with the affected
+ticket, attempted approaches, concrete evidence, and the exact input or external
+change needed.
+
+This changes reviews from an inner loop to an outer quality gate: roughly four
+reviews total instead of four multiplied by ticket count. Running Ponytail
+before the thermo-nuclear audit also prevents the expensive structural reviewer
+from analyzing code that will be deleted.
+
+The important wording is “actionable blocker,” not “all reviewers green.” The
+thermo-nuclear review is intentionally aspirational and can keep proposing
+improvements forever; literal greenness is not a stable completion condition.
+
+For especially risky tickets—new architectural boundaries, cross-module state
+changes, or a file crossing 1,000 lines—add an exceptional mid-stream thermo
+review. Otherwise, defer it. This preserves the official Goal pattern:
+measurable outcome, verification surface, constraints, boundaries, iteration
+policy, and blocked stop condition. OpenAI’s Goal-mode guide
+(https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex#how-to-write-a-goal)
+recommends those elements while leaving Codex room to choose the next action.
 
 ## Inbox
 
@@ -28,15 +75,18 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   and display the warning also in the view buffer (but not permanent via the data
   buffer).
 - Check what we can steal from https://github.com/karthink/gptel-agent/commit/5eb9fac975b65df04cf62e2eeffaa79273fbf965
-- Should WriteStdin prompt for permission? If yes, how?
-- Consider removing the timeout option from Bash. yield_time already unblocks the session at some point and /ps + /stop allows the user (and also the LLM) to kill stuck processes
-- Consider making mevedel's data buffers hidden 
+- Consider making mevedel's data buffers hidden
 - Find a better folder for the tool description markdown files
 - Ensure all tools have the examples and their descriptions in markdown files
 - Revisit provider prompt-cache optimization after ordered prompt profiles have
   usage data; avoid hard-coding unstable pricing assumptions.
-- Glob and Grep have issues in agents with bwrap sandbox
+- Guardian UX: The guardian should not have hard-denied these commands. For an ordinary repository test, uncertainty about npx downloading a package warrants ask, not deny. In
+  full-auto, that recommendation currently means “continue confined”; network isolation prevents downloading anyway. A specific network permission prompt should
+  appear only if execution later requires network access.
 
+- How do you go back in the view buffer to a previous segment just for viewing it? 
+  - Should be added to transient menu navigation
+  - Do we have a fork command? If so, it should be available in the transient menu as well and fork the conversation from the message at point
 
 ## Entry format
 
