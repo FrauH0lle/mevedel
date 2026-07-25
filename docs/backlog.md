@@ -94,6 +94,25 @@ Each entry records its source, owed change, reason for deferral, current
 status, and blast radius. Keep entries terse and remove them when they
 become implemented, obsolete, or unjustified.
 
+## Sessions
+
+### Surface incompatible persisted sessions
+
+- **Source:** `mevedel-session-persistence.el`; session schema changes during
+  `v0.5.0`.
+- **What's owed:** Detect session directories that the current picker cannot
+  restore and tell the user how many were omitted, why, their age and disk
+  usage, and where they live. Decide whether to offer inspection, archival, or
+  deletion; keep incompatible sessions unselectable until recovery semantics
+  are deliberately defined.
+- **Why deferred:** Resume remains safe by accepting only the current sidecar
+  shape, and ordinary age-based cleanup can reclaim stale data independently.
+- **Status check:** `mevedel-resume` currently drops missing, unreadable,
+  unsupported, and obsolete sidecars without reporting them.
+- **Blast radius:** Silent omission looks like data loss and can leave
+  unbounded workspace state without giving users enough information to decide
+  whether it is disposable.
+
 ## Agents
 
 ### Add task-focused summary context for agent forks

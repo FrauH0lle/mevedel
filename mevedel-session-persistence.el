@@ -306,11 +306,12 @@ Defaults to 1 MB."
 (defcustom mevedel-session-max-age-days 30
   "Auto-cleanup threshold for old sessions, in days.
 
-Sessions whose `:updated-at' is older than this are eligible for
-deletion when `mevedel-resume' runs (throttled per Emacs invocation).
-Sessions with active locks are always skipped: any cross-host lock, or
-a same-host lock whose PID is live and not known to have been reused.  A
-nil value disables auto-cleanup entirely."
+Sessions older than this are eligible for deletion when `mevedel-resume'
+runs (throttled per Emacs invocation).  Age comes from `:updated-at', or
+the sidecar or session directory modification time when metadata cannot
+provide it.  Sessions with active locks are always skipped: any cross-host
+lock, or a same-host lock whose PID is live and not known to have been
+reused.  A nil value disables auto-cleanup entirely."
   :type '(choice (integer :tag "Days")
           (const :tag "Disabled" nil))
   :group 'mevedel)
@@ -4249,11 +4250,12 @@ from disk."
   ;; `mevedel-workspace' and friends.
   (require 'mevedel)
   (let* ((workspace (mevedel-workspace))
-         ;; Silently drop `.lock' files left behind by previous Emacs
-         ;; invocations on this host before listing or cleaning up.
-         (_         (mevedel-session-persistence--sweep-stale-locks workspace))
-         ;; Run opportunistic cleanup once per workspace per Emacs invocation.
+         ;; Clean up before sweeping stale locks so removing a lock cannot make
+         ;; a sidecar-less session appear newly modified.
          (_         (mevedel-session-persistence-cleanup-expired workspace))
+         ;; Silently drop `.lock' files left behind by previous Emacs
+         ;; invocations on this host before listing.
+         (_         (mevedel-session-persistence--sweep-stale-locks workspace))
          (sessions  (mevedel-session-persistence-list-sessions workspace)))
     (unless sessions
       (user-error "No saved sessions in this workspace"))
@@ -4432,6 +4434,10 @@ active because we cannot probe the remote process."
 (defun mevedel-session-persistence-cleanup-expired (workspace &optional force)
   "Delete sessions in WORKSPACE older than `mevedel-session-max-age-days'.
 
+Scans session directories independently of resume compatibility.  Uses
+`:updated-at' when available, otherwise the sidecar or directory modification
+time.
+
 Skips sessions with an active lock.  Cross-host locks are active.
 Same-host locks are stale when their PID is dead or when the live
 process start time proves PID reuse.  Throttled to at most once per
@@ -4449,21 +4455,36 @@ the throttle has already fired."
         (puthash ws-key t mevedel-session-persistence--cleanup-throttle)
         (let ((threshold-secs (* mevedel-session-max-age-days 24 60 60))
               (now            (float-time))
+              (sessions-dir
+               (mevedel-session-persistence--sessions-dir workspace))
               (deleted        0))
-          (dolist (entry (mevedel-session-persistence-list-sessions workspace))
-            (let* ((save-path   (plist-get entry :save-path))
-                   (summary     (plist-get entry :summary))
-                   (updated-str (plist-get summary :updated-at))
-                   (parsed-time (mevedel-session-persistence--parse-iso-time
-                                 updated-str)))
-              (when (and parsed-time
-                         (> (- now (float-time parsed-time))
-                            threshold-secs)
-                         (not
-                          (mevedel-session-persistence--active-lock-p
-                           save-path)))
-                (delete-directory save-path t)
-                (cl-incf deleted))))
+          (dolist (save-path
+                   (and (file-directory-p sessions-dir)
+                        (directory-files sessions-dir t "\\`[^.]")))
+            (when (file-directory-p save-path)
+              (let* ((sidecar-path
+                      (mevedel-session-persistence--sidecar-path save-path))
+                     (sidecar
+                      (condition-case nil
+                          (mevedel-session-persistence-read sidecar-path)
+                        (error nil)))
+                     (updated-str (plist-get sidecar :updated-at))
+                     (parsed-time
+                      (or (mevedel-session-persistence--parse-iso-time
+                           updated-str)
+                          (file-attribute-modification-time
+                           (file-attributes
+                            (if (file-exists-p sidecar-path)
+                                sidecar-path
+                              save-path))))))
+                (when (and parsed-time
+                           (> (- now (float-time parsed-time))
+                              threshold-secs)
+                           (not
+                            (mevedel-session-persistence--active-lock-p
+                             save-path)))
+                  (delete-directory save-path t)
+                  (cl-incf deleted)))))
           (when (> deleted 0)
             (message "Cleaned up %d expired session%s"
                      deleted (if (= deleted 1) "" "s")))
