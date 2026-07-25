@@ -6116,6 +6116,74 @@ The result is a plist whose :tempdir owns every created file."
               (kill-buffer b2))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
+  :doc "deletes expired sessions with obsolete sidecars"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-persistence--cleanup-throttle
+                (make-hash-table :test #'equal))
+               (session (mevedel-session-create "obsolete" workspace))
+               (buf (generate-new-buffer "*test-obsolete-buf*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (insert "Old\n")
+                  (mevedel-session-persistence-save session buf))
+                (let* ((save-path (mevedel-session-save-path session))
+                       (sidecar
+                        (mevedel-session-persistence--sidecar-path save-path))
+                       (plist (mevedel-session-persistence-read sidecar))
+                       (forged
+                        (format-time-string
+                         "%FT%H-%M-%S"
+                         (time-subtract (current-time) (* 14 24 60 60)))))
+                  (cl-remf plist :plan-mode)
+                  (plist-put plist :updated-at forged)
+                  (mevedel-session-persistence-write sidecar plist)
+                  (mevedel-session-persistence-lock-release save-path)
+                  (should (= 1
+                             (mevedel-session-persistence-cleanup-expired
+                              workspace t)))
+                  (should-not (file-directory-p save-path))))
+            (when (buffer-live-p buf)
+              (with-current-buffer buf (set-buffer-modified-p nil))
+              (kill-buffer buf))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "deletes expired sessions without sidecars"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-persistence--cleanup-throttle
+                (make-hash-table :test #'equal))
+               (session (mevedel-session-create "missing" workspace))
+               (buf (generate-new-buffer "*test-missing-buf*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (insert "Old\n")
+                  (mevedel-session-persistence-save session buf))
+                (let* ((save-path (mevedel-session-save-path session))
+                       (sidecar
+                        (mevedel-session-persistence--sidecar-path save-path))
+                       (old-time
+                        (time-subtract (current-time) (* 14 24 60 60))))
+                  (mevedel-session-persistence-lock-release save-path)
+                  (delete-file sidecar)
+                  (set-file-times save-path old-time)
+                  (should (= 1
+                             (mevedel-session-persistence-cleanup-expired
+                              workspace t)))
+                  (should-not (file-directory-p save-path))))
+            (when (buffer-live-p buf)
+              (with-current-buffer buf (set-buffer-modified-p nil))
+              (kill-buffer buf))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
   :doc "skips locked sessions even when expired"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
