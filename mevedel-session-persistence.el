@@ -185,6 +185,7 @@
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
+(defvar mevedel-workspace--registry)
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-finish "mevedel-telemetry"
@@ -307,11 +308,11 @@ Defaults to 1 MB."
   "Auto-cleanup threshold for old sessions, in days.
 
 Sessions older than this are eligible for deletion when `mevedel-resume'
-runs (throttled per Emacs invocation).  Age comes from `:updated-at', or
-the sidecar or session directory modification time when metadata cannot
-provide it.  Sessions with active locks are always skipped: any cross-host
-lock, or a same-host lock whose PID is live and not known to have been
-reused.  A nil value disables auto-cleanup entirely."
+runs or Emacs exits (throttled per workspace per Emacs invocation).  Age
+comes from `:updated-at', or the sidecar or session directory modification
+time when metadata cannot provide it.  Sessions with active locks are always
+skipped: any cross-host lock, or a same-host lock whose PID is live and not
+known to have been reused.  A nil value disables auto-cleanup entirely."
   :type '(choice (integer :tag "Days")
           (const :tag "Disabled" nil))
   :group 'mevedel)
@@ -4502,31 +4503,42 @@ the throttle has already fired."
 ;; request struct (so `mevedel-request-file-snapshots' is still live).
 
 (defun mevedel-session-persistence--kill-emacs-hook ()
-  "Save modified mevedel sessions and release their locks on Emacs exit.
+  "Save sessions, clean expired state, and release locks on Emacs exit.
 
 Runs unconditionally so that locks don't outlive the Emacs process
 that wrote them.  Best-effort: individual errors are swallowed so one
 bad buffer can't block exit."
   (when (fboundp 'mevedel-execution-teardown-all)
     (ignore-errors (mevedel-execution-teardown-all)))
-  (dolist (buf (buffer-list))
-    (when (buffer-live-p buf)
-      (with-current-buffer buf
-        (when (and (boundp 'mevedel--session)
-                   mevedel--session)
-          (when (buffer-modified-p)
-            (condition-case _
-                (mevedel-session-persistence-save mevedel--session buf)
-              (error nil)))
-          (when-let ((dir (mevedel-session-save-path mevedel--session)))
-            (condition-case _
-                (mevedel-session-persistence-lock-release dir)
-              (error nil))))))))
+  (let (lock-dirs)
+    (dolist (buf (buffer-list))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (when (and (boundp 'mevedel--session)
+                     mevedel--session)
+            (when (buffer-modified-p)
+              (condition-case _
+                  (mevedel-session-persistence-save mevedel--session buf)
+                (error nil)))
+            (when-let ((dir (mevedel-session-save-path mevedel--session)))
+              (cl-pushnew dir lock-dirs :test #'equal))))))
+    ;; Keep live locks through cleanup so an exit-save failure cannot expose
+    ;; an old session directory for deletion.
+    (when (and (boundp 'mevedel-workspace--registry)
+               (hash-table-p mevedel-workspace--registry))
+      (maphash
+       (lambda (_ workspace)
+         (ignore-errors
+           (mevedel-session-persistence-cleanup-expired workspace)))
+       mevedel-workspace--registry))
+    (dolist (dir lock-dirs)
+      (condition-case _
+          (mevedel-session-persistence-lock-release dir)
+        (error nil)))))
 
-;; Install at file-load time so locks get released on exit even when
-;; the user never called `mevedel-install' this Emacs (e.g. running
-;; `mevedel-resume' is the only command invoked).  Duplicate adds are
-;; no-ops by `add-hook'.
+;; Install at file-load time so exit persistence runs even when the user
+;; never called `mevedel-install' this Emacs (e.g. running `mevedel-resume'
+;; is the only command invoked).  Duplicate adds are no-ops by `add-hook'.
 (add-hook 'kill-emacs-hook #'mevedel-session-persistence--kill-emacs-hook)
 
 

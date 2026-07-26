@@ -1172,6 +1172,18 @@ installs the real hook)."
     (with-current-buffer buf (set-buffer-modified-p nil))
     (kill-buffer buf)))
 
+(defun test-mevedel-session-persistence--expire-session (session)
+  "Set SESSION's persisted update time to fourteen days ago."
+  (let* ((save-path (mevedel-session-save-path session))
+         (sidecar (mevedel-session-persistence--sidecar-path save-path))
+         (plist (mevedel-session-persistence-read sidecar)))
+    (plist-put
+     plist :updated-at
+     (format-time-string
+      "%FT%H-%M-%S"
+      (time-subtract (current-time) (* 14 24 60 60))))
+    (mevedel-session-persistence-write sidecar plist)))
+
 (defun test-mevedel-session-persistence--make-missing-cwd-session ()
   "Return a saved session whose working directory has been deleted.
 The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
@@ -1911,9 +1923,12 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
   ,test
   (test)
   :doc "force-tears down executions before exit persistence"
-  (let (torn-down)
+  (let ((mevedel-workspace--registry nil)
+        torn-down)
     (cl-letf (((symbol-function 'mevedel-execution-teardown-all)
-               (lambda () (setq torn-down t))))
+               (lambda () (setq torn-down t)))
+              ((symbol-function 'buffer-list)
+               (lambda (&optional _frame) nil)))
       (mevedel-session-persistence--kill-emacs-hook))
     (should torn-down))
   :doc "modified view buffers are persisted through data buffers on exit"
@@ -1966,7 +1981,174 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
             (test-mevedel-session-persistence--release-and-kill
              data-buf session)))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))
+  :doc "cleans inactive expired sessions before releasing live locks"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-persistence--cleanup-throttle
+                (make-hash-table :test #'equal))
+               (live-session (mevedel-session-create "live" workspace))
+               (expired-session (mevedel-session-create "expired" workspace))
+               (live-buf (generate-new-buffer " *test-live*"))
+               (expired-buf (generate-new-buffer " *test-expired*")))
+          (unwind-protect
+              (progn
+                (dolist (pair `((,live-session . ,live-buf)
+                                (,expired-session . ,expired-buf)))
+                  (with-current-buffer (cdr pair)
+                    (org-mode)
+                    (setq-local mevedel--session (car pair))
+                    (setq-local mevedel--workspace workspace)
+                    (insert "Old session\n")
+                    (mevedel-session-persistence-save
+                     (car pair) (cdr pair))
+                    (set-buffer-modified-p nil)))
+                (dolist (session (list live-session expired-session))
+                  (test-mevedel-session-persistence--expire-session session))
+                (mevedel-session-persistence-lock-release
+                 (mevedel-session-save-path expired-session))
+                (cl-letf (((symbol-function 'buffer-list)
+                           (lambda (&optional _frame) (list live-buf))))
+                  (mevedel-session-persistence--kill-emacs-hook))
+                (should-not
+                 (file-directory-p
+                  (mevedel-session-save-path expired-session)))
+                (should
+                 (file-directory-p (mevedel-session-save-path live-session)))
+                (should-not
+                 (file-exists-p
+                  (mevedel-session-persistence--lock-path
+                   (mevedel-session-save-path live-session)))))
+            (test-mevedel-session-persistence--release-and-kill
+             live-buf live-session)
+            (test-mevedel-session-persistence--release-and-kill
+             expired-buf expired-session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "honors a cleanup run already throttled for the workspace"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-persistence--cleanup-throttle
+                (make-hash-table :test #'equal))
+               (session (mevedel-session-create "expired" workspace))
+               (buf (generate-new-buffer " *test-expired*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (insert "Old session\n")
+                  (mevedel-session-persistence-save session buf))
+                (let ((save-path (mevedel-session-save-path session)))
+                  (test-mevedel-session-persistence--expire-session session)
+                  (mevedel-session-persistence-lock-release save-path)
+                  (puthash
+                   (cons (mevedel-workspace-type workspace)
+                         (mevedel-workspace-id workspace))
+                   t mevedel-session-persistence--cleanup-throttle)
+                  (cl-letf (((symbol-function 'buffer-list)
+                             (lambda (&optional _frame) nil)))
+                    (mevedel-session-persistence--kill-emacs-hook))
+                  (should (file-directory-p save-path))))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "failed exit saves remain protected until cleanup finishes"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-persistence--cleanup-throttle
+                (make-hash-table :test #'equal))
+               (session (mevedel-session-create "live" workspace))
+               (buf (generate-new-buffer " *test-live*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (setq-local mevedel--session session)
+                  (insert "Unsaved exit change\n")
+                  (mevedel-session-persistence-save session buf))
+                (let* ((save-path (mevedel-session-save-path session))
+                       (sidecar
+                        (mevedel-session-persistence--sidecar-path save-path)))
+                  (test-mevedel-session-persistence--expire-session session)
+                  (delete-file sidecar)
+                  (make-directory sidecar)
+                  (set-file-times
+                   sidecar
+                   (time-subtract (current-time) (* 14 24 60 60)))
+                  (with-current-buffer buf
+                    (set-buffer-modified-p t))
+                  (cl-letf (((symbol-function 'buffer-list)
+                             (lambda (&optional _frame) (list buf))))
+                    (mevedel-session-persistence--kill-emacs-hook))
+                  (should (file-directory-p save-path))
+                  (should (file-directory-p sidecar))
+                  (should-not
+                   (file-exists-p
+                    (mevedel-session-persistence--lock-path save-path)))))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "cleanup errors do not block sibling workspaces or lock release"
+  (let* ((mevedel-session-max-age-days 7)
+         (mevedel-session-persistence--cleanup-throttle
+          (make-hash-table :test #'equal))
+         (mevedel-workspace--registry (make-hash-table :test #'equal))
+         (bad-root (file-name-as-directory
+                    (make-temp-file "mevedel-test-bad-ws-" t)))
+         (good-root (file-name-as-directory
+                     (make-temp-file "mevedel-test-good-ws-" t)))
+         (bad-workspace
+          (mevedel-workspace-get-or-create
+           'project "bad" bad-root "bad"))
+         (good-workspace
+          (mevedel-workspace-get-or-create
+           'project "good" good-root "good"))
+         (bad-sessions
+          (mevedel-session-persistence--sessions-dir bad-workspace))
+         (live-session (mevedel-session-create "live" good-workspace))
+         (expired-session (mevedel-session-create "expired" good-workspace))
+         (live-buf (generate-new-buffer " *test-live*"))
+         (expired-buf (generate-new-buffer " *test-expired*")))
+    (unwind-protect
+        (progn
+          (dolist (pair `((,live-session . ,live-buf)
+                          (,expired-session . ,expired-buf)))
+            (with-current-buffer (cdr pair)
+              (org-mode)
+              (setq-local mevedel--session (car pair))
+              (insert "Session\n")
+              (mevedel-session-persistence-save (car pair) (cdr pair))
+              (set-buffer-modified-p nil)))
+          (let ((save-path (mevedel-session-save-path expired-session)))
+            (test-mevedel-session-persistence--expire-session expired-session)
+            (mevedel-session-persistence-lock-release save-path))
+          (make-directory bad-sessions t)
+          (set-file-modes bad-sessions 0)
+          (cl-letf (((symbol-function 'buffer-list)
+                     (lambda (&optional _frame) (list live-buf))))
+            (mevedel-session-persistence--kill-emacs-hook))
+          (should-not
+           (file-directory-p (mevedel-session-save-path expired-session)))
+          (should-not
+           (file-exists-p
+            (mevedel-session-persistence--lock-path
+             (mevedel-session-save-path live-session)))))
+      (when (file-exists-p bad-sessions)
+        (set-file-modes bad-sessions #o700))
+      (test-mevedel-session-persistence--release-and-kill
+       live-buf live-session)
+      (test-mevedel-session-persistence--release-and-kill
+       expired-buf expired-session)
+      (delete-directory bad-root t)
+      (delete-directory good-root t))))
 
 (mevedel-deftest mevedel-session-persistence--instruction-snapshots ()
   ,test
