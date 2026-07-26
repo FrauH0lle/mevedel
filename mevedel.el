@@ -593,10 +593,10 @@ always prompt for the session name."
   ;; Install view-specific gptel stream repair advice.
   (mevedel-view-stream-install)
 
-  ;; Best-effort save of live sessions on Emacs exit.  The hook itself
-  ;; is installed at `mevedel-session-persistence' file-load time so
-  ;; it's active even when the user never calls `mevedel-install'
-  ;; (e.g. only invokes `mevedel-resume').
+  ;; Best-effort save and cleanup of live sessions on Emacs exit.  The hook
+  ;; itself is installed at `mevedel-session-persistence' file-load time so
+  ;; it's active even when the user never calls `mevedel-install' (e.g. only
+  ;; invokes `mevedel-resume').
   (require 'mevedel-session-persistence)
 
   ;; Terminate the session when the main agent errors out.  The main

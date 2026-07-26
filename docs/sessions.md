@@ -302,10 +302,12 @@ verified, the lock stays active.
 ### Auto-cleanup
 
 `mevedel-session-max-age-days` (default 30) deletes expired sessions on
-`mevedel-resume`, including sessions whose sidecars are obsolete, unreadable,
-or missing. Cleanup uses `:updated-at` when available, otherwise the sidecar or
-session directory modification time. It skips active locks and is throttled to
-once per workspace per Emacs invocation. `nil` disables.
+`mevedel-resume` and from `kill-emacs-hook`, including sessions whose sidecars
+are obsolete, unreadable, or missing. Exit cleanup scans every workspace
+registered during the Emacs invocation before releasing live-session locks.
+Cleanup uses `:updated-at` when available, otherwise the sidecar or session
+directory modification time. It skips active locks and is throttled to once per
+workspace per Emacs invocation. `nil` disables.
 
 ## Defcustoms
 
