@@ -181,6 +181,7 @@
          (mevedel-sandbox-mode 'off)
          (mevedel-execution--child-kill-delay 0.05)
          terminal)
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (mevedel-execution-start-bash
@@ -220,6 +221,7 @@
          (mevedel-sandbox-mode 'off)
          (mevedel-execution--child-kill-delay 0.05)
          callbacks)
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (dolist (owner '("main" "explorer--queued"))
@@ -254,7 +256,12 @@
            (lambda () (zerop (mevedel-execution-count-user session))))
           (should (= 2 (length callbacks))))
       (mevedel-execution-teardown-session session)
-      (delete-directory root t))))
+      (delete-directory root t)))
+  :doc "rejects native Windows interrupts explicitly"
+  (let ((system-type 'windows-nt))
+    (should-error
+     (mevedel-execution-interrupt-user nil "exec-test")
+     :type 'mevedel-execution-input-error)))
 
 (provide 'test-mevedel-execution-stop)
 ;;; test-mevedel-execution-stop.el ends here

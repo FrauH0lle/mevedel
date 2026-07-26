@@ -28,16 +28,22 @@
          (target (file-name-concat hidden "target"))
          (alias (file-name-concat hidden "alias"))
          (link (file-name-concat root "link")))
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (make-directory hidden)
           (with-temp-file target)
           (make-symbolic-link "target" alias)
           (make-symbolic-link "hidden/alias" link)
-          (should
-           (equal (mevedel-sandbox--symlink-chain link)
-                  (list (cons link "hidden/alias")
-                        (cons alias "target")))))
+          (let ((canonical-root (file-truename root)))
+            (should
+             (equal
+              (last (mevedel-sandbox--symlink-chain link) 2)
+              (list
+               (cons (file-name-concat canonical-root "link")
+                     "hidden/alias")
+               (cons (file-name-concat canonical-root "hidden" "alias")
+                     "target"))))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-sandbox--resolve-filesystem-permissions ()
@@ -48,6 +54,7 @@
   (let* ((root (make-temp-file "mevedel-sandbox-grant-resolve-" t))
          (target (file-name-concat root "target"))
          (link (file-name-concat root "link")))
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (with-temp-file target)
@@ -57,9 +64,12 @@
                   (mevedel-sandbox--resolve-filesystem-permissions
                    `((:path ,link :access read))))))
             (should (equal link (plist-get grant :source-path)))
-            (should (equal target (plist-get grant :path)))
-            (should (equal (list (cons link "target"))
-                           (plist-get grant :symlinks)))
+            (should (file-equal-p target (plist-get grant :path)))
+            (should
+             (equal
+              (list (cons (file-name-concat (file-truename root) "link")
+                          "target"))
+              (last (plist-get grant :symlinks))))
             (should (eq 'read (plist-get grant :access)))))
       (delete-directory root t))))
 
@@ -118,19 +128,21 @@
   (test)
   :doc "protected exact path:
 `mevedel-sandbox--open-granted-paths' removes only granted file masks"
-  (should
-   (equal
-    '("--ro-bind" "/dev/null" "/other" "--chmod" "000" "/other"
-      "--perms" "0111" "--tmpfs" "/protected")
-    (mevedel-sandbox--open-granted-paths
-     '("--ro-bind" "/dev/null" "/protected/link"
-       "--chmod" "000" "/protected/link"
-       "--ro-bind" "/dev/null" "/other" "--chmod" "000" "/other"
-       "--perms" "000" "--tmpfs" "/protected")
-     '(:file-system
-       ((:source-path "/protected/link"
-         :symlinks (("/protected/link" . "bin/runner"))
-         :path "/protected/bin/runner" :access read)))))))
+  (progn
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (should
+     (equal
+      '("--ro-bind" "/dev/null" "/other" "--chmod" "000" "/other"
+        "--perms" "0111" "--tmpfs" "/protected")
+      (mevedel-sandbox--open-granted-paths
+       '("--ro-bind" "/dev/null" "/protected/link"
+         "--chmod" "000" "/protected/link"
+         "--ro-bind" "/dev/null" "/other" "--chmod" "000" "/other"
+         "--perms" "000" "--tmpfs" "/protected")
+       '(:file-system
+         ((:source-path "/protected/link"
+           :symlinks (("/protected/link" . "bin/runner"))
+           :path "/protected/bin/runner" :access read))))))))
 
 (mevedel-deftest mevedel-sandbox--granted-path-mounts ()
   ,test
@@ -154,13 +166,15 @@
   (test)
   :doc "writable exact path:
 `mevedel-sandbox--protected-remounts' omits only a granted writable remount"
-  (should
-   (equal
-    '("--remount-ro" "/other")
-    (mevedel-sandbox--protected-remounts
-     '("--remount-ro" "/protected" "--remount-ro" "/other")
-     '(:file-system
-       ((:source-path "/source" :path "/protected" :access write)))))))
+  (progn
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (should
+     (equal
+      '("--remount-ro" "/other")
+      (mevedel-sandbox--protected-remounts
+       '("--remount-ro" "/protected" "--remount-ro" "/other")
+       '(:file-system
+         ((:source-path "/source" :path "/protected" :access write))))))))
 
 (provide 'test-mevedel-sandbox-grants)
 

@@ -251,7 +251,7 @@
          (first-path (file-name-concat root "first"))
          (second-path (file-name-concat root "second"))
          (mevedel-sandbox-mode 'off)
-         first second final)
+         first second final record)
     (unwind-protect
         (progn
           (mevedel-execution-start-bash
@@ -263,9 +263,14 @@
                  "scheduler-yield" first-path stop)
            :workdir root :writable-roots (list root)
            :artifact-directory (file-name-concat root "artifacts")
-           :yield-time-ms 100)
+           :yield-time-ms nil)
           (test-mevedel-execution-scheduler--wait
            (lambda () (file-exists-p first-path)))
+          (maphash
+           (lambda (_id candidate) (setq record candidate))
+           (mevedel-execution--state-records
+            (mevedel-session-execution-state session)))
+          (should record)
           (mevedel-execution-start-bash
            (lambda (value) (setq second value))
            :session session :owner "agent--scheduler"
@@ -274,8 +279,8 @@
            :workdir root :writable-roots (list root)
            :artifact-directory (file-name-concat root "artifacts")
            :yield-time-ms nil)
-          (accept-process-output nil 0.04)
           (should-not (file-exists-p second-path))
+          (mevedel-execution--yield-managed record)
           (test-mevedel-execution-scheduler--wait
            (lambda () (and first second (file-exists-p second-path))))
           (should (eq 'running

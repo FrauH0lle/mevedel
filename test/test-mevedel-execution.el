@@ -205,6 +205,7 @@
          (mevedel-sandbox-mode 'off)
          (mevedel-execution--child-kill-delay 0.05)
          result pid)
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (setq result
@@ -302,23 +303,19 @@
 (mevedel-deftest mevedel-execution--signal-record ()
   ,test
   (test)
-  :doc "uses native Windows process-group controls"
+  :doc "kills the native Windows process group"
   (let ((record (mevedel-execution--record-create :process 'process))
         (native-comp-enable-subr-trampolines nil)
         (system-type 'windows-nt)
         calls)
     (cl-letf (((symbol-function 'process-live-p) (lambda (_process) t))
-              ((symbol-function 'interrupt-process)
-               (lambda (process current-group)
-                 (push (list 'interrupt process current-group) calls)))
               ((symbol-function 'kill-process)
                (lambda (process current-group)
                  (push (list 'kill process current-group) calls)))
               ((symbol-function 'signal-process)
                (lambda (&rest args) (push (cons 'signal args) calls))))
-      (mevedel-execution--signal-record record 'INT)
       (mevedel-execution--signal-record record 'KILL))
-    (should (equal '((kill process t) (interrupt process t)) calls))))
+    (should (equal '((kill process t)) calls))))
 
 (mevedel-deftest mevedel-execution--utf8-prefix ()
   ,test
@@ -514,6 +511,7 @@
          (mevedel-sandbox-mode 'off)
          (mevedel-execution--child-kill-delay 0.05)
          initial polled stopped id pid)
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (setq initial
@@ -526,6 +524,8 @@
           (mevedel-execution-observe
            session "main" id (lambda (value) (setq polled value))
            :wait-ms 300000)
+          (test-mevedel-execution--wait
+           (lambda () (file-readable-p pid-file)))
           (mevedel-execution-stop
            session "main" id (lambda (value) (setq stopped value)))
           (should (eq 'running
@@ -544,6 +544,7 @@
          (mevedel-sandbox-mode 'off)
          (mevedel-execution--child-kill-delay 0.05)
          initial stopped id)
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (setq initial

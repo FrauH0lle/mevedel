@@ -1501,6 +1501,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (unwind-protect
             (progn
               (set-file-modes directory #o500)
+              (skip-unless (not (file-writable-p directory)))
               (should-error
                (mevedel--compact-agent-apply
                 target "## Goal\n- Continue" nil nil nil)

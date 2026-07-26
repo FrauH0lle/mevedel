@@ -347,10 +347,6 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
                (eq signal 'INT)
                (mevedel-execution--signal-confined-group record signal)))
          ((and (eq system-type 'windows-nt)
-               (eq signal 'INT)
-               (process-live-p process))
-          (interrupt-process process t))
-         ((and (eq system-type 'windows-nt)
                (process-live-p process))
           (kill-process process t))
          ((and (eq signal 'INT)
@@ -1073,7 +1069,11 @@ preserve the default zero-success/nonzero-failure rule."
     (mevedel-execution--emit-event
      (mevedel-execution--event
       record 'progress
-      :output-tail (or (mevedel-execution--record-output-tail record) "")))))
+      :output-tail (or (mevedel-execution--record-output-tail record) "")))
+    (setf (mevedel-execution--record-progress-timer record)
+          (run-at-time
+           (max 0.25 mevedel-execution-progress-interval) nil
+           #'mevedel-execution--emit-progress record))))
 
 (defun mevedel-execution--unread-preview (record unread-bytes)
   "Return RECORD's bounded unread preview for UNREAD-BYTES."
@@ -1393,7 +1393,7 @@ it briefly so repeated owner polls return the same result."
     (setf (mevedel-execution--record-progress-timer record)
           (run-at-time
            (max 0 mevedel-execution-progress-delay)
-           (max 0.25 mevedel-execution-progress-interval)
+           nil
            #'mevedel-execution--emit-progress record)))
   (when-let* ((yield-time-ms
                (mevedel-execution--record-yield-time-ms record)))
@@ -1528,6 +1528,9 @@ terminal settlement."
   (unless session
     (signal 'mevedel-execution-error
             (list "Managed Bash requires an active session")))
+  (when (and tty (eq system-type 'windows-nt))
+    (signal 'mevedel-execution-input-error
+            (list "PTY execution is unavailable on Windows")))
   (let* ((state (mevedel-execution--state-for-session session)))
     (when (>= (mevedel-execution--managed-count state)
               mevedel-execution-live-limit)
@@ -1669,6 +1672,10 @@ after WAIT-MS while the process remains live."
     (when input-p
       (cond
        ((equal chars (string 3))
+        (when (eq system-type 'windows-nt)
+          (signal
+           'mevedel-execution-input-error
+           (list "Interrupting managed execution is unavailable on Windows")))
         (unless (or (mevedel-execution--record-finished-p record)
                     (mevedel-execution--record-stop-p record)
                     (not (process-live-p
@@ -1797,6 +1804,9 @@ after WAIT-MS while the process remains live."
 
 (defun mevedel-execution-interrupt-user (session execution-id)
   "Interrupt live EXECUTION-ID in SESSION with user authority."
+  (when (eq system-type 'windows-nt)
+    (signal 'mevedel-execution-input-error
+            (list "Interrupting managed execution is unavailable on Windows")))
   (let* ((record
           (mevedel-execution--user-live-record session execution-id))
          (process (mevedel-execution--record-process record)))

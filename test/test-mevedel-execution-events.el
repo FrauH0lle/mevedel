@@ -277,7 +277,7 @@
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off))
     (unwind-protect
-        (dolist (tty '(nil t))
+        (dolist (tty (if (eq system-type 'windows-nt) '(nil) '(nil t)))
           (let (initial final id)
             (setq initial
                   (test-mevedel-execution--start-managed
@@ -292,28 +292,38 @@
             (should (eq (and tty t)
                         (plist-get (plist-get final :facts) :tty)))))
       (delete-directory root t)))
+  :doc "rejects PTY execution explicitly on native Windows"
+  (let ((system-type 'windows-nt)
+        (session (mevedel-session--create :name "windows")))
+    (should-error
+     (mevedel-execution-start-bash
+      #'ignore :session session :owner "main" :command '("sh")
+      :workdir temporary-file-directory :tty t)
+     :type 'mevedel-execution-input-error))
   :doc "line-buffered programs expose progress only through a PTY"
-  (skip-unless (executable-find "python3"))
-  (let* ((root (make-temp-file "mevedel-managed-buffering-" t))
-         (session (test-mevedel-execution--session root))
-         (mevedel-sandbox-mode 'off))
-    (unwind-protect
-        (dolist (tty '(nil t))
-          (let (initial final id)
-            (setq initial
-                  (test-mevedel-execution--start-managed
-                   session root
-                   '("python3" "-c"
-                     "import time; print('ready'); time.sleep(1); print('done')")
-                   :tty tty :yield-time-ms 100))
-            (setq id (plist-get (plist-get initial :facts) :execution-id))
-            (if tty
-                (should (string-match-p "ready" (plist-get initial :output)))
-              (should (equal "" (plist-get initial :output))))
-            (setq final (test-mevedel-execution--observe session id))
-            (should (string-match-p "done" (plist-get final :output)))))
-      (mevedel-execution-teardown-session session)
-      (delete-directory root t)))
+  (progn
+    (skip-unless (and (executable-find "python3")
+                      (not (eq system-type 'windows-nt))))
+    (let* ((root (make-temp-file "mevedel-managed-buffering-" t))
+           (session (test-mevedel-execution--session root))
+           (mevedel-sandbox-mode 'off))
+      (unwind-protect
+          (dolist (tty '(nil t))
+            (let (initial final id)
+              (setq initial
+                    (test-mevedel-execution--start-managed
+                     session root
+                     '("python3" "-c"
+                       "import time; print('ready'); time.sleep(1); print('done')")
+                     :tty tty :yield-time-ms 100))
+              (setq id (plist-get (plist-get initial :facts) :execution-id))
+              (if tty
+                  (should (string-match-p "ready" (plist-get initial :output)))
+                (should (equal "" (plist-get initial :output))))
+              (setq final (test-mevedel-execution--observe session id))
+              (should (string-match-p "done" (plist-get final :output)))))
+        (mevedel-execution-teardown-session session)
+        (delete-directory root t))))
   :doc "yields a stable owner-scoped id and retained session artifact"
   (let* ((root (make-temp-file "mevedel-managed-yield-" t))
          (session (test-mevedel-execution--session root))
@@ -415,6 +425,7 @@
          (mevedel-sandbox-mode 'off)
          (mevedel-execution--child-kill-delay 0.05)
          observation pid)
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (setq observation
@@ -523,141 +534,148 @@
            :type 'mevedel-execution-not-found))
       (delete-directory root t)))
   :doc "writes repeated PTY input and returns only newly unread output"
-  (let* ((root (make-temp-file "mevedel-managed-pty-input-" t))
-         (session (test-mevedel-execution--session root))
-         (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
-         initial first pending second final id)
-    (unwind-protect
-        (progn
-          (setq initial
-                (test-mevedel-execution--start-managed
-                 session root
-                 '("sh" "-c"
-                   "test -t 0 && test -t 1 || exit 9; printf 'start> '; while IFS= read -r line; do printf 'got:%s\\nnext> ' \"$line\"; done; printf eof")
-                 :tty t))
-          (setq id (plist-get (plist-get initial :facts) :execution-id))
-          (unless (string-match-p "start>" (plist-get initial :output))
-            (setq initial
-                  (test-mevedel-execution--observe session id)))
-          (should (string-match-p "start>" (plist-get initial :output)))
-          (should (plist-get (plist-get initial :facts) :tty))
-          (setq first
-                (test-mevedel-execution--observe
-                 session id :chars "one\n" :wait-ms 250))
-          (should (string-match-p "got:one" (plist-get first :output)))
-          (should-not (string-match-p "start>" (plist-get first :output)))
-          (mevedel-execution-observe
-           session "main" id (lambda (value) (setq pending value))
-           :wait-ms 300000)
-          (setq second
-                (test-mevedel-execution--observe
-                 session id :chars "two\n" :wait-ms 250))
-          (should (eq 'running
-                      (plist-get (plist-get pending :facts) :state)))
-          (should (string-match-p "got:two" (plist-get second :output)))
-          (should-not (string-match-p "got:one" (plist-get second :output)))
-          (setq final
-                (test-mevedel-execution--observe
-                 session id :chars (string 4)))
-          (should (string-match-p "eof" (plist-get final :output)))
-          (should-not (string-match-p "got:two" (plist-get final :output)))
-          (should (eq 'completed
-                      (plist-get (plist-get final :facts) :state))))
-      (mevedel-execution-teardown-session session)
-      (delete-directory root t)))
-  :doc "Ctrl-C interrupts the execution group in pipe and PTY modes"
-  (dolist (tty '(nil t))
-    (let* ((root (make-temp-file "mevedel-managed-interrupt-" t))
+  (progn
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (let* ((root (make-temp-file "mevedel-managed-pty-input-" t))
            (session (test-mevedel-execution--session root))
            (mevedel-sandbox-mode 'off)
            (mevedel-execution--child-kill-delay 0.05)
-           initial pending final id)
+           initial first pending second final id)
       (unwind-protect
           (progn
             (setq initial
                   (test-mevedel-execution--start-managed
-                   session root '("sh" "-c" "printf ready; exec sleep 30")
-                   :tty tty))
+                   session root
+                   '("sh" "-c"
+                     "test -t 0 && test -t 1 || exit 9; printf 'start> '; while IFS= read -r line; do printf 'got:%s\\nnext> ' \"$line\"; done; printf eof")
+                   :tty t))
             (setq id (plist-get (plist-get initial :facts) :execution-id))
+            (unless (string-match-p "start>" (plist-get initial :output))
+              (setq initial
+                    (test-mevedel-execution--observe session id)))
+            (should (string-match-p "start>" (plist-get initial :output)))
+            (should (plist-get (plist-get initial :facts) :tty))
+            (setq first
+                  (test-mevedel-execution--observe
+                   session id :chars "one\n" :wait-ms 250))
+            (should (string-match-p "got:one" (plist-get first :output)))
+            (should-not (string-match-p "start>" (plist-get first :output)))
             (mevedel-execution-observe
              session "main" id (lambda (value) (setq pending value))
              :wait-ms 300000)
-            (setq final
+            (setq second
                   (test-mevedel-execution--observe
-                   session id :chars (string 3)))
+                   session id :chars "two\n" :wait-ms 250))
             (should (eq 'running
                         (plist-get (plist-get pending :facts) :state)))
-            (should (= 2 (plist-get (plist-get final :facts) :exit-code)))
-            (should (eq 'signaled
-                        (plist-get (plist-get final :facts) :termination)))
-            (should (eq 'completed
-                        (plist-get (plist-get final :facts) :state)))
-            (should (eq (and tty t)
-                        (plist-get (plist-get final :facts) :tty))))
-        (mevedel-execution-teardown-session session)
-        (delete-directory root t))))
-  :doc "Ctrl-C stops a Bash loop through confined pipe and PTY transports"
-  (skip-unless (plist-get (mevedel-sandbox-probe) :available))
-  (dolist (tty '(nil t))
-    (let* ((root (make-temp-file "mevedel-managed-confined-interrupt-" t))
-           (session (test-mevedel-execution--session root))
-           (mevedel-sandbox-mode 'required)
-           (initial
-            (test-mevedel-execution--start-managed
-             session root
-             '("bash" "-lc"
-               "trap 'printf \"interrupted\\n\"; exit 130' INT; while :; do printf 'heartbeat\\n'; sleep 1; done")
-             :tty tty))
-           (id (plist-get (plist-get initial :facts) :execution-id))
-           final)
-      (unwind-protect
-          (progn
-            (test-mevedel-execution--observe session id :wait-ms 1200)
+            (should (string-match-p "got:two" (plist-get second :output)))
+            (should-not (string-match-p "got:one" (plist-get second :output)))
             (setq final
                   (test-mevedel-execution--observe
-                   session id :chars (string 3)))
-            (should (= 130 (plist-get (plist-get final :facts) :exit-code)))
-            (should (eq 'exited
-                        (plist-get (plist-get final :facts) :termination)))
+                   session id :chars (string 4)))
+            (should (string-match-p "eof" (plist-get final :output)))
+            (should-not (string-match-p "got:two" (plist-get final :output)))
             (should (eq 'completed
                         (plist-get (plist-get final :facts) :state))))
-        (delete-directory root t))))
-  :doc "keeps trapped and late Ctrl-C exit status distinct from signals"
-  (dolist (command '(("sh" "-c"
-                      "trap 'exit 2' INT; printf ready; while :; do sleep 1; done")
-                     ("sh" "-c" "printf ready; sleep 1; exit 2")))
-    (let* ((root (make-temp-file "mevedel-managed-exit-two-" t))
-           (session (test-mevedel-execution--session root))
-           (mevedel-sandbox-mode 'off)
-           (initial
-            (test-mevedel-execution--start-managed
-             session root command :yield-time-ms 250))
-           (id (plist-get (plist-get initial :facts) :execution-id))
-           final)
-      (unwind-protect
-          (progn
-            (if id
-                (progn
-                  (when (string-match-p
-                         "printf ready; sleep 1; exit 2"
-                         (car (last command)))
-                    (test-mevedel-execution--wait
-                     (lambda ()
-                       (mevedel-execution--record-finished-p
-                        (gethash
-                         id
-                         (mevedel-execution--state-records
-                          (mevedel-session-execution-state session)))))))
-                  (setq final
-                        (test-mevedel-execution--observe
-                         session id :chars (string 3))))
-              (setq final initial))
-            (should (= 2 (plist-get (plist-get final :facts) :exit-code)))
-            (should (eq 'exited
-                        (plist-get (plist-get final :facts) :termination))))
         (mevedel-execution-teardown-session session)
         (delete-directory root t))))
+  :doc "Ctrl-C interrupts the execution group in pipe and PTY modes"
+  (progn
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (dolist (tty '(nil t))
+      (let* ((root (make-temp-file "mevedel-managed-interrupt-" t))
+             (session (test-mevedel-execution--session root))
+             (mevedel-sandbox-mode 'off)
+             (mevedel-execution--child-kill-delay 0.05)
+             initial pending final id)
+        (unwind-protect
+            (progn
+              (setq initial
+                    (test-mevedel-execution--start-managed
+                     session root '("sh" "-c" "printf ready; exec sleep 30")
+                     :tty tty))
+              (setq id (plist-get (plist-get initial :facts) :execution-id))
+              (mevedel-execution-observe
+               session "main" id (lambda (value) (setq pending value))
+               :wait-ms 300000)
+              (setq final
+                    (test-mevedel-execution--observe
+                     session id :chars (string 3)))
+              (should (eq 'running
+                          (plist-get (plist-get pending :facts) :state)))
+              (should (= 2 (plist-get (plist-get final :facts) :exit-code)))
+              (should (eq 'signaled
+                          (plist-get (plist-get final :facts) :termination)))
+              (should (eq 'completed
+                          (plist-get (plist-get final :facts) :state)))
+              (should (eq (and tty t)
+                          (plist-get (plist-get final :facts) :tty))))
+          (mevedel-execution-teardown-session session)
+          (delete-directory root t)))))
+  :doc "Ctrl-C stops a Bash loop through confined pipe and PTY transports"
+  (progn
+    (skip-unless (plist-get (mevedel-sandbox-probe) :available))
+    (dolist (tty '(nil t))
+      (let* ((root (make-temp-file "mevedel-managed-confined-interrupt-" t))
+             (session (test-mevedel-execution--session root))
+             (mevedel-sandbox-mode 'required)
+             (initial
+              (test-mevedel-execution--start-managed
+               session root
+               '("bash" "-lc"
+                 "trap 'printf \"interrupted\\n\"; exit 130' INT; while :; do printf 'heartbeat\\n'; sleep 1; done")
+               :tty tty))
+             (id (plist-get (plist-get initial :facts) :execution-id))
+             final)
+        (unwind-protect
+            (progn
+              (test-mevedel-execution--observe session id :wait-ms 1200)
+              (setq final
+                    (test-mevedel-execution--observe
+                     session id :chars (string 3)))
+              (should (= 130 (plist-get (plist-get final :facts) :exit-code)))
+              (should (eq 'exited
+                          (plist-get (plist-get final :facts) :termination)))
+              (should (eq 'completed
+                          (plist-get (plist-get final :facts) :state))))
+          (delete-directory root t)))))
+  :doc "keeps trapped and late Ctrl-C exit status distinct from signals"
+  (progn
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (dolist (command '(("sh" "-c"
+                        "trap 'exit 2' INT; printf ready; while :; do sleep 1; done")
+                       ("sh" "-c" "printf ready; sleep 1; exit 2")))
+      (let* ((root (make-temp-file "mevedel-managed-exit-two-" t))
+             (session (test-mevedel-execution--session root))
+             (mevedel-sandbox-mode 'off)
+             (initial
+              (test-mevedel-execution--start-managed
+               session root command :yield-time-ms 250))
+             (id (plist-get (plist-get initial :facts) :execution-id))
+             final)
+        (unwind-protect
+            (progn
+              (if id
+                  (progn
+                    (when (string-match-p
+                           "printf ready; sleep 1; exit 2"
+                           (car (last command)))
+                      (test-mevedel-execution--wait
+                       (lambda ()
+                         (mevedel-execution--record-finished-p
+                          (gethash
+                           id
+                           (mevedel-execution--state-records
+                            (mevedel-session-execution-state session)))))))
+                    (setq final
+                          (test-mevedel-execution--observe
+                           session id :chars (string 3))))
+                (setq final initial))
+              (should (= 2 (plist-get (plist-get final :facts) :exit-code)))
+              (should (eq 'exited
+                          (plist-get (plist-get final :facts) :termination))))
+          (mevedel-execution-teardown-session session)
+          (delete-directory root t)))))
   :doc "independent completion waits for a model observer instead of recalling Bash"
   (let* ((root (make-temp-file "mevedel-managed-independent-" t))
          (session (test-mevedel-execution--session root))

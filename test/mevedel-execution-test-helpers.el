@@ -21,7 +21,9 @@
 
 (defun test-mevedel-execution--process-gone-p (pid)
   "Return non-nil when PID no longer names a live process."
-  (null (process-attributes pid)))
+  (let ((attributes (process-attributes pid)))
+    (or (null attributes)
+        (equal "Z" (alist-get 'state attributes)))))
 
 (defun test-mevedel-execution--read-pid (path)
   "Return the process id stored at PATH."
@@ -74,7 +76,7 @@
     observation))
 
 (cl-defun test-mevedel-execution--observe
-    (session execution-id &key chars (wait-ms 5000))
+    (session execution-id &key chars (wait-ms 4000))
   "Observe EXECUTION-ID in SESSION and return the delivered observation."
   (let (observation)
     (mevedel-execution-observe

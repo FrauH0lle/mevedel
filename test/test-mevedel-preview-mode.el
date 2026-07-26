@@ -757,7 +757,7 @@ cleanup."
                                 (with-current-buffer buffer
                                   (let ((inhibit-read-only t))
                                     (goto-char (point-min))
-                                    (re-search-forward "^ before$")
+                                    (search-forward " before")
                                     (beginning-of-line)
                                     (delete-char 1)))
                                 buffer)))

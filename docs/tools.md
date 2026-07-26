@@ -439,7 +439,9 @@ output, an opaque owner-scoped execution ID, and a retained session artifact.
 The 64 MiB output cap continues running after yield. Pipe-mode stdin is closed
 from spawn. Explicit `tty=true` instead allocates a PTY and retains writable
 stdin without changing the captured owner, workdir, confinement, or resource
-grants. `WriteStdin` sends ordinary input only to PTYs. Unconfined Ctrl-C is
+grants. Native Windows Emacs exposes only pipe subprocesses, so mevedel rejects
+PTY and Interrupt requests there; Stop remains available for the direct child.
+`WriteStdin` sends ordinary input only to PTYs. Unconfined Ctrl-C is
 written through PTYs or signals pipe-mode process groups; confined Ctrl-C
 instead signals the foreground process group once across Bubblewrap's session
 boundary.
