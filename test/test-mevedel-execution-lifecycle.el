@@ -57,7 +57,7 @@
 (mevedel-deftest mevedel-execution-stop-owner ()
   ,test
   (test)
-  :doc "stops only the selected owner and cleans its descendant process"
+  :doc "stops only the selected owner within platform process limits"
   (let* ((root (make-temp-file "mevedel-owner-lifetime-" t))
          (pid-file (file-name-concat root "child.pid"))
          (scratch-file (file-name-concat root "scratch.path"))
@@ -65,25 +65,29 @@
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
          (mevedel-execution--child-kill-delay 0.05)
-         owned sibling pid owned-id helper-result scratch tombstone)
+         owned sibling pid owned-id owned-process
+         helper-result scratch tombstone)
     (unwind-protect
         (progn
           (setq owned
                 (test-mevedel-execution--start-managed
                  session root
-                 (list "sh" "-c"
-                       "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait"
-                       "owner" pid-file)
+                 (if (eq system-type 'windows-nt)
+                     '("sleep" "30")
+                   (list
+                    "sh" "-c"
+                    "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait"
+                    "owner" pid-file))
                  :owner "agent-a"))
           (setq sibling
                 (test-mevedel-execution--start-managed
-                 session root '("sh" "-c" "while :; do sleep 1; done")
+                 session root '("sleep" "30")
                  :owner "agent-b"))
           (mevedel-execution-start-helper
            (lambda (result) (setq helper-result result))
            "mevedel-owner-helper"
            (list "sh" "-c"
-                 "printf '%s' \"$PWD\" > \"$1\"; sleep 30"
+                 "printf '%s' \"$PWD\" > \"$1\"; exec sleep 30"
                  "helper" scratch-file)
            nil (list root) :session session :owner "agent-a")
           (test-mevedel-execution--wait
@@ -105,10 +109,21 @@
                    (mevedel-execution--state-records
                     (mevedel-session-execution-state session)))
           (setq owned-id (plist-get (plist-get owned :facts) :execution-id))
+          (when (eq system-type 'windows-nt)
+            (setq owned-process
+                  (mevedel-execution--record-process
+                   (gethash
+                    owned-id
+                    (mevedel-execution--state-records
+                     (mevedel-session-execution-state session)))))
+            (should (process-live-p owned-process)))
           (should (= 3 (mevedel-execution-stop-owner session "agent-a")))
-          (setq pid (test-mevedel-execution--read-pid pid-file))
-          (test-mevedel-execution--wait
-           (lambda () (test-mevedel-execution--process-gone-p pid)))
+          (if (eq system-type 'windows-nt)
+            (test-mevedel-execution--wait
+             (lambda () (not (process-live-p owned-process))))
+            (setq pid (test-mevedel-execution--read-pid pid-file))
+            (test-mevedel-execution--wait
+             (lambda () (test-mevedel-execution--process-gone-p pid))))
           (test-mevedel-execution--wait
            (lambda ()
              (not
@@ -130,24 +145,40 @@
 (mevedel-deftest mevedel-execution-teardown-session ()
   ,test
   (test)
-  :doc "immediate teardown kills descendants and empties queued scheduler work"
+  :doc "immediate teardown obeys platform limits and empties queued work"
   (let* ((root (make-temp-file "mevedel-session-lifetime-" t))
          (pid-file (file-name-concat root "child.pid"))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         first-result second-result pid)
+         first-result second-result pid first-process)
     (unwind-protect
         (progn
           (mevedel-execution-start-bash
            (lambda (value) (setq first-result value))
            :session session :owner "main" :owner-context session
            :command
-           (list "sh" "-c"
-                 "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait"
-                 "first" pid-file)
+           (if (eq system-type 'windows-nt)
+               '("sleep" "30")
+             (list
+              "sh" "-c"
+              "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait"
+              "first" pid-file))
            :workdir root :writable-roots (list root)
            :artifact-directory root :yield-time-ms nil)
-          (test-mevedel-execution--wait (lambda () (file-readable-p pid-file)))
+          (unless (eq system-type 'windows-nt)
+            (test-mevedel-execution--wait
+             (lambda () (file-readable-p pid-file))))
+          (when (eq system-type 'windows-nt)
+            (let* ((execution
+                    (car (mevedel-execution-list-user session)))
+                   (record
+                    (gethash
+                     (plist-get execution :execution-id)
+                     (mevedel-execution--state-records
+                      (mevedel-session-execution-state session)))))
+              (setq first-process
+                    (mevedel-execution--record-process record))
+              (should (process-live-p first-process))))
           (mevedel-execution-start-bash
            (lambda (value) (setq second-result value))
            :session session :owner "main" :owner-context session
@@ -161,9 +192,12 @@
           (should (= 0 (hash-table-count
                         (mevedel-execution--state-records
                          (mevedel-session-execution-state session)))))
-          (setq pid (test-mevedel-execution--read-pid pid-file))
-          (test-mevedel-execution--wait
-           (lambda () (test-mevedel-execution--process-gone-p pid))))
+          (if (eq system-type 'windows-nt)
+            (test-mevedel-execution--wait
+             (lambda () (not (process-live-p first-process))))
+            (setq pid (test-mevedel-execution--read-pid pid-file))
+            (test-mevedel-execution--wait
+             (lambda () (test-mevedel-execution--process-gone-p pid)))))
       (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
