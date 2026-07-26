@@ -203,7 +203,8 @@ Returns (buffer . overlay)."
      (lambda (captures)
        (list :path (expand-file-name (car captures) "/tmp"))))
     (should
-     (equal '(:kind file :token "@file:a.txt" :path "/tmp/a.txt")
+     (equal (list :kind 'file :token "@file:a.txt"
+                  :path (expand-file-name "a.txt" "/tmp"))
             (get-text-property 0 'mevedel-mention-binding text)))
     (should-not
      (get-text-property

@@ -951,13 +951,14 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   [:description mevedel-menu--header
    ["Mode"
     :pad-keys t
-    ("k" mevedel-menu--mode-ask-description
-     (lambda () (interactive) (mevedel-menu--set-mode 'ask)))
-    ("a" mevedel-menu--mode-auto-description
-     (lambda () (interactive) (mevedel-menu--set-mode 'auto)))
-    ("f" mevedel-menu--mode-full-auto-description
-     (lambda () (interactive) (mevedel-menu--set-mode 'full-auto)))
-    ("p" mevedel-menu--mode-plan-description mevedel-menu--enter-plan)]
+    ("k" (lambda () (interactive) (mevedel-menu--set-mode 'ask))
+     :description mevedel-menu--mode-ask-description)
+    ("a" (lambda () (interactive) (mevedel-menu--set-mode 'auto))
+     :description mevedel-menu--mode-auto-description)
+    ("f" (lambda () (interactive) (mevedel-menu--set-mode 'full-auto))
+     :description mevedel-menu--mode-full-auto-description)
+    ("p" mevedel-menu--enter-plan
+     :description mevedel-menu--mode-plan-description)]
    ["Navigation"
     :pad-keys t
     ("b" "Back" mevedel-menu)]]

@@ -999,7 +999,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
             (let ((name (buffer-name)))
               (mevedel-session-persistence--set-visited-segment-file new-path)
               (should (equal name (buffer-name))))
-            (should (equal new-path buffer-file-name))
+            (should (file-equal-p new-path buffer-file-name))
             (should (equal (file-truename new-path) buffer-file-truename))
             (should (verify-visited-file-modtime buffer))
             (should-not (buffer-modified-p))))
@@ -1024,7 +1024,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
             (mevedel-session-persistence--publish-segment-text
              new-path "replacement")
             (should (equal "replacement" (buffer-string)))
-            (should (equal new-path buffer-file-name))
+            (should (file-equal-p new-path buffer-file-name))
             (should (verify-visited-file-modtime buffer)))
           (should
            (equal "replacement"
@@ -2975,7 +2975,7 @@ workspace tree."
                 (should (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
                                         (buffer-string)))))
             ;; New buffer points at the new segment file.
-            (should (equal new-path buffer-file-name))
+            (should (file-equal-p new-path buffer-file-name))
             ;; Buffer body contains the summary.
             (should (string-match-p "Summary of the prior conversation."
                                     (buffer-string)))
@@ -3045,7 +3045,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                   (mevedel-session-persistence-rotate-segment
                    session buf "Noninteractive summary.")))
           (with-current-buffer buf
-            (should (equal new-path buffer-file-name))
+            (should (file-equal-p new-path buffer-file-name))
             (should (equal (file-truename new-path) buffer-file-truename))
             (should (verify-visited-file-modtime buf))
             (should-not (buffer-modified-p))))
@@ -3132,7 +3132,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (should new-path)
             (should (= 2 (mevedel-session-current-segment session)))
             (should (file-exists-p new-path))
-            (should (equal new-path buffer-file-name))
+            (should (file-equal-p new-path buffer-file-name))
             (should (string-match-p "MEVEDEL_SEGMENT_NUMBER:[ \t]*2"
                                     (buffer-string)))
             (should (string-suffix-p "### " (buffer-string)))
@@ -3234,7 +3234,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
               session buf "Summary that will not commit.")))
           (with-current-buffer buf
             (should (= 1 (mevedel-session-current-segment session)))
-            (should (equal old-segment buffer-file-name))
+            (should (file-equal-p old-segment buffer-file-name))
             (should (equal old-text
                            (buffer-substring (point-min) (point-max)))))
           (should-not
@@ -3261,10 +3261,11 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (should (= 1 (mevedel-session-current-segment session)))
             (should (= 1 (plist-get plist :current-segment))))
           (with-current-buffer buf
-            (should (equal
-                     (mevedel-session-persistence--segment-path
-                      (mevedel-session-save-path session) 1)
-                     buffer-file-name)))
+            (should
+             (file-equal-p
+              (mevedel-session-persistence--segment-path
+               (mevedel-session-save-path session) 1)
+              buffer-file-name)))
           (should-not
            (file-exists-p
             (mevedel-session-persistence--segment-path
@@ -3291,7 +3292,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
               :pending-text "Pending prompt\n")))
           (with-current-buffer buf
             (should (= 1 (mevedel-session-current-segment session)))
-            (should (equal old-segment buffer-file-name))
+            (should (file-equal-p old-segment buffer-file-name))
             (should (string-match-p "Pending prompt" (buffer-string)))))
       (test-mevedel-session-persistence--cleanup tempdir))))
 

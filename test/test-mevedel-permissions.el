@@ -953,15 +953,19 @@
                  :resource-grants
                  (mevedel-session-resource-grants session)))))
   :doc "revocation does not mutate another session's shared list"
-  (let* ((first '(:path "/tmp/first" :access read))
-         (second '(:path "/tmp/second" :access read))
+  (let* ((first (list :path (expand-file-name
+                             "first" temporary-file-directory)
+                      :access 'read))
+         (second (list :path (expand-file-name
+                              "second" temporary-file-directory)
+                       :access 'read))
          (shared (list first second))
          (session (mevedel-session--create
                    :name "child" :resource-grants shared))
          (other (mevedel-session--create
                  :name "parent" :resource-grants shared)))
     (mevedel-permission-remove-session-resource-grant
-     session "/tmp/second" 'read)
+     session (plist-get second :path) 'read)
     (should (equal (list first)
                    (mevedel-session-resource-grants session)))
     (should (equal (list first second)

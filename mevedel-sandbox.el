@@ -244,12 +244,13 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 
 (defun mevedel-sandbox--first-missing-path (path)
   "Return the first nonexistent component of absolute PATH, or nil."
-  (let ((current "/") missing)
-    (dolist (component (split-string (expand-file-name path) "/" t))
-      (unless missing
-        (setq current (file-name-concat current component))
-        (unless (file-exists-p current)
-          (setq missing current))))
+  (let ((current (directory-file-name (expand-file-name path)))
+        missing)
+    (while (and current (not (file-exists-p current)))
+      (setq missing current)
+      (let* ((directory (file-name-directory current))
+             (parent (and directory (directory-file-name directory))))
+        (setq current (unless (equal parent current) parent))))
     missing))
 
 (defun mevedel-sandbox--writable-symlink-component (path writable-roots)

@@ -539,9 +539,10 @@ spanning lines")))
                 (goto-char (point-max))
                 (should (eq 'local (mevedel-skills--dispatch-slash-command)))
                 (should (= 2 (mevedel-session-current-segment session)))
-                (should (equal (file-name-concat
-                                save-path "segment-0002.chat.org")
-                               buffer-file-name))
+                (should (file-equal-p
+                         (file-name-concat
+                          save-path "segment-0002.chat.org")
+                         buffer-file-name))
                 (should (string-suffix-p "### " (buffer-string)))
                 (should (equal "clear" start-source))
                 (with-temp-buffer
@@ -594,9 +595,10 @@ spanning lines")))
                 (goto-char (point-max))
                 (should (eq 'local (mevedel-skills--dispatch-slash-command)))
                 (should (= 2 (mevedel-session-current-segment session)))
-                (should (equal (file-name-concat
-                                save-path "segment-0002.chat.org")
-                               buffer-file-name))
+                (should (file-equal-p
+                         (file-name-concat
+                          save-path "segment-0002.chat.org")
+                         buffer-file-name))
                 (should (string-suffix-p "### " (buffer-string)))
                 (with-temp-buffer
                   (insert-file-contents seg1)
@@ -639,9 +641,10 @@ spanning lines")))
                            (error "Supersession prompt"))))
                 (mevedel-cmd--clear nil)
                 (should (= 2 (mevedel-session-current-segment session)))
-                (should (equal (file-name-concat
-                                save-path "segment-0002.chat.org")
-                               buffer-file-name))))))
+                (should (file-equal-p
+                         (file-name-concat
+                          save-path "segment-0002.chat.org")
+                         buffer-file-name))))))
       (when (file-directory-p tempdir)
         (delete-directory tempdir t)))))
 

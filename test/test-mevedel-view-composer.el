@@ -161,7 +161,9 @@
               ('missing
                (delete-file source-file))
               ('unreadable
-               (set-file-modes source-file 0))
+               (set-file-modes source-file 0)
+               (when (file-readable-p source-file)
+                 (ert-skip "File permissions do not make files unreadable")))
               ('malformed
                (with-temp-file source-file
                  (insert "---\nname: [invalid\n---\n")))

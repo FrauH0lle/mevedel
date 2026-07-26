@@ -752,7 +752,7 @@
               (dolist (command
                        (list
                         (list "sh" "-c"
-                              "touch \"$1\"; while :; do sleep 1; done"
+                              "touch \"$1\"; exec sleep 30"
                               "agent-active" active-path)
                         (list "sh" "-c" "touch \"$1\""
                               "agent-queued-one" queued-one-path)

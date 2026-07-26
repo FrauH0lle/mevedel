@@ -1632,9 +1632,10 @@ the decision log identifies complete confinement bypass authority"
           (should-not
            (mevedel-tool-exec--bash-missing-resource-paths
             "rg TODO ." context '(:level use-default)))
-          (should-not
-           (mevedel-tool-exec--bash-missing-resource-paths
-            "diff /dev/null ./mevedel.el" context '(:level use-default)))
+          (unless (eq system-type 'windows-nt)
+            (should-not
+             (mevedel-tool-exec--bash-missing-resource-paths
+              "diff /dev/null ./mevedel.el" context '(:level use-default))))
           (should
            (equal (list parent-path)
                   (mevedel-tool-exec--bash-missing-resource-paths
@@ -2589,14 +2590,15 @@ default Bash keeps bare dot inspection automatic"
 	   (lambda (r)
 	     (setq result (test-bash-permissions--handler-result r)
 		   done t))
-           (list :command "pwd"))
+           (list :command (if (eq system-type 'windows-nt)
+                              "pwd -W"
+                            "pwd")))
           (with-timeout (5 (error "Timed out"))
             (while (not done)
               (accept-process-output nil 0.1)))
           (should
-           (equal (file-name-as-directory module-dir)
-                  (file-name-as-directory
-                   (car (split-string result "\n" t))))))
+           (file-equal-p module-dir
+                         (car (split-string result "\n" t)))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
 (mevedel-deftest mevedel-tool-exec--sandbox-writable-roots ()

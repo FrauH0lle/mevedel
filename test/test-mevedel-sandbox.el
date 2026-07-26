@@ -57,6 +57,7 @@
          (mevedel-sandbox--probe-cache nil)
          (mevedel-sandbox-probe-timeout 0.05)
          result started)
+    (skip-unless (eq system-type 'gnu/linux))
     (unwind-protect
         (progn
           (with-temp-file executable
@@ -75,6 +76,7 @@
          (exec-path (list root))
          (mevedel-sandbox--probe-cache nil)
          result)
+    (skip-unless (eq system-type 'gnu/linux))
     (unwind-protect
         (progn
           (with-temp-file executable
@@ -93,6 +95,7 @@
          (exec-path (list root))
          (mevedel-sandbox--probe-cache nil)
          result)
+    (skip-unless (eq system-type 'gnu/linux))
     (unwind-protect
         (progn
           (with-temp-file executable
@@ -142,6 +145,7 @@
   (let* ((root (make-temp-file "mevedel-sandbox-symlink-" t))
          (outside (make-temp-file "mevedel-sandbox-symlink-target-" t))
          (link (file-name-concat root "link")))
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (make-symbolic-link outside link)
@@ -208,13 +212,14 @@
             (should (cl-find secondary-dot-git candidates
                              :key (lambda (item) (plist-get item :path))
                              :test #'string-equal))
-            (should
-             (eq (plist-get
-                  (cl-find unreadable candidates
-                           :key (lambda (item) (plist-get item :path))
-                           :test #'string-equal)
-                  :mode)
-                 'inaccessible))
+            (unless (file-readable-p unreadable)
+              (should
+               (eq (plist-get
+                    (cl-find unreadable candidates
+                             :key (lambda (item) (plist-get item :path))
+                             :test #'string-equal)
+                    :mode)
+                   'inaccessible)))
             (should (eq (plist-get
                          (cl-find credentials candidates
                                   :key (lambda (item) (plist-get item :path))
@@ -259,6 +264,7 @@
             (,(concat credentials "/**") . inaccessible)
             (,(concat missing "/**") . inaccessible)))
          restrictions)
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (make-directory dot-git)
@@ -300,6 +306,7 @@
          (link (file-name-concat root "link"))
          (mevedel-protected-paths
           `((,(concat link "/secret/**") . inaccessible))))
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (make-symbolic-link outside link)
@@ -511,6 +518,7 @@
 `mevedel-sandbox--confined-preparation' canonicalizes authority and adds marker"
   (let ((root (make-temp-file "mevedel-sandbox-confined-" t))
         (mevedel-sandbox--last-facts nil))
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (let ((prepared
                (mevedel-sandbox--confined-preparation
@@ -552,9 +560,11 @@
          (mevedel-sandbox-mode 'auto)
          (mevedel-sandbox--probe-cache
           (list :available t :executable executable :mount-proc t))
-         (prepared
+         prepared)
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (setq prepared
           (mevedel-sandbox-prepare
-           '("sh" "-c" "printf ok") workdir (list root))))
+           '("sh" "-c" "printf ok") workdir (list root)))
     (unwind-protect
         (let ((command (plist-get prepared :command)))
           (should (eq (plist-get prepared :state) 'confined))
@@ -575,9 +585,10 @@
          (mevedel-sandbox-mode 'required)
          (mevedel-sandbox--probe-cache
           '(:available t :executable "/test/bwrap" :mount-proc nil))
-         (prepared
-          (mevedel-sandbox-prepare '("true") root (list root)))
-         (command (plist-get prepared :command)))
+         prepared command)
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (setq prepared (mevedel-sandbox-prepare '("true") root (list root))
+          command (plist-get prepared :command))
     (unwind-protect
         (progn
           (should (eq (plist-get prepared :state) 'confined))
@@ -630,11 +641,11 @@
          (mevedel-sandbox-mode 'required)
          (mevedel-sandbox--probe-cache
           '(:available t :executable "/test/bwrap" :mount-proc t))
-         (default
-          (mevedel-sandbox-prepare '("true") root (list root)))
-         (network
-          (mevedel-sandbox-prepare
-           '("true") root (list root) '(:network t))))
+         default network)
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (setq default (mevedel-sandbox-prepare '("true") root (list root))
+          network (mevedel-sandbox-prepare
+                   '("true") root (list root) '(:network t)))
     (unwind-protect
         (let ((default-command (plist-get default :command))
               (network-command (plist-get network :command)))
@@ -679,6 +690,7 @@ exact read and write mounts follow protected masks without broadening siblings"
          (mevedel-sandbox--probe-cache
           '(:available t :executable "/test/bwrap" :mount-proc t))
          prepared)
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (make-directory dot-git)
@@ -695,11 +707,13 @@ exact read and write mounts follow protected masks without broadening siblings"
             (should
              (cl-loop for tail on command
                       thereis (equal (seq-take tail 3)
-                                     (list "--ro-bind-fd" "10" token))))
+                                     (list "--ro-bind-fd" "10"
+                                           (file-truename token)))))
             (should
              (cl-loop for tail on command
                       thereis (equal (seq-take tail 3)
-                                     (list "--bind-fd" "11" config))))
+                                     (list "--bind-fd" "11"
+                                           (file-truename config)))))
             (should (member "/test/bwrap" command))
             (should-not (member head command))
             (should-not (member sibling command))
@@ -718,12 +732,14 @@ exact read and write mounts follow protected masks without broadening siblings"
          (mevedel-sandbox-mode 'required)
          (mevedel-sandbox--probe-cache
           '(:available t :executable "/test/bwrap" :mount-proc t))
-         (prepared
+         prepared command facts)
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (setq prepared
           (mevedel-sandbox-prepare
            '("true") root (list root)
-           '(:file-system ((:path "/dev/null" :access read)))))
-         (command (plist-get prepared :command))
-         (facts (plist-get prepared :facts)))
+           '(:file-system ((:path "/dev/null" :access read))))
+          command (plist-get prepared :command)
+          facts (plist-get prepared :facts))
     (unwind-protect
         (progn
           (should (equal "/test/bwrap" (car command)))
@@ -770,6 +786,7 @@ exact read and write mounts follow protected masks without broadening siblings"
           (list :available t
                 :executable (or (executable-find "bwrap") "bwrap")
                 :mount-proc t)))
+    (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
           (make-symbolic-link "missing" link)
