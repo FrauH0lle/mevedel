@@ -1883,6 +1883,7 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
          (occupied
           (or (buffer-local-value 'mevedel--current-request
                                   mevedel--data-buffer)
+              (mevedel-session-pending-follow-ups session)
               (mevedel-view--occupied-root-workflow-p session)
               mevedel-view--prompt-hook-pending
               mevedel-view--pending-skill-submission

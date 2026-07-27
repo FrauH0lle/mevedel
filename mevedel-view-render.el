@@ -3429,7 +3429,7 @@ hint.  Searches that region."
                         (let ((old-end (car close)))
                           (delete-region body-start old-end)
                           (goto-char body-start)
-                          (insert bash-summary)
+                          (insert bash-summary "\n")
                           (setcdr close (+ (cdr close) (- (point) old-end)))
                           (setcar close (point))))
                       (let* ((body-end (car close))
