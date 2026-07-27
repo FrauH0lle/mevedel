@@ -2569,6 +2569,29 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (eq 'follow-up (plist-get entry :category)))
                  entries)))))
 
+  :doc "C-c RET queues plain steering against the active request"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "main"))
+           (request (mevedel-request--create
+                     :id "request-1" :session session)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--current-request request))
+      (cl-letf (((symbol-function 'mevedel-agent-control-root-waiting-p)
+                 (lambda (_session) nil)))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "steer this turn")
+          (mevedel-view-send)
+          (should (string-empty-p (mevedel-view--input-text)))
+          (should (equal '("steer this turn")
+                         (mevedel-view-history--entries)))))
+      (let ((entry (car (mevedel-session-pending-steering session))))
+        (should (equal "steer this turn" (plist-get entry :input)))
+        (should (equal "request-1" (plist-get entry :request-id)))
+        (should (eq 'steering (plist-get entry :category)))
+        (should-not (mevedel-session-pending-follow-ups session)))))
+
   :doc "Here Goal reservation queues post-acceptance input under its identity"
   (mevedel-view-test--with-buffers
     (let ((session

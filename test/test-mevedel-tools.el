@@ -237,6 +237,123 @@
 
 
 ;;
+;;; Same-turn steering
+
+(mevedel-deftest mevedel-tools--handle-steering-inject
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "tool boundary drains its FIFO snapshot before older follow-ups"
+  (let* ((session (mevedel-tools-test--make-session))
+         (backend (gptel-make-openai
+                   "Steering test" :stream nil :key "unused"
+                   :host "example.test"
+                   :models '(steering-test)))
+         (buf (generate-new-buffer " *mt-steering-tool*"))
+         (data (list :messages []))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buf :backend backend :data data
+                           :history '(TRET)
+                           :mevedel-request-id "request-1")))
+         (original-inject (symbol-function 'gptel--inject-prompt))
+         late-enqueued)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session session))
+          (mevedel-session-enqueue-pending-input
+           session 'follow-up '(:input "older follow-up"))
+          (dolist (input '("first steering" "second steering"))
+            (mevedel-session-enqueue-pending-input
+             session 'steering
+             (list :input input :request-id "request-1")))
+          (cl-letf (((symbol-function 'gptel--inject-prompt)
+                     (lambda (actual-backend actual-data prompt
+                              &optional position)
+                       (prog1
+                           (funcall original-inject
+                                    actual-backend actual-data prompt position)
+                         (when (and (not late-enqueued)
+                                    (equal "first steering"
+                                           (plist-get prompt :content)))
+                           (setq late-enqueued t)
+                           (mevedel-session-enqueue-pending-input
+                            session 'steering
+                            '(:input "late steering"
+                              :request-id "request-1")))))))
+            (mevedel-tools--handle-steering-inject fsm))
+          (should
+           (equal '("first steering" "second steering")
+                  (mapcar
+                   (lambda (message) (plist-get message :content))
+                   (append (plist-get data :messages) nil))))
+          (should (equal '("late steering")
+                         (mapcar
+                          (lambda (entry) (plist-get entry :input))
+                          (mevedel-session-pending-steering session))))
+          (should (equal "older follow-up"
+                         (plist-get
+                          (car (mevedel-session-pending-follow-ups session))
+                          :input)))
+          (with-current-buffer buf
+            (should (string-match-p "first steering" (buffer-string)))
+            (should (string-match-p "second steering" (buffer-string)))))
+      (kill-buffer buf)))
+
+  :doc "final response is preserved and continued without settling the turn"
+  (let* ((session (mevedel-tools-test--make-session))
+         (backend (gptel-make-openai
+                   "Steering final test" :stream nil :key "unused"
+                   :host "example.test"
+                   :models '(steering-final-test)))
+         (buf (generate-new-buffer " *mt-steering-final*"))
+         (data (list :messages
+                     [( :role "user" :content "original prompt")]))
+         fsm)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-turn-count session) 4)
+          (with-current-buffer buf
+            (setq-local mevedel--session session)
+            (insert (propertize "otherwise final response"
+                                'gptel 'response))
+            (setq fsm
+                  (gptel-make-fsm
+                   :info
+                   (list :buffer buf :backend backend :data data
+                         :history '(TYPE)
+                         :position (copy-marker (point-min))
+                         :tracking-marker (copy-marker (point-max) t)
+                         :mevedel-request-id "request-2")))))
+          (mevedel-session-enqueue-pending-input
+           session 'steering
+           '(:input "continue this turn" :request-id "request-2"))
+          (should (mevedel-tools--pending-steering-p
+                   (gptel-fsm-info fsm)))
+          (mevedel-tools--handle-steering-inject fsm)
+          (should
+           (equal '(("user" . "original prompt")
+                    ("assistant" . "otherwise final response")
+                    ("user" . "continue this turn"))
+                  (mapcar
+                   (lambda (message)
+                     (cons (plist-get message :role)
+                           (plist-get message :content)))
+                   (append (plist-get data :messages) nil))))
+          (should-not (mevedel-session-pending-steering session))
+          (should-not (mevedel-tools--pending-steering-p
+                       (gptel-fsm-info fsm)))
+          (should (= 4 (mevedel-session-turn-count session)))
+          (with-current-buffer buf
+            (should (string-match-p "otherwise final response"
+                                    (buffer-string)))
+            (should (string-match-p "continue this turn"
+                                    (buffer-string)))))
+      (kill-buffer buf)))
+
+
+;;
 ;;; Unknown tool-call recovery
 
 (defun mevedel-tools-test--make-tool-use-fsm

@@ -102,6 +102,10 @@
                   "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-plan-tool-filter
                   "mevedel-tools" (fsm))
+(declare-function mevedel-tools--handle-steering-inject
+                  "mevedel-tools" (fsm))
+(declare-function mevedel-tools--pending-steering-p
+                  "mevedel-tools" (info))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--handle-inject
@@ -505,6 +509,16 @@ Has no effect when no extras are registered for PRESET-NAME."
 ;;
 ;;; FSM handler chain builder
 
+(defun mevedel-preset--build-transitions (transitions)
+  "Add same-turn steering continuation to copied TRANSITIONS."
+  (when-let* ((type-entry (assq 'TYPE transitions))
+              (rules (cdr type-entry)))
+    (setcdr type-entry
+            (append (butlast rules)
+                    (list (cons #'mevedel-tools--pending-steering-p 'WAIT))
+                    (last rules))))
+  transitions)
+
 (defun mevedel-preset--final-patch-handler (fsm)
   "Generate and display a final patch for FSM when a workspace exists."
   (when-let* ((info (gptel-fsm-info fsm))
@@ -529,10 +543,11 @@ Has no effect when no extras are registered for PRESET-NAME."
 HANDLERS is an alist like `gptel-send--handlers'.  Returns a new
 alist with mevedel-specific handlers added:
 
-  1.  System-reminder delivery (WAIT state handler)
-  1a.  Direct-child roster refresh (WAIT state handler)
-  1b.  Inbound agent-message delivery (WAIT state handler)
-  1c.  Deferred tool injection (WAIT state handler)
+  1.  Same-turn steering delivery (WAIT state handler)
+  1a.  System-reminder delivery (WAIT state handler)
+  1b.  Direct-child roster refresh (WAIT state handler)
+  1c.  Inbound agent-message delivery (WAIT state handler)
+  1d.  Deferred tool injection (WAIT state handler)
   2.  Final patch generation (terminal state handler)
   3.  Request callback invocation (terminal state handler)
   4.  Canonical successful-turn transaction (DONE state handler only)
@@ -542,13 +557,14 @@ alist with mevedel-specific handlers added:
     (when wait-entry
       (setcdr wait-entry
               (append
-               (list #'mevedel-reminders--handle-inject
+               (list #'mevedel-tools--handle-steering-inject
+                     #'mevedel-reminders--handle-inject
                      #'mevedel-tools--handle-agent-roster-inject
                      #'mevedel-tools--handle-message-inject
                      #'mevedel-tools--handle-deferred-inject
                      #'mevedel-tools--handle-plan-tool-filter)
                (cdr wait-entry)))))
-  ;; 1d. Begin the mevedel-request on the first WAIT entry.  WAIT is
+  ;; 1e. Begin the mevedel-request on the first WAIT entry.  WAIT is
   ;; re-entered after each tool call loop, so the guard on
   ;; `:mevedel-request-begun' keeps request-begin idempotent per FSM.
   ;; Materialize a fork-pending rewind preview before `request-begin'
@@ -598,7 +614,7 @@ alist with mevedel-specific handlers added:
                           (setf (gptel-fsm-info fsm)
                                 (plist-put info :mevedel-request-begun t)))))
                     (cdr wait-entry)))))
-  ;; 1e. Continuation auto-compaction: keep all WAIT injectors ahead
+  ;; 1f. Continuation auto-compaction: keep all WAIT injectors ahead
   ;; of the network send, then gate the realized request immediately
   ;; before gptel fires it.
   (let ((wait-entry (assq 'WAIT handlers)))

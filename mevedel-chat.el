@@ -135,7 +135,9 @@
 
 ;; `mevedel-presets'
 (declare-function mevedel-preset--build-handlers "mevedel-presets"
-		  (handlers))
+                  (handlers))
+(declare-function mevedel-preset--build-transitions "mevedel-presets"
+                  (transitions))
 (declare-function mevedel-preset-apply "mevedel-presets"
 		  (name &optional buffer))
 (declare-function mevedel-preset-restore-session "mevedel-presets"
@@ -440,6 +442,9 @@ session struct. SOURCE is `startup' or `resume' as a string."
     (setq-local gptel-send--handlers
                 (mevedel-preset--build-handlers
                  (copy-tree (default-value 'gptel-send--handlers))))
+    (setq-local gptel-send--transitions
+                (mevedel-preset--build-transitions
+                 (copy-tree (default-value 'gptel-send--transitions))))
     ;; Wrap lines
     (visual-line-mode +1)
     ;; Auto-scroll when at end of buffer
