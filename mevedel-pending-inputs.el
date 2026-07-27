@@ -50,6 +50,10 @@
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session--set-dropped-file-grants
+                  "mevedel-structs" (session paths))
+(declare-function mevedel-session-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (cl-x) t)
@@ -57,11 +61,13 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-input-paused
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-inputs
+                  "mevedel-structs" (session category))
 (declare-function mevedel-session-pending-steering
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-set-pending-input-paused
-                  "mevedel-structs" (session paused))
 (declare-function mevedel-session-set-pending-input-failure-paused
+                  "mevedel-structs" (session paused))
+(declare-function mevedel-session-set-pending-input-paused
                   "mevedel-structs" (session paused))
 (declare-function mevedel-session-set-pending-inputs
                   "mevedel-structs" (session category entries))
@@ -124,10 +130,7 @@
         rows)
     (dolist (category '(steering follow-up))
       (let ((position 0)
-            (entries
-             (if (eq category 'steering)
-                 (mevedel-session-pending-steering session)
-               (mevedel-session-pending-follow-ups session))))
+            (entries (mevedel-session-pending-inputs session category)))
         (dolist (entry entries)
           (push (list :id (plist-get entry :id)
                       :category category
@@ -182,12 +185,6 @@
   "Return the selected pending-input row projection."
   (mevedel-cockpit-surface-selected))
 
-(defun mevedel-pending-inputs--entries (session category)
-  "Return SESSION pending entries in CATEGORY."
-  (if (eq category 'steering)
-      (mevedel-session-pending-steering session)
-    (mevedel-session-pending-follow-ups session)))
-
 (defun mevedel-pending-inputs--refresh (&optional selected-id)
   "Refresh live pending-input UI, preserving SELECTED-ID and deletion marks."
   (let* ((context (mevedel-cockpit-surface-context))
@@ -212,10 +209,7 @@
 (defun mevedel-pending-inputs--replace
     (session category id replacement)
   "Replace pending entry ID in SESSION CATEGORY with REPLACEMENT."
-  (let* ((entries
-          (if (eq category 'steering)
-              (mevedel-session-pending-steering session)
-            (mevedel-session-pending-follow-ups session)))
+  (let* ((entries (mevedel-session-pending-inputs session category))
          (position
           (cl-position-if
            (lambda (entry) (equal id (plist-get entry :id)))
@@ -230,7 +224,7 @@
 (defun mevedel-pending-inputs--move-between
     (session source target id replacement)
   "Move ID from SESSION SOURCE to TARGET tail as REPLACEMENT."
-  (let ((source-entries (mevedel-pending-inputs--entries session source)))
+  (let ((source-entries (mevedel-session-pending-inputs session source)))
     (unless (cl-find id source-entries
                      :key (lambda (entry) (plist-get entry :id))
                      :test #'equal)
@@ -242,7 +236,7 @@
                 :test #'equal))
     (mevedel-session-set-pending-inputs
      session target
-     (append (mevedel-pending-inputs--entries session target)
+     (append (mevedel-session-pending-inputs session target)
              (list replacement)))
     replacement))
 
@@ -449,7 +443,7 @@
          (category (plist-get item :category))
          (id (plist-get item :id))
          (entries (copy-sequence
-                   (mevedel-pending-inputs--entries session category)))
+                   (mevedel-session-pending-inputs session category)))
          (index (cl-position id entries
                              :key (lambda (entry) (plist-get entry :id))
                              :test #'equal))
@@ -504,7 +498,26 @@
          (request (mevedel-pending-inputs--current-request context))
          (fsm (and request (mevedel-request-fsm request)))
          (view (mevedel-cockpit-context-view-buffer context))
-         (cockpit (current-buffer)))
+         (cockpit (current-buffer))
+         (original-grants
+          (copy-sequence
+           (mevedel-session-dropped-file-grants session)))
+         (entry-grants
+          (copy-sequence (plist-get entry :dropped-file-grants)))
+         (staged-grants
+          (cl-set-difference entry-grants original-grants :test #'equal))
+         (restore-grants
+          (lambda ()
+            (let ((current
+                   (mevedel-session-dropped-file-grants session)))
+              (mevedel-session--set-dropped-file-grants
+               session
+               (append
+                original-grants
+                (cl-set-difference
+                 current
+                 (append original-grants staged-grants)
+                 :test #'equal)))))))
     (unless (eq (plist-get item :category) 'follow-up)
       (user-error "Pending input is already steering"))
     (when mevedel-pending-inputs--converting-id
@@ -515,41 +528,51 @@
     (unless (buffer-live-p view)
       (user-error "No live owning view"))
     (setq mevedel-pending-inputs--converting-id id)
+    (mevedel-session--set-dropped-file-grants
+     session (append staged-grants original-grants))
     (with-current-buffer view
-      (mevedel-view--submit-planned-input
-       (mevedel-pending-inputs--copy-input entry)
-       nil
-       (lambda ()
-         (when (buffer-live-p cockpit)
-           (with-current-buffer cockpit
-             (setq mevedel-pending-inputs--converting-id nil)))
-         (message "mevedel: follow-up remains unchanged"))
-       (lambda (submission)
-         (if-let* ((prepared
-                    (mevedel-view--prepare-steering-entry
-                     submission request)))
-             (condition-case err
-                 (let ((replacement
-                        (mevedel-pending-inputs--restore-entry-metadata
-                         prepared entry)))
-                   (setq replacement
-                         (plist-put replacement :category 'steering)
-                         replacement
-                         (plist-put replacement :state 'pending))
-                   (mevedel-pending-inputs--move-between
-                    session 'follow-up 'steering id replacement)
-                   (mevedel-pending-inputs--conversion-finished
-                    cockpit context id))
-               (error
-                (mevedel-prompt-submission-restore submission)
-                (when (buffer-live-p cockpit)
-                  (with-current-buffer cockpit
-                    (setq mevedel-pending-inputs--converting-id nil)))
-                (message "mevedel: follow-up remains unchanged: %s"
-                         (error-message-string err))))
-           (when (buffer-live-p cockpit)
-             (with-current-buffer cockpit
-               (setq mevedel-pending-inputs--converting-id nil)))))))))
+      (condition-case err
+          (mevedel-view--submit-planned-input
+           (mevedel-pending-inputs--copy-input entry)
+           nil
+           (lambda ()
+             (funcall restore-grants)
+             (when (buffer-live-p cockpit)
+               (with-current-buffer cockpit
+                 (setq mevedel-pending-inputs--converting-id nil)))
+             (message "mevedel: follow-up remains unchanged"))
+           (lambda (submission)
+             (unwind-protect
+                 (if-let* ((prepared
+                            (mevedel-view--prepare-steering-entry
+                             submission request)))
+                     (condition-case conversion-err
+                         (let ((replacement
+                                (mevedel-pending-inputs--restore-entry-metadata
+                                 prepared entry)))
+                           (setq replacement
+                                 (plist-put replacement :category 'steering)
+                                 replacement
+                                 (plist-put replacement :state 'pending))
+                           (mevedel-pending-inputs--move-between
+                            session 'follow-up 'steering id replacement)
+                           (mevedel-pending-inputs--conversion-finished
+                            cockpit context id))
+                       (error
+                        (mevedel-prompt-submission-restore submission)
+                        (when (buffer-live-p cockpit)
+                          (with-current-buffer cockpit
+                            (setq mevedel-pending-inputs--converting-id nil)))
+                        (message "mevedel: follow-up remains unchanged: %s"
+                                 (error-message-string conversion-err))))
+                   (when (buffer-live-p cockpit)
+                     (with-current-buffer cockpit
+                       (setq mevedel-pending-inputs--converting-id nil))))
+               (funcall restore-grants))))
+        (error
+         (funcall restore-grants)
+         (setq mevedel-pending-inputs--converting-id nil)
+         (signal (car err) (cdr err)))))))
 
 (defun mevedel-pending-inputs-make-follow-up ()
   "Convert the selected steering entry to a follow-up at the target tail."

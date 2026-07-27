@@ -1947,7 +1947,13 @@ fork."
       (if (or active-request
               (and (not slash-parsed)
                    (mevedel-view--occupied-root-workflow-p session)))
-          (if (and slash-parsed
+          (let ((restore
+                 (lambda ()
+                   (when snapshot
+                     (mevedel-view--restore-composer-snapshot
+                      snapshot session)))))
+            (cond
+             ((and slash-parsed
                    (mevedel-skills-local-command-active-request-p
                     (nth 0 slash-parsed) (nth 1 slash-parsed)))
               (let ((result (with-current-buffer mevedel--data-buffer
@@ -1956,49 +1962,36 @@ fork."
                                        (nth 1 slash-parsed)))))
                 (when (stringp result) (message "%s" result))
                 (mevedel-view-history-add input)
-                (mevedel-view--clear-input))
-            (if slash-parsed
-                (progn
-                  (when snapshot
-                    (mevedel-view--restore-composer-snapshot
-                     snapshot session))
-                  (user-error
-                   "A request is already active -- wait or abort first"))
-              (require 'mevedel-agent-control)
-              (if active-request
-                  (if (mevedel-view--steerable-root-request-p active-request)
-                    (condition-case err
-                        (mevedel-view--submit-planned-input
-                         input nil
-                         (lambda ()
-                           (when snapshot
-                             (mevedel-view--restore-composer-snapshot
-                              snapshot session))
-                           (message
-                            "mevedel: steering preparation failed; use C-c TAB"))
-                         (lambda (submission)
-                           (unless
-                               (mevedel-view--queue-prepared-steering
-                                submission active-request)
-                             (when snapshot
-                               (mevedel-view--restore-composer-snapshot
-                                snapshot session)))))
-                      (error
-                       (when snapshot
-                         (mevedel-view--restore-composer-snapshot
-                          snapshot session))
-                       (user-error "%s; use C-c TAB for a follow-up"
-                                   (error-message-string err))))
-                    (when snapshot
-                      (mevedel-view--restore-composer-snapshot
-                       snapshot session))
-                    (user-error
-                     "This workflow cannot be steered -- use C-c TAB"))
-                (when snapshot
-                  (mevedel-view--restore-composer-snapshot
-                   snapshot session))
-                (user-error
-                 "The workflow is occupied -- use C-c TAB for a follow-up"))))
+                (mevedel-view--clear-input)))
+             (slash-parsed
+              (funcall restore)
+              (user-error
+               "A request is already active -- wait or abort first"))
+             ((not active-request)
+              (funcall restore)
+              (user-error
+               "The workflow is occupied -- use C-c TAB for a follow-up"))
+             ((not (mevedel-view--steerable-root-request-p active-request))
+              (funcall restore)
+              (user-error
+               "This workflow cannot be steered -- use C-c TAB"))
+             (t
+              (condition-case err
+                  (mevedel-view--submit-planned-input
+                   input nil
+                   (lambda ()
+                     (funcall restore)
+                     (message
+                      "mevedel: steering preparation failed; use C-c TAB"))
+                   (lambda (submission)
+                     (unless
+                         (mevedel-view--queue-prepared-steering
+                          submission active-request)
+                       (funcall restore))))
+                (error
+                 (funcall restore)
+                 (user-error "%s; use C-c TAB for a follow-up"
+                             (error-message-string err)))))))
         (cond
          (slash-parsed
           (let* ((name (nth 0 slash-parsed))

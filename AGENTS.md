@@ -134,6 +134,7 @@ Chat / view
   mevedel-view.el             view mode, zones, and session coordination
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
   mevedel-view-composer.el    composer editing, submission, queueing, fork/send flow
+  mevedel-pending-inputs.el   Pending Inputs cockpit and queue management
   mevedel-plan-mode.el        Plan conversations and proposal approval UI
   mevedel-view-interaction.el interaction registration, ordering, callback overlays, redraw
   mevedel-view-render.el      transcript rendering, folding, source mapping, navigation
