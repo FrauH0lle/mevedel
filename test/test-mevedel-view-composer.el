@@ -1091,6 +1091,22 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                             '(:input "queued"))))
   (should (equal "" (mevedel-view--pending-input-text nil))))
 
+(mevedel-deftest mevedel-view--pending-input-category-body ()
+  ,test
+  (test)
+  :doc "shows three compact previews and a remaining count"
+  (let ((body
+         (mevedel-view--pending-input-category-body
+          "Steering"
+          (mapcar (lambda (n)
+                    (list :input
+                          (format "message %d\nwith extra whitespace" n)))
+                  '(1 2 3 4 5)))))
+    (dolist (n '(1 2 3))
+      (should (string-match-p (format "message %d with extra" n) body)))
+    (should-not (string-match-p "message 4" body))
+    (should (string-match-p "2 more" body))))
+
 (mevedel-deftest mevedel-view--cancel-pending-skill-submission ()
   ,test
   (test)
@@ -3587,7 +3603,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (setf (mevedel-session-pending-follow-ups session)
             (list (list :input "prepared" :submission submission)))
       (with-current-buffer view-buf
-        (mevedel-view-clear-pending-input))
+        (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (mevedel-pending-inputs-clear)))
       (should-not (mevedel-session-pending-follow-ups session))
       (should (equal context-entries
                      (mevedel-session-hook-context-pending session))))))

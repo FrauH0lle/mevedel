@@ -108,8 +108,8 @@
           (mevedel-session-enqueue-pending-input
            session 'follow-up '(:input "second"))
           (with-current-buffer cockpit
-            (mevedel-cockpit-surface-refresh
-             (plist-get first :id))
+            (mevedel-cockpit-goto-id (plist-get first :id))
+            (mevedel-pending-inputs-refresh)
             (should (= 2 (length tabulated-list-entries)))
             (should (equal (plist-get first :id)
                            (tabulated-list-get-id))))))))
@@ -376,6 +376,261 @@
               (mevedel-pending-inputs-quit)))))
       (should (eq transition 'WAIT))
       (should-not (mevedel-session-pending-input-paused session)))))
+
+(mevedel-deftest mevedel-pending-inputs-move-up ()
+  ,test
+  (test)
+  :doc "moves only inside the selected category and preserves the draft"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((first
+            (mevedel-session-enqueue-pending-input
+             session 'steering '(:input "first")))
+           (second
+            (mevedel-session-enqueue-pending-input
+             session 'steering '(:input "second")))
+           (follow-up
+            (mevedel-session-enqueue-pending-input
+             session 'follow-up '(:input "later"))))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert "> draft"))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (mevedel-cockpit-goto-id (plist-get second :id))
+            (mevedel-pending-inputs-move-up)
+            (should (equal (plist-get second :id)
+                           (tabulated-list-get-id))))))
+      (should (equal (list second first)
+                     (mevedel-session-pending-steering session)))
+      (should (equal (list follow-up)
+                     (mevedel-session-pending-follow-ups session)))
+      (with-current-buffer view-buf
+        (should (equal "> draft" (mevedel-view--input-text)))))))
+
+(mevedel-deftest mevedel-pending-inputs-move-down ()
+  ,test
+  (test)
+  :doc "moves down within one category and rejects its lower boundary"
+  (mevedel-pending-inputs-test--with-session
+    (let ((first
+           (mevedel-session-enqueue-pending-input
+            session 'follow-up '(:input "first")))
+          (second
+           (mevedel-session-enqueue-pending-input
+            session 'follow-up '(:input "second"))))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (mevedel-cockpit-goto-id (plist-get first :id))
+            (mevedel-pending-inputs-move-down)
+            (should-error (mevedel-pending-inputs-move-down)
+                          :type 'user-error))))
+      (should (equal (list second first)
+                     (mevedel-session-pending-follow-ups session))))))
+
+(mevedel-deftest mevedel-pending-inputs-make-follow-up ()
+  ,test
+  (test)
+  :doc "drops steering preparation and appends a delayed follow-up"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((context-entries '((:event SessionStart :body "restore me")))
+           (submission
+            (mevedel-prompt-submission-create
+             :input "steer" :display-text "steer" :session session
+             :context-entries context-entries :state 'reserved))
+           (steering
+            (mevedel-session-enqueue-pending-input
+             session 'steering
+             (list :input "steer" :model-input "prepared"
+                   :request-id "request" :submission submission)))
+           (older
+            (mevedel-session-enqueue-pending-input
+             session 'follow-up '(:input "older"))))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (mevedel-cockpit-goto-id (plist-get steering :id))
+            (mevedel-pending-inputs-make-follow-up))))
+      (should-not (mevedel-session-pending-steering session))
+      (let ((converted
+             (cadr (mevedel-session-pending-follow-ups session))))
+        (should (eq older
+                    (car (mevedel-session-pending-follow-ups session))))
+        (should (equal (plist-get steering :id)
+                       (plist-get converted :id)))
+        (should (eq (plist-get converted :category) 'follow-up))
+        (should-not (plist-member converted :request-id))
+        (should-not (plist-member converted :model-input))
+        (should-not (plist-member converted :submission)))
+      (should (equal context-entries
+                     (mevedel-session-hook-context-pending session))))))
+
+(mevedel-deftest mevedel-pending-inputs-make-steering ()
+  ,test
+  (test)
+
+  :doc "fully prepares a follow-up and appends it to live steering"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((fsm (gptel-make-fsm :state 'TOOL))
+           (request
+            (mevedel-request--create
+             :id "convert-live" :session session :fsm fsm))
+           (older
+            (mevedel-session-enqueue-pending-input
+             session 'steering
+             '(:input "older steering" :request-id "convert-live")))
+           (follow-up
+            (mevedel-session-enqueue-pending-input
+             session 'follow-up '(:input "convert me"))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request request))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (mevedel-cockpit-goto-id (plist-get follow-up :id))
+            (mevedel-pending-inputs-make-steering))))
+      (should-not (mevedel-session-pending-follow-ups session))
+      (let ((converted (cadr (mevedel-session-pending-steering session))))
+        (should (eq older (car (mevedel-session-pending-steering session))))
+        (should (equal (plist-get follow-up :id)
+                       (plist-get converted :id)))
+        (should (eq (plist-get converted :category) 'steering))
+        (should (equal "convert-live"
+                       (plist-get converted :request-id)))
+        (should (plist-get converted :submission)))))
+
+  :doc "a turn-ending preparation race leaves the follow-up unchanged"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((fsm (gptel-make-fsm :state 'TOOL))
+           (request
+            (mevedel-request--create
+             :id "convert-race" :session session :fsm fsm))
+           (follow-up
+            (mevedel-session-enqueue-pending-input
+             session 'follow-up '(:input "stay follow-up")))
+           dispatch)
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request request))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (cl-letf
+              (((symbol-function 'mevedel-view--submit-planned-input)
+                (lambda (_input _before _blocked callback &rest _)
+                  (setq dispatch callback))))
+            (with-current-buffer cockpit
+              (mevedel-cockpit-goto-id (plist-get follow-up :id))
+              (mevedel-pending-inputs-make-steering)))
+          (with-current-buffer data-buf
+            (setq mevedel--current-request nil))
+          (with-current-buffer view-buf
+            (funcall
+             dispatch
+             (mevedel-prompt-submission-create
+              :input "stay follow-up" :display-text "stay follow-up"
+              :session session
+              :outcome
+              '(:model-input "stay follow-up"
+                :transcript-input "stay follow-up"))))))
+      (should (equal (list follow-up)
+                     (mevedel-session-pending-follow-ups session)))
+      (should-not (mevedel-session-pending-steering session)))))
+
+(mevedel-deftest mevedel-pending-inputs-mark-delete ()
+  ,test
+  (test)
+  :doc "marks the selected live row and advances"
+  (mevedel-pending-inputs-test--with-session
+    (let ((entry
+           (mevedel-session-enqueue-pending-input
+            session 'follow-up '(:input "delete me"))))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (mevedel-cockpit-goto-id (plist-get entry :id))
+            (mevedel-pending-inputs-mark-delete)
+            (should (member (plist-get entry :id)
+                            mevedel-pending-inputs--marked-ids))))))))
+
+(mevedel-deftest mevedel-pending-inputs-unmark ()
+  ,test
+  (test)
+  :doc "removes the selected row's deletion mark"
+  (mevedel-pending-inputs-test--with-session
+    (let ((entry
+           (mevedel-session-enqueue-pending-input
+            session 'follow-up '(:input "keep me"))))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (mevedel-cockpit-goto-id (plist-get entry :id))
+            (mevedel-pending-inputs-mark-delete)
+            (mevedel-cockpit-goto-id (plist-get entry :id))
+            (mevedel-pending-inputs-unmark)
+            (should-not mevedel-pending-inputs--marked-ids)))))))
+
+(mevedel-deftest mevedel-pending-inputs-execute-deletions ()
+  ,test
+  (test)
+  :doc "confirms category counts and deletes only marked entries"
+  (mevedel-pending-inputs-test--with-session
+    (let ((steering
+           (mevedel-session-enqueue-pending-input
+            session 'steering '(:input "delete steering")))
+          (keep
+           (mevedel-session-enqueue-pending-input
+            session 'follow-up '(:input "keep follow-up")))
+          (follow-up
+           (mevedel-session-enqueue-pending-input
+            session 'follow-up '(:input "delete follow-up")))
+          prompt)
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (setq mevedel-pending-inputs--marked-ids
+                  (list (plist-get steering :id)
+                        (plist-get follow-up :id)))
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (text) (setq prompt text) t)))
+              (mevedel-pending-inputs-execute-deletions)))))
+      (should (string-match-p "1 steering and 1 follow-up" prompt))
+      (should-not (mevedel-session-pending-steering session))
+      (should (equal (list keep)
+                     (mevedel-session-pending-follow-ups session))))))
+
+(mevedel-deftest mevedel-pending-inputs-clear ()
+  ,test
+  (test)
+  :doc "confirms separate counts and clears both live categories"
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-enqueue-pending-input
+     session 'steering '(:input "steering"))
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "follow-up"))
+    (let (prompt)
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'yes-or-no-p)
+                   (lambda (text) (setq prompt text) t)))
+          (mevedel-pending-inputs-clear)))
+      (should (string-match-p "1 steering and 1 follow-up" prompt))
+      (should-not (mevedel-session-pending-steering session))
+      (should-not (mevedel-session-pending-follow-ups session)))))
 
 (provide 'test-mevedel-pending-inputs)
 ;;; test-mevedel-pending-inputs.el ends here
