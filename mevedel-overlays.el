@@ -26,15 +26,27 @@
 (defvar gptel--fsm-last)
 
 ;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (declare-function gptel--model-name "ext:gptel-request" (model))
+(declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (defvar gptel-model)
+(defvar gptel-reasoning-effort)
 
 ;; `mevedel-chat'
-(declare-function mevedel--patch-buffer "mevedel-chat" (&optional create workspace))
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
+(declare-function mevedel--chat-buffer
+                  "mevedel-chat"
+                  (session-name &optional create workspace working-directory))
+(declare-function mevedel--patch-buffer "mevedel-chat" (&optional create workspace))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
 (defvar mevedel--view-buffer)
+
+;; `mevedel-menu'
+(declare-function mevedel-menu-open-model-selection
+                  "mevedel-menu" (&rest options))
+
+;; `mevedel-models'
+(declare-function mevedel-model-current-provider-label
+                  "mevedel-models" (&optional buffer))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
@@ -237,6 +249,8 @@ Each value is a plist with keys `:instructions', `:id-counter',
     mevedel-directive-fail-reason
     mevedel-directive-action
     mevedel-directive-patch
+    mevedel-directive-model-provider
+    mevedel-directive-reasoning-effort
     mevedel-directive-prefix-tag-query
     mevedel-directive-infix-tag-query-string
     mevedel-subdirective-typename
@@ -1538,6 +1552,56 @@ directly.  Return nil if no overlays exist at point."
       (setq selection (car ov-strings)))
     (alist-get selection ov-map nil nil #'equal)))
 
+(defun mevedel--directive-model-values (directive)
+  "Return DIRECTIVE's effective model provider, effort, and inheritance."
+  (if-let* ((provider
+             (overlay-get directive 'mevedel-directive-model-provider)))
+      (list provider
+            (overlay-get directive 'mevedel-directive-reasoning-effort)
+            nil)
+    (require 'mevedel-chat)
+    (require 'mevedel-models)
+    (require 'mevedel-workspace)
+    (let ((buffer
+           (mevedel--chat-buffer
+            "main" t (mevedel-workspace (overlay-buffer directive)))))
+      (list
+       (mevedel-model-current-provider-label buffer)
+       (with-current-buffer buffer
+         (and (boundp 'gptel-reasoning-effort)
+              gptel-reasoning-effort))
+       t))))
+
+(defun mevedel--ov-actions-model (&optional instruction)
+  "Select a request-local model for owning directive INSTRUCTION."
+  (interactive (list (mevedel--ov-actions-getov)))
+  (let ((directive
+         (mevedel--topmost-instruction instruction 'directive)))
+    (when (eq (overlay-get directive 'mevedel-directive-status) 'processing)
+      (user-error "Cannot change the model while the directive is processing"))
+    (pcase-let ((`(,provider ,effort ,inherited)
+                 (mevedel--directive-model-values directive)))
+      (require 'mevedel-menu)
+      (mevedel-menu-open-model-selection
+       :title "Directive model"
+       :provider provider
+       :effort effort
+       :inherited inherited
+       :update
+       (lambda (new-provider new-effort)
+         (overlay-put directive 'mevedel-directive-model-provider
+                      new-provider)
+         (overlay-put directive 'mevedel-directive-reasoning-effort
+                      new-effort)
+         (mevedel--update-instruction-overlay directive t))
+       :reset
+       (lambda ()
+         (overlay-put directive 'mevedel-directive-model-provider nil)
+         (overlay-put directive 'mevedel-directive-reasoning-effort nil)
+         (mevedel--update-instruction-overlay directive t)
+         (let ((values (mevedel--directive-model-values directive)))
+           (list (car values) (cadr values))))))))
+
 (defun mevedel--ov-actions-dispatch (&optional instruction ci)
   "Dispatch actions for a successful instruction overlay.
 
@@ -1548,7 +1612,18 @@ interactive calls."
         (instruction-type (mevedel--instruction-type instruction))
         (before-string (overlay-get instruction 'before-string)))
     (unwind-protect
-        (pcase-let ((choices
+        (pcase-let* ((request-owner
+                      (and (eq instruction-type 'directive)
+                           (mevedel--topmost-instruction
+                            instruction 'directive)))
+                     (model-choice
+                      (and request-owner
+                           (not
+                            (eq (overlay-get
+                                 request-owner 'mevedel-directive-status)
+                                'processing))
+                           '(?M "model")))
+                     (choices
                      (pcase instruction-type
                        (`reference `((?t "add-tags") (?r "remove-tags") (?l "link") (?u "unlink") (?c "commentary") (?k "clear")
                                      ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
@@ -1559,16 +1634,33 @@ interactive calls."
                                          ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
                                               '(?e "expand") '(?e "collapse"))))
                           ('succeeded `((?v "view") (?w "show-answer") (?r "revise") (?p "preview") (?m "modify") (?k "clear")
+                                        ,@(and model-choice
+                                               (list model-choice))
                                         ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
                                              '(?e "expand") '(?e "collapse"))))
                           ('failed `((?i "implement") (?r "revise") (?m "modify") (?p "preview") (?k "clear")
+                                     ,@(and model-choice
+                                            (list model-choice))
                                      ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
                                           '(?e "expand") '(?e "collapse"))))
                           (_ `((?d "discuss") (?i "implement") (?r "revise") (?t "tags") (?m "modify")
                                (?p "preview") (?k "clear")
+                               ,@(and model-choice (list model-choice))
                                ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
                                     '(?e "expand") '(?e "collapse"))))))))
-                    (hint-str (concat "[" (gptel--model-name gptel-model) "]\n")))
+                    (model-values
+                     (and request-owner
+                          (mevedel--directive-model-values request-owner)))
+                    (hint-str
+                     (concat
+                      "["
+                      (if model-values
+                          (format "%s · effort %s%s"
+                                  (car model-values)
+                                  (or (cadr model-values) "default")
+                                  (if (caddr model-values) " · session" ""))
+                        (gptel--model-name gptel-model))
+                      "]\n")))
           (overlay-put
            instruction 'before-string
            (concat
@@ -1991,6 +2083,18 @@ UPDATE-CHILDREN is non-nil."
                                                              sublabel
                                                              padding
                                                              (overlay-buffer instruction))))
+                    (when-let* ((provider
+                                 (overlay-get
+                                  instruction
+                                  'mevedel-directive-model-provider)))
+                      (append-to-label
+                       (format "%s · effort %s"
+                               provider
+                               (or (overlay-get
+                                    instruction
+                                    'mevedel-directive-reasoning-effort)
+                                   "default"))
+                       "MODEL: "))
                     (unless (mevedel--parent-instruction instruction 'directive)
                       (if-let* ((query-string (overlay-get instruction
                                                            'mevedel-directive-infix-tag-query-string)))

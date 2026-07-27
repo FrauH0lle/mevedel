@@ -56,6 +56,10 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 - `mevedel--instruction-states`: workspace-keyed instruction alists and ID state
 - Instruction types: **References** (context) and **Directives** (prompts)
 
+Top-level directives may persist an exact provider and reasoning-effort
+override on their overlay. Nested directives edit the top-level request owner.
+Without an override, the directive inherits the main session model at dispatch.
+
 Directive request callbacks must not assume the original overlay object is
 still live. Capture the directive UUID and re-resolve the directive before
 marking success/failure or touching overlay bounds; detached overlays can
@@ -141,6 +145,9 @@ request-only application is dynamically scoped. The built-ins are
 Dispatch resolves session values, tier values, workload values, then explicit
 Agent policy or request-owning skill policy. Skill preset entries use
 `$skill-name` workload symbols and are consumed before request realization.
+Directive overrides are validated before processing starts and appended as the
+final prompt transform. They therefore win for that directive request and its
+continuations without mutating the session model.
 System prompts are assembled dynamically from ordered profiles in
 `mevedel-system.el`. `mevedel-define-prompt-component` registers reusable
 Markdown, literal text, or dynamic producers.

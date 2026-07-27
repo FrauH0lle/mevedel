@@ -2,9 +2,9 @@
 
 ;;; Commentary:
 
-;; Transient-backed session cockpit for mevedel sessions.  The cockpit
-;; resolves the live view/data buffer pair once, then routes commands to
-;; the buffer that owns the relevant state.
+;; Transient-backed session cockpit and shared model-selection surface.
+;; The cockpit resolves the live view/data buffer pair once, then routes
+;; commands to the buffer or caller that owns the relevant state.
 
 ;;; Code:
 
@@ -68,6 +68,8 @@
                   (&optional buffer))
 (declare-function mevedel-model-current-provider-label "mevedel-models"
                   (&optional buffer))
+(declare-function mevedel-model-resolve-provider "mevedel-models"
+                  (spec &optional noerror))
 (declare-function mevedel-model-set-session-effort "mevedel-models"
                   (session effort &optional buffer))
 (declare-function mevedel-model-set-session-provider "mevedel-models"
@@ -291,21 +293,14 @@
                 (mevedel-menu--inactive-value model)
               (mevedel-menu--value model)))))
 
-(defun mevedel-menu--model-surface-description ()
-  "Return the model surface description."
-  (require 'mevedel-models)
-  (let* ((buffer (mevedel-cockpit-context-data-buffer
-                  (mevedel-menu--context)))
-         (model (mevedel-model-current-provider-label buffer))
-         (effort
-          (with-current-buffer buffer
-            (and (boundp 'gptel-reasoning-effort)
-                 gptel-reasoning-effort))))
-    (concat (mevedel-menu--face "Current model: " 'transient-heading)
-            (if (string= model "none")
-                (mevedel-menu--inactive-value model)
-              (mevedel-menu--value model))
-            (format " · effort %s" (or effort "default")))))
+(defun mevedel-menu--model-selection-description ()
+  "Return the caller-owned model-selection description."
+  (let ((scope (transient-scope)))
+    (format "%s: %s · effort %s%s"
+            (plist-get scope :title)
+            (plist-get scope :model-provider)
+            (or (plist-get scope :reasoning-effort) "default")
+            (if (plist-get scope :inherited) " · session" ""))))
 
 (defun mevedel-menu--tools-description ()
   "Return the top-level tools row description."
@@ -534,79 +529,26 @@
            candidates))))
     (sort candidates (lambda (a b) (string< (car a) (car b))))))
 
-(defun mevedel-menu--set-model (provider)
-  "Set the current data buffer's gptel PROVIDER."
-  (let* ((context (mevedel-menu--context))
-         (session (mevedel-cockpit-context-session context))
-         (buffer (mevedel-cockpit-context-data-buffer context))
-         (backend (plist-get provider :backend))
-         (model (plist-get provider :model)))
-    (require 'mevedel-models)
-    (mevedel-model-set-session-provider session provider buffer)
-    (mevedel-menu--refresh-plan-approval session)
-    (force-mode-line-update t)
-    (message "mevedel: model set to %s:%s"
-             (gptel-backend-name backend)
-             (gptel--model-name model))))
-
-(defun mevedel-menu--select-model ()
-  "Select a registered backend/model pair for the current data buffer."
-  (interactive)
-  (let ((candidates (mevedel-menu--model-candidates)))
-    (unless candidates
-      (user-error "No registered gptel models"))
-    (let ((label (completing-read "Model: " candidates nil t)))
-      (mevedel-menu--set-model (cdr (assoc label candidates))))))
-
-(defun mevedel-menu--select-effort ()
-  "Select reasoning effort for the current session model."
-  (interactive)
-  (let* ((context (mevedel-menu--context))
-         (session (mevedel-cockpit-context-session context))
-         (buffer (mevedel-cockpit-context-data-buffer context))
-         (model (buffer-local-value 'gptel-model buffer))
-         (candidates
-          (cons "default"
-                (mapcar #'symbol-name
-                        (mevedel-model-supported-efforts model))))
-         (choice (completing-read "Effort: " candidates nil t))
-         (effort (unless (string= choice "default") (intern choice))))
-    (mevedel-model-set-session-effort session effort buffer)
-    (mevedel-menu--refresh-plan-approval session)
-    (force-mode-line-update t)
-    (message "mevedel: reasoning effort set to %s" (or effort "default"))))
-
-(defun mevedel-menu--implementation-model-description ()
-  "Return the proposal-local implementation model description."
-  (let ((scope (transient-scope)))
-    (format "Implementation model: %s · effort %s"
-            (plist-get scope :model-provider)
-            (or (plist-get scope :reasoning-effort) "default"))))
-
-(defun mevedel-menu--update-implementation-model (scope provider effort)
-  "Update proposal SCOPE to PROVIDER and EFFORT."
-  (plist-put scope :model-provider provider)
-  (plist-put scope :reasoning-effort effort)
-  (funcall (plist-get scope :update) provider effort))
-
-(defun mevedel-menu--select-implementation-model ()
-  "Select the proposal's implementation model without changing the session."
+(defun mevedel-menu--model-selection-select-model ()
+  "Select a model for the caller-owned model-selection scope."
   (interactive)
   (let ((candidates (mevedel-menu--model-candidates)))
     (unless candidates
       (user-error "No registered gptel models"))
     (let* ((scope (transient-scope))
-           (label (completing-read "Implementation model: "
-                                   candidates nil t))
+           (label (completing-read "Model: " candidates nil t))
            (provider (cdr (assoc label candidates)))
            (effort (plist-get scope :reasoning-effort))
            (model (plist-get provider :model)))
       (unless (memq effort (mevedel-model-supported-efforts model))
         (setq effort nil))
-      (mevedel-menu--update-implementation-model scope label effort))))
+      (plist-put scope :model-provider label)
+      (plist-put scope :reasoning-effort effort)
+      (plist-put scope :inherited nil)
+      (funcall (plist-get scope :update) label effort))))
 
-(defun mevedel-menu--select-implementation-effort ()
-  "Select the proposal's implementation reasoning effort."
+(defun mevedel-menu--model-selection-select-effort ()
+  "Select reasoning effort for the caller-owned model-selection scope."
   (interactive)
   (let* ((scope (transient-scope))
          (provider
@@ -620,20 +562,33 @@
                  #'symbol-name
                  (mevedel-model-supported-efforts
                   (plist-get provider :model)))))
-         (choice (completing-read "Implementation effort: "
-                                  candidates nil t))
+         (choice (completing-read "Effort: " candidates nil t))
          (effort (unless (string= choice "default") (intern choice))))
-    (mevedel-menu--update-implementation-model
-     scope (plist-get scope :model-provider) effort)))
+    (plist-put scope :reasoning-effort effort)
+    (plist-put scope :inherited nil)
+    (funcall (plist-get scope :update)
+             (plist-get scope :model-provider) effort)))
 
-(defun mevedel-menu-open-implementation-model (provider effort update)
-  "Open proposal-local model selection for PROVIDER and EFFORT.
-Call UPDATE with the selected provider label and effort."
+(defun mevedel-menu--model-selection-reset ()
+  "Reset the caller-owned model selection to its inherited values."
+  (interactive)
+  (let* ((scope (transient-scope))
+         (values (funcall (plist-get scope :reset))))
+    (plist-put scope :model-provider (car values))
+    (plist-put scope :reasoning-effort (cadr values))
+    (plist-put scope :inherited t)))
+
+(cl-defun mevedel-menu-open-model-selection
+    (&key title provider effort update reset inherited)
+  "Open shared model selection for caller-owned state."
   (transient-setup
-   'mevedel-menu--implementation-model nil nil
-   :scope (list :model-provider provider
+   'mevedel-menu--model-selection nil nil
+   :scope (list :title title
+                :model-provider provider
                 :reasoning-effort effort
-                :update update)))
+                :update update
+                :reset reset
+                :inherited inherited)))
 
 ;;
 ;;; Commands
@@ -656,7 +611,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
       ('mode
        (transient-setup 'mevedel-menu--mode))
       ('model
-       (transient-setup 'mevedel-menu--model))
+       (mevedel-menu--open-model))
       ('goal
        (transient-setup 'mevedel-menu--goal))
       ('preset
@@ -732,7 +687,23 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
 (defun mevedel-menu--open-model ()
   "Open the model cockpit surface."
   (interactive)
-  (mevedel-menu-open 'model))
+  (let* ((context (mevedel-menu--context))
+         (session (mevedel-cockpit-context-session context))
+         (buffer (mevedel-cockpit-context-data-buffer context)))
+    (require 'mevedel-models)
+    (mevedel-menu-open-model-selection
+     :title "Session model"
+     :provider (mevedel-model-current-provider-label buffer)
+     :effort (with-current-buffer buffer
+               (and (boundp 'gptel-reasoning-effort)
+                    gptel-reasoning-effort))
+     :update
+     (lambda (provider effort)
+       (mevedel-model-set-session-provider
+        session (mevedel-model-resolve-provider provider) buffer)
+       (mevedel-model-set-session-effort session effort buffer)
+       (mevedel-menu--refresh-plan-approval session)
+       (force-mode-line-update t)))))
 
 (defun mevedel-menu--open-goal ()
   "Open the Goal cockpit surface."
@@ -966,29 +937,17 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (mevedel-menu--context)
   (transient-setup 'mevedel-menu--mode))
 
-(transient-define-prefix mevedel-menu--model ()
-  "Model cockpit surface."
-  [:description mevedel-menu--model-surface-description
+(transient-define-prefix mevedel-menu--model-selection ()
+  "Shared caller-owned model-selection surface."
+  [:description mevedel-menu--model-selection-description
    ["Model"
     :pad-keys t
-    ("RET" "Select model" mevedel-menu--select-model)
-    ("e" "Select effort" mevedel-menu--select-effort)
-    ("g" "gptel menu" mevedel-menu--open-gptel)]
-   ["Navigation"
-    :pad-keys t
-    ("b" "Back" mevedel-menu)]]
-  (interactive)
-  (mevedel-menu--context)
-  (transient-setup 'mevedel-menu--model))
-
-(transient-define-prefix mevedel-menu--implementation-model ()
-  "Proposal-local implementation model surface."
-  [:description mevedel-menu--implementation-model-description
-   ["Implementation model"
-    :pad-keys t
-    ("RET" "Select model" mevedel-menu--select-implementation-model
+    ("RET" "Select model" mevedel-menu--model-selection-select-model
      :transient t)
-    ("e" "Select effort" mevedel-menu--select-implementation-effort
+    ("e" "Select effort" mevedel-menu--model-selection-select-effort
+     :transient t)
+    ("s" "Use session model" mevedel-menu--model-selection-reset
+     :if (lambda () (plist-get (transient-scope) :reset))
      :transient t)]
    ["Navigation"
     :pad-keys t

@@ -39,10 +39,13 @@
 (declare-function gptel-mode "ext:gptel" (&optional arg))
 (declare-function gptel-send "ext:gptel" nil)
 (defvar gptel--markdown-block-map)
+(defvar gptel-backend)
 (defvar gptel-default-mode)
 (defvar gptel-display-buffer-action)
 (defvar gptel-mode)
+(defvar gptel-model)
 (defvar gptel-pre-tool-call-functions)
+(defvar gptel-reasoning-effort)
 (defvar gptel-send--handlers)
 (defvar gptel-send--transitions)
 
@@ -83,6 +86,10 @@
 ;; `mevedel-models'
 (declare-function mevedel-model-apply-session-policy
                   "mevedel-models" (session &optional buffer))
+(declare-function mevedel-model-resolve-provider
+                  "mevedel-models" (spec &optional noerror))
+(declare-function mevedel-model-validate-effort
+                  "mevedel-models" (model effort))
 
 ;; `mevedel-overlays'
 (declare-function mevedel--child-instructions "mevedel-overlays"
@@ -1012,6 +1019,17 @@ settling."
        (not (bound-and-true-p mevedel--session))
        (not (bound-and-true-p mevedel--agent-invocation))))
 
+(defun mevedel--directive-model-policy (directive)
+  "Return DIRECTIVE's resolved request-local model policy, or nil."
+  (when-let* ((provider
+               (overlay-get directive 'mevedel-directive-model-provider)))
+    (require 'mevedel-models)
+    (let* ((policy (mevedel-model-resolve-provider provider))
+           (effort
+            (overlay-get directive 'mevedel-directive-reasoning-effort)))
+      (mevedel-model-validate-effort (plist-get policy :model) effort)
+      (plist-put policy :effort effort))))
+
 (defun mevedel--process-directive (directive preset prompt-fn callback)
   "Process DIRECTIVE using PRESET and PROMPT-FN, calling CALLBACK when complete.
 
@@ -1023,7 +1041,8 @@ content.
 CALLBACK is called with (err fsm) when processing completes.
 
 Updates directive status and overlay, handles success/failure states."
-  (let* (;; Get chat buffer for the directive's buffer workspace
+  (let* ((model-policy (mevedel--directive-model-policy directive))
+         ;; Get chat buffer for the directive's buffer workspace
          (workspace (with-current-buffer (overlay-buffer directive)
                       (mevedel-workspace)))
          (chat-buffer (mevedel--chat-buffer "main" t workspace))
@@ -1166,7 +1185,21 @@ Updates directive status and overlay, handles success/failure states."
                       :buffer chat-buffer
                       :position response-start
                       :stream gptel-stream
-                      :transforms gptel-prompt-transform-functions
+                      :transforms
+                      (append
+                       gptel-prompt-transform-functions
+                       (and model-policy
+                            (list
+                             (lambda (_fsm)
+                               (setq-local
+                                gptel-backend
+                                (plist-get model-policy :backend))
+                               (setq-local
+                                gptel-model
+                                (plist-get model-policy :model))
+                               (setq-local
+                                gptel-reasoning-effort
+                                (plist-get model-policy :effort))))))
                       :fsm (gptel-make-fsm :handlers gptel-send--handlers)))
                ;; Extract the actual gptel callback for handling responses. By
                ;; default this will generally be `gptel--insert-response' or
