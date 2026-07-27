@@ -754,9 +754,9 @@ through font-lock refontification cycles.  Returns S."
 
 (defun mevedel-view--visible-response-text (text)
   "Return response TEXT with model protocol hidden when appropriate."
+  (require 'mevedel-plan)
   (let ((text (mevedel-view--strip-render-data-display-text text)))
-    (when (and (fboundp 'mevedel-plan-strip-proposed)
-               (mevedel-view--strip-proposed-plans-p text))
+    (when (mevedel-view--strip-proposed-plans-p text)
       (setq text (mevedel-plan-strip-proposed text)))
     (replace-regexp-in-string "^</?proposed_plan>[ \t]*\n?" "" text)))
 
@@ -2142,8 +2142,7 @@ stay hidden on later full rerenders without session-global hash history."
   (or (and (boundp 'mevedel--session)
            mevedel--session
            (mevedel-session-plan-mode mevedel--session))
-      (and (fboundp 'mevedel-plan-extract-proposed)
-           (mevedel-plan-extract-proposed text))))
+      (mevedel-plan-extract-proposed text)))
 
 (defun mevedel-view--current-render-insertion-marker ()
   "Return the marker render helpers should insert at."

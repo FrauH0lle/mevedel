@@ -42,6 +42,7 @@
 (defvar gptel-tools)
 
 ;; `transient'
+(declare-function transient--emergency-exit "transient" (&optional id))
 (defvar transient--buffer-name)
 (defvar transient--transient-map)
 
@@ -748,7 +749,9 @@
                  (substring-no-properties (buffer-string)))))
           (should (string-match-p "RET +Select model" display))
           (should-not (string-match-p "<return>" display))))
-    (transient-quit-all)))
+    (transient--emergency-exit :test)
+    (should-not
+     (memq transient--transient-map overriding-terminal-local-map))))
 
 (mevedel-deftest mevedel-menu--open-model ()
   ,test
