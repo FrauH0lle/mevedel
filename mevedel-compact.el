@@ -161,7 +161,7 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-steering-inject
-                  "mevedel-tools" (fsm &optional after-compaction))
+                  "mevedel-tools" (fsm &optional skip-compaction-gate))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--format-hook-audit-record "mevedel-utilities"

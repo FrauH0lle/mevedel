@@ -54,6 +54,10 @@
 (declare-function mevedel-model-current-label "mevedel-models"
                   (&optional buffer))
 
+;; `mevedel-pending-inputs'
+(declare-function mevedel-pending-inputs-clear
+                  "mevedel-pending-inputs" ())
+
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-abort-all
                   "mevedel-permission-queue" (&optional session))
@@ -114,10 +118,6 @@
 (declare-function mevedel-view-open-agent-transcript-at-point
                   "mevedel-view-agent" (&optional event))
 (defvar mevedel-view--agent-transcript-p)
-
-;; `mevedel-pending-inputs'
-(declare-function mevedel-pending-inputs-clear
-                  "mevedel-pending-inputs" ())
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--effective-permission-mode

@@ -96,7 +96,15 @@
               (buffer-substring-no-properties
                (point-min) (mevedel-view--input-start)))))))))
 
-  :doc "refresh reads live session state without a shadow Apply step"
+  :doc "rejects opening an empty Pending Inputs cockpit"
+  (mevedel-pending-inputs-test--with-session
+    (with-current-buffer view-buf
+      (should-error (mevedel-pending-inputs-open) :type 'user-error))))
+
+(mevedel-deftest mevedel-pending-inputs-refresh ()
+  ,test
+  (test)
+  :doc "reads live session state without a shadow Apply step"
   (mevedel-pending-inputs-test--with-session
     (let ((first
            (mevedel-session-enqueue-pending-input
@@ -112,12 +120,7 @@
             (mevedel-pending-inputs-refresh)
             (should (= 2 (length tabulated-list-entries)))
             (should (equal (plist-get first :id)
-                           (tabulated-list-get-id))))))))
-
-  :doc "rejects opening an empty Pending Inputs cockpit"
-  (mevedel-pending-inputs-test--with-session
-    (with-current-buffer view-buf
-      (should-error (mevedel-pending-inputs-open) :type 'user-error))))
+                           (tabulated-list-get-id)))))))))
 
 (mevedel-deftest mevedel-pending-inputs-edit ()
   ,test
@@ -570,6 +573,47 @@
         (should (equal "convert-live"
                        (plist-get converted :request-id)))
         (should (plist-get converted :submission)))))
+
+  :doc "retains queued file grants and restores the existing draft grants"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((fsm (gptel-make-fsm :state 'TOOL))
+           (request
+            (mevedel-request--create
+             :id "convert-grant" :session session :fsm fsm))
+           (file (make-temp-file "mevedel-convert-grant-"))
+           (draft-file (make-temp-file "mevedel-draft-grant-"))
+           (token (format "@file:%s" file))
+           (input
+            (propertize
+             token
+             'mevedel-mention-binding
+             (list :kind 'file :token token :path file)))
+           (follow-up
+            (mevedel-session-enqueue-pending-input
+             session 'follow-up
+             (list :input input :dropped-file-grants (list file)))))
+      (unwind-protect
+          (progn
+            (setf (mevedel-session-dropped-file-grants session)
+                  (list draft-file))
+            (with-current-buffer data-buf
+              (setq-local mevedel--current-request request))
+            (save-window-excursion
+              (let ((cockpit
+                     (with-current-buffer view-buf
+                       (mevedel-pending-inputs-open))))
+                (with-current-buffer cockpit
+                  (mevedel-cockpit-goto-id (plist-get follow-up :id))
+                  (mevedel-pending-inputs-make-steering))))
+            (let ((converted
+                   (car (mevedel-session-pending-steering session))))
+              (should (equal (list file)
+                             (plist-get converted :dropped-file-grants))))
+            (should
+             (equal (list draft-file)
+                    (mevedel-session-dropped-file-grants session))))
+        (delete-file file)
+        (delete-file draft-file))))
 
   :doc "a turn-ending preparation race leaves the follow-up unchanged"
   (mevedel-pending-inputs-test--with-session

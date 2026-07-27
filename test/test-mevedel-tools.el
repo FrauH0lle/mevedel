@@ -301,6 +301,50 @@
             (should (string-match-p "second steering" (buffer-string)))))
       (kill-buffer buf)))
 
+  :doc "a later delivery error leaves only the undelivered suffix pending"
+  (let* ((session (mevedel-tools-test--make-session))
+         (backend (gptel-make-openai
+                   "Steering partial test" :stream nil :key "unused"
+                   :host "example.test"
+                   :models '(steering-partial-test)))
+         (buf (generate-new-buffer " *mt-steering-partial*"))
+         (data (list :messages []))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buf :backend backend :data data
+                           :history '(TRET)
+                           :mevedel-request-id "request-partial"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session session))
+          (dolist (input '("delivered" "fails"))
+            (mevedel-session-enqueue-pending-input
+             session 'steering
+             (list :input input :request-id "request-partial")))
+          (cl-letf
+              (((symbol-function 'mevedel-mentions-expand-user-input)
+                (lambda (input _session)
+                  (when (equal input "fails")
+                    (error "Expansion failed"))
+                  (list :text input))))
+            (should-error
+             (mevedel-tools--handle-steering-inject fsm)
+             :type 'error))
+          (should
+           (equal '("delivered")
+                  (mapcar
+                   (lambda (message) (plist-get message :content))
+                   (append (plist-get data :messages) nil))))
+          (should
+           (equal '("fails")
+                  (mapcar
+                   (lambda (entry) (plist-get entry :input))
+                   (mevedel-session-pending-steering session))))
+          (with-current-buffer buf
+            (should (string-match-p "delivered" (buffer-string)))
+            (should-not (string-match-p "fails" (buffer-string)))))
+      (kill-buffer buf)))
+
   :doc "automatic compaction defers steering until its post-compact boundary"
   (let* ((session (mevedel-tools-test--make-session))
          (backend (gptel-make-openai
