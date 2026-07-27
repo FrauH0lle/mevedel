@@ -352,7 +352,7 @@
          (session
           (mevedel-session--create
            :name "main" :save-path save-dir
-           :queued-user-messages
+           :pending-follow-ups
            '((:input "steer first" :queued-at-goal-id "reserved"))
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
@@ -390,7 +390,7 @@
              (plist-member (mevedel-session-plan-metadata session)
                            :implementation-retry))
             (should
-             (mevedel-view--queued-user-message-auto-drain-blocked-p session))
+             (mevedel-view--follow-up-auto-drain-blocked-p session))
             (cl-letf (((symbol-function 'mevedel-session-persistence-save)
                        #'ignore)
                       ((symbol-function 'run-at-time)
@@ -399,18 +399,18 @@
               (with-current-buffer data-buffer
                 (mevedel-goal-resume))
               (should (eq 'active (mevedel-goal-status goal)))
-              (should (eq 'queued-user-message
+              (should (eq 'follow-up
                           (mevedel-goal-continue-if-idle
                            session data-buffer))))
             (should
              (seq-some
               (lambda (call)
-                (eq #'mevedel-view--run-queued-user-message-drain
+                (eq #'mevedel-view--run-follow-up-drain
                     (car call)))
               scheduled))
             (should (equal "steer first"
                            (plist-get
-                            (car (mevedel-session-queued-user-messages session))
+                            (car (mevedel-session-pending-follow-ups session))
                             :input)))))
       (kill-buffer view-buffer)
       (kill-buffer data-buffer)

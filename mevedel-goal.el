@@ -35,6 +35,10 @@
                   "mevedel-session-persistence" (session buffer))
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-enqueue-pending-input
+                  "mevedel-structs" (session category entry))
+(declare-function mevedel-session-pending-follow-ups
+                  "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
@@ -52,7 +56,7 @@
                   "mevedel-tools" (buffer))
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--run-queued-user-message-drain
+(declare-function mevedel-view--run-follow-up-drain
                   "mevedel-view-composer" (data-buffer))
 
 ;; `mevedel-view-interaction'
@@ -294,9 +298,9 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
      ((and (buffer-live-p buffer)
            (buffer-local-value 'mevedel--current-request buffer))
       'request)
-     ((mevedel-session-queued-user-messages session)
-      (run-at-time 0 nil #'mevedel-view--run-queued-user-message-drain buffer)
-      'queued-user-message)
+     ((mevedel-session-pending-follow-ups session)
+      (run-at-time 0 nil #'mevedel-view--run-follow-up-drain buffer)
+      'follow-up)
      ((mevedel-goal--pending-interaction-p session) 'interaction)
      ((mevedel-goal--budget-exhausted-p goal) 'budget)
      (t
@@ -373,9 +377,9 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
       (setf (mevedel-session-plan-metadata mevedel--session) metadata))
     (mevedel-goal--touch goal)
     (when (and (stringp steering) (not (string-blank-p steering)))
-      (setf (mevedel-session-queued-user-messages mevedel--session)
-            (append (mevedel-session-queued-user-messages mevedel--session)
-                    (list (list :input (string-trim steering))))))
+      (mevedel-session-enqueue-pending-input
+       mevedel--session 'follow-up
+       (list :input (string-trim steering))))
     (mevedel-goal--persist mevedel--session (current-buffer))
     (mevedel-goal--schedule-continuation mevedel--session (current-buffer))
     goal))

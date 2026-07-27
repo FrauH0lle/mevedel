@@ -2886,7 +2886,7 @@ spanning lines")))
                     'mevedel--implementation-permission-mode-restore)
                    (lambda () (setq permission-restored t)))
                   ((symbol-function
-                    'mevedel-view--schedule-queued-user-message-drain)
+                    'mevedel-view--schedule-follow-up-drain)
                    (lambda (_fsm) (setq queue-drain-scheduled t)))
                   ((symbol-function 'gptel--update-status)
                    (lambda (&rest args) (setq status-called args))))

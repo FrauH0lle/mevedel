@@ -63,10 +63,11 @@
                     mevedel-view--run-prompt-submit-hook))
     (should (equal "mevedel-view-composer"
                    (mevedel-view-composer-test--owner symbol))))
-  :doc "owns queued, forked, and request-progress send orchestration"
-  (dolist (symbol '(mevedel-view--queue-user-message
+  :doc "owns pending-input, forked, and request-progress send orchestration"
+  (dolist (symbol '(mevedel-view--queue-follow-up
+                    mevedel-view-send-follow-up
                     mevedel-view--fork-if-pending
-                    mevedel-view--schedule-queued-user-message-drain
+                    mevedel-view--schedule-follow-up-drain
                     mevedel-view-abort))
     (should (equal "mevedel-view-composer"
                    (mevedel-view-composer-test--owner symbol)))))
@@ -411,9 +412,9 @@
            ("<backtab>" . mevedel-view-cycle-permission-mode)
            ("S-TAB" . mevedel-view-cycle-permission-mode)
            ("C-c RET" . mevedel-view-send)
+           ("C-c TAB" . mevedel-view-send-follow-up)
            ("C-c C-l" . mevedel-view-history-browse)
            ("C-c C-u" . mevedel-view-history-clear-input)
-           ("C-c C-e" . mevedel-view-edit-last-queued-message)
            ("C-y" . mevedel-view-yank-dwim)
            ("M-p" . mevedel-view-history-previous)
            ("M-n" . mevedel-view-history-next)
@@ -1077,13 +1078,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 ;;
 ;;; Planned submission helpers
 
-(mevedel-deftest mevedel-view--queued-user-message-input ()
+(mevedel-deftest mevedel-view--pending-input-text ()
   ,test
   (test)
   :doc "returns queued input and defaults a missing value to empty text"
-  (should (equal "queued" (mevedel-view--queued-user-message-input
+  (should (equal "queued" (mevedel-view--pending-input-text
                             '(:input "queued"))))
-  (should (equal "" (mevedel-view--queued-user-message-input nil))))
+  (should (equal "" (mevedel-view--pending-input-text nil))))
 
 (mevedel-deftest mevedel-view--cancel-pending-skill-submission ()
   ,test
@@ -1476,7 +1477,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                           (mevedel-request--create :session session))
               (mevedel-skills-install session data-buf))
             (cl-letf (((symbol-function
-                        'mevedel-view--schedule-late-queued-user-message-drain)
+                        'mevedel-view--schedule-late-follow-up-drain)
                        #'ignore)
                       ((symbol-function 'gptel-send)
                        (lambda (&rest _)
@@ -1485,8 +1486,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (with-current-buffer view-buf
                 (goto-char (mevedel-view--input-start))
                 (insert "Please use $alpha for the queued analysis")
-                (mevedel-view-send))
-              (let* ((queue (mevedel-session-queued-user-messages session))
+                (mevedel-view-send-follow-up))
+              (let* ((queue (mevedel-session-pending-follow-ups session))
                      (input (plist-get (car queue) :input))
                      (start (string-match "\\$alpha" input))
                      (binding (and start
@@ -1504,12 +1505,12 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (delete-file source-file)
               (with-current-buffer data-buf
                 (setq-local mevedel--current-request nil))
-              (mevedel-view--drain-queued-user-message data-buf))
+              (mevedel-view--drain-follow-up data-buf))
             (should (string-search "[skill:alpha -- unavailable]"
                                    request-data))
             (should-not (string-search "ORIGINAL ALPHA V1" request-data))
             (should-not (string-search "COMPETING ALPHA" request-data))
-            (should-not (mevedel-session-queued-user-messages session))))
+            (should-not (mevedel-session-pending-follow-ups session))))
       (delete-directory root t)
       (delete-directory user-skills t)))
 
@@ -2194,7 +2195,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                               '(:status ok :kind instruction :body "ALPHA"
                                 :request-context (:invoked-skills nil))))))
                 ((symbol-function
-                  'mevedel-view--schedule-late-queued-user-message-drain)
+                  'mevedel-view--schedule-late-follow-up-drain)
                  #'ignore)
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (error "Gptel-send should not run"))))
@@ -2217,10 +2218,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (with-current-buffer data-buf
             (setq-local mevedel--current-request
                         (mevedel-request--create :session session)))
-          (mevedel-view-send)
+          (mevedel-view-send-follow-up)
           (let ((queued
                  (plist-get
-                  (car (mevedel-session-queued-user-messages session))
+                  (car (mevedel-session-pending-follow-ups session))
                   :input))
                 (history (car (mevedel-view-history--entries))))
             (dolist (text (list queued history))
@@ -2491,16 +2492,16 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (should-not mevedel--pending-model-input)))
       (kill-buffer chat-buffer))))
 
-(mevedel-deftest mevedel-view--queued-user-message-auto-drain-blocked-p ()
+(mevedel-deftest mevedel-view--follow-up-auto-drain-blocked-p ()
   ,test
   (test)
   :doc "blocks fallback drainage for approval and Goal handoff ownership"
   (let ((session (mevedel-session--create
                   :name "main" :pending-plan-approval 'plan)))
-    (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p session))
     (setf (mevedel-session-pending-plan-approval session) nil)
     (should-not
-     (mevedel-view--queued-user-message-auto-drain-blocked-p session)))
+     (mevedel-view--follow-up-auto-drain-blocked-p session)))
   (let ((here
          (mevedel-session--create
           :name "here"
@@ -2519,24 +2520,54 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
          (mevedel-session--create
           :name "target"
           :plan-metadata '(:implementation-goal-id "target-goal"))))
-    (should (mevedel-view--queued-user-message-auto-drain-blocked-p here))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p here))
     (should-not
-     (mevedel-view--queued-user-message-auto-drain-blocked-p source))
-    (should (mevedel-view--queued-user-message-auto-drain-blocked-p target)))
+     (mevedel-view--follow-up-auto-drain-blocked-p source))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p target)))
   (let* ((goal (mevedel-goal--create :id "goal" :status 'paused))
          (session
           (mevedel-session--create
            :name "paused" :goal goal
-           :queued-user-messages
+           :pending-follow-ups
            '((:input "held" :queued-at-goal-id "goal")))))
-    (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p session))
     (setf (mevedel-goal-status goal) 'active)
     (should-not
-     (mevedel-view--queued-user-message-auto-drain-blocked-p session))))
+     (mevedel-view--follow-up-auto-drain-blocked-p session))))
 
-(mevedel-deftest mevedel-view-send/queued-user-messages ()
+(mevedel-deftest mevedel-view-send/pending-input ()
   ,test
   (test)
+
+  :doc "C-c TAB queues independent FIFO follow-ups during an active request"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "main")))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (cl-letf (((symbol-function
+                  'mevedel-view--schedule-late-follow-up-drain)
+                 #'ignore))
+        (with-current-buffer view-buf
+          (dolist (text '("first" "second"))
+            (goto-char (mevedel-view--input-start))
+            (insert text)
+            (mevedel-view-send-follow-up))
+          (should (string-empty-p (mevedel-view--input-text)))
+          (should (equal '("second" "first")
+                         (mevedel-view-history--entries)))))
+      (let ((entries (mevedel-session-pending-follow-ups session)))
+        (should (equal '("first" "second")
+                       (mapcar (lambda (entry) (plist-get entry :input))
+                               entries)))
+        (should (equal '(1 2)
+                       (mapcar (lambda (entry) (plist-get entry :id))
+                               entries)))
+        (should (seq-every-p
+                 (lambda (entry)
+                   (eq 'follow-up (plist-get entry :category)))
+                 entries)))))
 
   :doc "Here Goal reservation queues post-acceptance input under its identity"
   (mevedel-view-test--with-buffers
@@ -2556,8 +2587,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "steer after kickoff")
-          (mevedel-view-send))
-        (let ((entry (car (mevedel-session-queued-user-messages session))))
+          (mevedel-view-send-follow-up))
+        (let ((entry (car (mevedel-session-pending-follow-ups session))))
           (should (equal "steer after kickoff" (plist-get entry :input)))
           (should (equal "reserved" (plist-get entry :queued-at-goal-id)))))))
 
@@ -2591,7 +2622,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                          (mevedel-view-history--entries)))
           (should-not (mevedel-view--interaction-count-label)))
       (should (eq 'user wake-reason))
-      (should-not (mevedel-session-queued-user-messages session))
+      (should-not (mevedel-session-pending-follow-ups session))
       (let* ((data (list :messages []))
              (fsm (gptel-make-fsm
                    :info (list :buffer data-buf :backend nil :data data))))
@@ -2675,15 +2706,14 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (mapcar #'mevedel-skill-invocation-record-name
                              (mevedel-session-invoked-skills session))))))
 
-  :doc "a lost steering race reserves context behind an older queued prompt"
+  :doc "a lost WaitAgent steering race leaves input and context untouched"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
                        :type 'test :id "steering-race" :root "/tmp"
                        :name "steering-race"))
            (session (mevedel-session-create "main" workspace))
            (waiting-checks 0)
-           (hook-calls 0)
-           sent)
+           (hook-calls 0))
       (with-current-buffer data-buf
         (setq-local mevedel--session session
                     mevedel--workspace workspace
@@ -2691,8 +2721,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                     (mevedel-request--create :session session))
         (mevedel-hooks-record-session-context
          session '(:additional-context ("race context")) 'SessionStart))
-      (mevedel-session-set-queued-user-messages
-       session (list (list :input "older prompt" :queued-at-turn 0)))
+      (mevedel-session-set-pending-inputs
+       session 'follow-up
+       (list (list :input "older prompt" :queued-at-turn 0)))
       (cl-letf (((symbol-function 'mevedel-agent-control-root-waiting-p)
                  (lambda (_session)
                    (= 1 (cl-incf waiting-checks))))
@@ -2700,36 +2731,18 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (_event _payload callback &rest _)
                    (cl-incf hook-calls)
                    (funcall callback nil)))
-                ((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent t)))
                 ((symbol-function 'run-at-time)
                  (lambda (&rest _) 'fake-timer)))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "race prompt")
           (mevedel-view-send))
-        (let* ((queue (mevedel-session-queued-user-messages session))
-               (entry (cadr queue))
-               (submission (plist-get entry :submission)))
-          (should (= 2 (length queue)))
-          (should (mevedel-prompt-submission-p submission))
-          (should (eq 'reserved
-                      (mevedel-prompt-submission-state submission))))
+        (should (= 1 (length
+                      (mevedel-session-pending-follow-ups session))))
+        (with-current-buffer view-buf
+          (should (equal "race prompt" (mevedel-view--input-text))))
         (should (= 1 hook-calls))
-        (should-not (mevedel-session-hook-context-pending session))
-        (with-current-buffer data-buf
-          (setq-local mevedel--current-request nil))
-        (mevedel-view--drain-queued-user-message data-buf)
-        (with-current-buffer data-buf
-          (should-not (string-match-p "race context" (buffer-string))))
-        (should (= 2 hook-calls))
-        (mevedel-view--drain-queued-user-message data-buf))
-      (should sent)
-      (should (= 2 hook-calls))
-      (should-not (mevedel-session-hook-context-pending session))
-      (with-current-buffer data-buf
-        (should (= 1 (mevedel-view-test--count-matches
-                      "race context" (buffer-string)))))))
+        (should (mevedel-session-hook-context-pending session)))))
 
   :doc "a prepared queue entry survives failure before transcript insertion"
   (mevedel-view-test--with-buffers
@@ -2754,16 +2767,16 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer data-buf
         (setq-local mevedel--session session
                     mevedel--workspace workspace))
-      (mevedel-session-set-queued-user-messages session (list entry))
+      (mevedel-session-set-pending-inputs session 'follow-up (list entry))
       (cl-letf (((symbol-function 'mevedel-view--forward-input-now)
                  (lambda (&rest _) (error "Before transcript"))))
-        (mevedel-view--drain-queued-user-message data-buf))
-      (should (eq entry (car (mevedel-session-queued-user-messages session))))
+        (mevedel-view--drain-follow-up data-buf))
+      (should (eq entry (car (mevedel-session-pending-follow-ups session))))
       (should (eq 'reserved (mevedel-prompt-submission-state submission)))
       (should-not (mevedel-session-hook-context-pending session))
       (cl-letf (((symbol-function 'gptel-send) #'ignore))
-        (mevedel-view--drain-queued-user-message data-buf))
-      (should-not (mevedel-session-queued-user-messages session))
+        (mevedel-view--drain-follow-up data-buf))
+      (should-not (mevedel-session-pending-follow-ups session))
       (should (eq 'committed (mevedel-prompt-submission-state submission)))
       (with-current-buffer data-buf
         (should (= 1 (mevedel-view-test--count-matches
@@ -2799,15 +2812,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (with-current-buffer view-buf
                 (setq-local mevedel--session session))
               (cl-letf (((symbol-function
-                          'mevedel-view--schedule-late-queued-user-message-drain)
+                          'mevedel-view--schedule-late-follow-up-drain)
                          #'ignore))
                 (with-current-buffer view-buf
                   (goto-char (mevedel-view--input-start))
                   (insert "Inspect " token " after the current turn")
-                  (mevedel-view-send)))
+                  (mevedel-view-send-follow-up)))
               (let* ((queued
                       (plist-get
-                       (car (mevedel-session-queued-user-messages session))
+                       (car (mevedel-session-pending-follow-ups session))
                        :input))
                      (queued-start (string-match (regexp-quote token) queued))
                      (history
@@ -2848,7 +2861,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                            (lambda (&rest _)
                              (setq request-data
                                    (mevedel-view-test--dry-run-request-data)))))
-                  (mevedel-view--drain-queued-user-message data-buf)))
+                  (mevedel-view--drain-follow-up data-buf)))
               (should (string-search (format "[ref:%d -- unavailable]" id)
                                      request-data))
               (should-not (string-search "replacement reference body"
@@ -2864,7 +2877,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                                  (match-beginning 0)
                                  'mevedel-mention-binding)
                                 :reference-uuid))))
-              (should-not (mevedel-session-queued-user-messages session)))))
+              (should-not (mevedel-session-pending-follow-ups session)))))
       (when (buffer-live-p ref-buf)
         (with-current-buffer ref-buf (set-buffer-modified-p nil))
         (kill-buffer ref-buf))
@@ -2891,15 +2904,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (with-current-buffer view-buf
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function
-                      'mevedel-view--schedule-late-queued-user-message-drain)
+                      'mevedel-view--schedule-late-follow-up-drain)
                      #'ignore))
             (with-current-buffer view-buf
               (goto-char (mevedel-view--input-start))
               (insert "Inspect @file:queued.txt")
-              (mevedel-view-send)))
+              (mevedel-view-send-follow-up)))
           (let* ((queued
                   (plist-get
-                   (car (mevedel-session-queued-user-messages session))
+                   (car (mevedel-session-pending-follow-ups session))
                    :input))
                  (queued-start (string-match "@file:" queued))
                  (history
@@ -2932,7 +2945,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                        (lambda (&rest _)
                          (setq request-data
                                (mevedel-view-test--dry-run-request-data)))))
-              (mevedel-view--drain-queued-user-message data-buf)))
+              (mevedel-view--drain-follow-up data-buf)))
           (should (string-search
                    "[file:queued.txt -- does not exist]" request-data))
           (should-not (string-search "queued file secret" request-data))
@@ -2946,7 +2959,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                             (get-text-property
                              (match-beginning 0) 'mevedel-mention-binding)
                             :path))))
-          (should-not (mevedel-session-queued-user-messages session)))
+          (should-not (mevedel-session-pending-follow-ups session)))
       (when (file-exists-p file) (delete-file file))
       (delete-directory root t)))
 
@@ -2972,15 +2985,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (with-current-buffer view-buf
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function
-                      'mevedel-view--schedule-late-queued-user-message-drain)
+                      'mevedel-view--schedule-late-follow-up-drain)
                      #'ignore))
             (with-current-buffer view-buf
               (goto-char (mevedel-view--input-start))
               (insert "Consult " token)
-              (mevedel-view-send))
+              (mevedel-view-send-follow-up))
             (let* ((queued
                     (plist-get
-                     (car (mevedel-session-queued-user-messages session))
+                     (car (mevedel-session-pending-follow-ups session))
                      :input))
                    (queued-start (string-match (regexp-quote token) queued))
                    (history
@@ -3018,7 +3031,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                        (lambda (&rest _)
                          (setq request-data
                                (mevedel-view-test--dry-run-request-data)))))
-              (mevedel-view--drain-queued-user-message data-buf)))
+              (mevedel-view--drain-follow-up data-buf)))
           (should (string-search "current guide" request-data))
           (with-current-buffer data-buf
             (goto-char (point-min))
@@ -3029,7 +3042,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (get-text-property
                       (match-beginning 0) 'mevedel-mention-binding)
                      :uri))))
-          (should-not (mevedel-session-queued-user-messages session)))
+          (should-not (mevedel-session-pending-follow-ups session)))
       (delete-directory root t)))
 
   :doc "queued message stays visible across incremental in-flight rendering"
@@ -3058,7 +3071,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (mevedel-view--render-incremental data-buf)
         (goto-char (mevedel-view--input-start))
         (insert "follow up")
-        (mevedel-view-send)
+        (mevedel-view-send-follow-up)
         (should (string-match-p "follow up"
                                 (buffer-substring-no-properties
                                  (point-min) (point-max))))
@@ -3095,7 +3108,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (let ((start (point)))
           (insert "Partial response.\n")
           (put-text-property start (point) 'gptel 'response)))
-      (setf (mevedel-session-queued-user-messages session)
+      (setf (mevedel-session-pending-follow-ups session)
             (list (list :input "follow up"
                         :display-text "follow up")))
       (with-current-buffer view-buf
@@ -3117,7 +3130,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (< partial queued))
           (should (< queued prompt))))))
 
-  :doc "queued message UI shows edit-batch and clear key hints"
+  :doc "follow-up UI shows the clear key hint"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq-hint" :root "/tmp/vq" :name "vq"
@@ -3127,12 +3140,12 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
            (session (mevedel-session-create "main" ws)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
-      (setf (mevedel-session-queued-user-messages session)
+      (setf (mevedel-session-pending-follow-ups session)
             (list (list :input "follow up" :display-text "follow up")))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--interaction-rebuild)
-        (should (string-match-p "C-c C-e edit batch; C-c C-q clear"
+        (should (string-match-p "C-c C-q clear"
                                 (buffer-string))))))
 
   :doc "queued skill hooks run once at dispatch and not while queueing"
@@ -3149,18 +3162,18 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (cl-incf hooks))
                    (funcall callback nil)))
                 ((symbol-function
-                  'mevedel-view--schedule-late-queued-user-message-drain)
+                  'mevedel-view--schedule-late-follow-up-drain)
                  #'ignore)
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (cl-incf sends))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "Queue $alpha exactly")
-          (mevedel-view-send))
+          (mevedel-view-send-follow-up))
         (should (= 0 hooks))
         (should (= 0 sends))
         (let* ((input (plist-get
-                       (car (mevedel-session-queued-user-messages session))
+                       (car (mevedel-session-pending-follow-ups session))
                        :input))
                (start (string-match "\\$alpha" input)))
           (should (plist-get
@@ -3168,10 +3181,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    :source-file)))
         (with-current-buffer data-buf
           (setq-local mevedel--current-request nil))
-        (mevedel-view--drain-queued-user-message data-buf)
+        (mevedel-view--drain-follow-up data-buf)
         (should (= 1 hooks))
         (should (= 1 sends))
-        (should-not (mevedel-session-queued-user-messages session)))))
+        (should-not (mevedel-session-pending-follow-ups session)))))
 
   :doc "an unavailable queued binding annotates, sends, and leaves the queue"
   (mevedel-view-test--with-source-skills
@@ -3181,13 +3194,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--current-request
                     (mevedel-request--create :session session)))
       (cl-letf (((symbol-function
-                  'mevedel-view--schedule-late-queued-user-message-drain)
+                  'mevedel-view--schedule-late-follow-up-drain)
                  #'ignore))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "Queue $alpha exactly")
-          (mevedel-view-send)))
-      (setq original (car (mevedel-session-queued-user-messages session)))
+          (mevedel-view-send-follow-up)))
+      (setq original (car (mevedel-session-pending-follow-ups session)))
       (delete-file
        (plist-get
         (get-text-property
@@ -3198,9 +3211,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--current-request nil))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
-        (mevedel-view--drain-queued-user-message data-buf))
+        (mevedel-view--drain-follow-up data-buf))
       (should sent)
-      (should-not (mevedel-session-queued-user-messages session))))
+      (should-not (mevedel-session-pending-follow-ups session))))
 
   :doc "fallback drain preserves queued entries while plan approval is pending"
   (mevedel-view-test--with-buffers
@@ -3219,15 +3232,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--session session))
       (setf (mevedel-session-pending-plan-approval session)
             (list :body "# Plan" :origin "main"))
-      (setf (mevedel-session-queued-user-messages session)
+      (setf (mevedel-session-pending-follow-ups session)
             (list (list :input "new feedback"
                         :model-input "new feedback prepared")))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _)
                    (setq sent t))))
-        (mevedel-view--drain-queued-user-message data-buf))
+        (mevedel-view--drain-follow-up data-buf))
       (should-not sent)
-      (should (= 1 (length (mevedel-session-queued-user-messages session))))))
+      (should (= 1 (length (mevedel-session-pending-follow-ups session))))))
 
   :doc "late drain scheduler uses data buffer after request cleanup"
   (mevedel-view-test--with-buffers
@@ -3248,7 +3261,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (setq drain-buffer (car args))
                    'timer)))
         (with-current-buffer view-buf
-          (mevedel-view--schedule-late-queued-user-message-drain)))
+          (mevedel-view--schedule-late-follow-up-drain)))
       (should (eq drain-buffer data-buf))))
 
   :doc "interaction rebuild preserves composer point while drafting"
@@ -3261,7 +3274,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
            (session (mevedel-session-create "main" ws)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
-      (setf (mevedel-session-queued-user-messages session)
+      (setf (mevedel-session-pending-follow-ups session)
             (list (list :input "already queued"
                         :display-text "already queued")))
       (with-current-buffer view-buf
@@ -3321,7 +3334,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (goto-char (mevedel-view--input-start))
         (insert "/review")
         (should-error (mevedel-view-send) :type 'user-error)
-        (should-not (mevedel-session-queued-user-messages session))
+        (should-not (mevedel-session-pending-follow-ups session))
         (should (string= "/review" (mevedel-view--input-text))))))
 
   :doc "fallback drain submits one exact FIFO entry per turn"
@@ -3335,7 +3348,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
            (sent 0))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
-      (setf (mevedel-session-queued-user-messages session)
+      (setf (mevedel-session-pending-follow-ups session)
             (list (list :input "first" :display-text "first")
                   (list :input "second" :display-text "second")))
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
@@ -3347,11 +3360,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _) nil))
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (cl-incf sent))))
-        (mevedel-view--drain-queued-user-message data-buf)
+        (mevedel-view--drain-follow-up data-buf)
         (should (= 1 sent))
         (should (equal "second"
                        (plist-get
-                        (car (mevedel-session-queued-user-messages session))
+                        (car (mevedel-session-pending-follow-ups session))
                         :input)))
         (with-current-buffer data-buf
           (let ((text (buffer-string)))
@@ -3371,47 +3384,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--session session)
         (setq-local mevedel--current-request
                     (mevedel-request--create :session session)))
-      (setf (mevedel-session-queued-user-messages session)
+      (setf (mevedel-session-pending-follow-ups session)
             (list (list :input "pending" :display-text "pending")))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
-        (mevedel-view--drain-queued-user-message data-buf)
+        (mevedel-view--drain-follow-up data-buf)
         (should-not sent)
-        (should (mevedel-session-queued-user-messages session)))))
+        (should (mevedel-session-pending-follow-ups session)))))
 
-  :doc "editing queued messages restores the whole uncommitted batch"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-edit" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           (context-entries '((:event SessionStart :body "reserved context")))
-           (submission
-            (mevedel-prompt-submission-create
-             :input "second" :display-text "second" :session session
-             :context-entries context-entries :state 'reserved))
-           (sent nil))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (setf (mevedel-session-queued-user-messages session)
-            (list (list :input "first" :display-text "first")
-                  (list :input "second" :display-text "second"
-                        :submission submission)))
-      (with-current-buffer view-buf
-        (mevedel-view--interaction-rebuild)
-        (mevedel-view-edit-last-queued-message)
-        (should (string= "first\n\nsecond" (mevedel-view--input-text)))
-        (should-not (mevedel-session-queued-user-messages session))
-        (should (equal context-entries
-                       (mevedel-session-hook-context-pending session))))
-      (cl-letf (((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent t))))
-        (mevedel-view--drain-queued-user-message data-buf)
-        (should-not sent))))
-
-  :doc "clearing prepared queued prompts restores their reserved context"
+  :doc "clearing prepared follow-ups restores their reserved context"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq-clear" :root "/tmp/vq" :name "vq"))
@@ -3423,48 +3404,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
              :context-entries context-entries :state 'reserved)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
-      (setf (mevedel-session-queued-user-messages session)
+      (setf (mevedel-session-pending-follow-ups session)
             (list (list :input "prepared" :submission submission)))
       (with-current-buffer view-buf
-        (mevedel-view-clear-queued-messages))
-      (should-not (mevedel-session-queued-user-messages session))
+        (mevedel-view-clear-pending-input))
+      (should-not (mevedel-session-pending-follow-ups session))
       (should (equal context-entries
-                     (mevedel-session-hook-context-pending session)))))
-
-  :doc "resubmitting an edited queued batch creates one queued entry"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-edit-resubmit" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws)))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws)
-        (setq-local mevedel--current-request
-                    (mevedel-request--create :session session)))
-      (setf (mevedel-session-queued-user-messages session)
-            (list (list :input "first" :display-text "first")
-                  (list :input "second" :display-text "second")))
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _event-plist callback &rest _)
-                   (funcall callback nil)))
-                ((symbol-function 'mevedel-hooks-event-plist)
-                 (lambda (&rest _) nil))
-                ((symbol-function 'mevedel-hooks-additional-context-string)
-                 (lambda (&rest _) nil))
-	                ((symbol-function 'gptel-send)
-	                 (lambda (&rest _) (error "Gptel-send should not run"))))
-        (with-current-buffer view-buf
-          (mevedel-view--interaction-rebuild)
-          (mevedel-view-edit-last-queued-message)
-          (mevedel-view-send)))
-      (let ((queue (mevedel-session-queued-user-messages session)))
-        (should (= 1 (length queue)))
-        (should (equal "first\n\nsecond"
-                       (plist-get (car queue) :input)))
-        (should-not (plist-member (car queue) :model-input))))))
+                     (mevedel-session-hook-context-pending session))))))
 
 (mevedel-deftest mevedel-view--send-local-goal ()
   ,test

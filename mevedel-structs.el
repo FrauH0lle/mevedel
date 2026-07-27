@@ -223,7 +223,9 @@ workspace."
   (agent-root-activity 'idle) ; root roster activity: running or idle
   agent-root-waiter ; transient async WaitAgent callback and timer
   (agent-turn-capacity 3) ; maximum active non-root turns in this session tree
-  queued-user-messages ; transient FIFO of bound or prepared prompts awaiting dispatch
+  pending-steering ; transient FIFO of same-turn steering prompts
+  pending-follow-ups ; transient FIFO of prompts awaiting separate root turns
+  pending-input-next-id ; next session-local pending-input identity
   dropped-file-grants ; pending exact-file read grants from drag/drop
   active-dropped-file-grants ; session-scoped exact-file read grants
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
@@ -401,9 +403,33 @@ workspace root and is kept stable for the lifetime of the session."
    :skills-snapshot :uninitialized
    :turn-count 0))
 
-(defun mevedel-session-set-queued-user-messages (session queue)
-  "Set SESSION's transient queued user message QUEUE."
-  (setf (mevedel-session-queued-user-messages session) queue))
+(defun mevedel-session-pending-inputs (session category)
+  "Return SESSION pending inputs in CATEGORY."
+  (pcase category
+    ('steering (mevedel-session-pending-steering session))
+    ('follow-up (mevedel-session-pending-follow-ups session))
+    (_ (error "Unknown pending input category: %S" category))))
+
+(defun mevedel-session-set-pending-inputs (session category entries)
+  "Replace SESSION pending input CATEGORY with ENTRIES."
+  (pcase category
+    ('steering (setf (mevedel-session-pending-steering session) entries))
+    ('follow-up (setf (mevedel-session-pending-follow-ups session) entries))
+    (_ (error "Unknown pending input category: %S" category))))
+
+(defun mevedel-session-enqueue-pending-input (session category entry)
+  "Append ENTRY to SESSION pending input CATEGORY.
+Return the copied entry with a stable session-local identity and category."
+  (let* ((entries (mevedel-session-pending-inputs session category))
+         (next-id (1+ (or (mevedel-session-pending-input-next-id session) 0)))
+         (entry (copy-sequence entry)))
+    (setf (mevedel-session-pending-input-next-id session) next-id)
+    (setq entry (plist-put entry :id next-id)
+          entry (plist-put entry :category category))
+    (mevedel-session-set-pending-inputs
+     session category
+     (append entries (list entry)))
+    entry))
 
 (defun mevedel-session-set-hook-context-pending (session entries)
   "Set SESSION's pending hook context ENTRIES."
