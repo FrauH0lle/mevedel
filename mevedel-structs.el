@@ -227,6 +227,7 @@ workspace."
   pending-follow-ups ; transient FIFO of prompts awaiting separate root turns
   pending-input-next-id ; next session-local pending-input identity
   pending-input-paused ; non-nil while automatic delivery is user-paused
+  pending-input-failure-paused ; non-nil after undelivered steering loses its turn
   dropped-file-grants ; pending exact-file read grants from drag/drop
   active-dropped-file-grants ; session-scoped exact-file read grants
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
@@ -435,6 +436,16 @@ Return the copied entry with a stable session-local identity and category."
 (defun mevedel-session-set-pending-input-paused (session paused)
   "Set whether SESSION automatic pending-input delivery is PAUSED."
   (setf (mevedel-session-pending-input-paused session) (and paused t)))
+
+(defun mevedel-session-set-pending-input-failure-paused (session paused)
+  "Set whether SESSION pending input awaits explicit failure recovery."
+  (setf (mevedel-session-pending-input-failure-paused session)
+        (and paused t)))
+
+(defun mevedel-session-pending-input-delivery-paused-p (session)
+  "Return non-nil when SESSION automatic pending-input delivery is paused."
+  (or (mevedel-session-pending-input-paused session)
+      (mevedel-session-pending-input-failure-paused session)))
 
 (defun mevedel-session-set-hook-context-pending (session entries)
   "Set SESSION's pending hook context ENTRIES."

@@ -274,6 +274,8 @@
                  (push (list event status) events)))
               ((symbol-function 'mevedel--turn-restore-permission-mode)
                (lambda (_fsm) (push 'restore events)))
+              ((symbol-function 'mevedel--turn-fail-pending-input)
+               (lambda (_fsm) (push 'pending-input-failure events)))
               ((symbol-function 'mevedel--turn-end-request)
                (lambda (_fsm) (push 'request-end events)))
               ((symbol-function
@@ -285,9 +287,75 @@
         (should (equal (nreverse events)
                        `(turn baseline goal-failure
                                 (StopFailure ,(car case))
-                                restore request-end goal-save goal-retry))))
+                                restore pending-input-failure
+                                request-end goal-save goal-retry))))
     (should-not saved)
     (should-not drained))))
+
+(mevedel-deftest mevedel--turn-fail-pending-input ()
+  ,test
+  (test)
+
+  :doc "error marks only remaining steering for the failed request"
+  (let* ((chat-buf (generate-new-buffer " *mevedel-turn-input-failure*"))
+         (view-buf (generate-new-buffer " *mevedel-turn-input-view*"))
+         (session (mevedel-session--create))
+         (request (mevedel-request--create :id "failed" :session session))
+         (failed
+          '(:id 1 :category steering :input "remaining"
+            :request-id "failed"))
+         (other
+          '(:id 2 :category steering :input "other"
+            :request-id "other"))
+         (follow-ups
+          '((:id 3 :category follow-up :input "later one")
+            (:id 4 :category follow-up :input "later two")))
+         redrawn)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-pending-steering session)
+                (list failed other)
+                (mevedel-session-pending-follow-ups session)
+                follow-ups)
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session
+                        mevedel--current-request request
+                        mevedel--view-buffer view-buf))
+          (cl-letf (((symbol-function 'mevedel-view--interaction-rebuild)
+                     (lambda () (setq redrawn t))))
+            (mevedel--turn-fail-pending-input
+             (gptel-make-fsm :info (list :buffer chat-buf))))
+          (let ((entries (mevedel-session-pending-steering session)))
+            (should (eq 'failed-turn (plist-get (car entries) :state)))
+            (should (eq other (cadr entries))))
+          (should (eq follow-ups
+                      (mevedel-session-pending-follow-ups session)))
+          (should
+           (mevedel-session-pending-input-failure-paused session))
+          (should redrawn))
+      (kill-buffer chat-buf)
+      (kill-buffer view-buf)))
+
+  :doc "abort with no undelivered matching steering does not pause"
+  (let* ((chat-buf (generate-new-buffer " *mevedel-turn-input-clean*"))
+         (session (mevedel-session--create))
+         (request (mevedel-request--create :id "finished" :session session))
+         (other
+          '(:id 2 :category steering :input "other"
+            :request-id "other")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-pending-steering session) (list other))
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session
+                        mevedel--current-request request))
+          (mevedel--turn-fail-pending-input
+           (gptel-make-fsm :info (list :buffer chat-buf)))
+          (should (equal (list other)
+                         (mevedel-session-pending-steering session)))
+          (should-not
+           (mevedel-session-pending-input-failure-paused session)))
+      (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--handler-name ()
   ,test

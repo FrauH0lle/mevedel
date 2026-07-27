@@ -229,6 +229,10 @@
 		  "mevedel-structs" (session paths))
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-input-delivery-paused-p
+                  "mevedel-structs" (session))
+(declare-function mevedel-session-pending-input-failure-paused
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-input-paused
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
@@ -1226,7 +1230,7 @@ When FORCE is non-nil, replace the current draft unconditionally."
 (defun mevedel-view--follow-up-auto-drain-blocked-p (&optional session)
   "Return non-nil when SESSION follow-ups should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
-    (or (mevedel-session-pending-input-paused sess)
+    (or (mevedel-session-pending-input-delivery-paused-p sess)
         (mevedel-session-pending-plan-approval sess)
         (mevedel-view--reserved-goal-handoff-id sess)
         (when-let* ((goal (mevedel-session-goal sess))
@@ -1280,6 +1284,8 @@ When FORCE is non-nil, replace the current draft unconditionally."
 (defun mevedel-view--pending-inputs-body (session)
   "Return the main-view pending-input summary for SESSION."
   (concat
+   (when (mevedel-session-pending-input-failure-paused session)
+     "\nPending-input delivery stopped after turn failure; review required\n")
    (when (mevedel-session-pending-input-paused session)
      "\nPending-input delivery paused\n")
    (when-let* ((entries (mevedel-session-pending-steering session)))
@@ -1290,17 +1296,19 @@ When FORCE is non-nil, replace the current draft unconditionally."
 
 (defun mevedel-view--pending-inputs-render (&optional session)
   "Render SESSION pending input into the interaction zone."
-  (when-let* ((session (or session (mevedel-view--session)))
-              (entries
-               (append (mevedel-session-pending-steering session)
-                       (mevedel-session-pending-follow-ups session))))
-    (mevedel-view--interaction-register
-     (list :kind 'pending-input
-           :id 'pending-inputs
-           :count (length entries)
-           :body (mevedel-view--pending-inputs-body session)
-           :keymap mevedel-view--pending-inputs-map
-           :help-echo "Open Pending Inputs cockpit"))))
+  (when-let* ((session (or session (mevedel-view--session))))
+    (let ((entries
+           (append (mevedel-session-pending-steering session)
+                   (mevedel-session-pending-follow-ups session))))
+      (when (or entries
+                (mevedel-session-pending-input-failure-paused session))
+        (mevedel-view--interaction-register
+         (list :kind 'pending-input
+               :id 'pending-inputs
+               :count (length entries)
+               :body (mevedel-view--pending-inputs-body session)
+               :keymap mevedel-view--pending-inputs-map
+               :help-echo "Open Pending Inputs cockpit"))))))
 
 (defun mevedel-view--queue-follow-up (input)
   "Queue INPUT to start a separate root turn."

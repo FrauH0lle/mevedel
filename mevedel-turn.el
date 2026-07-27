@@ -49,8 +49,15 @@
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (declare-function mevedel-request-origin "mevedel-structs" (cl-x))
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x))
+(declare-function mevedel-session-pending-steering
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-set-pending-input-failure-paused
+                  "mevedel-structs" (session paused))
+(declare-function mevedel-session-set-pending-inputs
+                  "mevedel-structs" (session category entries))
 (defvar mevedel--current-request)
 (defvar mevedel--session)
+(defvar mevedel--view-buffer)
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record
@@ -59,6 +66,10 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--schedule-follow-up-drain
                   "mevedel-view-composer" (fsm))
+
+;; `mevedel-view-interaction'
+(declare-function mevedel-view--interaction-rebuild
+                  "mevedel-view-interaction" ())
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -184,6 +195,35 @@
     (with-current-buffer chat-buffer
       (mevedel-request-end))))
 
+(defun mevedel--turn-fail-pending-input (fsm)
+  "Mark undelivered steering for FSM's dead turn as requiring review."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (when (and mevedel--session mevedel--current-request)
+        (let* ((request-id (mevedel-request-id mevedel--current-request))
+               (entries (mevedel-session-pending-steering mevedel--session))
+               (failed nil)
+               (updated
+                (mapcar
+                 (lambda (entry)
+                   (if (equal request-id (plist-get entry :request-id))
+                       (progn
+                         (setq failed t)
+                         (plist-put (copy-sequence entry)
+                                    :state 'failed-turn))
+                     entry))
+                 entries)))
+          (when failed
+            (mevedel-session-set-pending-inputs
+             mevedel--session 'steering updated)
+            (mevedel-session-set-pending-input-failure-paused
+             mevedel--session t)
+            (when (buffer-live-p mevedel--view-buffer)
+              (with-current-buffer mevedel--view-buffer
+                (mevedel-view--interaction-rebuild)))))))))
+
 (defun mevedel--run-turn-steps (fsm steps)
   "Run FSM through STEPS without allowing one failure to skip the rest."
   (dolist (step steps)
@@ -220,6 +260,7 @@
            (mevedel--run-turn-terminal-hook
             machine 'StopFailure status))
          #'mevedel--turn-restore-permission-mode
+         #'mevedel--turn-fail-pending-input
          #'mevedel--turn-end-request
          #'mevedel-goal-persist-failure
          #'mevedel-goal-dispatch-after-turn)))

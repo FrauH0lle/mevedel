@@ -323,7 +323,16 @@
                       (car (mevedel-session-pending-steering session))))
           (should (plist-get (gptel-fsm-info fsm)
                              :mevedel-pending-input-hold))
-          (should (= 0 (length (plist-get data :messages)))))
+          (should (= 0 (length (plist-get data :messages))))
+          (mevedel-session-set-pending-input-paused session nil)
+          (mevedel-session-set-pending-input-failure-paused session t)
+          (plist-put (gptel-fsm-info fsm)
+                     :mevedel-pending-input-hold nil)
+          (mevedel-tools--handle-steering-inject fsm)
+          (should (plist-get (gptel-fsm-info fsm)
+                             :mevedel-pending-input-hold))
+          (should (eq entry
+                      (car (mevedel-session-pending-steering session)))))
       (kill-buffer buf)))
 
   :doc "final response is preserved and continued without settling the turn"
