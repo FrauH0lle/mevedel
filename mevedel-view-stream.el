@@ -317,6 +317,7 @@ chunk when that stale transformer fails."
   (mevedel-view-stream--repair-gptel-stream-info info)
   (cond
    ((and (stringp response)
+         (not raw)
          (mevedel-view-stream--gptel-stream-info-p info)
          (not mevedel-view--stream-insert-batching-suspended)
          (numberp mevedel-view-stream-insert-batch-delay)
