@@ -49,6 +49,18 @@
     (should-error
      (mevedel-session-set-pending-inputs session 'unknown nil))))
 
+(mevedel-deftest mevedel-session-pending-input-p ()
+  ,test
+  (test)
+  :doc "combines the two pending-input categories"
+  (let ((session (mevedel-session--create)))
+    (should-not (mevedel-session-pending-input-p session))
+    (setf (mevedel-session-pending-steering session) '((:input "now")))
+    (should (mevedel-session-pending-input-p session))
+    (setf (mevedel-session-pending-steering session) nil
+          (mevedel-session-pending-follow-ups session) '((:input "later")))
+    (should (mevedel-session-pending-input-p session))))
+
 (mevedel-deftest mevedel-session-enqueue-pending-input ()
   ,test
   (test)

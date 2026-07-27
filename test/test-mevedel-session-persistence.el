@@ -605,7 +605,15 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                         '((mevedel-model-tiers
                            (strong :provider "Test:test-model" :effort high))
                           (mevedel-model-workloads
-                           (review :tier strong)))))
+                           (review :tier strong)))
+                        (mevedel-session-pending-steering source)
+                        '((:id 1 :input "steer"))
+                        (mevedel-session-pending-follow-ups source)
+                        '((:id 2 :input "later"))
+                        (mevedel-session-pending-input-next-id source) 3
+                        (mevedel-session-pending-input-paused source) t
+                        (mevedel-session-pending-input-failure-paused source)
+                        t))
                (plist (mevedel-session-persistence-serialize
                        source
                        :first-user-message "Hi"
@@ -650,6 +658,15 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                          (mevedel-session-resource-grants session)))
           (should (equal "Hi" (plist-get result :first-user-message)))
           (should (equal "Later" (plist-get result :latest-user-message)))
+          (dolist (key '(:pending-steering :pending-follow-ups
+                         :pending-input-next-id :pending-input-paused
+                         :pending-input-failure-paused))
+            (should-not (plist-member plist key)))
+          (should-not (mevedel-session-pending-input-p session))
+          (should-not (mevedel-session-pending-input-next-id session))
+          (should-not (mevedel-session-pending-input-paused session))
+          (should-not
+           (mevedel-session-pending-input-failure-paused session))
           ;; touched-files / mentions-shown reset to empty hash tables
           (should (hash-table-p (mevedel-session-touched-files session)))
           (should (zerop (hash-table-count (mevedel-session-touched-files session))))
@@ -4629,6 +4646,23 @@ rotation never saves through a rebound temporary visited filename or prompts"
   (with-temp-buffer
     (let ((mevedel--session nil))
       (should-error (mevedel-rewind) :type 'user-error)))
+  :doc "refuses both pending-input categories before the picker"
+  (dolist (category '(steering follow-up))
+    (with-temp-buffer
+      (let ((session (mevedel-session--create :name "rewind"))
+            picked)
+        (setq-local mevedel--session session)
+        (mevedel-session-enqueue-pending-input
+         session category '(:input "keep me"))
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (&rest _)
+                     (setq picked t))))
+          (let ((err (should-error (mevedel-rewind) :type 'user-error)))
+            (should (string-match-p "Pending Inputs"
+                                    (error-message-string err)))
+            (should (string-match-p "C-c C-q"
+                                    (error-message-string err)))
+            (should-not picked))))))
   :doc "refuses before the picker while executions remain live"
   (let ((buffer (generate-new-buffer " *execution-rewind*"))
         (session (mevedel-session--create :name "rewind")))

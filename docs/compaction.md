@@ -165,17 +165,18 @@ transforms. Without a baseline it falls back to the transformed prompt
 buffer estimate.
 
 The second automatic gate wraps `gptel--handle-wait` in the preset FSM
-handler chain. Existing WAIT injectors still run first: request-begin,
-skill overrides, queued user prompts, agent mailbox messages, and
-deferred tool injection. The gate then estimates the realized
+handler chain. For a root continuation with pending steering, compaction
+admission is decided before steering mutates the realized payload. Other WAIT
+injectors still run before the final gate: request-begin, reminders, agent
+mailbox messages, and deferred tool injection. The gate then estimates the realized
 `info :data` payload for continuation WAIT cycles, currently the
 `TRET -> WAIT` path after tool results have been injected. If the
 request is below threshold, it calls the original wait handler normally.
 If it is over threshold and the session is ineligible, it emits the same
 one-shot skip warning as the pre-send gate and lets the continuation
-proceed. If eligible, it compacts the active persisted segment, rebuilds
-`info :data` from the compacted buffer, and then calls the original wait
-handler.
+proceed. If eligible, it leaves steering pending, compacts the active persisted
+segment, rebuilds `info :data`, injects the pending steering into that
+post-compaction provider boundary, and then calls the original wait handler.
 
 Continuation compaction supports the active persisted session segment and a
 persisted sub-agent transcript.  Agent compaction is considered only in the
@@ -373,6 +374,10 @@ Rotation never saves through a dynamically rebound `buffer-file-name`.
 Automatic compaction therefore cannot enter Emacs's interactive
 supersession or backup-file prompt paths while publishing the successor
 segment.
+
+Manual and automatic root compaction mutate transcript segments only. The live
+session retains pending steering, queued follow-ups, FIFO order, delivery
+pause, and failure pause unchanged. Compaction does not serialize that state.
 
 Old segment files remain on disk and stay available through
 `mevedel-rewind`. The live view skips the leading summary block when

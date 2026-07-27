@@ -9,14 +9,14 @@ Expansion runs as a gptel prompt transform (priority -90) via
 `<system-reminder>` block above the user prompt.
 
 Root `WaitAgent` steering has no new gptel request on which that transform can
-run. At its final delivery boundary, `mevedel-mentions-expand-user-input`
-therefore applies the same transformer to the prepared steering text before
-the `USER` mailbox record wakes the suspended request. The original bound text
-remains in the composer, history, or fallback queue; only the model-ready copy
+run. At its delivery boundary, `mevedel-mentions-expand-user-input` therefore
+applies the same transformer to the prepared steering text before the
+suspended request re-enters `WAIT`. The original bound text remains in the
+composer, history, or pending-steering entry; only the model-ready copy
 contains placeholders and reminders. Expansion returns media contexts and
 deduplication updates explicitly: ordinary request transforms apply both,
 while WaitAgent steering rejects new media and commits deduplication only when
-the text-only steering record is accepted.
+the text-only steering entry is accepted.
 
 Inline `$skill` attachment scanning lives next to this transform and reuses
 the same placeholder plus `<system-reminder>` output path, but keeps a
@@ -48,7 +48,7 @@ Reference queries intentionally remain unbound so every dispatch evaluates the
 current matching set. Agent mentions also remain unbound because registered
 agent names already provide their live identity.
 
-Composer drafts, queued messages, retries, transcript prompts, history recall,
+Composer drafts, pending input, retries, transcript prompts, history recall,
 and persisted input history carry the propertized prompt string. Copying or
 yanking a bound token inside mevedel preserves its locator; plain external text
 has no property and follows normal send-time binding. Editing a token or

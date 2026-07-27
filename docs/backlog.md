@@ -68,8 +68,6 @@ recommends those elements while leaving Codex room to choose the next action.
   `trust-all` -> `auto`. Thus, UI and internal naming conventions are the same.
   - Or find better names, also fine.
 - Pause the \"working...\" timer while user input is pending.
-- Two message queues: Send as soon as possible (right now) or send automatically after request completed
-  - Requires to send keybinds: C-c RET for current way, C-c TAB for after request queue?
 - Warnings in Emacs are quite intrusive. Consider making warnings in mevedel target
   the messages buffer ([mevedel] Something happened, can be colored, see corfu)
   and display the warning also in the view buffer (but not permanent via the data

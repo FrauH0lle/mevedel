@@ -139,6 +139,8 @@
 		  (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-input-p
+		  "mevedel-structs" (session))
 (declare-function mevedel-session-permission-log-pending
 		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs"
@@ -3569,6 +3571,9 @@ no-op."
          (session (buffer-local-value 'mevedel--session buffer)))
     (unless session
       (user-error "Active buffer has no mevedel session"))
+    (when (mevedel-session-pending-input-p session)
+      (user-error
+       "Resolve pending input in the Pending Inputs cockpit or clear it with C-c C-q before rewinding"))
     (when (buffer-local-value 'mevedel--current-request buffer)
       (user-error "Abort the current request first"))
     (require 'mevedel-execution)

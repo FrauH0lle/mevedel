@@ -81,6 +81,13 @@ and `C-g` cancels.
 Selecting Worktree while Current is selected changes the context to Fresh. A
 dirty source checkout is not copied or stashed; Worktree starts at `HEAD`.
 
+Pending input remains available while the approval overlay is open. `C-c TAB`
+queues a follow-up without demoting or settling the proposal. Same-turn
+steering left from the Plan request must be delivered or resolved before
+acceptance, while queued follow-ups do not block acceptance and run after the
+accepted implementation kickoff. The same ordering applies while handoff
+preparation or retry owns the session.
+
 The approval card keeps the Markdown proposal expanded above a compact
 Implementation section. Cycle keys appear beside their settings; accept,
 feedback, hide, and cancel remain in the action footer. A hidden approval stays
@@ -153,10 +160,11 @@ restore, it reactivates it without scheduling before retrying the owned
 kickoff, preventing both duplicate Goals and duplicate continuations.
 
 For Here + Goal, non-command input submitted after acceptance queues behind the
-reserved kickoff. After that turn it runs as Goal steering before automatic
-continuation. A Worktree source remains independent; its input stays ordinary
-source-session work, while input entered in the prepared target queues behind
-that target's kickoff. Paused kickoff-owned input remains held until resume.
+reserved kickoff. Each queued follow-up then runs as its own Goal turn before
+automatic continuation. A Worktree source remains independent; its input stays
+ordinary source-session work, while input entered in the prepared target queues
+behind that target's kickoff. Paused kickoff-owned input remains held until
+resume.
 
 Plan activity, proposal identity, selection, artifact descriptors, and retry
 state persist in session metadata. Resume reconstructs an approval only when

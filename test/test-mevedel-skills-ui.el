@@ -648,6 +648,28 @@ spanning lines")))
       (when (file-directory-p tempdir)
         (delete-directory tempdir t)))))
 
+(mevedel-deftest mevedel-cmd--clear ()
+  ,test
+  (test)
+  :doc "refuses both pending-input categories before confirmation"
+  (dolist (category '(steering follow-up))
+    (let ((session (mevedel-skills-test--make-session))
+          asked)
+      (mevedel-session-enqueue-pending-input
+       session category '(:input "keep me"))
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (cl-letf (((symbol-function 'yes-or-no-p)
+                   (lambda (&rest _)
+                     (setq asked t))))
+          (let ((err (should-error (mevedel-cmd--clear nil)
+                                   :type 'user-error)))
+            (should (string-match-p "Pending Inputs"
+                                    (error-message-string err)))
+            (should (string-match-p "C-c C-q"
+                                    (error-message-string err)))
+            (should-not asked)))))))
+
 (mevedel-deftest mevedel-cmd--skills ()
   ,test
   (test)
