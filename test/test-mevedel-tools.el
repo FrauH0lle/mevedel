@@ -27,6 +27,7 @@
 (require 'mevedel-tool-introspect)
 (require 'mevedel-view)
 (require 'mevedel-view-render)
+(require 'mevedel-view-stream)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -291,7 +292,53 @@
       (goto-char (point-min))
       (search-forward "steer directly")
       (should-not
-       (get-text-property (match-beginning 0) 'gptel)))))
+       (get-text-property (match-beginning 0) 'gptel))))
+
+  :doc "batched reasoning close stays before injected user text"
+  (with-temp-buffer
+    (org-mode)
+    (setq-local mevedel--session 'test)
+    (let* ((gptel-mode t)
+           (mevedel-view-stream-insert-batch-delay 60)
+           (info
+            (list :buffer (current-buffer)
+                  :position (point-marker)
+                  :include-reasoning 'ignore
+                  :reasoning-block 'in
+                  :reasoning-open t))
+           (advice
+            #'mevedel-view-stream--gptel-stream-insert-response-advice)
+           (installed
+            (advice-member-p advice 'gptel-curl--stream-insert-response)))
+      (unwind-protect
+          (progn
+            (unless installed
+              (advice-add 'gptel-curl--stream-insert-response
+                          :around advice))
+            (gptel--display-reasoning-stream "thinking" info)
+            (mevedel-view-stream--flush-gptel-stream-insert-batch info)
+            (plist-put info :reasoning-marker
+                       (copy-marker (plist-get info :tracking-marker) nil))
+            (mevedel-tools--split-open-reasoning-before-user-input info)
+            (mevedel--insert-user-role-block-at-marker
+             "batched steer" (plist-get info :tracking-marker))
+            (mevedel-view-stream--flush-gptel-stream-insert-batch info)
+            (mevedel-transcript-normalize-properties)
+            (goto-char (point-min))
+            (let ((reasoning-end
+                   (search-forward "#+end_reasoning" nil t))
+                  (steering
+                   (progn
+                     (goto-char (point-min))
+                     (search-forward "batched steer" nil t))))
+              (should reasoning-end)
+              (should steering)
+              (should (< reasoning-end steering))
+              (should-not
+               (get-text-property (- steering (length "batched steer"))
+                                  'gptel))))
+        (unless installed
+          (advice-remove 'gptel-curl--stream-insert-response advice))))))
 
 (mevedel-deftest mevedel-tools--handle-steering-inject
   (:after-each (mevedel-workspace-clear-registry))
