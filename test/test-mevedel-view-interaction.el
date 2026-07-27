@@ -1170,7 +1170,7 @@
           (should (< plan request permission queued))
           (should (< plan ask permission)))
         (should (equal
-                 "1 preview · 1 plan · 1 request · 1 question · 1 permission · 1 follow-up pending"
+                 "1 preview · 1 plan · 1 request · 1 question · 1 permission · 1 input pending"
                  (mevedel-view--interaction-count-label)))
         (dolist (pair overlays)
           (let* ((kind (car pair))

@@ -138,6 +138,9 @@
 (declare-function mevedel-review-transform-outcome "mevedel-review"
 		  (skill-name outcome))
 
+;; `seq'
+(declare-function seq-take "seq" (sequence n))
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-fork-now
 		  "mevedel-session-persistence" (buffer))
@@ -225,6 +228,8 @@
 (declare-function mevedel-session-pop-dropped-file-grants
 		  "mevedel-structs" (session paths))
 (declare-function mevedel-session-pending-follow-ups
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-input-paused
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
                   "mevedel-structs" (cl-x) t)
@@ -453,7 +458,13 @@ Nil and unknown modes are treated as `ask'."
 The prompt starts with a blank separator line so status and interaction
 rows remain visually distinct from the editable composer."
   (let ((mode (or mode (mevedel-view--effective-permission-mode))))
-    (if (mevedel-view--plan-mode-p)
+    (if mevedel-view--pending-input-edit
+        (propertize
+         (format "\n[Editing %s] %s"
+                 (plist-get mevedel-view--pending-input-edit :label)
+                 mevedel-view--input-prompt)
+         'font-lock-face 'mevedel-view-input-prompt)
+      (if (mevedel-view--plan-mode-p)
         (pcase-let* ((`(,label ,_) (mevedel-view--permission-mode-display mode))
                      (text (format "\n[Plan · %s] %s"
                                    label mevedel-view--input-prompt)))
@@ -483,7 +494,7 @@ rows remain visually distinct from the editable composer."
            label-start label-end
            `(font-lock-face ,face)
            text)
-          text)))))
+          text))))))
 
 
 ;;
@@ -501,6 +512,9 @@ composer body.")
   "C-<tab>" #'mevedel-view-toggle-plan-mode
   "C-c RET" #'mevedel-view-send
   "C-c TAB" #'mevedel-view-send-follow-up
+  "C-c C-c" #'mevedel-pending-inputs-save-edit
+  "C-c C-e" #'mevedel-pending-inputs-open
+  "C-c C-k" #'mevedel-pending-inputs-cancel-edit
   "C-c C-l" #'mevedel-view-history-browse
   "C-c C-u" #'mevedel-view-history-clear-input
   "C-y" #'mevedel-view-yank-dwim
@@ -528,6 +542,9 @@ This covers the interval before the prompt has been accepted and before
 
 (defvar-local mevedel-view--pending-skill-submission nil
   "Cancellation token for skill-plan preparation before request dispatch.")
+
+(defvar-local mevedel-view--pending-input-edit nil
+  "Queue edit state active in this composer, or nil.")
 
 (defun mevedel-view--cancel-pending-skill-submission ()
   "Cancel this view's pending skill-plan preparation, if any."
@@ -1142,12 +1159,14 @@ means a failed attempt leaves the exact source attached for a retry."
           :dropped-file-grants
           (copy-sequence (mevedel-session-dropped-file-grants session)))))
 
-(defun mevedel-view--restore-composer-snapshot (snapshot session)
-  "Restore SNAPSHOT for SESSION when its visible draft is still current."
+(defun mevedel-view--restore-composer-snapshot (snapshot session &optional force)
+  "Restore SNAPSHOT for SESSION when its visible draft is still current.
+When FORCE is non-nil, replace the current draft unconditionally."
   (let* ((start (mevedel-view--input-start))
          (text (plist-get snapshot :text)))
-    (when (equal (buffer-substring-no-properties start (point-max))
-                 (substring-no-properties text))
+    (when (or force
+              (equal (buffer-substring-no-properties start (point-max))
+                     (substring-no-properties text)))
       (let ((inhibit-read-only t))
         (with-silent-modifications
           (delete-region start (point-max))
@@ -1207,7 +1226,8 @@ means a failed attempt leaves the exact source attached for a retry."
 (defun mevedel-view--follow-up-auto-drain-blocked-p (&optional session)
   "Return non-nil when SESSION follow-ups should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
-    (or (mevedel-session-pending-plan-approval sess)
+    (or (mevedel-session-pending-input-paused sess)
+        (mevedel-session-pending-plan-approval sess)
         (mevedel-view--reserved-goal-handoff-id sess)
         (when-let* ((goal (mevedel-session-goal sess))
                     ((eq (mevedel-goal-status goal) 'paused))
@@ -1233,31 +1253,54 @@ means a failed attempt leaves the exact source attached for a retry."
   "Return normalized input text for pending ENTRY."
   (mevedel--normalize-message-text (or (plist-get entry :input) "")))
 
-(defun mevedel-view--pending-follow-ups-body (entries)
-  "Return interaction-zone body text for pending follow-up ENTRIES."
+(defvar-keymap mevedel-view--pending-inputs-map
+  :doc "Keymap on the pending-input summary."
+  "RET" #'mevedel-pending-inputs-open
+  "<return>" #'mevedel-pending-inputs-open
+  "<mouse-1>" #'mevedel-pending-inputs-open
+  "<mouse-2>" #'mevedel-pending-inputs-open)
+
+(defun mevedel-view--pending-input-category-body (label entries)
+  "Return compact pending-input summary for LABEL and ENTRIES."
   (let ((index 0)
         lines)
-    (dolist (entry entries)
+    (dolist (entry (seq-take entries 3))
       (cl-incf index)
       (push (format "  %d. %s"
                     index
                     (mevedel-view--pending-input-preview
                      (mevedel-view--pending-input-text entry)))
             lines))
-    (concat "\nFollow-ups\n"
-            "  C-c C-q clear\n"
+    (when (> (length entries) 3)
+      (push (format "  %d more" (- (length entries) 3)) lines))
+    (concat "\n" label "\n"
             (string-join (nreverse lines) "\n")
             "\n")))
 
-(defun mevedel-view--pending-follow-ups-render (&optional session)
-  "Render pending follow-ups for SESSION into the interaction zone."
-  (when-let* ((entries (mevedel-view--pending-follow-ups session)))
+(defun mevedel-view--pending-inputs-body (session)
+  "Return the main-view pending-input summary for SESSION."
+  (concat
+   (when (mevedel-session-pending-input-paused session)
+     "\nPending-input delivery paused\n")
+   (when-let* ((entries (mevedel-session-pending-steering session)))
+     (mevedel-view--pending-input-category-body "Steering" entries))
+   (when-let* ((entries (mevedel-session-pending-follow-ups session)))
+     (mevedel-view--pending-input-category-body "Follow-ups" entries))
+   "\nRET or C-c C-e manage pending inputs\n"))
+
+(defun mevedel-view--pending-inputs-render (&optional session)
+  "Render SESSION pending input into the interaction zone."
+  (when-let* ((session (or session (mevedel-view--session)))
+              (entries
+               (append (mevedel-session-pending-steering session)
+                       (mevedel-session-pending-follow-ups session))))
     (mevedel-view--interaction-register
      (list :kind 'pending-input
-           :id 'pending-follow-ups
+           :id 'pending-inputs
            :count (length entries)
-           :body (mevedel-view--pending-follow-ups-body entries)
-           :help-echo "Pending follow-ups"))))
+           :body (mevedel-view--pending-inputs-body session)
+           :keymap mevedel-view--pending-inputs-map
+           :help-echo "Open Pending Inputs cockpit"))))
 
 (defun mevedel-view--queue-follow-up (input)
   "Queue INPUT to start a separate root turn."
@@ -1310,8 +1353,10 @@ means a failed attempt leaves the exact source attached for a retry."
             (mevedel-mentions-expand-user-input text session)))
       (mevedel-session--set-active-dropped-file-grants session active))))
 
-(defun mevedel-view--queue-prepared-steering (submission request)
-  "Queue accepted prompt SUBMISSION as steering for REQUEST."
+(defun mevedel-view--prepare-steering-entry (submission request)
+  "Return a validated steering entry for SUBMISSION and REQUEST.
+Return nil and leave the submission pending when the live request contract no
+longer accepts the prepared input."
   (let* ((session (mevedel-view--session))
          (outcome (mevedel-prompt-submission-outcome submission))
          (request-context (plist-get outcome :request-context))
@@ -1347,33 +1392,39 @@ means a failed attempt leaves the exact source attached for a retry."
                   (mevedel-prompt-submission-display-text submission))
                  (dropped-file-grants
                   (mevedel-view--pop-dropped-file-grants-for-input
-                   input session))
-                 (entry
-                  (progn
-                    (mevedel-prompt-submission-reserve submission)
-                    (mevedel-session-enqueue-pending-input
-                     session 'steering
-                     (list
-                      :input input
-                      :model-input model-input
-                      :transcript-payload
-                      (concat (plist-get outcome :transcript-input)
-                              (or (plist-get outcome :render-data) ""))
-                      :hook-audits (plist-get outcome :hook-audits)
-                      :request-context request-context
-                      :submission submission
-                      :dropped-file-grants dropped-file-grants
-                      :request-id (mevedel-request-id request)
-                      :queued-at-time (float-time)
-                      :queued-at-turn
-                      (or (mevedel-session-turn-count session) 0))))))
-            (mevedel-view-history-add input)
-            (when (equal-including-properties
-                   (mevedel-view--input-text) input)
-              (mevedel-view--clear-input))
-            (mevedel-view--interaction-rebuild)
-            (message "mevedel: queued steering for this turn")
-            entry)))))))
+                   input session)))
+            (mevedel-prompt-submission-reserve submission)
+            (list
+             :input input
+             :model-input model-input
+             :transcript-payload
+             (concat (plist-get outcome :transcript-input)
+                     (or (plist-get outcome :render-data) ""))
+             :hook-audits (plist-get outcome :hook-audits)
+             :request-context request-context
+             :submission submission
+             :dropped-file-grants dropped-file-grants
+             :request-id (mevedel-request-id request)
+             :queued-at-time (float-time)
+             :queued-at-turn
+             (or (mevedel-session-turn-count session) 0)))))))))
+
+(defun mevedel-view--queue-prepared-steering (submission request)
+  "Queue accepted prompt SUBMISSION as steering for REQUEST."
+  (when-let* ((prepared
+               (mevedel-view--prepare-steering-entry submission request))
+              (session (mevedel-view--session))
+              (entry
+               (mevedel-session-enqueue-pending-input
+                session 'steering prepared)))
+    (let ((input (plist-get entry :input)))
+      (mevedel-view-history-add input)
+      (when (equal-including-properties
+             (mevedel-view--input-text) input)
+        (mevedel-view--clear-input))
+      (mevedel-view--interaction-rebuild)
+      (message "mevedel: queued steering for this turn")
+      entry)))
 
 (defun mevedel-view-clear-pending-input ()
   "Clear all pending input for the current session."
@@ -1871,6 +1922,8 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
   "Queue the composer as a follow-up, or send normally while idle."
   (interactive)
   (mevedel-view--ensure-interactive-chat-view)
+  (when mevedel-view--pending-input-edit
+    (user-error "Save or cancel the pending-input edit first"))
   (unless (and mevedel--data-buffer (buffer-live-p mevedel--data-buffer))
     (user-error "No live data buffer associated with this view"))
   (let* ((session (buffer-local-value 'mevedel--session
@@ -1913,6 +1966,8 @@ slash commands, and local-only slash commands do not spuriously create a
 fork."
   (interactive)
   (mevedel-view--ensure-interactive-chat-view)
+  (when mevedel-view--pending-input-edit
+    (user-error "Save or cancel the pending-input edit first"))
   (unless mevedel--data-buffer
     (user-error "No data buffer associated with this view"))
   (unless (buffer-live-p mevedel--data-buffer)

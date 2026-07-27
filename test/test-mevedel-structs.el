@@ -68,6 +68,18 @@
     (should (eq 'follow-up (plist-get second :category)))
     (should (eq 'steering (plist-get steering :category)))))
 
+(mevedel-deftest mevedel-session-set-pending-input-paused ()
+  ,test
+  (test)
+  :doc "normalizes the transient delivery pause to a boolean"
+  (let ((session (mevedel-session--create)))
+    (should
+     (mevedel-session-set-pending-input-paused session 'cockpit))
+    (should (eq t (mevedel-session-pending-input-paused session)))
+    (should-not
+     (mevedel-session-set-pending-input-paused session nil))
+    (should-not (mevedel-session-pending-input-paused session))))
+
 (mevedel-deftest mevedel-session-set-hook-context-pending ()
   ,test
   (test)

@@ -43,6 +43,8 @@
 		  (cl-x) t)
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-steering
+                  "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
@@ -68,7 +70,7 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-marker-position
 		  "mevedel-view-composer" nil)
-(declare-function mevedel-view--pending-follow-ups-render
+(declare-function mevedel-view--pending-inputs-render
                   "mevedel-view-composer" (&optional session))
 (declare-function mevedel-view--session "mevedel-view-composer" nil)
 (defvar mevedel-view--prompt-hook-pending)
@@ -209,7 +211,7 @@ silently placing controls in a data buffer."
         (requests 0)
         (asks 0)
         (permissions 0)
-        (follow-ups 0)
+        (pending-inputs 0)
         parts)
     (when (hash-table-p mevedel-view--interaction-descriptors)
       (maphash
@@ -222,7 +224,7 @@ silently placing controls in a data buffer."
              ('ask (cl-incf asks (max 1 count)))
              ('permission (cl-incf permissions count))
              ('pending-input
-              (cl-incf follow-ups count)))))
+              (cl-incf pending-inputs count)))))
        mevedel-view--interaction-descriptors))
     (let ((session (mevedel-view--session)))
       (when session
@@ -231,9 +233,12 @@ silently placing controls in a data buffer."
         (setq permissions
               (max permissions
                    (length (mevedel-session-permission-queue session))))
-        (setq follow-ups
-              (max follow-ups
-                   (length (mevedel-session-pending-follow-ups session))))))
+        (setq pending-inputs
+              (max
+               pending-inputs
+               (+ (length (mevedel-session-pending-steering session))
+                  (length
+                   (mevedel-session-pending-follow-ups session)))))))
     (setq parts
           (delq nil
                 (list
@@ -250,9 +255,9 @@ silently placing controls in a data buffer."
                  (when (> permissions 0)
                    (mevedel-view--interaction-plural
                     permissions "permission" "permissions"))
-                 (when (> follow-ups 0)
+                 (when (> pending-inputs 0)
                    (mevedel-view--interaction-plural
-                    follow-ups "follow-up" "follow-ups")))))
+                    pending-inputs "input" "inputs")))))
     (when parts
       (concat (string-join parts " · ") " pending"))))
 
@@ -507,8 +512,9 @@ This deletes only interaction UI overlays and never settles callbacks."
       (when (mevedel-session-permission-queue session)
         (require 'mevedel-permission-queue)
         (mevedel-permission-queue--render-head session))
-      (when (mevedel-session-pending-follow-ups session)
-        (mevedel-view--pending-follow-ups-render session)))
+      (when (or (mevedel-session-pending-steering session)
+                (mevedel-session-pending-follow-ups session))
+        (mevedel-view--pending-inputs-render session)))
     (when (hash-table-p mevedel-view--interaction-telemetry-opened)
       (let (closed)
         (maphash

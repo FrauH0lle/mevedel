@@ -2285,9 +2285,12 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
   "Run continuation auto-compaction for FSM before `gptel--handle-wait'."
   (let* ((info (and fsm (gptel-fsm-info fsm)))
          (chat-buffer (and (listp info) (plist-get info :buffer))))
-    (if (or (not (mevedel--compact-continuation-wait-p fsm))
-            (not (buffer-live-p chat-buffer)))
-        (mevedel--compact-provider-wait fsm)
+    (cond
+     ((plist-get info :mevedel-pending-input-hold) nil)
+     ((or (not (mevedel--compact-continuation-wait-p fsm))
+          (not (buffer-live-p chat-buffer)))
+      (mevedel--compact-provider-wait fsm))
+     (t
       (with-current-buffer chat-buffer
         (let* ((target-policy
                 (or (plist-get info :mevedel-compaction-target-policy)
@@ -2309,7 +2312,7 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
                (admission
                 (mevedel--compact-should-compact-p token-estimate)))
           (mevedel--compact-handle-target-wait
-           fsm (mevedel--compact-main-target) admission))))))
+           fsm (mevedel--compact-main-target) admission)))))))
 
 (defun mevedel--compact-transform-auto (continue fsm)
   "Run auto-compaction before request realization.
