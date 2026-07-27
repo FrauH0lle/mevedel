@@ -3326,13 +3326,45 @@ are left bare, while blank lines between payload lines keep the gutter."
     (prog1 (marker-position end-marker)
       (set-marker end-marker nil))))
 
+(defun mevedel-view--bash-completion-summary (text)
+  "Return compact visible execution facts from Bash completion TEXT."
+  (when (string-match "<bash-execution[^<>]*?/>[[:space:]]*\\'" text)
+    (require 'xml)
+    (condition-case nil
+        (with-temp-buffer
+          (insert (match-string 0 text))
+          (let* ((attributes (cadr (car (xml-parse-region
+                                         (point-min) (point-max)))))
+                 (id (alist-get 'execution_id attributes))
+                 (exit-code (alist-get 'exit_code attributes))
+                 (outcome (alist-get 'outcome attributes))
+                 (termination (alist-get 'termination attributes))
+                 (wall-time (alist-get 'wall_time_seconds attributes))
+                 (lines (alist-get 'output_lines attributes))
+                 (bytes (alist-get 'output_bytes attributes)))
+            (and id
+                 (string-join
+                  (delq nil
+                        (list id
+                              outcome
+                              termination
+                              (and exit-code (format "exit %s" exit-code))
+                              (and wall-time
+                                   (format "%.1fs"
+                                           (string-to-number wall-time)))
+                              (and lines (format "%s lines" lines))
+                              (and bytes (format "%s bytes" bytes))))
+                  " · "))))
+      (error nil))))
+
 (defun mevedel-view--decorate-mailbox-block
     (open-regex close-tag start end &optional kind)
   "Replace OPEN-REGEX/CLOSE-TAG regions from START to END with mailbox cards.
 KIND identifies the mailbox block flavor.  Shared engine for
 `<agent-message>' and `<agent-result>'
 rendering.  OPEN-REGEX must capture the canonical sender path in match group
-1.  Bodies between the matched open and close tags are preserved verbatim.
+1.  Ordinary bodies between the matched open and close tags are preserved
+verbatim; root EXECUTION bodies are summarized from their trailing facts.
 If a body's line count exceeds CLOSE-TAG's threshold,
 `mevedel-view-mailbox-collapse-line-threshold', the body is marked
 invisible (with the `mailbox-delivery' vtype tag for downstream
@@ -3346,7 +3378,24 @@ hint.  Searches that region."
             (while (re-search-forward open-regex (marker-position end-marker) t)
               (let* ((open-start (match-beginning 0))
                      (open-end (match-end 0))
+                     (execution-p
+                      (and (eq kind 'agent-message)
+                           (string-match-p
+                            "\\_<type=\"EXECUTION\""
+                            (match-string-no-properties 0))))
                      (sender (match-string-no-properties 1))
+                     (bash-summary
+                      (and execution-p
+                           (equal sender "/root")
+                           (save-excursion
+                             (goto-char open-end)
+                             (when-let* ((close
+                                          (mevedel-transcript--mailbox-find-close
+                                           open-regex close-tag
+                                           (marker-position end-marker))))
+                               (mevedel-view--bash-completion-summary
+                                (buffer-substring-no-properties
+                                 open-end (car close)))))))
                      (attribution (mevedel-view--insert-attribution sender))
                      (inhibit-read-only t))
                 (delete-region open-start open-end)
@@ -3355,24 +3404,34 @@ hint.  Searches that region."
                       (card-id (cl-gensym "mevedel-view-mailbox-")))
                   (insert "  ")
                   (insert (propertize
-                           (if (eq kind 'agent-result)
-                               "✓ finished "
-                             "✉ message ")
+                           (cond
+                            (bash-summary "✓ Bash completed · ")
+                            ((eq kind 'agent-result) "✓ finished ")
+                            (t "✉ message "))
                            'font-lock-face 'mevedel-view-attribution
                            'mevedel-view-mailbox t))
-                  (if (eq kind 'agent-result)
+                  (if bash-summary
+                      (insert sender)
+                    (if (eq kind 'agent-result)
                       (let ((label-start (point)))
                         (insert attribution)
                         (when (string-prefix-p "from " attribution)
                           (delete-region label-start
                                          (+ label-start (length "from ")))))
-                    (insert attribution))
+                      (insert attribution)))
                   (insert "\n")
                   (let ((body-start (point)))
                     (when-let* ((close
                                  (mevedel-transcript--mailbox-find-close
                                   open-regex close-tag
                                   (marker-position end-marker))))
+                      (when bash-summary
+                        (let ((old-end (car close)))
+                          (delete-region body-start old-end)
+                          (goto-char body-start)
+                          (insert bash-summary)
+                          (setcdr close (+ (cdr close) (- (point) old-end)))
+                          (setcar close (point))))
                       (let* ((body-end (car close))
                              (close-end (cdr close))
                              (body-line-count

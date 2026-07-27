@@ -1437,6 +1437,20 @@
       (should (eq 'steering reason))
       (should (eq 'running (mevedel-agent-record-activity record))))))
 
+(mevedel-deftest mevedel-agent-control-enqueue-execution-result ()
+  ,test
+  (test)
+  :doc "queues a distinct root execution record and acknowledges delivery"
+  (let ((session (mevedel-agent-control-test--session)))
+    (should
+     (mevedel-agent-control-enqueue-execution-result
+      session "/root" "root execution complete"))
+    (let ((message (car (mevedel-agent-control-context-mailbox session))))
+      (should (eq 'EXECUTION (plist-get message :type)))
+      (should (equal "/root" (plist-get message :sender)))
+      (should (equal "root execution complete"
+                     (plist-get message :payload))))))
+
 (mevedel-deftest mevedel-agent-control-wake-root-user ()
   ,test
   (test)

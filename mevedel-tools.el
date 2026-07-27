@@ -598,8 +598,9 @@ otherwise queues them on the chat buffer's session."
              (plist-get msg :outcome)
              (mevedel-tools--mailbox-body-escape
               (or (plist-get msg :payload) ""))))
-    ('MAIL
-     (format "<agent-message type=\"MAIL\" sender=\"%s\" recipient=\"%s\">\n%s\n</agent-message>"
+    ((or 'EXECUTION 'MAIL)
+     (format "<agent-message type=\"%s\" sender=\"%s\" recipient=\"%s\">\n%s\n</agent-message>"
+             (plist-get msg :type)
              (plist-get msg :sender)
              (plist-get msg :recipient)
              (mevedel-tools--mailbox-body-escape

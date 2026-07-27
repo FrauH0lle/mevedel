@@ -1373,6 +1373,16 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
     (should (string-match-p "&lt;agent-result" block))
     (should (string-match-p "&lt;agent-message" block)))
 
+  :doc "EXECUTION records retain an explicit transcript discriminator"
+  (should
+   (string-prefix-p
+    "<agent-message type=\"EXECUTION\" sender=\"/root\" recipient=\"/root\">"
+    (mevedel-tools--message-delivery-block
+     '(:type EXECUTION
+       :sender "/root"
+       :recipient "/root"
+       :payload "<bash-execution execution_id=\"exec-1\"/>"))))
+
   :doc "USER records remain plain model payloads"
   (should (equal "steer this"
                  (mevedel-tools--message-delivery-block
