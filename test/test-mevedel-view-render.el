@@ -89,9 +89,10 @@
     (should (eq 'user (plist-get (caddr turns) :role)))
     (should (eq 'assistant (plist-get (cadddr turns) :role))))
 
-  :doc "reasoning text (nil segments) inside assistant turn absorbed"
-  (let* ((segs '((user 1 10) (ignored 10 20) (user 20 40) (tool 40 80)
-                 (user 80 90) (ignored 90 100) (response 100 150)))
+  :doc "reasoning segments inside assistant turn absorbed"
+  (let* ((segs '((user 1 10) (ignored 10 20) (reasoning 20 40)
+                 (tool 40 80) (reasoning 80 90) (ignored 90 100)
+                 (response 100 150)))
          (turns (mevedel-view-test--group-synthetic-segments segs)))
     (should (= 2 (length turns)))
     (should (eq 'user (plist-get (car turns) :role)))
@@ -161,6 +162,14 @@
 
   :doc "real user prompt after closed reasoning starts a user turn"
   (let* ((segs '((reasoning 1 20) (user 20 40) (reasoning 40 60)))
+         (turns (mevedel-view-test--group-synthetic-segments segs)))
+    (should (equal '(assistant user assistant)
+                   (mapcar (lambda (turn) (plist-get turn :role))
+                           turns))))
+
+  :doc "same-turn steering after a tool starts a user turn"
+  (let* ((segs '((response 1 20) (tool 20 40)
+                 (user 40 60) (reasoning 60 80)))
          (turns (mevedel-view-test--group-synthetic-segments segs)))
     (should (equal '(assistant user assistant)
                    (mapcar (lambda (turn) (plist-get turn :role))
@@ -978,7 +987,7 @@
         (mevedel-view--render-incremental data-buf)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (= 1 (cl-count-if (lambda (line) (string= line "Assistant"))
+          (should (= 2 (cl-count-if (lambda (line) (string= line "Assistant"))
                                     (split-string text "\n"))))
           (should (= 1 (cl-loop with start = 0
                                 while (string-match "Second response" text start)
