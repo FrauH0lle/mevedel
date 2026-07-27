@@ -1129,8 +1129,8 @@
     (with-current-buffer view-buf
       (let* ((draft "> first line\nsecond line")
              (point-offset (length "> first"))
-             (kinds '(queued-user-message permission ask request plan preview))
-             (bodies '((queued-user-message . "queued message body")
+             (kinds '(pending-input permission ask request plan preview))
+             (bodies '((pending-input . "follow-up body")
                        (permission . "permission body")
                        (ask . "question body")
                        (request . "access body")
@@ -1165,12 +1165,12 @@
                (request (string-search "access body" text))
                (ask (string-search "question body" text))
                (permission (string-search "permission body" text))
-               (queued (string-search "queued message body" text)))
+               (queued (string-search "follow-up body" text)))
           (should (< preview plan))
           (should (< plan request permission queued))
           (should (< plan ask permission)))
         (should (equal
-                 "1 preview · 1 plan · 1 request · 1 question · 1 permission · 1 queued message pending"
+                 "1 preview · 1 plan · 1 request · 1 question · 1 permission · 1 follow-up pending"
                  (mevedel-view--interaction-count-label)))
         (dolist (pair overlays)
           (let* ((kind (car pair))

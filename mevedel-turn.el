@@ -57,7 +57,7 @@
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--schedule-queued-user-message-drain
+(declare-function mevedel-view--schedule-follow-up-drain
                   "mevedel-view-composer" (fsm))
 
 ;; `mevedel-workspace'
@@ -204,7 +204,7 @@
          #'mevedel--turn-restore-permission-mode
          #'mevedel--turn-end-request
          #'mevedel-goal-dispatch-after-turn
-         #'mevedel-view--schedule-queued-user-message-drain)))
+         #'mevedel-view--schedule-follow-up-drain)))
 
 (defun mevedel--fail-turn (fsm status)
   "Run failure cleanup for FSM with terminal STATUS."

@@ -122,8 +122,6 @@
 		  "mevedel-prompt-submission" (cl-x) t)
 (declare-function mevedel-prompt-submission-outcome
 		  "mevedel-prompt-submission" (cl-x) t)
-(declare-function mevedel-prompt-submission-reserve
-		  "mevedel-prompt-submission" (submission))
 (declare-function mevedel-prompt-submission-restore
 		  "mevedel-prompt-submission" (submission))
 (declare-function mevedel-prompt-submission-set-outcome
@@ -211,10 +209,12 @@
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pop-dropped-file-grants
 		  "mevedel-structs" (session paths))
-(declare-function mevedel-session-queued-user-messages
-		  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-set-queued-user-messages
-		  "mevedel-structs" (session queue))
+(declare-function mevedel-session-enqueue-pending-input
+                  "mevedel-structs" (session category entry))
+(declare-function mevedel-session-pending-follow-ups
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-set-pending-inputs
+                  "mevedel-structs" (session category entries))
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x)
 		  t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -485,7 +485,7 @@ composer body.")
   :doc "Keymap active over the editable composer body."
   "C-<tab>" #'mevedel-view-toggle-plan-mode
   "C-c RET" #'mevedel-view-send
-  "C-c C-e" #'mevedel-view-edit-last-queued-message
+  "C-c TAB" #'mevedel-view-send-follow-up
   "C-c C-l" #'mevedel-view-history-browse
   "C-c C-u" #'mevedel-view-history-clear-input
   "C-y" #'mevedel-view-yank-dwim
@@ -1134,15 +1134,15 @@ means a failed attempt leaves the exact source attached for a retry."
            (buffer-live-p mevedel--data-buffer)
            (buffer-local-value 'mevedel--session mevedel--data-buffer))))
 
-(defun mevedel-view--queued-user-messages (&optional session)
-  "Return SESSION's queued user messages."
+(defun mevedel-view--pending-follow-ups (&optional session)
+  "Return SESSION's pending follow-ups."
   (when-let* ((sess (or session (mevedel-view--session))))
-    (mevedel-session-queued-user-messages sess)))
+    (mevedel-session-pending-follow-ups sess)))
 
-(defun mevedel-view--set-queued-user-messages (queue &optional session)
-  "Set SESSION's queued user message QUEUE."
+(defun mevedel-view--set-pending-follow-ups (entries &optional session)
+  "Set SESSION's pending follow-up ENTRIES."
   (when-let* ((sess (or session (mevedel-view--session))))
-    (mevedel-session-set-queued-user-messages sess queue)))
+    (mevedel-session-set-pending-inputs sess 'follow-up entries)))
 
 (defun mevedel-view--mentioned-file-paths (input)
   "Return expanded @file paths mentioned in INPUT."
@@ -1161,23 +1161,14 @@ means a failed attempt leaves the exact source attached for a retry."
   (when (and session paths)
     (mevedel-session-activate-dropped-file-grants session paths)))
 
-(defun mevedel-view--queued-user-message-dropped-file-grants (queue)
-  "Return deduplicated dropped-file grants recorded in queued QUEUE."
-  (let (grants)
-    (dolist (entry queue)
-      (dolist (path (plist-get entry :dropped-file-grants))
-        (unless (member path grants)
-          (push path grants))))
-    (nreverse grants)))
-
-(defun mevedel-view--queued-user-message-auto-drain-blocked-p (&optional session)
-  "Return non-nil when SESSION queued messages should wait for user action."
+(defun mevedel-view--follow-up-auto-drain-blocked-p (&optional session)
+  "Return non-nil when SESSION follow-ups should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
     (or (mevedel-session-pending-plan-approval sess)
         (mevedel-view--reserved-goal-handoff-id sess)
         (when-let* ((goal (mevedel-session-goal sess))
                     ((eq (mevedel-goal-status goal) 'paused))
-                    (entry (car (mevedel-session-queued-user-messages sess))))
+                    (entry (car (mevedel-session-pending-follow-ups sess))))
           (equal (mevedel-goal-id goal)
                  (plist-get entry :queued-at-goal-id))))))
 
@@ -1187,134 +1178,93 @@ means a failed attempt leaves the exact source attached for a retry."
   (mevedel-plan-handoff-reserved-goal-id
    (or session (mevedel-view--session))))
 
-(defun mevedel-view--queued-user-message-preview (input)
-  "Return a one-line preview for queued INPUT."
+(defun mevedel-view--pending-input-preview (input)
+  "Return a one-line preview for pending INPUT."
   (let ((preview (string-trim
                   (replace-regexp-in-string "[ \t\n\r]+" " " input t t))))
     (if (> (length preview) 96)
         (concat (substring preview 0 93) "...")
       preview)))
 
-(defun mevedel-view--queued-user-message-input (entry)
-  "Return normalized input text for queued ENTRY."
+(defun mevedel-view--pending-input-text (entry)
+  "Return normalized input text for pending ENTRY."
   (mevedel--normalize-message-text (or (plist-get entry :input) "")))
 
-(defun mevedel-view--queued-user-messages-body (queue)
-  "Return interaction-zone body text for queued user message QUEUE."
+(defun mevedel-view--pending-follow-ups-body (entries)
+  "Return interaction-zone body text for pending follow-up ENTRIES."
   (let ((index 0)
         lines)
-    (dolist (entry queue)
+    (dolist (entry entries)
       (cl-incf index)
       (push (format "  %d. %s"
                     index
-                    (mevedel-view--queued-user-message-preview
-                     (mevedel-view--queued-user-message-input entry)))
+                    (mevedel-view--pending-input-preview
+                     (mevedel-view--pending-input-text entry)))
             lines))
-    (concat "\nQueued messages\n"
-            "  C-c C-e edit batch; C-c C-q clear\n"
+    (concat "\nFollow-ups\n"
+            "  C-c C-q clear\n"
             (string-join (nreverse lines) "\n")
             "\n")))
 
-(defun mevedel-view--queued-user-messages-render (&optional session)
-  "Render queued user messages for SESSION into the interaction zone."
-  (when-let* ((queue (mevedel-view--queued-user-messages session)))
+(defun mevedel-view--pending-follow-ups-render (&optional session)
+  "Render pending follow-ups for SESSION into the interaction zone."
+  (when-let* ((entries (mevedel-view--pending-follow-ups session)))
     (mevedel-view--interaction-register
-     (list :kind 'queued-user-message
-           :id 'queued-user-messages
-           :count (length queue)
-           :body (mevedel-view--queued-user-messages-body queue)
-           :help-echo "Queued user messages"))))
+     (list :kind 'pending-input
+           :id 'pending-follow-ups
+           :count (length entries)
+           :body (mevedel-view--pending-follow-ups-body entries)
+           :help-echo "Pending follow-ups"))))
 
-(defun mevedel-view--queue-user-message
-    (input &optional force-queue submission)
-  "Queue INPUT, or prepare steering for a root WaitAgent.
-When FORCE-QUEUE is non-nil, skip steering even if root is waiting.
-SUBMISSION retains an already-approved steering attempt without rerunning its
-prompt hook when the queue drains."
+(defun mevedel-view--queue-follow-up (input)
+  "Queue INPUT to start a separate root turn."
   (setq input (mevedel--normalize-message-text input))
   (let ((session (mevedel-view--session)))
     (unless session
-      (user-error "No active session for queued message"))
-    (require 'mevedel-agent-control)
-    (if (and (not force-queue)
-             (mevedel-agent-control-root-waiting-p session))
-        (mevedel-view--submit-planned-input
-         input
-         nil
-         #'ignore
-         #'mevedel-view--deliver-prepared-steering)
-      (let* ((dropped-file-grants
-              (mevedel-view--pop-dropped-file-grants-for-input input session))
-             (entry
-              (list :input input
-                    :submission submission
-                    :dropped-file-grants dropped-file-grants
-                    :queued-at-time (float-time)
-                    :queued-at-goal-id
-                    (or (and (mevedel-session-goal session)
-                             (mevedel-goal-id
-                              (mevedel-session-goal session)))
-                        (mevedel-view--reserved-goal-handoff-id session))
-                    :queued-at-turn
-                    (or (mevedel-session-turn-count session) 0))))
-        (when submission
-          (mevedel-prompt-submission-reserve submission))
-        (mevedel-view--set-queued-user-messages
-         (append (mevedel-view--queued-user-messages session) (list entry))
-         session)
-        (when (fboundp 'mevedel-telemetry-record)
-          (mevedel-telemetry-record
-           session 'user-message-queued
-           :message-hash (secure-hash 'sha256 input)
-           :message-chars (length input)
-           :queue-depth (length (mevedel-view--queued-user-messages session))
-           :enqueue-goal-id (plist-get entry :queued-at-goal-id)))
-        (mevedel-view-history-add input)
-        (when (equal-including-properties (mevedel-view--input-text) input)
-          (mevedel-view--clear-input))
-        (mevedel-view--interaction-rebuild)
-        (message "mevedel: queued message for the next turn")
-        (mevedel-view--schedule-late-queued-user-message-drain)
-        entry))))
-
-(defun mevedel-view-edit-last-queued-message ()
-  "Move all queued user messages back to the composer."
-  (interactive)
-  (mevedel-view--ensure-interactive-chat-view)
-  (let* ((session (mevedel-view--session))
-         (queue (and session (mevedel-view--queued-user-messages session))))
-    (unless queue
-      (user-error "No queued messages"))
-    (let ((draft (string-join
-                  (mapcar #'mevedel-view--queued-user-message-input queue)
-                  "\n\n")))
-      (dolist (entry (reverse queue))
-        (when-let* ((submission (plist-get entry :submission)))
-          (mevedel-prompt-submission-restore submission)))
-      (mevedel-view--set-queued-user-messages nil session)
-      (mevedel-view--clear-input)
-      (dolist (path (mevedel-view--queued-user-message-dropped-file-grants
-                     queue))
-        (mevedel-session-add-dropped-file-grant session path))
-      (goto-char (mevedel-view--input-start))
-      (insert draft)
-      (goto-char (point-max))
+      (user-error "No active session for follow-up"))
+    (let* ((dropped-file-grants
+            (mevedel-view--pop-dropped-file-grants-for-input input session))
+           (entry
+            (mevedel-session-enqueue-pending-input
+             session 'follow-up
+             (list :input input
+                   :dropped-file-grants dropped-file-grants
+                   :queued-at-time (float-time)
+                   :queued-at-goal-id
+                   (or (and (mevedel-session-goal session)
+                            (mevedel-goal-id
+                             (mevedel-session-goal session)))
+                       (mevedel-view--reserved-goal-handoff-id session))
+                   :queued-at-turn
+                   (or (mevedel-session-turn-count session) 0)))))
+      (when (fboundp 'mevedel-telemetry-record)
+        (mevedel-telemetry-record
+         session 'user-message-queued
+         :message-hash (secure-hash 'sha256 input)
+         :message-chars (length input)
+         :queue-depth (length (mevedel-view--pending-follow-ups session))
+         :enqueue-goal-id (plist-get entry :queued-at-goal-id)))
+      (mevedel-view-history-add input)
+      (when (equal-including-properties (mevedel-view--input-text) input)
+        (mevedel-view--clear-input))
       (mevedel-view--interaction-rebuild)
-      queue)))
+      (message "mevedel: queued follow-up for a separate turn")
+      (mevedel-view--schedule-late-follow-up-drain)
+      entry)))
 
-(defun mevedel-view-clear-queued-messages ()
-  "Clear all queued user messages for the current session."
+(defun mevedel-view-clear-pending-input ()
+  "Clear all pending input for the current session."
   (interactive)
   (mevedel-view--ensure-interactive-chat-view)
   (let ((session (mevedel-view--session)))
-    (unless (and session (mevedel-view--queued-user-messages session))
-      (user-error "No queued messages"))
-    (dolist (entry (reverse (mevedel-view--queued-user-messages session)))
+    (unless (and session (mevedel-view--pending-follow-ups session))
+      (user-error "No pending input"))
+    (dolist (entry (reverse (mevedel-view--pending-follow-ups session)))
       (when-let* ((submission (plist-get entry :submission)))
         (mevedel-prompt-submission-restore submission)))
-    (mevedel-view--set-queued-user-messages nil session)
+    (mevedel-view--set-pending-follow-ups nil session)
     (mevedel-view--interaction-rebuild)
-    (message "mevedel: cleared queued messages")))
+    (message "mevedel: cleared pending input")))
 
 (defun mevedel-view--delete-skill-argument-hint ()
   "Remove the composer skill argument hint overlay."
@@ -1766,7 +1716,8 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
          ((plist-get expansion :media-contexts)
           (message "mevedel: media mentions cannot steer an active request"))
          ((not (mevedel-agent-control-root-waiting-p session))
-          (mevedel-view--queue-user-message input t submission))
+          (mevedel-prompt-submission-restore submission)
+          (message "mevedel: turn is no longer waiting; use C-c TAB"))
          ((mevedel-agent-control-steer-user
            session (plist-get expansion :text)
            (lambda ()
@@ -1783,9 +1734,42 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
             (concat (plist-get outcome :transcript-input)
                     (plist-get outcome :render-data))
             :hook-audits (plist-get outcome :hook-audits)))
-          (mevedel-view--finish-prepared-steering submission))
+         (mevedel-view--finish-prepared-steering submission))
          (t
-          (mevedel-view--queue-user-message input t submission))))))))
+          (mevedel-prompt-submission-restore submission)
+          (message "mevedel: turn is no longer waiting; use C-c TAB"))))))))
+
+(defun mevedel-view-send-follow-up ()
+  "Queue the composer as a follow-up, or send normally while idle."
+  (interactive)
+  (mevedel-view--ensure-interactive-chat-view)
+  (unless (and mevedel--data-buffer (buffer-live-p mevedel--data-buffer))
+    (user-error "No live data buffer associated with this view"))
+  (let* ((session (buffer-local-value 'mevedel--session
+                                      mevedel--data-buffer))
+         (occupied
+          (or (buffer-local-value 'mevedel--current-request
+                                  mevedel--data-buffer)
+              (mevedel-view--reserved-goal-handoff-id session))))
+    (if (not occupied)
+        (mevedel-view-send)
+      (when mevedel-view--prompt-hook-pending
+        (user-error "A prompt hook is still running -- wait or abort first"))
+      (when mevedel-view--pending-skill-submission
+        (user-error "Skill preparation is still running -- wait or abort first"))
+      (when (buffer-local-value 'mevedel--compaction-in-flight
+                                mevedel--data-buffer)
+        (user-error "Compaction in progress"))
+      (when (buffer-local-value 'mevedel-session--read-only-mode
+                                mevedel--data-buffer)
+        (user-error "Session is open read-only (another host holds the lock)"))
+      (let ((input (mevedel-view--bind-input-mentions session)))
+        (when (string-empty-p input)
+          (user-error "Nothing to send"))
+        (when (mevedel-skills--parse-slash-line input)
+          (user-error "Slash commands cannot be queued as follow-ups"))
+        (mevedel-view--queue-follow-up input))))
+  (goto-char (point-max)))
 
 (defun mevedel-view-send ()
   "Send the current composer text to the LLM via the data buffer.
@@ -1839,7 +1823,12 @@ fork."
                 (mevedel-view--clear-input))
             (if slash-parsed
                 (user-error "A request is already active -- wait or abort first")
-              (mevedel-view--queue-user-message input)))
+              (require 'mevedel-agent-control)
+              (if (mevedel-agent-control-root-waiting-p session)
+                  (mevedel-view--submit-planned-input
+                   input nil #'ignore #'mevedel-view--deliver-prepared-steering)
+                (user-error
+                 "A request is already active -- use C-c TAB for a follow-up"))))
         (cond
          (slash-parsed
           (let* ((name (nth 0 slash-parsed))
@@ -2184,8 +2173,8 @@ replaces INPUT only in the temporary request prompt."
            (with-current-buffer data-buffer
              (bound-and-true-p mevedel--agent-invocation)))))
 
-(defun mevedel-view--drain-queued-user-message (data-buffer)
-  "Submit the next queued user message for DATA-BUFFER.
+(defun mevedel-view--drain-follow-up (data-buffer)
+  "Submit the next pending follow-up for DATA-BUFFER.
 
 Each bound entry is planned and prepared as its own turn.  The queue entry is
 removed only when the resulting prompt reaches its transcript commit boundary."
@@ -2200,13 +2189,12 @@ removed only when the resulting prompt reaches its transcript commit boundary."
           (when (and (not mevedel-view--agent-transcript-p)
                      (not mevedel-view--prompt-hook-pending)
                      (not mevedel-view--pending-skill-submission)
-                     (not (mevedel-view--queued-user-message-auto-drain-blocked-p
+                     (not (mevedel-view--follow-up-auto-drain-blocked-p
                            session))
                      (string-empty-p (mevedel-view--input-text)))
-            (when-let* ((queue (mevedel-view--queued-user-messages session)))
+            (when-let* ((queue (mevedel-view--pending-follow-ups session)))
               (let* ((entry (car queue))
-                     (input (mevedel-view--queued-user-message-input
-                             entry))
+                     (input (mevedel-view--pending-input-text entry))
                      (submission (plist-get entry :submission))
                      (dropped-file-grants
                       (plist-get entry :dropped-file-grants)))
@@ -2222,7 +2210,7 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                             session 'user-message-dequeued
                             :message-hash (secure-hash 'sha256 input)
                             :queue-depth-before
-                            (length (mevedel-view--queued-user-messages session))
+                            (length (mevedel-view--pending-follow-ups session))
                             :queue-duration-ms
                             (and (numberp (plist-get entry :queued-at-time))
                                  (round
@@ -2237,10 +2225,10 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                                  (mevedel-goal-id
                                   (mevedel-session-goal session)))))
                          (when (eq entry
-                                   (car (mevedel-view--queued-user-messages
+                                   (car (mevedel-view--pending-follow-ups
                                          session)))
-                           (mevedel-view--set-queued-user-messages
-                            (cdr (mevedel-view--queued-user-messages session))
+                           (mevedel-view--set-pending-follow-ups
+                            (cdr (mevedel-view--pending-follow-ups session))
                             session))
                          (mevedel-view--interaction-rebuild))))
                   (if submission
@@ -2256,29 +2244,29 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                        (mevedel-view--interaction-rebuild))
                      nil after-insert)))))))))))
 
-(defun mevedel-view--run-queued-user-message-drain (data-buffer)
-  "Drain one queued user message for DATA-BUFFER if it is live."
+(defun mevedel-view--run-follow-up-drain (data-buffer)
+  "Drain one pending follow-up for DATA-BUFFER if it is live."
   (when (buffer-live-p data-buffer)
-    (mevedel-view--drain-queued-user-message data-buffer)))
+    (mevedel-view--drain-follow-up data-buffer)))
 
-(defun mevedel-view--schedule-late-queued-user-message-drain ()
-  "Schedule a fallback drain when queueing completes after request cleanup."
+(defun mevedel-view--schedule-late-follow-up-drain ()
+  "Schedule a fallback follow-up drain after request cleanup."
   (when-let* ((data-buffer mevedel--data-buffer)
               ((buffer-live-p data-buffer))
               ((not (buffer-local-value 'mevedel--current-request
                                         data-buffer))))
     (run-at-time 0 nil
-                 #'mevedel-view--run-queued-user-message-drain
+                 #'mevedel-view--run-follow-up-drain
                  data-buffer)))
 
-(defun mevedel-view--schedule-queued-user-message-drain (fsm)
-  "Schedule the next queued user message after FSM completes successfully."
+(defun mevedel-view--schedule-follow-up-drain (fsm)
+  "Schedule the next follow-up after FSM completes successfully."
   (when-let* ((info (and fsm (fboundp 'gptel-fsm-info)
                          (gptel-fsm-info fsm)))
               (data-buffer (plist-get info :buffer))
               ((buffer-live-p data-buffer)))
     (run-at-time 0 nil
-                 #'mevedel-view--run-queued-user-message-drain
+                 #'mevedel-view--run-follow-up-drain
                  data-buffer)))
 
 (defun mevedel-view-abort ()

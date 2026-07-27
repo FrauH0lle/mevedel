@@ -128,7 +128,7 @@
 (declare-function mevedel-view--position-in-input-region-p
                   "mevedel-view-composer" (position))
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
-(declare-function mevedel-view-clear-queued-messages
+(declare-function mevedel-view-clear-pending-input
                   "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-initialize
                   "mevedel-view-composer" ())
@@ -463,7 +463,7 @@ above `mevedel-view--input-marker'."
   "C-g" #'mevedel-view-abort
   "C-c C-k" #'mevedel-view-abort
   "C-c C-o" #'mevedel-menu
-  "C-c C-q" #'mevedel-view-clear-queued-messages)
+  "C-c C-q" #'mevedel-view-clear-pending-input)
 
 (defun mevedel-view--display-fragment-keymap (&rest maps)
   "Return a composed display-fragment keymap from MAPS.

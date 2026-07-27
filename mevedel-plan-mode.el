@@ -74,6 +74,8 @@
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-plan-approval
 		  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-steering
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-plan-metadata "mevedel-structs"
@@ -815,8 +817,8 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
                        (mevedel-session-pending-plan-approval session))))
     (when (and (proper-list-p outcome)
                (plist-get outcome :accept)
-               (mevedel-session-queued-user-messages session))
-      (user-error "Resolve queued messages before implementing the plan"))
+               (mevedel-session-pending-steering session))
+      (user-error "Resolve pending steering before implementing the plan"))
     (if (not (eq entry pending))
         (display-warning 'mevedel
                          "Plan approval: stale settlement ignored" :warning)

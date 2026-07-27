@@ -21,6 +21,53 @@
 ;;
 ;;; Session transient state
 
+(mevedel-deftest mevedel-session-pending-inputs ()
+  ,test
+  (test)
+  :doc "returns each pending input category and rejects unknown categories"
+  (let ((session (mevedel-session--create
+                  :pending-steering '((:input "steer"))
+                  :pending-follow-ups '((:input "later")))))
+    (should (equal '((:input "steer"))
+                   (mevedel-session-pending-inputs session 'steering)))
+    (should (equal '((:input "later"))
+                   (mevedel-session-pending-inputs session 'follow-up)))
+    (should-error
+     (mevedel-session-pending-inputs session 'unknown))))
+
+(mevedel-deftest mevedel-session-set-pending-inputs ()
+  ,test
+  (test)
+  :doc "replaces one pending category without changing the other"
+  (let ((session (mevedel-session--create
+                  :pending-steering '((:input "steer")))))
+    (should (equal '((:input "later"))
+                   (mevedel-session-set-pending-inputs
+                    session 'follow-up '((:input "later")))))
+    (should (equal '((:input "steer"))
+                   (mevedel-session-pending-steering session)))
+    (should-error
+     (mevedel-session-set-pending-inputs session 'unknown nil))))
+
+(mevedel-deftest mevedel-session-enqueue-pending-input ()
+  ,test
+  (test)
+  :doc "assigns stable session-local IDs and appends within each category"
+  (let* ((session (mevedel-session--create))
+         (first (mevedel-session-enqueue-pending-input
+                 session 'follow-up '(:input "first")))
+         (steering (mevedel-session-enqueue-pending-input
+                    session 'steering '(:input "steer")))
+         (second (mevedel-session-enqueue-pending-input
+                  session 'follow-up '(:input "second"))))
+    (should (equal '(1 3)
+                   (mapcar (lambda (entry) (plist-get entry :id))
+                           (mevedel-session-pending-follow-ups session))))
+    (should (= 2 (plist-get steering :id)))
+    (should (eq 'follow-up (plist-get first :category)))
+    (should (eq 'follow-up (plist-get second :category)))
+    (should (eq 'steering (plist-get steering :category)))))
+
 (mevedel-deftest mevedel-session-set-hook-context-pending ()
   ,test
   (test)

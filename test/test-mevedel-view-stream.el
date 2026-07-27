@@ -1901,7 +1901,7 @@
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--start-spinner "Working...")
-        (setf (mevedel-session-queued-user-messages session)
+        (setf (mevedel-session-pending-follow-ups session)
               (list (list :input "queued while busy"
                           :display-text "queued while busy")))
         (mevedel-view--interaction-rebuild)
@@ -1929,7 +1929,7 @@
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--start-spinner "Working...")
-        (setf (mevedel-session-queued-user-messages session)
+        (setf (mevedel-session-pending-follow-ups session)
               (list (list :input "queued while busy"
                           :display-text "queued while busy")))
         (let ((changes 0))
@@ -1956,7 +1956,7 @@
         (mevedel-view--start-spinner "Working...")
         (mevedel-view--insert-pending-tool-lines
          (list (cons "call-1" "Calling Read: a")))
-        (setf (mevedel-session-queued-user-messages session)
+        (setf (mevedel-session-pending-follow-ups session)
               (list (list :input "queued while busy"
                           :display-text "queued while busy")))
         (mevedel-view--interaction-rebuild)

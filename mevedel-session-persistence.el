@@ -3767,8 +3767,9 @@ mail are deliberately absent from the returned session."
           :agent-root-waiter nil
           :agent-turn-capacity
           (mevedel-session-agent-turn-capacity session)
-          :queued-user-messages
-          (copy-tree (mevedel-session-queued-user-messages session) t)
+          :pending-steering nil
+          :pending-follow-ups nil
+          :pending-input-next-id nil
           :dropped-file-grants
           (copy-tree (mevedel-session-dropped-file-grants session) t)
           :active-dropped-file-grants

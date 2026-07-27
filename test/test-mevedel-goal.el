@@ -194,12 +194,12 @@
                         (mevedel-goal-continue-if-idle session buffer)))
             (with-current-buffer buffer
               (setq-local mevedel--current-request nil))
-            (setf (mevedel-session-queued-user-messages session)
+            (setf (mevedel-session-pending-follow-ups session)
                   '((:input "steer")))
-            (should (eq 'queued-user-message
+            (should (eq 'follow-up
                         (mevedel-goal-continue-if-idle session buffer)))
             (should scheduled)
-            (setf (mevedel-session-queued-user-messages session) nil
+            (setf (mevedel-session-pending-follow-ups session) nil
                   (mevedel-session-permission-queue session) '(pending))
             (should (eq 'interaction
                         (mevedel-goal-continue-if-idle session buffer)))
@@ -396,8 +396,10 @@
     (should-not
      (plist-member (mevedel-session-plan-metadata session)
                    :implementation-goal-id))
-    (should (equal '((:input "steer first"))
-                   (mevedel-session-queued-user-messages session)))
+    (let ((entry (car (mevedel-session-pending-follow-ups session))))
+      (should (equal "steer first" (plist-get entry :input)))
+      (should (= 1 (plist-get entry :id)))
+      (should (eq 'follow-up (plist-get entry :category))))
     (setf (mevedel-goal-status goal) 'budget-limited)
     (with-temp-buffer
       (setq-local mevedel--session session)

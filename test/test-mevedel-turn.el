@@ -234,7 +234,7 @@
                        (with-current-buffer chat-buf
                          (setq mevedel--current-request nil))))
                     ((symbol-function
-                      'mevedel-view--schedule-queued-user-message-drain)
+                      'mevedel-view--schedule-follow-up-drain)
                      (lambda (_fsm)
                        (push (list 'drain
                                    (with-current-buffer chat-buf
@@ -277,7 +277,7 @@
               ((symbol-function 'mevedel--turn-end-request)
                (lambda (_fsm) (push 'request-end events)))
               ((symbol-function
-                'mevedel-view--schedule-queued-user-message-drain)
+                'mevedel-view--schedule-follow-up-drain)
                (lambda (_fsm) (setq drained t))))
       (dolist (case '((error) (aborted)))
         (setq events nil)
