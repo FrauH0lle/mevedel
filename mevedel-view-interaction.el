@@ -43,6 +43,8 @@
 		  (cl-x) t)
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-input-failure-paused
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
                   "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
@@ -513,7 +515,8 @@ This deletes only interaction UI overlays and never settles callbacks."
         (require 'mevedel-permission-queue)
         (mevedel-permission-queue--render-head session))
       (when (or (mevedel-session-pending-steering session)
-                (mevedel-session-pending-follow-ups session))
+                (mevedel-session-pending-follow-ups session)
+                (mevedel-session-pending-input-failure-paused session))
         (mevedel-view--pending-inputs-render session)))
     (when (hash-table-p mevedel-view--interaction-telemetry-opened)
       (let (closed)

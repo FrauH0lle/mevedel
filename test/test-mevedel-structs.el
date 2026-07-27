@@ -80,6 +80,30 @@
      (mevedel-session-set-pending-input-paused session nil))
     (should-not (mevedel-session-pending-input-paused session))))
 
+(mevedel-deftest mevedel-session-set-pending-input-failure-paused ()
+  ,test
+  (test)
+  :doc "normalizes failure recovery pause to a boolean"
+  (let ((session (mevedel-session--create)))
+    (should
+     (mevedel-session-set-pending-input-failure-paused session 'failure))
+    (should (eq t
+                (mevedel-session-pending-input-failure-paused session)))
+    (should-not
+     (mevedel-session-set-pending-input-failure-paused session nil))))
+
+(mevedel-deftest mevedel-session-pending-input-delivery-paused-p ()
+  ,test
+  (test)
+  :doc "combines cockpit pause and failure pause"
+  (let ((session (mevedel-session--create)))
+    (should-not (mevedel-session-pending-input-delivery-paused-p session))
+    (mevedel-session-set-pending-input-paused session t)
+    (should (mevedel-session-pending-input-delivery-paused-p session))
+    (mevedel-session-set-pending-input-paused session nil)
+    (mevedel-session-set-pending-input-failure-paused session t)
+    (should (mevedel-session-pending-input-delivery-paused-p session))))
+
 (mevedel-deftest mevedel-session-set-hook-context-pending ()
   ,test
   (test)

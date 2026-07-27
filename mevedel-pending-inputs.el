@@ -53,11 +53,15 @@
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-input-failure-paused
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-input-paused
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-set-pending-input-paused
+                  "mevedel-structs" (session paused))
+(declare-function mevedel-session-set-pending-input-failure-paused
                   "mevedel-structs" (session paused))
 (declare-function mevedel-session-set-pending-inputs
                   "mevedel-structs" (session category entries))
@@ -143,7 +147,9 @@
      (vector
       (if (eq category 'steering) "Steering" "Follow-up")
       (number-to-string (plist-get item :position))
-      (capitalize (symbol-name (plist-get item :state)))
+      (pcase (plist-get item :state)
+        ('failed-turn "Needs review")
+        (state (capitalize (symbol-name state))))
       (mevedel-view--pending-input-preview
        (mevedel-view--pending-input-text entry))))))
 
@@ -152,10 +158,12 @@
   (format "%d pending input%s%s"
           (length items)
           (if (= 1 (length items)) "" "s")
-          (if (mevedel-session-pending-input-paused
-               (mevedel-pending-inputs--session context))
-              " · delivery paused"
-            "")))
+          (let ((session (mevedel-pending-inputs--session context)))
+            (concat
+             (when (mevedel-session-pending-input-failure-paused session)
+               " · failure recovery required")
+             (when (mevedel-session-pending-input-paused session)
+               " · delivery paused")))))
 
 (defun mevedel-pending-inputs--details (item _context)
   "Return full text for pending-input ITEM."
@@ -346,6 +354,25 @@
           replacement (plist-put replacement :submission nil))
     (mevedel-pending-inputs--finish-replacement state replacement)))
 
+(defun mevedel-pending-inputs--save-failed-steering (state input session)
+  "Save failed steering edit STATE as review-only INPUT in SESSION."
+  (let* ((original (plist-get state :entry))
+         (grants
+          (mevedel-view--pop-dropped-file-grants-for-input input session))
+         replacement)
+    (when-let* ((submission (plist-get original :submission)))
+      (mevedel-prompt-submission-restore submission))
+    (cl-loop for (key value) on original by #'cddr
+             unless (memq key '(:model-input :transcript-payload
+                                :hook-audits :request-context :submission))
+             do (setq replacement
+                      (append replacement (list key value))))
+    (setq replacement
+          (plist-put replacement :input input)
+          replacement
+          (plist-put replacement :dropped-file-grants grants))
+    (mevedel-pending-inputs--finish-replacement state replacement)))
+
 (defun mevedel-pending-inputs--save-steering (state input request)
   "Prepare and save steering edit STATE from INPUT for REQUEST."
   (setf (plist-get state :saving) t)
@@ -380,9 +407,15 @@
             (user-error "Pending input must not be empty"))
           (when (string-match-p "\\`[ \t]*[/]" input)
             (user-error "Slash commands cannot be pending input"))
-          (if (eq category 'follow-up)
-              (mevedel-pending-inputs--save-follow-up
-               state input session)
+          (cond
+           ((eq category 'follow-up)
+            (mevedel-pending-inputs--save-follow-up
+             state input session))
+           ((eq (plist-get (plist-get state :entry) :state)
+                'failed-turn)
+            (mevedel-pending-inputs--save-failed-steering
+             state input session))
+           (t
             (let ((request
                    (and (buffer-live-p mevedel--data-buffer)
                         (buffer-local-value
@@ -394,7 +427,7 @@
                                    :request-id)))
                 (user-error "Steering turn is no longer active"))
               (mevedel-pending-inputs--save-steering
-               state input request))))
+               state input request)))))
       (error
        (message "mevedel: pending-input edit failed: %s"
                 (error-message-string err))))))
@@ -638,12 +671,33 @@
         (mevedel-cockpit-surface-refresh))
       (message "mevedel: cleared pending input"))))
 
+(defun mevedel-pending-inputs-resume-after-failure ()
+  "Clear failure pause after all failed-turn steering is resolved."
+  (interactive)
+  (let* ((context (mevedel-cockpit-surface-context))
+         (session (mevedel-pending-inputs--session context))
+         (failed
+          (cl-remove-if-not
+           (lambda (entry)
+             (eq (plist-get entry :state) 'failed-turn))
+           (mevedel-session-pending-steering session))))
+    (unless (mevedel-session-pending-input-failure-paused session)
+      (user-error "Pending input is not paused after a turn failure"))
+    (when failed
+      (user-error "Resolve %d failed-turn steering message%s first"
+                  (length failed) (if (= 1 (length failed)) "" "s")))
+    (mevedel-session-set-pending-input-failure-paused session nil)
+    (mevedel-pending-inputs--refresh)
+    (message "mevedel: pending-input failure pause cleared")))
+
 (defun mevedel-pending-inputs-quit ()
   "Close the cockpit and resume eligible automatic delivery."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (view (mevedel-cockpit-context-view-buffer context))
+         (failure-paused
+          (mevedel-session-pending-input-failure-paused session))
          (editing
           (and (buffer-live-p view)
                (buffer-local-value
@@ -654,18 +708,19 @@
     (when (buffer-live-p view)
       (with-current-buffer view
         (mevedel-view--interaction-rebuild)))
-    (when-let* ((data-buffer
-                 (and (buffer-live-p view)
-                      (buffer-local-value 'mevedel--data-buffer view)))
-                ((buffer-live-p data-buffer))
-                (request
-                 (buffer-local-value
-                  'mevedel--current-request data-buffer))
-                (fsm (and request (mevedel-request-fsm request)))
-                ((plist-get (gptel-fsm-info fsm)
-                            :mevedel-pending-input-hold)))
-      (gptel--fsm-transition fsm 'WAIT))
-    (when (buffer-live-p view)
+    (unless failure-paused
+      (when-let* ((data-buffer
+                   (and (buffer-live-p view)
+                        (buffer-local-value 'mevedel--data-buffer view)))
+                  ((buffer-live-p data-buffer))
+                  (request
+                   (buffer-local-value
+                    'mevedel--current-request data-buffer))
+                  (fsm (and request (mevedel-request-fsm request)))
+                  ((plist-get (gptel-fsm-info fsm)
+                              :mevedel-pending-input-hold)))
+        (gptel--fsm-transition fsm 'WAIT)))
+    (when (and (not failure-paused) (buffer-live-p view))
       (with-current-buffer view
         (mevedel-view--schedule-late-follow-up-drain)))
     (mevedel-cockpit-quit "Pending Inputs cockpit")))
@@ -697,6 +752,7 @@
            ("u" "Unmark deletion" mevedel-pending-inputs-unmark)
            ("x" "Delete marked pending input"
             mevedel-pending-inputs-execute-deletions)
+           ("R" "Resume after failure" mevedel-pending-inputs-resume-after-failure)
            ("C-c C-q" "Clear all pending input" mevedel-pending-inputs-clear)
            ("g" "Refresh live pending input" mevedel-pending-inputs-refresh)
            ("q" "Close and resume eligible delivery" mevedel-pending-inputs-quit)))
@@ -722,7 +778,8 @@
                       (mevedel-cockpit-current-context)))
          (session (mevedel-pending-inputs--session context)))
     (unless (or (mevedel-session-pending-steering session)
-                (mevedel-session-pending-follow-ups session))
+                (mevedel-session-pending-follow-ups session)
+                (mevedel-session-pending-input-failure-paused session))
       (user-error "No pending input"))
     (mevedel-cockpit-open-surface
      mevedel-pending-inputs--surface context)))

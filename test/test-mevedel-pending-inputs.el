@@ -272,6 +272,41 @@
                          (plist-get replacement :input)))
           (should (plist-get replacement :submission))))))
 
+  :doc "failed-turn steering remains review-only after editing"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((submission
+            (mevedel-prompt-submission-create
+             :input "old" :display-text "old" :session session
+             :state 'reserved))
+           (entry
+            (mevedel-session-enqueue-pending-input
+             session 'steering
+             (list :input "old" :model-input "prepared"
+                   :request-id "dead" :state 'failed-turn
+                   :submission submission)))
+           cockpit)
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (save-window-excursion
+        (setq cockpit
+              (with-current-buffer view-buf
+                (mevedel-pending-inputs-open)))
+        (with-current-buffer cockpit
+          (mevedel-cockpit-goto-id (plist-get entry :id))
+          (mevedel-pending-inputs-edit))
+        (mevedel-pending-inputs-test--replace-composer
+         view-buf "edited for review")
+        (with-current-buffer view-buf
+          (mevedel-pending-inputs-save-edit)))
+      (let ((replacement
+             (car (mevedel-session-pending-steering session))))
+        (should (equal "edited for review"
+                       (plist-get replacement :input)))
+        (should (eq 'failed-turn (plist-get replacement :state)))
+        (should-not (plist-member replacement :model-input))
+        (should-not (plist-member replacement :submission)))
+      (should
+       (mevedel-session-pending-input-failure-paused session))))
+
   :doc "a stale steering turn leaves the original and editing text"
   (mevedel-pending-inputs-test--with-session
     (let* ((entry
@@ -375,6 +410,29 @@
             (with-current-buffer cockpit
               (mevedel-pending-inputs-quit)))))
       (should (eq transition 'WAIT))
+      (should-not (mevedel-session-pending-input-paused session))))
+
+  :doc "closing cannot resume delivery during unresolved failure recovery"
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-enqueue-pending-input
+     session 'steering
+     '(:input "review" :request-id "dead" :state failed-turn))
+    (mevedel-session-set-pending-input-failure-paused session t)
+    (let (scheduled)
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (cl-letf
+              (((symbol-function 'mevedel-cockpit-quit) #'ignore)
+               ((symbol-function
+                 'mevedel-view--schedule-late-follow-up-drain)
+                (lambda () (setq scheduled t))))
+            (with-current-buffer cockpit
+              (mevedel-pending-inputs-quit)))))
+      (should-not scheduled)
+      (should
+       (mevedel-session-pending-input-failure-paused session))
       (should-not (mevedel-session-pending-input-paused session)))))
 
 (mevedel-deftest mevedel-pending-inputs-move-up ()
@@ -447,10 +505,12 @@
             (mevedel-session-enqueue-pending-input
              session 'steering
              (list :input "steer" :model-input "prepared"
-                   :request-id "request" :submission submission)))
+                   :request-id "request" :submission submission
+                   :state 'failed-turn)))
            (older
             (mevedel-session-enqueue-pending-input
              session 'follow-up '(:input "older"))))
+      (mevedel-session-set-pending-input-failure-paused session t)
       (save-window-excursion
         (let ((cockpit
                (with-current-buffer view-buf
@@ -466,11 +526,14 @@
         (should (equal (plist-get steering :id)
                        (plist-get converted :id)))
         (should (eq (plist-get converted :category) 'follow-up))
+        (should (eq (plist-get converted :state) 'pending))
         (should-not (plist-member converted :request-id))
         (should-not (plist-member converted :model-input))
         (should-not (plist-member converted :submission)))
       (should (equal context-entries
-                     (mevedel-session-hook-context-pending session))))))
+                     (mevedel-session-hook-context-pending session)))
+      (should
+       (mevedel-session-pending-input-failure-paused session)))))
 
 (mevedel-deftest mevedel-pending-inputs-make-steering ()
   ,test
@@ -613,6 +676,72 @@
       (should-not (mevedel-session-pending-steering session))
       (should (equal (list keep)
                      (mevedel-session-pending-follow-ups session))))))
+
+(mevedel-deftest mevedel-pending-inputs-resume-after-failure ()
+  ,test
+  (test)
+
+  :doc "rejects unresolved steering and accepts explicit conversion recovery"
+  (mevedel-pending-inputs-test--with-session
+    (let ((failed
+           (mevedel-session-enqueue-pending-input
+            session 'steering
+            '(:input "review me" :request-id "dead"
+              :state failed-turn)))
+          (later
+           (mevedel-session-enqueue-pending-input
+            session 'follow-up '(:input "later"))))
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (with-current-buffer view-buf
+            (should
+             (string-match-p
+              "delivery stopped after turn failure"
+              (buffer-string))))
+          (with-current-buffer cockpit
+            (should (string-match-p
+                     "failure recovery required"
+                     (mevedel-pending-inputs--header
+                      (mevedel-cockpit-surface-items)
+                      mevedel-cockpit--context)))
+            (mevedel-cockpit-goto-id (plist-get failed :id))
+            (should-error
+             (mevedel-pending-inputs-resume-after-failure)
+             :type 'user-error)
+            (mevedel-pending-inputs-make-follow-up)
+            (mevedel-pending-inputs-resume-after-failure))))
+      (should-not
+       (mevedel-session-pending-input-failure-paused session))
+      (let ((entries (mevedel-session-pending-follow-ups session)))
+        (should (eq later (car entries)))
+        (should (equal (plist-get failed :id)
+                       (plist-get (cadr entries) :id))))))
+
+  :doc "deletion recovery can resume from an otherwise empty cockpit"
+  (mevedel-pending-inputs-test--with-session
+    (let ((failed
+           (mevedel-session-enqueue-pending-input
+            session 'steering
+            '(:input "delete me" :request-id "dead"
+              :state failed-turn))))
+      (mevedel-session-set-pending-input-failure-paused session t)
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (setq mevedel-pending-inputs--marked-ids
+                  (list (plist-get failed :id)))
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (&rest _) t)))
+              (mevedel-pending-inputs-execute-deletions))
+            (should-not (mevedel-cockpit-surface-items))
+            (mevedel-pending-inputs-resume-after-failure))))
+      (should-not
+       (mevedel-session-pending-input-failure-paused session)))))
 
 (mevedel-deftest mevedel-pending-inputs-clear ()
   ,test

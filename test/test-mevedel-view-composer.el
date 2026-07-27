@@ -2554,7 +2554,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
     (should (mevedel-view--follow-up-auto-drain-blocked-p session))
     (setf (mevedel-goal-status goal) 'active)
     (should-not
-     (mevedel-view--follow-up-auto-drain-blocked-p session))))
+     (mevedel-view--follow-up-auto-drain-blocked-p session)))
+  (let ((session (mevedel-session--create
+                  :name "failed" :pending-input-failure-paused t)))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p session))))
 
 (mevedel-deftest mevedel-view-send/pending-input ()
   ,test
