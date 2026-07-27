@@ -533,13 +533,26 @@
               "\n#+end_tool\n")
              info t)
             (move-marker (plist-get info :reasoning-marker)
-                         (plist-get info :tracking-marker)))
+                         (plist-get info :tracking-marker))
+            (set-marker-insertion-type
+             (plist-get info :tracking-marker) nil))
           (mevedel-session-enqueue-pending-input
            session 'steering
            '(:input "steer visibly" :request-id "request-reasoning"))
           (mevedel-tools--handle-steering-inject fsm)
           (with-current-buffer buf
             (should-not (plist-get info :reasoning-block))
+            (should-not
+             (marker-insertion-type
+              (plist-get info :tracking-marker)))
+            (let* ((text (buffer-string))
+                   (reasoning-end
+                    (string-match
+                     (regexp-quote "#+end_reasoning") text))
+                   (steering (string-match "steer visibly" text)))
+              (should reasoning-end)
+              (should steering)
+              (should (< reasoning-end steering)))
             (plist-put info :reasoning-block 'in)
             (gptel--display-reasoning-stream "after" info)
             (gptel--display-reasoning-stream t info)
@@ -1402,6 +1415,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                info t)
               (move-marker (plist-get info :reasoning-marker)
                            (plist-get info :tracking-marker))
+              (set-marker-insertion-type
+               (plist-get info :tracking-marker) nil)
               (setq tracking-marker (plist-get info :tracking-marker))))
           (let ((mevedel--agent-invocation nil))
             (mevedel-agent-control-send-message

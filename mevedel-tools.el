@@ -625,7 +625,16 @@ otherwise queues them on the chat buffer's session."
 (defun mevedel-tools--split-open-reasoning-before-user-input (info)
   "Close INFO's open reasoning block before injecting user input."
   (when (eq (plist-get info :reasoning-block) 'in)
-    (gptel--display-reasoning-stream t info)
+    (let* ((tracking (plist-get info :tracking-marker))
+           (insertion-type
+            (and (markerp tracking)
+                 (marker-insertion-type tracking))))
+      (when (markerp tracking)
+        (set-marker-insertion-type tracking t))
+      (unwind-protect
+          (gptel--display-reasoning-stream t info)
+        (when (markerp tracking)
+          (set-marker-insertion-type tracking insertion-type))))
     (when-let* ((marker (plist-get info :reasoning-marker)))
       (set-marker marker nil))
     (plist-put info :reasoning-marker nil)
