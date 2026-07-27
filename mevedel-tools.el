@@ -87,14 +87,28 @@
 (declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
 
-;; `mevedel-goal'
+;; `mevedel-mentions'
+(declare-function mevedel-mentions--commit-expansion
+                  "mevedel-mentions" (session expansion))
+(declare-function mevedel-mentions-expand-user-input
+                  "mevedel-mentions" (text session))
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-origin
                   "mevedel-permission-queue"
                   (origin &optional session no-render))
 
+;; `mevedel-prompt-submission'
+(declare-function mevedel-prompt-submission-commit
+                  "mevedel-prompt-submission" (submission))
+
+;; `mevedel-skills-invoke'
+(declare-function mevedel-skills-commit-invoked-records
+                  "mevedel-skills-invoke" (session records))
+
 ;; `mevedel-structs'
+(declare-function mevedel-session-activate-dropped-file-grants
+                  "mevedel-structs" (session paths))
 (defvar mevedel--session)
 
 ;; `mevedel-tool-registry'
@@ -692,13 +706,36 @@ sync with what the model actually saw."
                    (car (gptel--parse-list
                          backend (list (cons 'response response)))))))
               (dolist (entry snapshot)
-                (let* ((input (plist-get entry :input))
+                (let* ((input (or (plist-get entry :model-input)
+                                  (plist-get entry :input)))
+                       (_
+                        (mevedel-session-activate-dropped-file-grants
+                         session
+                         (plist-get entry :dropped-file-grants)))
+                       (expansion
+                        (with-current-buffer buffer
+                          (require 'mevedel-mentions)
+                          (mevedel-mentions-expand-user-input input session)))
+                       (media-contexts
+                        (plist-get expansion :media-contexts))
+                       (block (plist-get expansion :text))
                        (prompt
                         (car (gptel--parse-list
-                              backend (list (cons 'prompt input))))))
+                              backend (list (cons 'prompt block))))))
+                  (when media-contexts
+                    (error "Media steering cannot be delivered"))
                   (mevedel-tools--insert-session-injected-prompt
-                   session fsm entry input)
-                  (gptel--inject-prompt backend data prompt)))
+                   session fsm entry
+                   (or (plist-get entry :transcript-payload)
+                       (plist-get entry :input)))
+                  (gptel--inject-prompt backend data prompt)
+                  (mevedel-mentions--commit-expansion session expansion)
+                  (mevedel-skills-commit-invoked-records
+                   session
+                   (plist-get (plist-get entry :request-context)
+                              :invoked-skills))
+                  (when-let* ((submission (plist-get entry :submission)))
+                    (mevedel-prompt-submission-commit submission))))
               (when-let* ((marker
                            (mevedel-tools--active-response-marker info buffer)))
                 (plist-put info :mevedel-steering-response-start

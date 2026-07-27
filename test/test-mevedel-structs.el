@@ -352,6 +352,25 @@
     (mevedel-session--set-execution-state session state)
     (should (eq state (mevedel-session-execution-state session)))))
 
+(mevedel-deftest mevedel-session--set-dropped-file-grants ()
+  ,test
+  (test)
+  :doc "replaces pending dropped-file grants"
+  (let ((session (mevedel-session--create))
+        (paths '("/tmp/one" "/tmp/two")))
+    (mevedel-session--set-dropped-file-grants session paths)
+    (should (eq paths (mevedel-session-dropped-file-grants session)))))
+
+(mevedel-deftest mevedel-session--set-active-dropped-file-grants ()
+  ,test
+  (test)
+  :doc "replaces active dropped-file grants"
+  (let ((session (mevedel-session--create))
+        (paths '("/tmp/one" "/tmp/two")))
+    (mevedel-session--set-active-dropped-file-grants session paths)
+    (should (eq paths
+                (mevedel-session-active-dropped-file-grants session)))))
+
 
 ;;
 ;;; Session buffer name
