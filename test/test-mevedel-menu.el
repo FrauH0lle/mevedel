@@ -41,6 +41,10 @@
 (defvar gptel-reasoning-effort)
 (defvar gptel-tools)
 
+;; `transient'
+(defvar transient--buffer-name)
+(defvar transient--transient-map)
+
 (defmacro mevedel-menu-test--with-model-backends (&rest body)
   "Run BODY with isolated gptel model backends."
   (declare (indent 0) (debug t))
@@ -722,7 +726,29 @@
     (should (eq 'high (plist-get scope :reasoning-effort)))
     (should (eq #'ignore (plist-get scope :update)))
     (should (eq #'identity (plist-get scope :reset)))
-    (should (eq t (plist-get scope :inherited)))))
+    (should (eq t (plist-get scope :inherited))))
+
+  :doc "binds both Return events while advertising only RET"
+  (unwind-protect
+      (progn
+        (mevedel-menu-open-model-selection
+         :title "Directive model"
+         :provider "Fast:fast-model"
+         :effort nil
+         :update #'ignore
+         :inherited nil)
+        (should
+         (eq #'mevedel-menu--model-selection-select-model
+             (lookup-key transient--transient-map (kbd "RET"))))
+        (should
+         (eq #'mevedel-menu--model-selection-select-model
+             (lookup-key transient--transient-map (kbd "<return>"))))
+        (let ((display
+               (with-current-buffer transient--buffer-name
+                 (substring-no-properties (buffer-string)))))
+          (should (string-match-p "RET +Select model" display))
+          (should-not (string-match-p "<return>" display))))
+    (transient-quit-all)))
 
 (mevedel-deftest mevedel-menu--open-model ()
   ,test

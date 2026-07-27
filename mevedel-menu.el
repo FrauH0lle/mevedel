@@ -944,6 +944,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     :pad-keys t
     ("RET" "Select model" mevedel-menu--model-selection-select-model
      :transient t)
+    ("<return>" "Select model" mevedel-menu--model-selection-select-model
+     :transient t :if (lambda (&rest _) nil))
     ("e" "Select effort" mevedel-menu--model-selection-select-effort
      :transient t)
     ("s" "Use session model" mevedel-menu--model-selection-reset
