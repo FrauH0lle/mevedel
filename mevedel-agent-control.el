@@ -429,6 +429,10 @@ Return the caller path when suspended, and nil after an immediate release."
   "Return non-nil when SESSION's root has an active WaitAgent callback."
   (and (mevedel-agent-control--waiter session "/root") t))
 
+(defun mevedel-agent-control-wake-root-user (session)
+  "Wake SESSION's root WaitAgent for pending user steering."
+  (mevedel-agent-control--wake session "/root" 'user))
+
 (defun mevedel-agent-control--enqueue
     (session recipient record &optional wake-reason)
   "Queue RECORD for RECIPIENT in SESSION and wake a matching wait."

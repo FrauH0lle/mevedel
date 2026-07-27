@@ -113,6 +113,10 @@
                   "mevedel-structs" (session))
 (defvar mevedel--session)
 
+;; `mevedel-view-interaction'
+(declare-function mevedel-view-interaction-blocking-p
+                  "mevedel-view-interaction" (&optional view-buffer))
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 (declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
@@ -675,13 +679,24 @@ sync with what the model actually saw."
          (paused
           (and session
                (mevedel-session-pending-input-delivery-paused-p session)))
-         (snapshot
-          (and (not paused) session request-id
+         (interaction
+          (and session
+               (buffer-live-p buffer)
+               (when-let* ((view (buffer-local-value
+                                  'mevedel--view-buffer buffer))
+                           ((buffer-live-p view)))
+                 (require 'mevedel-view-interaction)
+                 (mevedel-view-interaction-blocking-p view))))
+         (matching
+          (and session request-id
                (cl-remove-if-not
                 (lambda (entry)
                   (equal request-id (plist-get entry :request-id)))
-                (mevedel-session-pending-steering session)))))
-    (plist-put info :mevedel-pending-input-hold (and paused request-id t))
+                (mevedel-session-pending-steering session))))
+         (snapshot
+          (and (not paused) (not interaction) matching)))
+    (plist-put info :mevedel-pending-input-hold
+               (and matching (or paused interaction) t))
     (when snapshot
       (let ((snapshot-ids (mapcar (lambda (entry) (plist-get entry :id))
                                   snapshot))
