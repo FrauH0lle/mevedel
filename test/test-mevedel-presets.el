@@ -43,6 +43,25 @@
 ;;
 ;;; FSM handler chain builder
 
+(mevedel-deftest mevedel-preset--build-transitions ()
+  ,test
+  (test)
+
+  :doc "continues a final response through WAIT only for pending steering"
+  (let* ((transitions
+          (mevedel-preset--build-transitions
+           '((INIT . ((t . WAIT)))
+             (WAIT . ((t . TYPE)))
+             (TYPE . ((error-p . ERRS)
+                      (tool-p . TPRE)
+                      (t . DONE))))))
+         (rules (cdr (assq 'TYPE transitions))))
+    (should
+     (equal '(error-p tool-p mevedel-tools--pending-steering-p t)
+            (mapcar #'car rules)))
+    (should (eq 'WAIT
+                (cdr (assq #'mevedel-tools--pending-steering-p rules))))))
+
 (mevedel-deftest mevedel-preset--build-handlers
   (:before-each (mevedel-workspace-clear-registry)
    :after-each (mevedel-workspace-clear-registry))

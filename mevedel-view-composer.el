@@ -193,6 +193,7 @@
 (declare-function mevedel-request-begin "mevedel-structs"
 		  (session &optional directive-uuid))
 (declare-function mevedel-request-end "mevedel-structs" nil)
+(declare-function mevedel-request-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-activate-dropped-file-grants
 		  "mevedel-structs" (session paths))
 (declare-function mevedel-session-add-dropped-file-grant
@@ -212,6 +213,8 @@
 (declare-function mevedel-session-enqueue-pending-input
                   "mevedel-structs" (session category entry))
 (declare-function mevedel-session-pending-follow-ups
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-steering
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-set-pending-inputs
                   "mevedel-structs" (session category entries))
@@ -1252,6 +1255,27 @@ means a failed attempt leaves the exact source attached for a retry."
       (mevedel-view--schedule-late-follow-up-drain)
       entry)))
 
+(defun mevedel-view--queue-steering (input request)
+  "Queue plain INPUT as same-turn steering for REQUEST."
+  (setq input (mevedel--normalize-message-text input))
+  (let ((session (mevedel-view--session)))
+    (unless (and session request)
+      (user-error "No active request for steering"))
+    (let ((entry
+           (mevedel-session-enqueue-pending-input
+            session 'steering
+            (list :input input
+                  :request-id (mevedel-request-id request)
+                  :queued-at-time (float-time)
+                  :queued-at-turn
+                  (or (mevedel-session-turn-count session) 0)))))
+      (mevedel-view-history-add input)
+      (when (equal-including-properties (mevedel-view--input-text) input)
+        (mevedel-view--clear-input))
+      (mevedel-view--interaction-rebuild)
+      (message "mevedel: queued steering for this turn")
+      entry)))
+
 (defun mevedel-view-clear-pending-input ()
   "Clear all pending input for the current session."
   (interactive)
@@ -1806,9 +1830,11 @@ fork."
                   (mevedel-view--input-text))))
     (when (string-empty-p input)
       (user-error "Nothing to send"))
-    (let ((slash-parsed (mevedel-skills--parse-slash-line input)))
-      (if (or (buffer-local-value 'mevedel--current-request
-                                  mevedel--data-buffer)
+    (let* ((slash-parsed (mevedel-skills--parse-slash-line input))
+           (active-request
+            (buffer-local-value 'mevedel--current-request
+                                mevedel--data-buffer)))
+      (if (or active-request
               (and (not slash-parsed)
                    (mevedel-view--reserved-goal-handoff-id session)))
           (if (and slash-parsed
@@ -1827,8 +1853,10 @@ fork."
               (if (mevedel-agent-control-root-waiting-p session)
                   (mevedel-view--submit-planned-input
                    input nil #'ignore #'mevedel-view--deliver-prepared-steering)
-                (user-error
-                 "A request is already active -- use C-c TAB for a follow-up"))))
+                (if active-request
+                    (mevedel-view--queue-steering input active-request)
+                  (user-error
+                   "Goal handoff is reserved -- use C-c TAB for a follow-up")))))
         (cond
          (slash-parsed
           (let* ((name (nth 0 slash-parsed))

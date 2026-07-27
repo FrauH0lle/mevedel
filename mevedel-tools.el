@@ -47,9 +47,12 @@
 (declare-function gptel--handle-tool-use "ext:gptel-request" (fsm))
 (declare-function gptel--inject-prompt "ext:gptel-request"
                   (backend data new-prompt &optional position))
+(declare-function gptel--parse-list "ext:gptel-request"
+                  (backend prompt-list))
 (declare-function gptel--parse-tools "ext:gptel-request" (backend tools))
 (declare-function gptel--process-tool-call
                   "ext:gptel-request" (fsm tool-spec tool-call result))
+(declare-function gptel--trim-prefixes "ext:gptel-request" (string))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-get-tool "ext:gptel-request" (path))
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
@@ -631,6 +634,81 @@ sync with what the model actually saw."
         (error
          (message "mevedel: insert session injected prompt failed: %S"
                   err))))))
+
+(defun mevedel-tools--pending-steering-p (info)
+  "Return non-nil when INFO's root request has pending steering."
+  (when-let* ((buffer (plist-get info :buffer))
+              ((buffer-live-p buffer))
+              ((not (mevedel-tools--buffer-local-agent-invocation buffer)))
+              (session (mevedel-tools--buffer-local-session buffer))
+              (request-id (plist-get info :mevedel-request-id)))
+    (cl-some
+     (lambda (entry)
+       (equal request-id (plist-get entry :request-id)))
+     (mevedel-session-pending-steering session))))
+
+(defun mevedel-tools--handle-steering-inject (fsm)
+  "WAIT-state handler: inject root steering for FSM's request."
+  (let* ((info (gptel-fsm-info fsm))
+         (buffer (plist-get info :buffer))
+         (session
+          (and (buffer-live-p buffer)
+               (not (mevedel-tools--buffer-local-agent-invocation buffer))
+               (mevedel-tools--buffer-local-session buffer)))
+         (request-id (plist-get info :mevedel-request-id))
+         (snapshot
+          (and session request-id
+               (cl-remove-if-not
+                (lambda (entry)
+                  (equal request-id (plist-get entry :request-id)))
+                (mevedel-session-pending-steering session)))))
+    (when snapshot
+      (let ((snapshot-ids (mapcar (lambda (entry) (plist-get entry :id))
+                                  snapshot))
+            (backend (plist-get info :backend))
+            (data (plist-get info :data)))
+        (mevedel-session-set-pending-inputs
+         session 'steering
+         (cl-remove-if
+          (lambda (entry)
+            (member (plist-get entry :id) snapshot-ids))
+          (mevedel-session-pending-steering session)))
+        (condition-case err
+            (progn
+              (when (eq (car (plist-get info :history)) 'TYPE)
+                (when-let* ((start
+                             (or (plist-get info
+                                            :mevedel-steering-response-start)
+                                 (plist-get info :position)))
+                            (end (plist-get info :tracking-marker))
+                            ((and (markerp start) (marker-position start)
+                                  (markerp end) (marker-position end)))
+                            (response
+                             (with-current-buffer buffer
+                               (gptel--trim-prefixes
+                                (buffer-substring-no-properties start end)))))
+                  (gptel--inject-prompt
+                   backend data
+                   (car (gptel--parse-list
+                         backend (list (cons 'response response)))))))
+              (dolist (entry snapshot)
+                (let* ((input (plist-get entry :input))
+                       (prompt
+                        (car (gptel--parse-list
+                              backend (list (cons 'prompt input))))))
+                  (mevedel-tools--insert-session-injected-prompt
+                   session fsm entry input)
+                  (gptel--inject-prompt backend data prompt)))
+              (when-let* ((marker
+                           (mevedel-tools--active-response-marker info buffer)))
+                (plist-put info :mevedel-steering-response-start
+                           (copy-marker marker nil))))
+          (error
+           (mevedel-session-set-pending-inputs
+            session 'steering
+            (append snapshot
+                    (mevedel-session-pending-steering session)))
+           (signal (car err) (cdr err))))))))
 
 (defun mevedel-tools--handle-message-inject (fsm)
   "WAIT-state handler: drain FSM's inbox into the next request.
