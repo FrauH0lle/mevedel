@@ -560,6 +560,40 @@
              info)
              'delegated))))))
 
+(mevedel-deftest mevedel-view-stream--gptel-handle-wait-advice ()
+  ,test
+  (test)
+  :doc "keeps an open reasoning fence across a tool continuation request"
+  (mevedel-view-stream-test--with-buffers
+    (let* ((mevedel-view-stream-insert-batch-delay nil)
+           (info (list :buffer data-buf
+                       :position (with-current-buffer data-buf
+                                   (copy-marker (point-max) nil))
+                       :include-reasoning 'ignore))
+           (fsm (gptel-make-fsm :info info)))
+      (gptel--display-reasoning-stream "thinking" info)
+      ;; Current gptel tracks whether its rendered fence is still open.
+      (plist-put info :reasoning-open t)
+      (should (plist-get info :reasoning-open))
+      (should (mevedel-view-stream--gptel-stream-info-p info))
+      (should
+       (eq (mevedel-view-stream--gptel-handle-wait-advice
+            (lambda (_fsm)
+              (plist-put info :reasoning-open nil)
+              'continued)
+            fsm)
+           'continued))
+      (should (plist-get info :reasoning-open))
+      (gptel--display-reasoning-stream t info)
+      (with-current-buffer data-buf
+        (let ((text (buffer-string)))
+          (should
+           (= 1 (mevedel-view-stream-test--count-substring
+                 "#+begin_reasoning" text)))
+          (should
+           (= 1 (mevedel-view-stream-test--count-substring
+                 "#+end_reasoning" text))))))))
+
 (mevedel-deftest mevedel-view-stream--gptel-stream-insert-response-advice/performance ()
   ,test
   (test)

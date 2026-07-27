@@ -334,6 +334,16 @@ chunk when that stale transformer fails."
                (not (stringp response)))))
       (funcall orig-fn response info raw)))))
 
+(defun mevedel-view-stream--gptel-handle-wait-advice (orig-fn fsm)
+  "Preserve an open mevedel reasoning fence across ORIG-FN for FSM."
+  (let* ((info (gptel-fsm-info fsm))
+         (reasoning-open
+          (and (mevedel-view-stream--gptel-stream-info-p info)
+               (plist-get info :reasoning-open))))
+    (prog1 (funcall orig-fn fsm)
+      (when reasoning-open
+        (plist-put info :reasoning-open t)))))
+
 (defun mevedel-view-stream--queue-gptel-stream-insert-batch
     (orig-fn response info raw)
   "Queue string RESPONSE for ORIG-FN as a batched gptel stream insert."
@@ -497,6 +507,9 @@ chunk and replay it once the request entry exists."
 (defun mevedel-view-stream--install-advice ()
   "Install gptel stream marker repair advice."
   (mevedel-view-stream--advice-add-if-bound
+   'gptel--handle-wait
+   :around #'mevedel-view-stream--gptel-handle-wait-advice)
+  (mevedel-view-stream--advice-add-if-bound
    'gptel-curl--stream-insert-response
    :around #'mevedel-view-stream--gptel-stream-insert-response-advice)
   (mevedel-view-stream--advice-add-if-bound
@@ -513,6 +526,9 @@ chunk and replay it once the request entry exists."
 
 (defun mevedel-view-stream--uninstall-advice ()
   "Remove gptel stream marker repair advice."
+  (mevedel-view-stream--advice-remove-if-bound
+   'gptel--handle-wait
+   #'mevedel-view-stream--gptel-handle-wait-advice)
   (mevedel-view-stream--advice-remove-if-bound
    'gptel-curl--stream-insert-response
    #'mevedel-view-stream--gptel-stream-insert-response-advice)
