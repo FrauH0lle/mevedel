@@ -953,6 +953,21 @@ missing or zero prompt-side usage cannot become the active baseline"
           (should-not checked))
       (kill-buffer chat-buf)))
 
+  :doc "held pending input keeps WAIT open without provider dispatch"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-held-wait*"))
+        (sent 0))
+    (unwind-protect
+        (let ((fsm
+               (gptel-make-fsm
+                :info (list :buffer chat-buf
+                            :history '(TRET)
+                            :mevedel-pending-input-hold t))))
+          (cl-letf (((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf sent))))
+            (mevedel--compact-handle-wait fsm))
+          (should (= sent 0)))
+      (kill-buffer chat-buf)))
+
   :doc "sends continuation directly when realized data is below threshold"
   (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
         (sent 0)

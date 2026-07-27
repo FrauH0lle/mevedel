@@ -109,6 +109,8 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-activate-dropped-file-grants
                   "mevedel-structs" (session paths))
+(declare-function mevedel-session-pending-input-paused
+                  "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
 ;; `mevedel-tool-registry'
@@ -670,12 +672,15 @@ sync with what the model actually saw."
                (not (mevedel-tools--buffer-local-agent-invocation buffer))
                (mevedel-tools--buffer-local-session buffer)))
          (request-id (plist-get info :mevedel-request-id))
+         (paused (and session
+                      (mevedel-session-pending-input-paused session)))
          (snapshot
-          (and session request-id
+          (and (not paused) session request-id
                (cl-remove-if-not
                 (lambda (entry)
                   (equal request-id (plist-get entry :request-id)))
                 (mevedel-session-pending-steering session)))))
+    (plist-put info :mevedel-pending-input-hold (and paused request-id t))
     (when snapshot
       (let ((snapshot-ids (mapcar (lambda (entry) (plist-get entry :id))
                                   snapshot))

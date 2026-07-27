@@ -301,6 +301,31 @@
             (should (string-match-p "second steering" (buffer-string)))))
       (kill-buffer buf)))
 
+  :doc "paused delivery holds matching steering at the model boundary"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-steering-paused*"))
+         (data (list :messages []))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buf :data data
+                           :history '(TRET)
+                           :mevedel-request-id "request-paused")))
+         (entry
+          (mevedel-session-enqueue-pending-input
+           session 'steering
+           '(:input "held steering" :request-id "request-paused"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session session))
+          (mevedel-session-set-pending-input-paused session t)
+          (mevedel-tools--handle-steering-inject fsm)
+          (should (eq entry
+                      (car (mevedel-session-pending-steering session))))
+          (should (plist-get (gptel-fsm-info fsm)
+                             :mevedel-pending-input-hold))
+          (should (= 0 (length (plist-get data :messages)))))
+      (kill-buffer buf)))
+
   :doc "final response is preserved and continued without settling the turn"
   (let* ((session (mevedel-tools-test--make-session))
          (backend (gptel-make-openai

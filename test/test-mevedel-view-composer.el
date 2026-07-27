@@ -3310,7 +3310,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (< partial queued))
           (should (< queued prompt))))))
 
-  :doc "follow-up UI shows the clear key hint"
+  :doc "pending-input UI shows the queue-management key hint"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq-hint" :root "/tmp/vq" :name "vq"
@@ -3325,7 +3325,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--interaction-rebuild)
-        (should (string-match-p "C-c C-q clear"
+        (should (string-match-p "C-c C-e manage pending inputs"
                                 (buffer-string))))))
 
   :doc "queued skill hooks run once at dispatch and not while queueing"
