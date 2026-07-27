@@ -16,6 +16,8 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-exec)
 (require 'mevedel-session-persistence)
+(require 'mevedel-skills-invoke)
+(require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-tools)
 (require 'mevedel-tool-task)
@@ -23,6 +25,8 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-web)
 (require 'mevedel-tool-introspect)
+(require 'mevedel-view)
+(require 'mevedel-view-render)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -239,6 +243,56 @@
 ;;
 ;;; Same-turn steering
 
+(mevedel-deftest mevedel-tools--split-open-reasoning-before-user-input ()
+  ,test
+  (test)
+
+  :doc "closes and resets an active streamed reasoning block"
+  (with-temp-buffer
+    (org-mode)
+    (let* ((gptel-mode t)
+           (info
+            (list :buffer (current-buffer)
+                  :position (point-marker)
+                  :include-reasoning 'ignore
+                  :reasoning-block 'in)))
+      (gptel--display-reasoning-stream "thinking" info)
+      (let ((old-marker (plist-get info :reasoning-marker)))
+        (mevedel-tools--split-open-reasoning-before-user-input info)
+        (should (string-match-p
+                 (regexp-quote "#+end_reasoning")
+                 (buffer-string)))
+        (should-not (marker-position old-marker))
+        (should-not (plist-get info :reasoning-marker))
+        (should-not (plist-get info :reasoning-block)))))
+
+  :doc "direct response after the split does not add another reasoning close"
+  (with-temp-buffer
+    (org-mode)
+    (let* ((gptel-mode t)
+           (info
+            (list :buffer (current-buffer)
+                  :position (point-marker)
+                  :include-reasoning 'ignore
+                  :reasoning-block 'in)))
+      (gptel--display-reasoning-stream "thinking" info)
+      (mevedel-tools--split-open-reasoning-before-user-input info)
+      (mevedel--insert-user-role-block-at-marker
+       "steer directly" (plist-get info :tracking-marker))
+      (gptel-curl--stream-insert-response "answer" info)
+      (mevedel-transcript-normalize-properties)
+      (let ((text (buffer-string)))
+        (should
+         (= 1
+            (mevedel-view-test--count-substring
+             "#+begin_reasoning" text)
+            (mevedel-view-test--count-substring
+             "#+end_reasoning" text))))
+      (goto-char (point-min))
+      (search-forward "steer directly")
+      (should-not
+       (get-text-property (match-beginning 0) 'gptel)))))
+
 (mevedel-deftest mevedel-tools--handle-steering-inject
   (:after-each (mevedel-workspace-clear-registry))
   ,test
@@ -443,6 +497,83 @@
                              :mevedel-pending-input-hold)))
       (kill-buffer buf)
       (kill-buffer view)))
+
+  :doc "steering splits active reasoning and remains a rendered user turn"
+  (let* ((session (mevedel-tools-test--make-session))
+         (backend (gptel-make-openai
+                   "Steering reasoning test" :stream t :key "unused"
+                   :host "example.test"
+                   :models '(steering-reasoning-test)))
+         (buf (generate-new-buffer " *mt-steering-reasoning*"))
+         (view (generate-new-buffer " *mt-steering-reasoning-view*"))
+         (data (list :messages (vector)))
+         info
+         fsm)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (org-mode)
+            (setq-local mevedel--session session)
+            (insert "Original prompt\n\n")
+            (setq info
+                  (list :buffer buf
+                        :backend backend
+                        :data data
+                        :history '(TRET)
+                        :position (copy-marker (point-max))
+                        :include-reasoning 'ignore
+                        :reasoning-block 'in
+                        :mevedel-request-id "request-reasoning")
+                  fsm (gptel-make-fsm :info info))
+            (gptel--display-reasoning-stream "before" info)
+            (gptel-curl--stream-insert-response
+             (concat
+              "\n#+begin_tool (Demo)\n"
+              (propertize "result" 'gptel '(tool . "demo"))
+              "\n#+end_tool\n")
+             info t)
+            (move-marker (plist-get info :reasoning-marker)
+                         (plist-get info :tracking-marker)))
+          (mevedel-session-enqueue-pending-input
+           session 'steering
+           '(:input "steer visibly" :request-id "request-reasoning"))
+          (mevedel-tools--handle-steering-inject fsm)
+          (with-current-buffer buf
+            (should-not (plist-get info :reasoning-block))
+            (plist-put info :reasoning-block 'in)
+            (gptel--display-reasoning-stream "after" info)
+            (gptel--display-reasoning-stream t info)
+            (plist-put info :reasoning-block 'done)
+            (mevedel-transcript-normalize-properties)
+            (let ((text (buffer-string)))
+              (should
+               (= (mevedel-view-test--count-substring
+                   "#+begin_reasoning" text)
+                  (mevedel-view-test--count-substring
+                   "#+end_reasoning" text))))
+            (goto-char (point-min))
+            (search-forward "steer visibly")
+            (should-not
+             (get-text-property (match-beginning 0) 'gptel))
+            (let* ((pos (match-beginning 0))
+                   (segment
+                    (seq-find
+                     (lambda (candidate)
+                       (<= (cadr candidate) pos (1- (caddr candidate))))
+                     (mevedel-transcript-segments
+                      (point-min) (point-max)))))
+              (should (eq (car segment) 'user))))
+          (mevedel-view--setup view buf)
+          (with-current-buffer view
+            (mevedel-view--full-rerender)
+            (goto-char (point-min))
+            (should
+             (search-forward
+              "steer visibly" mevedel-view--input-marker t))))
+      (when (buffer-live-p view)
+        (kill-buffer view))
+      (when (buffer-live-p buf)
+        (kill-buffer buf))))
 
   :doc "final response is preserved and continued without settling the turn"
   (let* ((session (mevedel-tools-test--make-session))
@@ -1247,21 +1378,31 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                :info (list :buffer buffer
                            :backend nil
                            :data data
+                           :include-reasoning 'ignore
+                           :reasoning-block 'in
                            :mevedel-agent-invocation invocation))))
     (setf (mevedel-session-agent-registry session)
           (list (cons "/root/worker" record)))
     (unwind-protect
         (progn
           (with-current-buffer buffer
+            (org-mode)
             (setq-local mevedel--session session)
             (setq-local mevedel--agent-invocation invocation)
-            (insert "* Agent Task: work\n\n"
-                    "#+begin_tool (WaitAgent :timeout_ms 120000)\n"
-                    "#+end_tool\n")
-            (setq tracking-marker (copy-marker (point-max))))
-          (setf (gptel-fsm-info fsm)
-                (plist-put (gptel-fsm-info fsm)
-                           :tracking-marker tracking-marker))
+            (insert "* Agent Task: work\n\n")
+            (let ((info (gptel-fsm-info fsm)))
+              (plist-put info :position (copy-marker (point-max)))
+              (gptel--display-reasoning-stream "waiting" info)
+              (gptel-curl--stream-insert-response
+               (concat
+                "\n#+begin_tool (WaitAgent :timeout_ms 120000)\n"
+                (propertize "Timeout elapsed"
+                            'gptel '(tool . "wait"))
+                "\n#+end_tool\n")
+               info t)
+              (move-marker (plist-get info :reasoning-marker)
+                           (plist-get info :tracking-marker))
+              (setq tracking-marker (plist-get info :tracking-marker))))
           (let ((mevedel--agent-invocation nil))
             (mevedel-agent-control-send-message
              session "/root/worker" "one")
@@ -1269,6 +1410,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
              session "/root/worker" "two"))
           (mevedel-tools--handle-message-inject fsm)
           (should-not (mevedel-agent-record-mailbox record))
+          (should-not
+           (plist-get (gptel-fsm-info fsm) :reasoning-block))
           (let* ((messages (append (plist-get data :messages) nil))
                  (text (mapconcat
                         (lambda (message) (plist-get message :content))
@@ -1281,6 +1424,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
               (should (< (string-match-p "\\* Agent Task:" text)
                          (string-match-p "one" text)))
               (should (< (string-match-p "#\\+end_tool" text)
+                         (string-match-p "one" text)))
+              (should (< (string-match-p "#\\+end_reasoning" text)
                          (string-match-p "one" text)))
               (should (< (string-match-p "one" text)
                          (string-match-p "two" text)))

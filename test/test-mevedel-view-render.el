@@ -159,6 +159,13 @@
                        (mapcar (lambda (turn) (plist-get turn :role))
                                turns))))))
 
+  :doc "real user prompt after closed reasoning starts a user turn"
+  (let* ((segs '((reasoning 1 20) (user 20 40) (reasoning 40 60)))
+         (turns (mevedel-view-test--group-synthetic-segments segs)))
+    (should (equal '(assistant user assistant)
+                   (mapcar (lambda (turn) (plist-get turn :role))
+                           turns))))
+
   :doc "retained agent task after tool activity starts a user turn"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Initial prompt.\n" nil)

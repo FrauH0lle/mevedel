@@ -41,6 +41,7 @@
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
 ;; `gptel'
+(declare-function gptel--display-reasoning-stream "ext:gptel" (text info))
 (defvar gptel-tools)
 
 ;; `gptel-request'
@@ -621,6 +622,15 @@ otherwise queues them on the chat buffer's session."
      ((mevedel-tools--live-buffer-marker-p tracking buffer) tracking)
      ((mevedel-tools--live-buffer-marker-p position buffer) position))))
 
+(defun mevedel-tools--split-open-reasoning-before-user-input (info)
+  "Close INFO's open reasoning block before injecting user input."
+  (when (eq (plist-get info :reasoning-block) 'in)
+    (gptel--display-reasoning-stream t info)
+    (when-let* ((marker (plist-get info :reasoning-marker)))
+      (set-marker marker nil))
+    (plist-put info :reasoning-marker nil)
+    (plist-put info :reasoning-block nil)))
+
 (defun mevedel-tools--insert-session-injected-prompt
     (session fsm message block)
   "Insert injected MESSAGE for SESSION and FSM into the data buffer.
@@ -644,11 +654,11 @@ sync with what the model actually saw."
             (let* ((inhibit-read-only t)
                    (marker (mevedel-tools--active-response-marker info buf))
                    (transcript-block
-                    (or (plist-get message :transcript-payload) block))
-                   (range
-                    (mevedel--insert-user-role-block-at-marker
-                     transcript-block marker)))
-              (when range
+                    (or (plist-get message :transcript-payload) block)))
+              (mevedel-tools--split-open-reasoning-before-user-input info)
+              (when-let* ((range
+                           (mevedel--insert-user-role-block-at-marker
+                            transcript-block marker)))
                 (save-excursion
                   (goto-char (cdr range))
                   (dolist (audit (plist-get message :hook-audits))
@@ -790,6 +800,8 @@ model-visible communication in conversation history."
             (and agent-p
                  (zerop (or (mevedel-agent-invocation-turn-count ctx) 0)))))
       (when (and messages data)
+        (when agent-p
+          (mevedel-tools--split-open-reasoning-before-user-input info))
         (cl-loop
          for message in messages
          for index from 0
