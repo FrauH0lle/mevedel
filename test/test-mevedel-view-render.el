@@ -3838,7 +3838,17 @@ state of its inner sections"
           (concat "Implemented.\n<proposed_plan>\n"
                   "Transition to review.\n</proposed_plan>\n"))))
     (should-not (string-match-p "Transition to review" text))
-    (should-not (string-match-p "proposed_plan" text))))
+    (should-not (string-match-p "proposed_plan" text)))
+
+  :doc "loads Plan protocol helpers before hiding proposed plans"
+  (unload-feature 'mevedel-plan t)
+  (should-not (featurep 'mevedel-plan))
+  (let ((text
+         (mevedel-view--visible-response-text
+          "<proposed_plan>\nHidden\n</proposed_plan>\nVisible\n")))
+    (should (featurep 'mevedel-plan))
+    (should-not (string-match-p "Hidden" text))
+    (should (string-match-p "Visible" text))))
 
 (mevedel-deftest mevedel-view--bash-completion-summary ()
   ,test

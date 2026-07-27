@@ -637,6 +637,38 @@
           (should (equal '(tool user response)
                          (mapcar #'car segments)))))))
 
+  :doc "classifies an orphan agent-result tail between tool and reasoning as ignored"
+  (mevedel-transcript-test--with-buffer
+    (mevedel-transcript-test--insert data-buf "tool\n" '(tool . "call_1"))
+    (mevedel-transcript-test--insert
+     data-buf
+     "**Output observed:**\n  `ok`\n\nVERDICT: PASS\n</agent-result>\n"
+     nil)
+    (mevedel-transcript-test--insert
+     data-buf
+     "#+begin_reasoning\nreal thought\n#+end_reasoning\n"
+     'ignore)
+    (with-current-buffer data-buf
+      (should (equal '(tool ignored reasoning)
+                     (mapcar #'car
+                             (mevedel-transcript-segments
+                              (point-min) (point-max)))))))
+
+  :doc "keeps user prose ending with an inline agent-result tag as user text"
+  (mevedel-transcript-test--with-buffer
+    (mevedel-transcript-test--insert data-buf "tool\n" '(tool . "call_1"))
+    (mevedel-transcript-test--insert
+     data-buf "Please preserve this literal </agent-result>\n" nil)
+    (mevedel-transcript-test--insert
+     data-buf
+     "#+begin_reasoning\nreal thought\n#+end_reasoning\n"
+     'ignore)
+    (with-current-buffer data-buf
+      (should (equal '(tool user reasoning)
+                     (mapcar #'car
+                             (mevedel-transcript-segments
+                              (point-min) (point-max)))))))
+
   :doc "ignore segment"
   (mevedel-transcript-test--with-buffer
     (mevedel-transcript-test--insert data-buf "thinking...\n" 'ignore)

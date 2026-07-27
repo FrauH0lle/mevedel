@@ -516,8 +516,9 @@ runs and incomplete control text remains ordinary transcript text."
         (setq segments (mevedel-transcript--overlay-range segments range))))
     (mevedel-transcript--merge-adjacent-segments
      (mevedel-transcript--repair-response-fragment-segments
-      (mevedel-transcript--repair-mailbox-prose-segments
-       (mevedel-transcript--absorb-structural-whitespace segments)))
+      (mevedel-transcript--repair-orphan-mailbox-tail-segments
+       (mevedel-transcript--repair-mailbox-prose-segments
+        (mevedel-transcript--absorb-structural-whitespace segments))))
      '(ignored))))
 
 (defun mevedel-transcript--whitespace-segment-p (seg)
@@ -561,6 +562,27 @@ runs and incomplete control text remains ordinary transcript text."
                         (buffer-substring-no-properties
                          (cadr seg) (caddr seg))))
                   (list 'response (cadr seg) (caddr seg))
+                seg)
+              out))
+      (setq rest (cdr rest)))
+    (nreverse out)))
+
+(defun mevedel-transcript--repair-orphan-mailbox-tail-segments (segments)
+  "Classify orphan agent-result tails in SEGMENTS as ignored control text."
+  (let (out rest)
+    (setq rest segments)
+    (while rest
+      (let* ((seg (car rest))
+             (text (and (eq (car seg) 'user)
+                        (buffer-substring-no-properties
+                         (cadr seg) (caddr seg)))))
+        (push (if (and text
+                       (eq (car-safe (car out)) 'tool)
+                       (eq (car-safe (cadr rest)) 'reasoning)
+                       (string-match-p
+                        "^[ \t]*</agent-result>[ \t]*\\(?:\r?\n\\)?\\'"
+                        text))
+                  (list 'ignored (cadr seg) (caddr seg))
                 seg)
               out))
       (setq rest (cdr rest)))
