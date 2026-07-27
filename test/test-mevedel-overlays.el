@@ -6,6 +6,9 @@
 
 (require 'mevedel-overlays)
 (require 'mevedel-persistence)
+(require 'mevedel-chat)
+(require 'mevedel-menu)
+(require 'mevedel-models)
 (require 'mevedel-structs)
 (require 'helpers
          (file-name-concat
@@ -40,6 +43,174 @@
       (kill-buffer buffer)
       (when (file-exists-p file)
         (delete-file file)))))
+
+
+;;
+;;; Directive model selection
+
+(mevedel-deftest mevedel--directive-model-values ()
+  ,test
+  (test)
+
+  :doc "returns a pinned directive model without consulting the session"
+  (with-temp-buffer
+    (insert "directive")
+    (let ((directive (make-overlay (point-min) (point-max))))
+      (overlay-put directive
+                   'mevedel-directive-model-provider "Pinned:model")
+      (overlay-put directive
+                   'mevedel-directive-reasoning-effort 'high)
+      (should
+       (equal '("Pinned:model" high nil)
+              (mevedel--directive-model-values directive)))))
+
+  :doc "returns the effective inherited session model"
+  (let ((session-buffer (generate-new-buffer " *directive-values-session*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer session-buffer
+            (setq-local gptel-reasoning-effort 'medium))
+          (with-temp-buffer
+            (insert "directive")
+            (let ((directive (make-overlay (point-min) (point-max))))
+              (cl-letf (((symbol-function 'mevedel--chat-buffer)
+                         (lambda (&rest _) session-buffer))
+                        ((symbol-function 'mevedel-workspace)
+                         (lambda (&optional _) 'workspace))
+                        ((symbol-function
+                          'mevedel-model-current-provider-label)
+                         (lambda (&optional _) "Session:model")))
+                (should
+                 (equal '("Session:model" medium t)
+                        (mevedel--directive-model-values directive)))))))
+      (kill-buffer session-buffer))))
+
+(mevedel-deftest mevedel--ov-actions-model
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global)))
+  ,test
+  (test)
+  :doc "pins and resets the request-owning top-level directive"
+  (let ((session-buffer (generate-new-buffer " *directive-model-session*"))
+        options)
+    (unwind-protect
+        (progn
+          (with-current-buffer session-buffer
+            (setq-local gptel-reasoning-effort 'medium))
+          (with-temp-buffer
+            (insert "abcdef")
+            (let ((parent (mevedel--create-directive-in
+                           (current-buffer) 1 7 nil "Parent"))
+                  child)
+              (setq child
+                    (mevedel--create-directive-in
+                     (current-buffer) 2 4 nil "Child"))
+              (cl-letf (((symbol-function 'mevedel--chat-buffer)
+                         (lambda (&rest _) session-buffer))
+                        ((symbol-function 'mevedel-workspace)
+                         (lambda (&optional _) 'workspace))
+                        ((symbol-function
+                          'mevedel-model-current-provider-label)
+                         (lambda (&optional _) "Session:session-model"))
+                        ((symbol-function
+                          'mevedel-menu-open-model-selection)
+                         (lambda (&rest args) (setq options args))))
+                (mevedel--ov-actions-model child))
+              (should (equal "Session:session-model"
+                             (plist-get options :provider)))
+              (should (eq 'medium (plist-get options :effort)))
+              (should (eq t (plist-get options :inherited)))
+              (funcall (plist-get options :update)
+                       "Fast:fast-model" 'high)
+              (should (equal "Fast:fast-model"
+                             (overlay-get
+                              parent 'mevedel-directive-model-provider)))
+              (should (eq 'high
+                          (overlay-get
+                           parent 'mevedel-directive-reasoning-effort)))
+              (should-not
+               (overlay-get child 'mevedel-directive-model-provider))
+              (should (string-match-p
+                       "MODEL: Fast:fast-model · effort high"
+                       (substring-no-properties
+                        (overlay-get parent 'before-string))))
+              (let ((properties
+                     (mevedel--instruction-persisted-properties parent)))
+                (should
+                 (equal "Fast:fast-model"
+                        (plist-get
+                         properties 'mevedel-directive-model-provider)))
+                (should
+                 (eq 'high
+                     (plist-get
+                      properties
+                      'mevedel-directive-reasoning-effort))))
+              (should
+               (equal
+                '("Session:session-model" medium)
+                (cl-letf (((symbol-function 'mevedel--chat-buffer)
+                           (lambda (&rest _) session-buffer))
+                          ((symbol-function 'mevedel-workspace)
+                           (lambda (&optional _) 'workspace))
+                          ((symbol-function
+                            'mevedel-model-current-provider-label)
+                           (lambda (&optional _)
+                             "Session:session-model")))
+                  (funcall (plist-get options :reset)))))
+              (should-not
+               (overlay-get parent 'mevedel-directive-model-provider))
+              (should-not
+               (overlay-get parent 'mevedel-directive-reasoning-effort)))))
+      (kill-buffer session-buffer)))
+
+  :doc "shows the effective pair except while the directive is processing"
+  (let ((session-buffer (generate-new-buffer " *directive-actions-session*"))
+        choices action-row target)
+    (unwind-protect
+        (with-temp-buffer
+          (insert "directive")
+          (let* ((directive
+                  (mevedel--create-directive-in
+                   (current-buffer) (point-min) (point-max)
+                   nil "Test"))
+                 (child
+                  (mevedel--create-directive-in
+                   (current-buffer) 2 5 nil "Child")))
+            (setq target directive)
+            (cl-letf (((symbol-function 'mevedel--chat-buffer)
+                       (lambda (&rest _) session-buffer))
+                      ((symbol-function 'mevedel-workspace)
+                       (lambda (&optional _) 'workspace))
+                      ((symbol-function
+                        'mevedel-model-current-provider-label)
+                       (lambda (&optional _) "Session:model"))
+                      ((symbol-function 'read-multiple-choice)
+                       (lambda (_prompt options)
+                         (setq choices options
+                               action-row
+                               (substring-no-properties
+                                (overlay-get target 'before-string)))
+                         (throw 'captured nil))))
+              (catch 'captured
+                (mevedel--ov-actions-dispatch directive))
+              (should (member '(?M "model") choices))
+              (should
+               (string-match-p
+                "Session:model · effort default · session"
+                action-row))
+              (overlay-put directive 'mevedel-directive-status 'processing)
+              (catch 'captured
+                (mevedel--ov-actions-dispatch directive))
+              (should-not (assoc ?M choices))
+              (setq target child)
+              (catch 'captured
+                (mevedel--ov-actions-dispatch child))
+              (should-not (assoc ?M choices))
+              (should-error
+               (mevedel--ov-actions-model child)
+               :type 'user-error))))
+      (kill-buffer session-buffer))))
 
 
 ;;

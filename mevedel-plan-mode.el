@@ -22,8 +22,8 @@
                   "mevedel-interaction-prompt" (key))
 
 ;; `mevedel-menu'
-(declare-function mevedel-menu-open-implementation-model
-                  "mevedel-menu" (provider effort update))
+(declare-function mevedel-menu-open-model-selection "mevedel-menu"
+                  (&rest options))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-current-provider-label
@@ -535,9 +535,11 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
          (open-model ()
            (interactive)
            (require 'mevedel-menu)
-           (mevedel-menu-open-implementation-model
-            (plist-get selection :model-provider)
-            (plist-get selection :reasoning-effort)
+           (mevedel-menu-open-model-selection
+            :title "Implementation model"
+            :provider (plist-get selection :model-provider)
+            :effort (plist-get selection :reasoning-effort)
+            :update
             (lambda (provider effort)
               (plist-put selection :model-provider provider)
               (plist-put selection :reasoning-effort effort)

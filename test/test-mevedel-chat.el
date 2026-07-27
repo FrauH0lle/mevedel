@@ -21,20 +21,36 @@
                byte-compile-current-file))
           "helpers"))
 
+;; `gptel'
+(defvar gptel--known-presets)
+(defvar gptel-backend)
+(defvar gptel-model)
+(defvar gptel-reasoning-effort)
+
+;; `gptel-org'
 (defvar gptel-org-branching-context)
 (defvar gptel-org-ignore-elements)
-(defvar gptel--known-presets)
+
+;; `mevedel-view'
+(declare-function mevedel-view--render-incremental "mevedel-view"
+                  (data-buffer))
 (defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--in-flight-turn-start)
 (defvar mevedel-view--input-marker)
+
+;; `org'
+(defvar org-mode-hook)
+
+;; `org-agenda'
 (defvar org-agenda-file-menu-enabled)
+
+;; `org-element'
 (defvar org-element-cache-persistent)
 (defvar org-element-use-cache)
-(defvar org-indent-mode)
-(defvar org-mode-hook)
-(declare-function mevedel-view--render-incremental "mevedel-view"
-                  (data-buffer))
+
+;; `org-indent'
 (declare-function org-indent-mode "org-indent" (&optional arg))
+(defvar org-indent-mode)
 
 (defvar mevedel-chat-test--hook-events nil)
 
@@ -640,6 +656,40 @@
     (set-buffer-modified-p t)
     (should-not (mevedel--directive-save-buffer-p))))
 
+(mevedel-deftest mevedel--directive-model-policy ()
+  ,test
+  (test)
+
+  :doc "returns nil when the directive inherits its session model"
+  (with-temp-buffer
+    (insert "directive")
+    (should-not
+     (mevedel--directive-model-policy
+      (make-overlay (point-min) (point-max)))))
+
+  :doc "resolves and validates a pinned provider and effort"
+  (with-temp-buffer
+    (insert "directive")
+    (let ((directive (make-overlay (point-min) (point-max)))
+          (backend (list :backend 'directive))
+          validated)
+      (overlay-put directive
+                   'mevedel-directive-model-provider "Directive:model")
+      (overlay-put directive
+                   'mevedel-directive-reasoning-effort 'high)
+      (cl-letf (((symbol-function 'mevedel-model-resolve-provider)
+                 (lambda (provider &optional _)
+                   (should (equal provider "Directive:model"))
+                   (list :backend backend :model 'model)))
+                ((symbol-function 'mevedel-model-validate-effort)
+                 (lambda (model effort)
+                   (setq validated (list model effort))
+                   effort)))
+        (should
+         (equal (list :backend backend :model 'model :effort 'high)
+                (mevedel--directive-model-policy directive)))
+        (should (equal '(model high) validated))))))
+
 (mevedel-deftest mevedel--process-directives-sequentially ()
   ,test
   (test)
@@ -690,8 +740,10 @@
 				 (make-temp-file "mevedel-directive-" t)))
 			(file (file-name-concat tmpdir "sample.txt"))
 			(buf (find-file-noselect file))
+                        (override-backend (list :backend 'directive))
+                        (override-model 'directive-model)
 			captured-prompt captured-args captured-fsm captured-chat
-			callback-result)
+			callback-result override-validated)
 		   (unwind-protect
 		       (with-current-buffer buf
 			 (erase-buffer)
@@ -703,12 +755,33 @@
 					   buf (point-min) (line-end-position)
 					   nil "Change alpha.")))
 			   (overlay-put directive 'mevedel-directive-action 'implement)
+                           (overlay-put directive
+                                        'mevedel-directive-model-provider
+                                        "Directive:directive-model")
+                           (overlay-put directive
+                                        'mevedel-directive-reasoning-effort
+                                        'high)
 			   (cl-letf (((symbol-function 'save-some-buffers)
 				      (lambda (&rest _) nil))
 				     ((symbol-function 'display-buffer)
 				      (lambda (&rest _) nil))
 				     ((symbol-function 'gptel--apply-preset)
 				      (lambda (&rest _) nil))
+                                     ((symbol-function
+                                       'mevedel-model-resolve-provider)
+                                      (lambda (provider &optional _)
+                                        (should
+                                         (equal provider
+                                                "Directive:directive-model"))
+                                        (list :backend override-backend
+                                              :model override-model)))
+                                     ((symbol-function
+                                       'mevedel-model-validate-effort)
+                                      (lambda (model effort)
+                                        (when (eq model override-model)
+                                          (should (eq effort 'high))
+                                          (setq override-validated t))
+                                        effort))
 				     ((symbol-function 'gptel-request)
 				      (lambda (prompt &rest args)
 					(setq captured-prompt prompt
@@ -732,6 +805,30 @@
 			     (should (string-match-p "Change alpha" captured-prompt))
 			     (should (eq captured-chat (plist-get captured-args :buffer)))
 			     (should (markerp (plist-get captured-args :position)))
+                             (should override-validated)
+                             (let* ((transforms
+                                     (plist-get captured-args :transforms))
+                                    (directive-transform
+                                     (car (last transforms)))
+                                    session-backend session-model session-effort)
+                               (with-current-buffer captured-chat
+                                 (setq session-backend gptel-backend
+                                       session-model gptel-model
+                                       session-effort gptel-reasoning-effort))
+                               (with-temp-buffer
+                                 (setq-local gptel-backend 'prompt-backend
+                                             gptel-model 'prompt-model
+                                             gptel-reasoning-effort 'low)
+                                 (funcall directive-transform nil)
+                                 (should (eq gptel-backend override-backend))
+                                 (should (eq gptel-model override-model))
+                                 (should (eq gptel-reasoning-effort 'high)))
+                               (with-current-buffer captured-chat
+                                 (should (eq gptel-backend session-backend))
+                                 (should (eq gptel-model session-model))
+                                 (should
+                                  (eq gptel-reasoning-effort
+                                      session-effort))))
 			     (with-current-buffer captured-chat
 			       (should (eq 'processing
 					   (overlay-get directive
