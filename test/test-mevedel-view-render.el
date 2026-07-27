@@ -3922,6 +3922,24 @@ state of its inner sections"
         (should-not (string-match-p "│ \\[sandbox: bubblewrap" text))
         (should-not (string-match-p "<bash-execution" text)))))
 
+  :doc "Bash completion keeps following reasoning on a separate line"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat
+      "<agent-message type=\"EXECUTION\" sender=\"/root\" recipient=\"/root\">\n"
+      "<bash-execution execution_id=\"exec-1\" outcome=\"success\" "
+      "output_bytes=\"0\" output_lines=\"0\"/>\n"
+      "</agent-message>\n"
+      "#+begin_reasoning\nnext\n#+end_reasoning\n")
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "0 bytes\n  … Thinking" text))
+        (should-not (string-match-p "0 bytes  … Thinking" text)))))
+
   :doc "pure agent-result turn renders with the same mailbox card path"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data

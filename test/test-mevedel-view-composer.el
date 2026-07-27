@@ -2595,6 +2595,35 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (eq 'follow-up (plist-get entry :category)))
                  entries)))))
 
+  :doc "C-c TAB cannot overtake an older follow-up after the request settles"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "main")))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (cl-letf (((symbol-function
+                  'mevedel-view--schedule-late-follow-up-drain)
+                 #'ignore)
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (ert-fail "Newer follow-up bypassed the queue"))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "first")
+          (mevedel-view-send-follow-up))
+        (with-current-buffer data-buf
+          (setq-local mevedel--current-request nil))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "second")
+          (mevedel-view-send-follow-up)))
+      (should
+       (equal '("first" "second")
+              (mapcar
+               (lambda (entry) (plist-get entry :input))
+               (mevedel-session-pending-follow-ups session))))))
+
   :doc "C-c RET queues plain steering against the active request"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create :name "main"))
