@@ -867,11 +867,11 @@ ROLE is `user' or `assistant'.
 
 DATA-BUF is the authoritative transcript buffer.
 
-A segment classified as `user' (gptel property nil) only starts a
-new turn when it follows another `user' or `response' segment, or when
-it contains a retained `* Agent Task:' heading.
-When it follows `ignore' or `tool' segments it is reasoning text
-embedded in the assistant turn and is absorbed as such.
+A segment classified as `user' (gptel property nil) starts a new turn
+when it follows another `user' or `response' segment, when non-scaffolding
+text follows a closed `reasoning' segment, or when it contains a retained
+`* Agent Task:' heading.  When it follows `ignore' or `tool' segments it
+is reasoning text embedded in the assistant turn and is absorbed as such.
 
 Additionally, a nil segment immediately after a `response' is
 absorbed into the assistant turn when the next segment is `ignore'
@@ -990,7 +990,11 @@ real user message."
          ((and (eq type 'user)
                (or review-action-p
                    agent-task-p
-                   (memq prev-type '(nil user response)))
+                   (memq prev-type '(nil user response))
+                   (and (eq prev-type 'reasoning)
+                        data-buf
+                        (not (mevedel-view--scaffolding-only-p
+                              data-buf seg-start (caddr seg)))))
                ;; Look-ahead: a scaffolding-only nil gap right after a
                ;; response is assistant-side glue.  Require DATA-BUF proof
                ;; so a real user prompt remains a user turn.
@@ -1004,8 +1008,8 @@ real user message."
                                   data-buf
                                   (mevedel-view--scaffolding-only-p
                                    data-buf seg-start (caddr seg)))))))
-          ;; Genuine user turn: either the first segment, or follows
-          ;; a user/response segment.
+          ;; Genuine user turn: either the first segment, follows a
+          ;; user/response segment, or follows a closed reasoning block.
           (progn
             ;; Flush any accumulated assistant turn
             (when current-segs
