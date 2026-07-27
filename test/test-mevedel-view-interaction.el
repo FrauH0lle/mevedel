@@ -135,6 +135,22 @@
     (kill-buffer view)
     (should-not (mevedel-view-interaction-pending-p view))))
 
+(mevedel-deftest mevedel-view-interaction-blocking-p ()
+  ,test
+  (test)
+  :doc "distinguishes user decisions from pending-input management"
+  (with-temp-buffer
+    (mevedel-view-interaction-initialize)
+    (should-not (mevedel-view-interaction-blocking-p))
+    (puthash 'pending-input '(:kind pending-input)
+             mevedel-view--interaction-descriptors)
+    (should-not (mevedel-view-interaction-blocking-p))
+    (puthash 'ask '(:kind ask) mevedel-view--interaction-descriptors)
+    (should (mevedel-view-interaction-blocking-p))
+    (remhash 'ask mevedel-view--interaction-descriptors)
+    (setq-local mevedel-view--prompt-hook-pending t)
+    (should (mevedel-view-interaction-blocking-p))))
+
 (mevedel-deftest mevedel-view--interaction-register ()
   ,test
   (test)

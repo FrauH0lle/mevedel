@@ -147,6 +147,13 @@
             (should (equal "goal-1"
                            (plist-get (gptel-fsm-info root)
                                       :mevedel-goal-id))))
+          (setf (mevedel-goal-status goal) 'complete)
+          (let ((after-completion
+                 (gptel-make-fsm :info (list :buffer buffer :data "next"))))
+            (mevedel-goal-capture-request after-completion)
+            (should-not (plist-get (gptel-fsm-info after-completion)
+                                   :mevedel-goal-id)))
+          (setf (mevedel-goal-status goal) 'active)
           (with-current-buffer buffer
             (setq-local mevedel--agent-invocation
                         (mevedel-agent-invocation--create)))

@@ -152,6 +152,24 @@ VIEW-BUFFER defaults to the current buffer."
                         mevedel-view--interaction-descriptors)
                        0)))))))
 
+(defun mevedel-view-interaction-blocking-p (&optional view-buffer)
+  "Return non-nil when VIEW-BUFFER awaits input outside pending-input UI."
+  (let ((view (or view-buffer (current-buffer))))
+    (and
+     (buffer-live-p view)
+     (with-current-buffer view
+       (or
+        (bound-and-true-p mevedel-view--prompt-hook-pending)
+        (and
+         (hash-table-p mevedel-view--interaction-descriptors)
+         (catch 'blocking
+           (maphash
+            (lambda (_id descriptor)
+              (unless (eq (plist-get descriptor :kind) 'pending-input)
+                (throw 'blocking t)))
+            mevedel-view--interaction-descriptors)
+           nil)))))))
+
 
 ;;
 ;;; Target view

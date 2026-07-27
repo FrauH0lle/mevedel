@@ -335,6 +335,35 @@
                       (car (mevedel-session-pending-steering session)))))
       (kill-buffer buf)))
 
+  :doc "an unresolved interaction holds steering at the model boundary"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-steering-interaction*"))
+         (view (generate-new-buffer " *mt-steering-interaction-view*"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buf
+                           :mevedel-request-id "request-interaction")))
+         (entry
+          (mevedel-session-enqueue-pending-input
+           session 'steering
+           '(:input "held steering" :request-id "request-interaction"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session session
+                        mevedel--view-buffer view))
+          (with-current-buffer view
+            (setq-local mevedel-view--interaction-descriptors
+                        (make-hash-table :test #'equal))
+            (puthash 'ask '(:kind ask)
+                     mevedel-view--interaction-descriptors))
+          (mevedel-tools--handle-steering-inject fsm)
+          (should (eq entry
+                      (car (mevedel-session-pending-steering session))))
+          (should (plist-get (gptel-fsm-info fsm)
+                             :mevedel-pending-input-hold)))
+      (kill-buffer buf)
+      (kill-buffer view)))
+
   :doc "final response is preserved and continued without settling the turn"
   (let* ((session (mevedel-tools-test--make-session))
          (backend (gptel-make-openai

@@ -1437,6 +1437,20 @@
       (should (eq 'steering reason))
       (should (eq 'running (mevedel-agent-record-activity record))))))
 
+(mevedel-deftest mevedel-agent-control-wake-root-user ()
+  ,test
+  (test)
+  :doc "wakes WaitAgent without creating a mailbox message"
+  (let ((session (mevedel-agent-control-test--session))
+        reason)
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (&rest _) 'fake-timer)))
+      (mevedel-agent-control-wait
+       session (lambda (seen) (setq reason seen)) 10000)
+      (mevedel-agent-control-wake-root-user session))
+    (should (eq 'user reason))
+    (should-not (mevedel-agent-control--mailbox session "/root"))))
+
 (provide 'test-mevedel-agent-control)
 
 ;;; test-mevedel-agent-control.el ends here

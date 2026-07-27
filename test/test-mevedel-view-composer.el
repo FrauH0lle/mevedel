@@ -2542,8 +2542,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           :name "target"
           :plan-metadata '(:implementation-goal-id "target-goal"))))
     (should (mevedel-view--follow-up-auto-drain-blocked-p here))
-    (should-not
-     (mevedel-view--follow-up-auto-drain-blocked-p source))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p source))
     (should (mevedel-view--follow-up-auto-drain-blocked-p target)))
   (let* ((goal (mevedel-goal--create :id "goal" :status 'paused))
          (session
@@ -2554,7 +2553,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
     (should (mevedel-view--follow-up-auto-drain-blocked-p session))
     (setf (mevedel-goal-status goal) 'active)
     (should-not
-     (mevedel-view--follow-up-auto-drain-blocked-p session)))
+     (mevedel-view--follow-up-auto-drain-blocked-p session))
+    (dolist (status '(blocked budget-limited))
+      (setf (mevedel-goal-status goal) status)
+      (should (mevedel-view--follow-up-auto-drain-blocked-p session))))
   (let ((session (mevedel-session--create
                   :name "failed" :pending-input-failure-paused t)))
     (should (mevedel-view--follow-up-auto-drain-blocked-p session))))
@@ -2791,6 +2793,52 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (equal "steer after kickoff" (plist-get entry :input)))
           (should (equal "reserved" (plist-get entry :queued-at-goal-id)))))))
 
+  :doc "C-c TAB at Plan approval queues without demoting the proposal"
+  (mevedel-view-test--with-buffers
+    (let* ((metadata '(:status proposed :proposal-id (1 2 "hash")))
+           (session
+            (mevedel-session--create
+             :name "plan" :plan-mode t :plan-metadata metadata)))
+      (setf (mevedel-session-pending-plan-approval session)
+            (list :session session :callback #'ignore :renderer #'ignore))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (&rest _) 'fake-timer)))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "after approval")
+          (mevedel-view-send-follow-up)))
+      (should (mevedel-session-pending-plan-approval session))
+      (should (eq 'proposed
+                  (plist-get (mevedel-session-plan-metadata session)
+                             :status)))
+      (should (equal "after approval"
+                     (plist-get
+                      (car (mevedel-session-pending-follow-ups session))
+                      :input)))))
+
+  :doc "special root workflows reject steering but accept a follow-up"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "review"))
+           (request
+            (mevedel-request--create
+             :id "review-request" :session session :origin "/root")))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--current-request request))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert "later work")
+        (should-error (mevedel-view-send) :type 'user-error)
+        (should (equal "later work" (mevedel-view--input-text)))
+        (mevedel-view-send-follow-up)
+        (should (string-empty-p (mevedel-view--input-text)))
+        (should (equal "later work"
+                       (plist-get
+                        (car (mevedel-session-pending-follow-ups session))
+                        :input))))))
+
   :doc "plain input during WaitAgent is injected before its resumed sample"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
@@ -2799,12 +2847,17 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
            (session (mevedel-session-create "main" ws))
+           (fsm (gptel-make-fsm
+                 :state 'TOOL
+                 :info (list :buffer data-buf
+                             :mevedel-request-id "wait-plain")))
            send-called
            wake-reason)
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--current-request
-                    (mevedel-request--create :session session)))
+                    (mevedel-request--create
+                     :id "wait-plain" :session session :fsm fsm)))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq send-called t)))
                 ((symbol-function 'run-at-time)
@@ -2819,20 +2872,16 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (string-empty-p (mevedel-view--input-text)))
           (should (equal '("follow up")
                          (mevedel-view-history--entries)))
-          (should-not (mevedel-view--interaction-count-label)))
+          (should (string-match-p
+                   "1 input pending"
+                   (mevedel-view--interaction-count-label)))))
       (should (eq 'user wake-reason))
       (should-not (mevedel-session-pending-follow-ups session))
-      (let* ((data (list :messages []))
-             (fsm (gptel-make-fsm
-                   :info (list :buffer data-buf :backend nil :data data))))
-        (mevedel-tools--handle-message-inject fsm)
-        (should (equal 1 (length (plist-get data :messages))))
-        (should (equal "follow up"
-                       (plist-get (aref (plist-get data :messages) 0)
-                                  :content)))
-        (should-not (mevedel-session-messages session))
-        (with-current-buffer data-buf
-          (should (string-match-p "follow up" (buffer-string))))))))
+      (should-not (mevedel-session-messages session))
+      (should (equal "follow up"
+                     (plist-get
+                      (car (mevedel-session-pending-steering session))
+                      :input)))))
 
   :doc "WaitAgent steering honors UserPromptSubmit rewrites and context"
   (let* ((root (make-temp-file "mevedel-wait-steering-hook-" t))
@@ -2846,6 +2895,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                         ((:type elisp
                                 :function
                                 mevedel-view-test--rewrite-prompt-hook-with-context)))))))
+         (fsm (gptel-make-fsm
+               :state 'TOOL
+               :info (list :mevedel-request-id "wait-hook")))
          wake-reason)
     (unwind-protect
         (mevedel-view-test--with-buffers
@@ -2853,7 +2905,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
             (setq-local mevedel--current-request
-                        (mevedel-request--create :session session)))
+                        (mevedel-request--create
+                         :id "wait-hook" :session session :fsm fsm)))
           (cl-letf (((symbol-function 'run-at-time)
                      (lambda (&rest _) 'fake-timer)))
             (mevedel-agent-control-wait
@@ -2866,22 +2919,25 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (eq 'user wake-reason))
           (should (equal "original steering"
                          mevedel-view-test--seen-prompt))
-          (let ((payload (plist-get (car (mevedel-session-messages session))
-                                    :payload)))
+          (let* ((entry (car (mevedel-session-pending-steering session)))
+                 (payload (plist-get entry :model-input)))
             (should (string-match-p "rewritten prompt" payload))
             (should (string-match-p "hook policy context" payload))
             (should-not (string-match-p "original steering" payload))
-            (should (plist-get (car (mevedel-session-messages session))
-                               :hook-audits))))
+            (should (plist-get entry :hook-audits))))
       (delete-directory root t)))
 
   :doc "WaitAgent steering consumes inline skill text and transcript metadata"
   (mevedel-view-test--with-source-skills
       '(("alpha" "inline" "ALPHA STEERING BODY"))
-    (let (wake-reason)
+    (let* ((fsm (gptel-make-fsm
+                 :state 'TOOL
+                 :info (list :mevedel-request-id "wait-skill")))
+           wake-reason)
       (with-current-buffer data-buf
         (setq-local mevedel--current-request
-                    (mevedel-request--create :session session)))
+                    (mevedel-request--create
+                     :id "wait-skill" :session session :fsm fsm)))
       (cl-letf (((symbol-function 'run-at-time)
                  (lambda (&rest _) 'fake-timer))
                 ((symbol-function 'gptel-send)
@@ -2894,30 +2950,32 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (insert "Use $alpha")
           (mevedel-view-send)))
       (should (eq 'user wake-reason))
-      (let ((message (car (mevedel-session-messages session))))
+      (let ((message (car (mevedel-session-pending-steering session))))
         (should (string-match-p "ALPHA STEERING BODY"
-                                (plist-get message :payload)))
+                                (plist-get message :model-input)))
         (should (string-match-p "Use \\$alpha"
                                 (plist-get message :transcript-payload)))
         (should (string-match-p "mevedel-render-data"
                                 (plist-get message :transcript-payload))))
-      (should (equal '("alpha")
-                     (mapcar #'mevedel-skill-invocation-record-name
-                             (mevedel-session-invoked-skills session))))))
+      (should-not (mevedel-session-invoked-skills session))))
 
-  :doc "a lost WaitAgent steering race leaves input and context untouched"
+  :doc "a WaitAgent ending during preparation leaves steering queued"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
                        :type 'test :id "steering-race" :root "/tmp"
                        :name "steering-race"))
            (session (mevedel-session-create "main" workspace))
+           (fsm (gptel-make-fsm
+                 :state 'TOOL
+                 :info (list :mevedel-request-id "wait-race")))
            (waiting-checks 0)
            (hook-calls 0))
       (with-current-buffer data-buf
         (setq-local mevedel--session session
                     mevedel--workspace workspace
                     mevedel--current-request
-                    (mevedel-request--create :session session))
+                    (mevedel-request--create
+                     :id "wait-race" :session session :fsm fsm))
         (mevedel-hooks-record-session-context
          session '(:additional-context ("race context")) 'SessionStart))
       (mevedel-session-set-pending-inputs
@@ -2939,9 +2997,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (= 1 (length
                       (mevedel-session-pending-follow-ups session))))
         (with-current-buffer view-buf
-          (should (equal "race prompt" (mevedel-view--input-text))))
+          (should (string-empty-p (mevedel-view--input-text)))
+          (should (equal '("race prompt")
+                         (mevedel-view-history--entries))))
+        (should (equal "race prompt"
+                       (plist-get
+                        (car (mevedel-session-pending-steering session))
+                        :input)))
         (should (= 1 hook-calls))
-        (should (mevedel-session-hook-context-pending session)))))
+        (should-not (mevedel-session-hook-context-pending session)))))
 
   :doc "a prepared queue entry survives failure before transcript insertion"
   (mevedel-view-test--with-buffers
