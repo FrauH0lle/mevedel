@@ -159,6 +159,10 @@
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-tools'
+(declare-function mevedel-tools--handle-steering-inject
+                  "mevedel-tools" (fsm &optional after-compaction))
+
 ;; `mevedel-utilities'
 (declare-function mevedel--format-hook-audit-record "mevedel-utilities"
                   (record))
@@ -2181,7 +2185,16 @@ set already stored on FSM's info plist."
       (when-let* ((status-function (plist-get target :resume-status)))
         (funcall status-function target)))
     (mevedel--compact-rebuild-info-data-from-buffer fsm buffer)
-    (mevedel--compact-provider-wait fsm)))
+    (mevedel--compact-target-provider-wait target fsm)))
+
+(defun mevedel--compact-target-provider-wait (target fsm)
+  "Dispatch FSM after TARGET compaction, including deferred root steering."
+  (if (plist-get target :invocation)
+      (mevedel--compact-provider-wait fsm)
+    (require 'mevedel-tools)
+    (mevedel-tools--handle-steering-inject fsm t)
+    (unless (plist-get (gptel-fsm-info fsm) :mevedel-pending-input-hold)
+      (mevedel--compact-provider-wait fsm))))
 
 (defun mevedel--compact-agent-terminal-failure (target fsm err)
   "Terminate agent FSM with compaction failure ERR."
@@ -2218,7 +2231,7 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
               (mevedel--compact-target-call
                target :fail fsm
                "No compactable history remains at target pressure")
-            (mevedel--compact-provider-wait fsm))
+            (mevedel--compact-target-provider-wait target fsm))
         (mevedel--compact-run
          :pending-start pending-start
          :auto t
@@ -2228,7 +2241,7 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
          (lambda (err)
            (cond
             ((eq err :skip)
-             (mevedel--compact-provider-wait fsm))
+             (mevedel--compact-target-provider-wait target fsm))
             (err
              (mevedel--compact-target-call target :fail fsm err))
             (t
@@ -2281,16 +2294,12 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
            (t
             (mevedel--compact-provider-wait fsm))))))))
 
-(defun mevedel--compact-handle-wait (fsm)
-  "Run continuation auto-compaction for FSM before `gptel--handle-wait'."
+(defun mevedel--compact-main-wait-decision (fsm)
+  "Return the main continuation compaction decision for FSM, or nil."
   (let* ((info (and fsm (gptel-fsm-info fsm)))
          (chat-buffer (and (listp info) (plist-get info :buffer))))
-    (cond
-     ((plist-get info :mevedel-pending-input-hold) nil)
-     ((or (not (mevedel--compact-continuation-wait-p fsm))
-          (not (buffer-live-p chat-buffer)))
-      (mevedel--compact-provider-wait fsm))
-     (t
+    (when (and (mevedel--compact-continuation-wait-p fsm)
+               (buffer-live-p chat-buffer))
       (with-current-buffer chat-buffer
         (let* ((target-policy
                 (or (plist-get info :mevedel-compaction-target-policy)
@@ -2308,11 +2317,47 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
                 (plist-get target-policy :effort))
                (gptel-max-tokens (plist-get target-policy :max-tokens))
                (gptel--request-params
-                (plist-get target-policy :request-params))
-               (admission
-                (mevedel--compact-should-compact-p token-estimate)))
-          (mevedel--compact-handle-target-wait
-           fsm (mevedel--compact-main-target) admission)))))))
+                (plist-get target-policy :request-params)))
+          (list :admission
+                (mevedel--compact-should-compact-p token-estimate)
+                :target-policy target-policy))))))
+
+(defun mevedel--compact-defer-steering-p (fsm)
+  "Cache FSM's compaction decision and return non-nil when steering must wait."
+  (when-let* ((decision (mevedel--compact-main-wait-decision fsm)))
+    (setf (gptel-fsm-info fsm)
+          (plist-put (gptel-fsm-info fsm)
+                     :mevedel-compaction-wait-decision decision))
+    (plist-get decision :admission)))
+
+(defun mevedel--compact-handle-wait (fsm)
+  "Run continuation auto-compaction for FSM before `gptel--handle-wait'."
+  (let* ((info (and fsm (gptel-fsm-info fsm)))
+         (cached (and (listp info)
+                      (plist-get info :mevedel-compaction-wait-decision))))
+    (if (plist-get info :mevedel-pending-input-hold)
+        nil
+      (let ((decision
+             (or cached (mevedel--compact-main-wait-decision fsm))))
+        (when cached
+          (cl-remf info :mevedel-compaction-wait-decision)
+          (setf (gptel-fsm-info fsm) info))
+        (if (not decision)
+            (mevedel--compact-provider-wait fsm)
+          (let* ((chat-buffer (plist-get info :buffer))
+                 (target-policy (plist-get decision :target-policy)))
+            (with-current-buffer chat-buffer
+              (let ((gptel-backend (plist-get target-policy :backend))
+                    (gptel-model (plist-get target-policy :model))
+                    (gptel-reasoning-effort
+                     (plist-get target-policy :effort))
+                    (gptel-max-tokens
+                     (plist-get target-policy :max-tokens))
+                    (gptel--request-params
+                     (plist-get target-policy :request-params)))
+                (mevedel--compact-handle-target-wait
+                 fsm (mevedel--compact-main-target)
+                 (plist-get decision :admission))))))))))
 
 (defun mevedel--compact-transform-auto (continue fsm)
   "Run auto-compaction before request realization.

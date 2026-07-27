@@ -78,6 +78,13 @@ buffer-local mevedel variables in `:preset-settings`, plus the session's exact
 settings, and a normal fork deep-copies them so parent and child can diverge.
 gptel's other buffer-local settings continue to use its Org persistence.
 
+Pending input is live-session state, not sidecar state. Same-turn steering,
+queued follow-ups, their category order and edit state, session-local IDs,
+delivery pause, and failure pause are deliberately transient. Killing and
+resuming a session therefore restores accepted text only through the ordinary
+workspace input history; it does not recreate either pending-input category or
+any delivery state. There is no compatibility migration or queue-size cap.
+
 Standalone Plan state lives in the same sidecar and session directory.
 Here/Fresh finalizes the planning segment through the `/clear` rotation path
 and records a `SessionStart(clear)` context snapshot.  Here/Summary instead
@@ -217,6 +224,10 @@ Rewind refuses while the session has live executions and points the user to
 `/ps` and `/stop`; hiding a process behind older history would violate its
 session ownership boundary.
 
+Rewind and `/clear` also refuse while either pending-input category is nonempty.
+The user must resolve the entries in the Pending Inputs cockpit or explicitly
+clear them with `C-c C-q` before a destructive transcript operation.
+
 ### Fork
 
 When the user sends in a buffer with `fork-pending` set,
@@ -277,7 +288,8 @@ The view input ring is persisted at
 `<workspace-root>/.mevedel/input-history.el` when the session is
 writable. Missing files are normal. Corrupt
 files are warned about once, renamed aside, and replaced with an empty
-in-memory ring.
+in-memory ring. Accepting same-turn steering or a queued follow-up records its
+text in this ring immediately, independently of the transient queue state.
 
 ### Generated state excludes
 

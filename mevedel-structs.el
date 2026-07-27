@@ -412,6 +412,11 @@ workspace root and is kept stable for the lifetime of the session."
     ('follow-up (mevedel-session-pending-follow-ups session))
     (_ (error "Unknown pending input category: %S" category))))
 
+(defun mevedel-session-pending-input-p (session)
+  "Return non-nil when SESSION has pending steering or follow-ups."
+  (or (mevedel-session-pending-steering session)
+      (mevedel-session-pending-follow-ups session)))
+
 (defun mevedel-session-set-pending-inputs (session category entries)
   "Replace SESSION pending input CATEGORY with ENTRIES."
   (pcase category

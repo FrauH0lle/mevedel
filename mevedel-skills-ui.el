@@ -138,6 +138,8 @@
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-input-p
+                  "mevedel-structs" (session))
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -348,6 +350,10 @@ Routes through the lifecycle-aware permission transition path."
 
 (defun mevedel-cmd--clear (_args)
   "Start a new, empty chat segment."
+  (when (and (bound-and-true-p mevedel--session)
+             (mevedel-session-pending-input-p mevedel--session))
+    (user-error
+     "Resolve pending input in the Pending Inputs cockpit or clear it with C-c C-q first"))
   (let ((prefix (or (alist-get major-mode gptel-prompt-prefix-alist) "")))
     (cond
      ((bound-and-true-p mevedel-session--read-only-mode)

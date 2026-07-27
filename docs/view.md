@@ -3,7 +3,7 @@
 The view modules render a compact user-facing projection of the authoritative
 gptel data buffer. `mevedel-view.el` owns the mode, zones, and session
 coordination. `mevedel-view-composer.el` owns the editable composer,
-submission hooks, queued follow-ups, and send/fork dispatch.
+submission hooks, pending input, and send/fork dispatch.
 `mevedel-view-agent.el` owns agent transcript inspection, live agent status,
 and targeted handle refresh. `mevedel-view-interaction.el` owns interaction
 descriptor registration, ordering, callback overlays, and redraw.
@@ -156,7 +156,7 @@ interaction chrome around that transcript.
 +---------------------- interaction marker --------------------+
 | Interaction zone                                             |
 |   Permission prompts, plan approvals, Ask,                    |
-|   queued follow-ups, and preview controls.                   |
+|   pending input, approvals, and preview controls.            |
 +--------------------------------------------------------------+
 | Request progress row                                         |
 |   Bottom live spinner such as `Working...` or `Compacting...` |
@@ -178,7 +178,7 @@ Terminology:
   unsupported/unavailable fallback; task and aggregate-agent rows follow it.
 - **Interaction zone**: user-action chrome between
   `mevedel-view--interaction-marker` and the request progress row; it is for
-  queued prompts and controls that require user response.
+  pending input and controls that require user response.
 - **Request progress row**: the fragment-backed foreground spinner directly
   above the input prompt. It is not part of the history, status, or
   interaction zones.
@@ -263,8 +263,9 @@ Current fragment namespaces:
 - `status`: the persistent `sandbox` boundary row plus `tasks` and `agents`
   status-zone blocks. Task and aggregate-agent disclosure state is backed by
   fragment collapse state.
-- `interaction`: queued user controls plus a non-navigatable `:separator`
-  fragment. Ask, permission, plan, preview, and queued-user-message
+- `interaction`: pending-input summaries and user controls plus a
+  non-navigatable `:separator` fragment. Ask, permission, plan, preview, and
+  pending-input
   callers continue to use the descriptor registry.
 - `progress`: the foreground `request` progress row between the interaction
   zone and input prompt.
@@ -372,7 +373,7 @@ main  ~/project/                                      ask · idle · gpt-5.5 · 
 > draft starts here
 ```
 
-Active request with a pending tool live-tail row and queued follow-up:
+Active request with a pending tool live-tail row and pending input:
 
 ```text
 main  ~/project/                                   ask · running · gpt-5.5 · 20 tools
@@ -385,11 +386,11 @@ I'll inspect the associated files.
 
 Calling Read: mevedel-view.el...
 
--- 1 queued message pending -----------------------------------
+-- 1 pending input --------------------------------------------
 
-Queued messages
-  C-c C-e edit batch; C-c C-q clear
+Follow-ups
   1. Also check the docs.
+  RET or C-c C-e manage pending inputs
 
 Working... · 42s
 
@@ -445,7 +446,7 @@ Calling Grep: status zone...
   Agent: explorer -- audit zone terminology [running · 3 calls]
   Agent: verifier -- check spinner ordering [blocked · waiting]
 
--- 1 question · 1 permission · 2 queued messages pending ------
+-- 1 question · 1 permission · 2 pending inputs ---------------
 
 Ask
   Which validation should run next?
@@ -455,10 +456,11 @@ Permission request from /root/verifier
 Allow Bash?
   npx @emacs-eask/cli test ert test/test-mevedel-view.el
 
-Queued messages
-  C-c C-e edit batch; C-c C-q clear
+Steering
+  1. Keep the request spinner pinned above the composer.
+Follow-ups
   1. Also include a full mockup with agents and permissions.
-  2. Keep the request spinner pinned above the composer.
+  RET or C-c C-e manage pending inputs
 
 Working... · 2m 14s · 1 agent blocked · 1 agent running
 
@@ -471,9 +473,13 @@ Working... · 2m 14s · 1 agent blocked · 1 agent running
 view input zone. `mevedel-view-composer.el` owns the editable input boundary,
 completion, prompt submission, and integration with that history ring:
 
-- `C-c RET`: send the current input
+- `C-c RET`: send while idle, or enqueue same-turn steering for the active
+  ordinary root turn
+- `C-c TAB`: send while idle, or enqueue a separate queued follow-up while the
+  session is occupied
 - `C-y`: yank text or insert a clipboard image
-- `C-c C-e`: move queued follow-ups back into the composer
+- `C-c C-e`: open the Pending Inputs cockpit
+- `C-c C-q`: confirm and clear all pending input
 - `M-p` / `M-n`: previous / next input
 - `M-r`: search history
 - `C-c C-l`: browse history
@@ -526,45 +532,43 @@ exact path. The grant does not create a directory rule, does not apply to
 write tools, and is not persisted with the session. Clipboard image paste
 uses the same pending-grant path.
 
-## Queued Follow-Ups
+## Pending Input
 
-Plain user input submitted while a request is active is queued on the
-session as a transient FIFO and shown in the interaction zone. The entry keeps
-the original atomically bound text and any dropped-file grants; queueing does
-not prepare skills or run prompt hooks. Slash commands are not queued and
-remain rejected until the active request finishes.
+Pending input is session-owned and has two independent FIFO categories.
+`C-c RET` during an ordinary active root turn accepts same-turn steering:
+preparation and `UserPromptSubmit` run immediately, then all steering already
+present at the next model interaction boundary is inserted as durable user
+transcript messages without creating extra turns. Steering submitted during
+that injection waits for the following boundary. It never aborts the request.
+Root `WaitAgent` uses the same steering path and wakes the wait at the next
+possible boundary rather than creating a mailbox message.
 
-Root `WaitAgent` is the exception. Plain input submitted while the root is
-explicitly waiting is prepared as steering for that same turn: inline skills
-are planned, `UserPromptSubmit` runs, bound mentions expand, and the resulting
-model input is delivered as a `USER` mailbox record before the wait resumes.
-Dropped-file grants activate at that boundary. If the wait ends while
-asynchronous preparation is still running, the unchanged bound input falls
-back to the ordinary FIFO instead of starting another request or being lost.
-Preparation that requires a fork, request-policy change, or new media context
-cannot modify the already active request and is blocked explicitly. Any blocked
-preparation leaves the composer unchanged.
+`C-c TAB` while the session is occupied accepts a queued follow-up. Each
+follow-up later starts one normal user turn. Steering always has delivery
+priority over follow-ups regardless of submission order; FIFO applies within
+each category. While idle, both send keys perform an ordinary immediate send.
+Slash commands cannot become pending input.
 
-After a successful turn, the next ordinary entry drains as its own normal user
-turn. It is planned and prepared at that point, then passes through
-`UserPromptSubmit` once before request or fork dispatch. A WaitAgent steering
-attempt that was already approved before losing its waiter race retains that
-prepared outcome in the queue and does not run preparation or the prompt hook
-again. It also owns its accepted hook context so earlier FIFO entries cannot
-consume it. The entry leaves the FIFO only at its dispatch boundary, so earlier
-planning, preparation, and hook failures keep it editable. Each successful
-queued turn schedules the next entry; aborted and errored turns leave the
-remaining FIFO pending for review. There is no `WAIT` injection or synthetic
-queued-message transcript format.
+The interaction zone shows compact per-category previews. `RET` on that
+summary or `C-c C-e` opens the Pending Inputs cockpit and pauses automatic
+delivery. The cockpit edits one entry in the composer without losing an
+existing draft, reorders entries within their category, converts entries
+between steering and follow-up, marks and deletes selected entries, and clears
+all pending input with `C-c C-q`. Saving an edit updates the entry in place;
+cancelling restores the prior draft. Closing the cockpit resumes eligible
+delivery.
 
-Outside root WaitAgent steering, `@` mentions and dropped-file grants therefore
-follow the same ordinary send path as direct composer input and are expanded or
-activated for their own turn.
+Permission, Ask, Plan, and other user-input overlays do not disable either
+queue. An unresolved interaction merely postpones steering injection and
+follow-up dispatch. If a turn fails with undelivered steering, those entries
+remain steering, become `Needs review`, and pause all automatic pending-input
+delivery. The user must edit, delete, or recategorize the failed entries, then
+resume delivery from the cockpit. Later follow-ups remain intact.
 
-Editing queued prompts removes the whole uncommitted FIFO
-and restores a combined draft to the composer, so it cannot be
-auto-submitted while being edited. Editing or clearing also returns context
-owned by prepared entries to the session for the next submitted prompt.
+Entries retain atomically bound mention text and dropped-file grants.
+Follow-ups run skill planning, mention expansion, and `UserPromptSubmit` only
+when their own turn dispatches; an already prepared steering entry is not
+prepared twice. Accepted input is added to ordinary workspace input history.
 
 ## Agent Transcript Views
 

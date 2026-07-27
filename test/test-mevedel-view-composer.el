@@ -3308,7 +3308,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should-not (mevedel-session-pending-follow-ups session)))
       (delete-directory root t)))
 
-  :doc "queued message stays visible across incremental in-flight rendering"
+  :doc "queued follow-up stays visible across incremental in-flight rendering"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq-incremental" :root "/tmp/vq"
@@ -3354,7 +3354,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (< partial queued))
           (should (< queued prompt))))))
 
-  :doc "queued message stays visible across in-flight full rerender"
+  :doc "queued follow-up stays visible across in-flight full rerender"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq-full-rerender" :root "/tmp/vq"
@@ -3634,7 +3634,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (should (string-match-p "first" text))
             (should-not (string-match-p "second" text)))))))
 
-  :doc "queued messages do not drain while the request is still active"
+  :doc "queued follow-ups do not drain while the request is still active"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq-active" :root "/tmp/vq" :name "vq"

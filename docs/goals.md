@@ -25,8 +25,10 @@ cannot dispatch work without an explicit `/goal resume`.
 Immediately before every active root request, mevedel generates request-local
 Goal context from the durable record. It contains the objective, accounting,
 remaining budget, and any accepted-plan reference. It is never inserted into
-the visible or persisted transcript. Ordinary user messages during a Goal are
-steering turns and receive the same context and accounting as automatic turns.
+the visible or persisted transcript. Ordinary user messages that start a turn
+during a Goal receive the same context and accounting as automatic turns.
+Same-turn steering instead joins the already-running Goal turn at its next
+model interaction boundary and does not create or charge another turn.
 
 `/goal edit <objective>` revises the live objective and rotates the Goal ID
 while retaining status, budget, accounting, accepted-plan reference, and
@@ -95,11 +97,15 @@ after canonical request teardown. Dispatch requires all of the following:
 - the Goal is active;
 - no root request is running;
 - no permission or Plan interaction is pending;
-- no user message is queued; and
+- no queued follow-up is ready to run; and
 - the token budget is not exhausted.
 
-Queued user input always runs first. Once that steering turn settles, the Goal
-loop may continue. There is no maximum-turn or no-tool heuristic.
+Same-turn steering stays with its owning active request. After that request
+settles, queued follow-ups run before generic Goal continuation, one normal
+turn per entry. Follow-ups owned by a paused, blocked, or budget-limited Goal
+remain held until the Goal resumes. Once a Goal is complete, the next queued
+follow-up is an ordinary non-Goal message. There is no maximum-turn or no-tool
+heuristic.
 
 A transient transport failure is retried once. Terminal provider, transport,
 compaction, and other runtime failures pause the Goal with a concrete reason.

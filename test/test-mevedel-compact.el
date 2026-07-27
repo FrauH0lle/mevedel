@@ -926,6 +926,89 @@ missing or zero prompt-side usage cannot become the active baseline"
       (when (buffer-live-p chat-buf)
         (kill-buffer chat-buf)))))
 
+(mevedel-deftest mevedel--compact-main-wait-decision ()
+  ,test
+  (test)
+  :doc "evaluates continuation admission with the realized request policy"
+  (let* ((chat-buf (generate-new-buffer " *mevedel-compact-decision*"))
+         (policy '(:backend chosen-backend :model chosen-model
+                   :effort high :max-tokens 321
+                   :request-params (:temperature 0)))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf :history '(TRET)
+                           :data 'realized
+                           :mevedel-compaction-target-policy policy)))
+         captured)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel--compact-estimate-data-tokens)
+                   (lambda (data)
+                     (should (eq data 'realized))
+                     42))
+                  ((symbol-function 'mevedel--compact-should-compact-p)
+                   (lambda (estimate)
+                     (setq captured
+                           (list estimate gptel-backend gptel-model
+                                 gptel-reasoning-effort gptel-max-tokens
+                                 gptel--request-params))
+                     'admitted)))
+          (should
+           (equal (list :admission 'admitted :target-policy policy)
+                  (mevedel--compact-main-wait-decision fsm)))
+          (should
+           (equal '(42 chosen-backend chosen-model high 321
+                       (:temperature 0))
+                  captured)))
+      (kill-buffer chat-buf))))
+
+(mevedel-deftest mevedel--compact-defer-steering-p ()
+  ,test
+  (test)
+  :doc "caches one admission decision for the final WAIT gate"
+  (let* ((decision '(:admission (:target-pressure nil)))
+         (fsm (gptel-make-fsm :info nil)))
+    (cl-letf (((symbol-function 'mevedel--compact-main-wait-decision)
+               (lambda (_fsm) decision)))
+      (should (equal '(:target-pressure nil)
+                     (mevedel--compact-defer-steering-p fsm)))
+      (should (eq decision
+                  (plist-get (gptel-fsm-info fsm)
+                             :mevedel-compaction-wait-decision))))))
+
+(mevedel-deftest mevedel--compact-target-provider-wait ()
+  ,test
+  (test)
+  :doc "root compaction reinjects steering before provider dispatch"
+  (let ((fsm (gptel-make-fsm :info nil))
+        events)
+    (cl-letf (((symbol-function 'mevedel-tools--handle-steering-inject)
+               (lambda (_fsm after-compaction)
+                 (push (list 'steering after-compaction) events)))
+              ((symbol-function 'mevedel--compact-provider-wait)
+               (lambda (_fsm) (push 'provider events))))
+      (mevedel--compact-target-provider-wait '(:invocation nil) fsm))
+    (should (equal '((steering t) provider) (nreverse events))))
+  :doc "a new interaction hold prevents post-compact provider dispatch"
+  (let ((fsm (gptel-make-fsm :info nil))
+        sent)
+    (cl-letf (((symbol-function 'mevedel-tools--handle-steering-inject)
+              (lambda (actual-fsm _after-compaction)
+                 (setf (gptel-fsm-info actual-fsm)
+                       (plist-put (gptel-fsm-info actual-fsm)
+                                  :mevedel-pending-input-hold t))))
+              ((symbol-function 'mevedel--compact-provider-wait)
+               (lambda (_fsm) (setq sent t))))
+      (mevedel--compact-target-provider-wait '(:invocation nil) fsm))
+    (should-not sent))
+  :doc "agent compaction dispatches without root steering"
+  (let ((fsm (gptel-make-fsm :info nil))
+        sent)
+    (cl-letf (((symbol-function 'mevedel-tools--handle-steering-inject)
+               (lambda (&rest _) (error "Root steering called")))
+              ((symbol-function 'mevedel--compact-provider-wait)
+               (lambda (_fsm) (setq sent t))))
+      (mevedel--compact-target-provider-wait '(:invocation agent) fsm))
+    (should sent)))
+
 (mevedel-deftest mevedel--compact-handle-wait ()
   ,test
   (test)
@@ -967,6 +1050,27 @@ missing or zero prompt-side usage cannot become the active baseline"
             (mevedel--compact-handle-wait fsm))
           (should (= sent 0)))
       (kill-buffer chat-buf)))
+
+  :doc "consumes the admission decision cached before steering injection"
+  (with-temp-buffer
+    (let* ((decision '(:admission admitted :target-policy nil))
+           (fsm
+            (gptel-make-fsm
+             :info (list :buffer (current-buffer)
+                         :mevedel-compaction-wait-decision decision)))
+           captured)
+      (cl-letf (((symbol-function 'mevedel--compact-main-wait-decision)
+                 (lambda (_fsm) (error "Recomputed admission")))
+                ((symbol-function 'mevedel--compact-main-target)
+                 (lambda () 'target))
+                ((symbol-function 'mevedel--compact-handle-target-wait)
+                 (lambda (actual-fsm target admission
+                          &optional _pending-start)
+                   (setq captured (list actual-fsm target admission)))))
+        (mevedel--compact-handle-wait fsm))
+      (should (equal (list fsm 'target 'admitted) captured))
+      (should-not (plist-member (gptel-fsm-info fsm)
+                                :mevedel-compaction-wait-decision))))
 
   :doc "sends continuation directly when realized data is below threshold"
   (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
@@ -3211,6 +3315,12 @@ missing or zero prompt-side usage cannot become the active baseline"
          (workspace (mevedel-workspace-get-or-create
                      'project "compact-apply" tempdir "compact-apply"))
          (session (mevedel-session-create "main" workspace))
+         (steering
+          (mevedel-session-enqueue-pending-input
+           session 'steering '(:input "steer after compact")))
+         (follow-up
+          (mevedel-session-enqueue-pending-input
+           session 'follow-up '(:input "turn after compact")))
          (execution-state (mevedel-execution--state-for-session session))
          (buffer (generate-new-buffer " *mevedel-compact-apply*")))
     (unwind-protect
@@ -3233,6 +3343,8 @@ missing or zero prompt-side usage cannot become the active baseline"
                  :id "goal-compact" :objective "Finish the work"
                  :status 'active :tokens-used 0 :time-used-seconds 0
                  :turns-run 0))
+          (mevedel-session-set-pending-input-paused session t)
+          (mevedel-session-set-pending-input-failure-paused session t)
           (mevedel-session-persistence-ensure-files session buffer)
           (let* ((plan
                   (mevedel-view-stream-prepare-execution-row-archive
@@ -3248,6 +3360,13 @@ missing or zero prompt-side usage cannot become the active baseline"
              nil 0))
           (should (eq execution-state
                       (mevedel-session-execution-state session)))
+          (should (equal (list steering)
+                         (mevedel-session-pending-steering session)))
+          (should (equal (list follow-up)
+                         (mevedel-session-pending-follow-ups session)))
+          (should (mevedel-session-pending-input-paused session))
+          (should
+           (mevedel-session-pending-input-failure-paused session))
           (should (= 2 (mevedel-session-current-segment session)))
           (should (string-match-p "summary" (buffer-string)))
           (should (string-match "<!-- mevedel-hook-audit -->"

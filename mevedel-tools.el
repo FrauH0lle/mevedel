@@ -87,6 +87,10 @@
 (declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
 
+;; `mevedel-compact'
+(declare-function mevedel--compact-defer-steering-p
+                  "mevedel-compact" (fsm))
+
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions--commit-expansion
                   "mevedel-mentions" (session expansion))
@@ -667,8 +671,9 @@ sync with what the model actually saw."
        (equal request-id (plist-get entry :request-id)))
      (mevedel-session-pending-steering session))))
 
-(defun mevedel-tools--handle-steering-inject (fsm)
-  "WAIT-state handler: inject root steering for FSM's request."
+(defun mevedel-tools--handle-steering-inject (fsm &optional after-compaction)
+  "WAIT-state handler: inject root steering for FSM's request.
+AFTER-COMPACTION skips the already-completed automatic compaction gate."
   (let* ((info (gptel-fsm-info fsm))
          (buffer (plist-get info :buffer))
          (session
@@ -693,8 +698,14 @@ sync with what the model actually saw."
                 (lambda (entry)
                   (equal request-id (plist-get entry :request-id)))
                 (mevedel-session-pending-steering session))))
+         (compaction
+          (and (not after-compaction)
+               matching
+               (progn
+                 (require 'mevedel-compact)
+                 (mevedel--compact-defer-steering-p fsm))))
          (snapshot
-          (and (not paused) (not interaction) matching)))
+          (and (not paused) (not interaction) (not compaction) matching)))
     (plist-put info :mevedel-pending-input-hold
                (and matching (or paused interaction) t))
     (when snapshot

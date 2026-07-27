@@ -301,6 +301,42 @@
             (should (string-match-p "second steering" (buffer-string)))))
       (kill-buffer buf)))
 
+  :doc "automatic compaction defers steering until its post-compact boundary"
+  (let* ((session (mevedel-tools-test--make-session))
+         (backend (gptel-make-openai
+                   "Steering compact test" :stream nil :key "unused"
+                   :host "example.test"
+                   :models '(steering-compact-test)))
+         (buf (generate-new-buffer " *mt-steering-compact*"))
+         (data (list :messages []))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buf :backend backend :data data
+                           :history '(TRET)
+                           :mevedel-request-id "request-compact")))
+         (entry
+          (mevedel-session-enqueue-pending-input
+           session 'steering
+           '(:input "after compact" :request-id "request-compact"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel--compact-defer-steering-p)
+                     (lambda (_fsm) t)))
+            (mevedel-tools--handle-steering-inject fsm))
+          (should (eq entry
+                      (car (mevedel-session-pending-steering session))))
+          (should-not (plist-get (gptel-fsm-info fsm)
+                                 :mevedel-pending-input-hold))
+          (should (= 0 (length (plist-get data :messages))))
+          (mevedel-tools--handle-steering-inject fsm t)
+          (should-not (mevedel-session-pending-steering session))
+          (should (equal "after compact"
+                         (plist-get
+                          (aref (plist-get data :messages) 0)
+                          :content))))
+      (kill-buffer buf)))
+
   :doc "paused delivery holds matching steering at the model boundary"
   (let* ((session (mevedel-tools-test--make-session))
          (buf (generate-new-buffer " *mt-steering-paused*"))
