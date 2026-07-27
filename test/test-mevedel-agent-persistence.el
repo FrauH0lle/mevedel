@@ -307,21 +307,24 @@
 (mevedel-deftest mevedel-agent-persistence-sanitize-mailbox ()
   ,test
   (test)
-  :doc "keeps canonical MAIL, RESULT, and USER records in stored queue order"
+  :doc "keeps canonical MAIL, EXECUTION, RESULT, and USER records in stored order"
   (let* ((newer (list 2 0 0 0))
          (older (list 1 0 0 0))
          (raw
           (list
            (list :type 'RESULT :sender "/root/child" :recipient "/root"
                  :outcome 'completed :payload "done" :timestamp newer)
+           (list :type 'EXECUTION :sender "/root" :recipient "/root"
+                 :payload "execution" :timestamp newer)
            (list :type 'MAIL :sender "/root/child" :recipient "/root"
                  :payload "hello" :timestamp older)
            (list :type 'MAIL :sender "bad" :recipient "/root"
                  :payload "drop" :timestamp older)))
          (clean (mevedel-agent-persistence-sanitize-mailbox raw "/root")))
-    (should (= 2 (length clean)))
+    (should (= 3 (length clean)))
     (should (eq 'RESULT (plist-get (car clean) :type)))
-    (should (equal "hello" (plist-get (cadr clean) :payload))))
+    (should (eq 'EXECUTION (plist-get (cadr clean) :type)))
+    (should (equal "hello" (plist-get (caddr clean) :payload))))
   :doc "drops wrong recipients, malformed outcomes, payloads, and timestamps"
   (dolist (entry
            (list
@@ -329,6 +332,8 @@
                   :payload "x" :timestamp '(1 0 0 0))
             (list :type 'RESULT :sender "/root/a" :recipient "/root"
                   :outcome 'future :payload "x" :timestamp '(1 0 0 0))
+            (list :type 'EXECUTION :sender "/root/a" :recipient "/root"
+                  :payload "x" :timestamp '(1 0 0 0))
             (list :type 'MAIL :sender "/root/a" :recipient "/root"
                   :payload 4 :timestamp '(1 0 0 0))
             (list :type 'MAIL :sender "/root/a" :recipient "/root"

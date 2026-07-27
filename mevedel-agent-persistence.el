@@ -75,12 +75,14 @@ callers reverse it only when delivering the mailbox as FIFO."
      for payload = (and type (plist-get entry :payload))
      for timestamp = (and type (plist-get entry :timestamp))
      when
-     (and (memq type '(MAIL RESULT USER))
+     (and (memq type '(EXECUTION MAIL RESULT USER))
           (equal target recipient)
           (stringp payload)
           (timestamp-p timestamp)
           (pcase type
             ('USER (and (equal sender "user") (equal recipient "/root")))
+            ('EXECUTION
+             (and (equal sender "/root") (equal recipient "/root")))
             ('MAIL (mevedel-agent-path-p sender))
             ('RESULT
              (and (mevedel-agent-path-p sender)

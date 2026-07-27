@@ -487,11 +487,12 @@ Return the resolved recipient path.  Sending never activates a turn."
     (error "Invalid root execution result"))
   (mevedel-agent-control--enqueue
    session "/root"
-   (list :type 'MAIL
+   (list :type 'EXECUTION
          :sender "/root"
          :recipient "/root"
          :payload body
-         :timestamp (current-time))))
+         :timestamp (current-time)))
+  t)
 
 (defun mevedel-agent-control-list-agents (session &optional path-prefix)
   "Return SESSION's minimal roster, optionally below PATH-PREFIX."

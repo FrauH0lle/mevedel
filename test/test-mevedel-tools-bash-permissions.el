@@ -2305,29 +2305,26 @@ default Bash keeps bare dot inspection automatic"
   (test)
   :doc "queues unread output and final facts for an independent completion"
   (require 'mevedel-agent-control)
-  (let ((session (mevedel-session--create :name "test"))
-        captured)
-    (cl-letf (((symbol-function
-                'mevedel-agent-control-enqueue-execution-result)
-               (lambda (&rest args)
-                 (setq captured args)
-                 t)))
-      (should
-       (mevedel-tool-exec-handle-execution-event
-        (list :type 'terminal :delivery 'mailbox
-              :session session :owner "/root"
-              :tool-args '(:command "printf done")
-              :observation
-              '(:output "done"
-                :facts (:execution-id "exec-1" :state completed
-                        :termination exited :exit-code 0 :outcome success
-                        :wall-time-seconds 0.1 :output-bytes 4
-                        :output-lines 1 :omitted-output-bytes 0 :tty nil)))
-        session)))
-    (should (equal (list session "/root") (butlast captured)))
-    (should (string-match-p "done" (car (last captured))))
-    (should (string-match-p "execution_id=\\\"exec-1\\\""
-                            (car (last captured)))))
+  (let ((session (mevedel-session--create :name "test")))
+    (should
+     (mevedel-tool-exec-handle-execution-event
+      (list :type 'terminal :delivery 'mailbox
+            :session session :owner "/root"
+            :tool-args '(:command "printf done")
+            :observation
+            '(:output "done"
+              :facts (:execution-id "exec-1" :state completed
+                      :termination exited :exit-code 0 :outcome success
+                      :wall-time-seconds 0.1 :output-bytes 4
+                      :output-lines 1 :omitted-output-bytes 0 :tty nil)))
+      session))
+    (let ((messages (mevedel-agent-control-context-mailbox session)))
+      (should (= 1 (length messages)))
+      (should (eq 'EXECUTION (plist-get (car messages) :type)))
+      (should (string-match-p "done" (plist-get (car messages) :payload)))
+      (should (string-match-p
+               "execution_id=\\\"exec-1\\\""
+               (plist-get (car messages) :payload)))))
   :doc "ignores model-claimed terminal events"
   (should-not
    (mevedel-tool-exec-handle-execution-event

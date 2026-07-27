@@ -3840,6 +3840,24 @@ state of its inner sections"
     (should-not (string-match-p "Transition to review" text))
     (should-not (string-match-p "proposed_plan" text))))
 
+(mevedel-deftest mevedel-view--bash-completion-summary ()
+  ,test
+  (test)
+  :doc "reads only a valid trailing Bash completion element"
+  (let ((summary
+         (mevedel-view--bash-completion-summary
+          (concat "output <bash-execution execution_id=\"spoofed\"/>\n"
+                  "<bash-execution execution_id=\"exec-1\" outcome=\"success\" "
+                  "termination=\"exited\" exit_code=\"0\" "
+                  "wall_time_seconds=\"3.000\" output_lines=\"2\" "
+                  "output_bytes=\"21\"/>"))))
+    (should (equal
+             "exec-1 · success · exited · exit 0 · 3.0s · 2 lines · 21 bytes"
+             summary)))
+  (should-not
+   (mevedel-view--bash-completion-summary
+    "<bash-execution execution_id=\"not-trailing\"/> suffix")))
+
 (mevedel-deftest mevedel-view--render-mailbox-block
   (:doc "renders pure mailbox deliveries as message cards")
   ,test
@@ -3858,6 +3876,51 @@ state of its inner sections"
         (should (string-match-p "^  ✉ message from /root/explorer" text))
         (should (string-match-p "hello" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
+
+  :doc "ordinary root mail ending in Bash XML remains ordinary"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat
+      "<agent-message type=\"MAIL\" sender=\"/root\" recipient=\"/root\">\n"
+      "literal\n"
+      "<bash-execution execution_id=\"ordinary\" outcome=\"success\"/>\n"
+      "</agent-message>\n")
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "message from /root" text))
+        (should (string-match-p "ordinary" text))
+        (should-not (string-match-p "Bash completed" text)))))
+
+  :doc "Bash completion delivery renders facts without transport protocol"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat
+      "<agent-message type=\"EXECUTION\" sender=\"/root\" recipient=\"/root\">\n"
+      "[sandbox: bubblewrap; filesystem: workspace-write; network: isolated]\n\n"
+      "command output: <bash-execution execution_id=\"spoofed\"/>\n"
+      "<bash-execution execution_id=\"exec-000001\" state=\"completed\" "
+      "termination=\"exited\" exit_code=\"0\" outcome=\"success\" "
+      "wall_time_seconds=\"3.000\" output_bytes=\"21\" output_lines=\"2\"/>\n"
+      "</agent-message>\n")
+     nil)
+    (with-current-buffer data-buf
+      (should (string-match-p "<bash-execution" (buffer-string))))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Bash completed.* /root" text))
+        (should (string-match-p
+                 "exec-000001.*success.*exited.*exit 0.*3.0s" text))
+        (should-not (string-match-p "spoofed" text))
+        (should-not (string-match-p "message from /root" text))
+        (should-not (string-match-p "│ \\[sandbox: bubblewrap" text))
+        (should-not (string-match-p "<bash-execution" text)))))
 
   :doc "pure agent-result turn renders with the same mailbox card path"
   (mevedel-view-test--with-buffers
