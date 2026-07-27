@@ -596,6 +596,9 @@ alist with mevedel-specific handlers added:
                                mevedel--current-directive-uuid)
                               (when (and mevedel--current-request
                                          (fboundp 'mevedel-request-id))
+                                (setf (mevedel-request-fsm
+                                       mevedel--current-request)
+                                      fsm)
                                 (plist-put
                                  info :mevedel-request-id
                                  (mevedel-request-id

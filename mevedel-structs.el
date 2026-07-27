@@ -463,6 +463,14 @@ Return the copied entry with a stable session-local identity and category."
   "Store opaque execution-module STATE on SESSION."
   (setf (mevedel-session-execution-state session) state))
 
+(defun mevedel-session--set-dropped-file-grants (session paths)
+  "Replace SESSION's pending dropped-file grants with PATHS."
+  (setf (mevedel-session-dropped-file-grants session) paths))
+
+(defun mevedel-session--set-active-dropped-file-grants (session paths)
+  "Replace SESSION's active dropped-file grants with PATHS."
+  (setf (mevedel-session-active-dropped-file-grants session) paths))
+
 (defun mevedel-session--normalize-dropped-file-path (path)
   "Return PATH as an expanded file name, or nil when invalid."
   (when (and (stringp path) (not (string-empty-p path)))
@@ -532,6 +540,7 @@ Return the expanded paths activated."
 Created at request start, cleared in the termination handler."
   id                ; process-unique request correlation id
   session           ; back-reference to mevedel-session
+  fsm               ; owning root gptel FSM, or nil for non-provider requests
   file-snapshots    ; hash-table: filepath -> original content at request start
   directive-uuid    ; UUID of directive being processed, if any
   pending-plan      ; pending plan action plist

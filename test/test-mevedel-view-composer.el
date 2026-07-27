@@ -244,6 +244,11 @@
   '(:updated-input "rewritten prompt"
     :system-message "changed by test hook"))
 
+(defun mevedel-view-test--add-prompt-hook-context (event)
+  "Capture prompt EVENT and add model-visible context."
+  (setq mevedel-view-test--seen-prompt (plist-get event :prompt))
+  '(:additional-context "ordinary steering hook context"))
+
 
 ;;
 ;;; Composer editing
@@ -2573,7 +2578,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create :name "main"))
            (request (mevedel-request--create
-                     :id "request-1" :session session)))
+                     :id "request-1" :session session
+                     :fsm (gptel-make-fsm :state 'TOOL))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session
                     mevedel--current-request request))
@@ -2591,6 +2597,157 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (equal "request-1" (plist-get entry :request-id)))
         (should (eq 'steering (plist-get entry :category)))
         (should-not (mevedel-session-pending-follow-ups session)))))
+
+  :doc "ordinary steering binds a file and reads its latest contents at delivery"
+  (let* ((root (make-temp-file "mevedel-steering-file-" t))
+         (file (file-name-concat root "target.txt"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'test :id root :root root :name "steering-file"
+           :file-cache
+           (mevedel-file-cache--create
+            :table (make-hash-table :test #'equal)
+            :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" workspace))
+         (backend
+          (gptel-make-openai
+           "Steering file" :stream nil :key "unused"
+           :host "example.test" :models '(steering-file-test)))
+         (data (list :messages []))
+         fsm request)
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "FILE CONTENT V1\n"))
+          (mevedel-view-test--with-buffers
+            (setq fsm
+                  (gptel-make-fsm
+                   :state 'TOOL
+                   :info (list :buffer data-buf :backend backend :data data
+                               :history '(TRET)
+                               :mevedel-request-id "request-file")))
+            (setq request
+                  (mevedel-request--create
+                   :id "request-file" :session session :fsm fsm))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session
+                          mevedel--workspace workspace
+                          mevedel--current-request request))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "Inspect @file:target.txt")
+              (mevedel-view-send))
+            (let* ((entry
+                    (car (mevedel-session-pending-steering session)))
+                   (input (plist-get entry :input))
+                   (start (string-match "@file:" input)))
+              (should
+               (equal file
+                      (plist-get
+                       (get-text-property
+                        start 'mevedel-mention-binding input)
+                       :path)))
+              (with-temp-file file (insert "FILE CONTENT V2\n"))
+              (mevedel-tools--handle-steering-inject fsm)
+              (should-not (mevedel-session-pending-steering session))
+              (should
+               (eq 'committed
+                   (mevedel-prompt-submission-state
+                    (plist-get entry :submission)))))
+            (let ((payload (format "%S" (plist-get data :messages))))
+              (should (string-match-p "FILE CONTENT V2" payload))
+              (should-not (string-match-p "FILE CONTENT V1" payload)))
+            (with-current-buffer data-buf
+              (should (string-match-p
+                       (regexp-quote "@file:target.txt")
+                       (buffer-string))))))
+      (delete-directory root t)))
+
+  :doc "ordinary steering accepts an inline skill and prompt hook context"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA ORDINARY STEERING"))
+    (let* ((mevedel-hook-rules
+            '((UserPromptSubmit
+               ((:matcher "*"
+                          :hooks
+                          ((:type elisp
+                                  :function
+                                  mevedel-view-test--add-prompt-hook-context)))))))
+           (backend
+            (gptel-make-openai
+             "Steering prepared" :stream nil :key "unused"
+             :host "example.test" :models '(steering-prepared-test)))
+           (data (list :messages []))
+           (fsm
+            (gptel-make-fsm
+             :state 'TOOL
+             :info (list :buffer data-buf :backend backend :data data
+                         :history '(TRET)
+                         :mevedel-request-id "request-prepared")))
+           (request
+            (mevedel-request--create
+             :id "request-prepared" :session session :fsm fsm)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request request))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert "Use $alpha")
+        (mevedel-view-send))
+      (let ((entry (car (mevedel-session-pending-steering session))))
+        (should (string-match-p
+                 "ALPHA ORDINARY STEERING"
+                 (plist-get entry :model-input)))
+        (should (string-match-p
+                 "ordinary steering hook context"
+                 (plist-get entry :model-input))))
+      (mevedel-tools--handle-steering-inject fsm)
+      (let ((payload (format "%S" (plist-get data :messages))))
+        (should (string-match-p "ALPHA ORDINARY STEERING" payload))
+        (should (string-match-p
+                 "ordinary steering hook context" payload)))))
+
+  :doc "a lost ordinary steering race restores the exact composer state"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "steering-race"))
+           (fsm (gptel-make-fsm :state 'TOOL))
+           (request
+            (mevedel-request--create
+             :id "request-race" :session session :fsm fsm))
+           (grant "/tmp/steering-race.txt")
+           snapshot point-offset notice)
+      (setf (mevedel-session-dropped-file-grants session) (list grant))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--current-request request))
+      (cl-letf
+          (((symbol-function 'mevedel-hooks-run-event)
+            (lambda (_event _payload callback &rest _)
+              (with-current-buffer data-buf
+                (setq-local mevedel--current-request nil))
+              (funcall callback nil)))
+           ((symbol-function 'message)
+            (lambda (format-string &rest args)
+              (setq notice (apply #'format format-string args)))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert (propertize "race prompt" 'test-property 'preserved))
+          (goto-char (+ (mevedel-view--input-start) 4))
+          (setq snapshot
+                (buffer-substring
+                 (mevedel-view--input-start) (point-max))
+                point-offset (- (point) (mevedel-view--input-start)))
+          (mevedel-view-send)
+          (should
+           (equal-including-properties
+            snapshot
+            (buffer-substring
+             (mevedel-view--input-start) (point-max))))
+          (should (= point-offset
+                     (- (point) (mevedel-view--input-start))))))
+      (should (equal (list grant)
+                     (mevedel-session-dropped-file-grants session)))
+      (should-not (mevedel-session-pending-steering session))
+      (should-not (mevedel-session-pending-follow-ups session))
+      (should (string-match-p "C-c TAB" notice))))
 
   :doc "Here Goal reservation queues post-acceptance input under its identity"
   (mevedel-view-test--with-buffers

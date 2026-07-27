@@ -26,6 +26,7 @@
 (declare-function gptel--update-status "ext:gptel"
 		  (msg &optional face))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
@@ -122,6 +123,8 @@
 		  "mevedel-prompt-submission" (cl-x) t)
 (declare-function mevedel-prompt-submission-outcome
 		  "mevedel-prompt-submission" (cl-x) t)
+(declare-function mevedel-prompt-submission-reserve
+		  "mevedel-prompt-submission" (submission))
 (declare-function mevedel-prompt-submission-restore
 		  "mevedel-prompt-submission" (submission))
 (declare-function mevedel-prompt-submission-set-outcome
@@ -193,13 +196,24 @@
 (declare-function mevedel-request-begin "mevedel-structs"
 		  (session &optional directive-uuid))
 (declare-function mevedel-request-end "mevedel-structs" nil)
+(declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session--set-active-dropped-file-grants
+                  "mevedel-structs" (session paths))
+(declare-function mevedel-session--set-dropped-file-grants
+                  "mevedel-structs" (session paths))
+(declare-function mevedel-session-active-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-activate-dropped-file-grants
 		  "mevedel-structs" (session paths))
 (declare-function mevedel-session-add-dropped-file-grant
 		  "mevedel-structs" (session path))
 (declare-function mevedel-session-clear-dropped-file-grants
 		  "mevedel-structs" (session))
+(declare-function mevedel-session-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-enqueue-pending-input
+                  "mevedel-structs" (session category entry))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-hook-context-pending
 		  "mevedel-structs" (cl-x) t)
@@ -210,8 +224,6 @@
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pop-dropped-file-grants
 		  "mevedel-structs" (session paths))
-(declare-function mevedel-session-enqueue-pending-input
-                  "mevedel-structs" (session category entry))
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
@@ -1122,6 +1134,34 @@ means a failed attempt leaves the exact source attached for a retry."
          (plist-get range :binding))))
     (string-trim bound-input)))
 
+(defun mevedel-view--composer-snapshot (session)
+  "Capture the editable composer and pending grants for SESSION."
+  (let ((start (mevedel-view--input-start)))
+    (list :text (buffer-substring start (point-max))
+          :point-offset (- (point) start)
+          :dropped-file-grants
+          (copy-sequence (mevedel-session-dropped-file-grants session)))))
+
+(defun mevedel-view--restore-composer-snapshot (snapshot session)
+  "Restore SNAPSHOT for SESSION when its visible draft is still current."
+  (let* ((start (mevedel-view--input-start))
+         (text (plist-get snapshot :text)))
+    (when (equal (buffer-substring-no-properties start (point-max))
+                 (substring-no-properties text))
+      (let ((inhibit-read-only t))
+        (with-silent-modifications
+          (delete-region start (point-max))
+          (goto-char start)
+          (insert text)))
+      (mevedel-session--set-dropped-file-grants
+       session
+       (copy-sequence
+        (plist-get snapshot :dropped-file-grants)))
+      (goto-char
+       (min (point-max)
+            (+ start (plist-get snapshot :point-offset))))
+      t)))
+
 (defun mevedel-view--clear-input ()
   "Clear the user's composer text, leaving the prompt in place."
   (mevedel-view--ensure-interactive-chat-view)
@@ -1255,26 +1295,85 @@ means a failed attempt leaves the exact source attached for a retry."
       (mevedel-view--schedule-late-follow-up-drain)
       entry)))
 
-(defun mevedel-view--queue-steering (input request)
-  "Queue plain INPUT as same-turn steering for REQUEST."
-  (setq input (mevedel--normalize-message-text input))
-  (let ((session (mevedel-view--session)))
-    (unless (and session request)
-      (user-error "No active request for steering"))
-    (let ((entry
-           (mevedel-session-enqueue-pending-input
-            session 'steering
-            (list :input input
-                  :request-id (mevedel-request-id request)
-                  :queued-at-time (float-time)
-                  :queued-at-turn
-                  (or (mevedel-session-turn-count session) 0)))))
-      (mevedel-view-history-add input)
-      (when (equal-including-properties (mevedel-view--input-text) input)
-        (mevedel-view--clear-input))
-      (mevedel-view--interaction-rebuild)
-      (message "mevedel: queued steering for this turn")
-      entry)))
+(defun mevedel-view--steering-validation-expansion (text session)
+  "Expand TEXT for steering validation without committing its effects."
+  (let* ((paths (mevedel-view--mentioned-file-paths text))
+         (pending (mevedel-session-dropped-file-grants session))
+         (temporary-grants (cl-intersection paths pending :test #'equal))
+         (active (mevedel-session-active-dropped-file-grants session)))
+    (unwind-protect
+        (progn
+          (mevedel-session--set-active-dropped-file-grants
+           session (append temporary-grants active))
+          (with-current-buffer mevedel--data-buffer
+            (require 'mevedel-mentions)
+            (mevedel-mentions-expand-user-input text session)))
+      (mevedel-session--set-active-dropped-file-grants session active))))
+
+(defun mevedel-view--queue-prepared-steering (submission request)
+  "Queue accepted prompt SUBMISSION as steering for REQUEST."
+  (let* ((session (mevedel-view--session))
+         (outcome (mevedel-prompt-submission-outcome submission))
+         (request-context (plist-get outcome :request-context))
+         (model-input (plist-get outcome :model-input))
+         (fsm (and request (mevedel-request-fsm request)))
+         (current-request
+          (and (buffer-live-p mevedel--data-buffer)
+               (buffer-local-value 'mevedel--current-request
+                                   mevedel--data-buffer))))
+    (cond
+     ((plist-get outcome :fork-outcome)
+      (message "mevedel: fork skills cannot steer; use C-c TAB")
+      nil)
+     ((not (mevedel-view--steering-request-context-supported-p
+            request-context))
+      (message "mevedel: skill policy cannot steer; use C-c TAB")
+      nil)
+     ((or (not (eq request current-request))
+          (not fsm)
+          (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT)))
+      (message "mevedel: request can no longer be steered; use C-c TAB")
+      nil)
+     (t
+      (let ((expansion
+             (mevedel-view--steering-validation-expansion
+              model-input session)))
+        (if (plist-get expansion :media-contexts)
+            (progn
+              (message
+               "mevedel: media cannot steer an active request; use C-c TAB")
+              nil)
+          (let* ((input
+                  (mevedel-prompt-submission-display-text submission))
+                 (dropped-file-grants
+                  (mevedel-view--pop-dropped-file-grants-for-input
+                   input session))
+                 (entry
+                  (progn
+                    (mevedel-prompt-submission-reserve submission)
+                    (mevedel-session-enqueue-pending-input
+                     session 'steering
+                     (list
+                      :input input
+                      :model-input model-input
+                      :transcript-payload
+                      (concat (plist-get outcome :transcript-input)
+                              (or (plist-get outcome :render-data) ""))
+                      :hook-audits (plist-get outcome :hook-audits)
+                      :request-context request-context
+                      :submission submission
+                      :dropped-file-grants dropped-file-grants
+                      :request-id (mevedel-request-id request)
+                      :queued-at-time (float-time)
+                      :queued-at-turn
+                      (or (mevedel-session-turn-count session) 0))))))
+            (mevedel-view-history-add input)
+            (when (equal-including-properties
+                   (mevedel-view--input-text) input)
+              (mevedel-view--clear-input))
+            (mevedel-view--interaction-rebuild)
+            (message "mevedel: queued steering for this turn")
+            entry)))))))
 
 (defun mevedel-view-clear-pending-input ()
   "Clear all pending input for the current session."
@@ -1726,10 +1825,12 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
          (request-context (plist-get outcome :request-context)))
     (cond
      ((plist-get outcome :fork-outcome)
-      (message "mevedel: fork skills cannot steer a waiting turn"))
+      (message "mevedel: fork skills cannot steer a waiting turn")
+      nil)
      ((not (mevedel-view--steering-request-context-supported-p
             request-context))
-      (message "mevedel: skill policy cannot steer an active request"))
+      (message "mevedel: skill policy cannot steer an active request")
+      nil)
      (t
       (let ((expansion
              (with-current-buffer mevedel--data-buffer
@@ -1738,10 +1839,12 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
                 (plist-get outcome :model-input) session))))
         (cond
          ((plist-get expansion :media-contexts)
-          (message "mevedel: media mentions cannot steer an active request"))
+          (message "mevedel: media mentions cannot steer an active request")
+          nil)
          ((not (mevedel-agent-control-root-waiting-p session))
           (mevedel-prompt-submission-restore submission)
-          (message "mevedel: turn is no longer waiting; use C-c TAB"))
+          (message "mevedel: turn is no longer waiting; use C-c TAB")
+          nil)
          ((mevedel-agent-control-steer-user
            session (plist-get expansion :text)
            (lambda ()
@@ -1761,7 +1864,8 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
          (mevedel-view--finish-prepared-steering submission))
          (t
           (mevedel-prompt-submission-restore submission)
-          (message "mevedel: turn is no longer waiting; use C-c TAB"))))))))
+          (message "mevedel: turn is no longer waiting; use C-c TAB")
+          nil)))))))
 
 (defun mevedel-view-send-follow-up ()
   "Queue the composer as a follow-up, or send normally while idle."
@@ -1825,6 +1929,8 @@ fork."
     (user-error "Session is open read-only (another host holds the lock)"))
   (let* ((session (buffer-local-value 'mevedel--session
                                       mevedel--data-buffer))
+         (snapshot (and session
+                        (mevedel-view--composer-snapshot session)))
          (input (if session
                     (mevedel-view--bind-input-mentions session)
                   (mevedel-view--input-text))))
@@ -1848,13 +1954,52 @@ fork."
                 (mevedel-view-history-add input)
                 (mevedel-view--clear-input))
             (if slash-parsed
-                (user-error "A request is already active -- wait or abort first")
+                (progn
+                  (when snapshot
+                    (mevedel-view--restore-composer-snapshot
+                     snapshot session))
+                  (user-error
+                   "A request is already active -- wait or abort first"))
               (require 'mevedel-agent-control)
               (if (mevedel-agent-control-root-waiting-p session)
                   (mevedel-view--submit-planned-input
-                   input nil #'ignore #'mevedel-view--deliver-prepared-steering)
+                   input nil
+                   (lambda ()
+                     (when snapshot
+                       (mevedel-view--restore-composer-snapshot
+                        snapshot session)))
+                   (lambda (submission)
+                     (unless
+                         (mevedel-view--deliver-prepared-steering submission)
+                       (when snapshot
+                         (mevedel-view--restore-composer-snapshot
+                          snapshot session)))))
                 (if active-request
-                    (mevedel-view--queue-steering input active-request)
+                    (condition-case err
+                        (mevedel-view--submit-planned-input
+                         input nil
+                         (lambda ()
+                           (when snapshot
+                             (mevedel-view--restore-composer-snapshot
+                              snapshot session))
+                           (message
+                            "mevedel: steering preparation failed; use C-c TAB"))
+                         (lambda (submission)
+                           (unless
+                               (mevedel-view--queue-prepared-steering
+                                submission active-request)
+                             (when snapshot
+                               (mevedel-view--restore-composer-snapshot
+                                snapshot session)))))
+                      (error
+                       (when snapshot
+                         (mevedel-view--restore-composer-snapshot
+                          snapshot session))
+                       (user-error "%s; use C-c TAB for a follow-up"
+                                   (error-message-string err))))
+                  (when snapshot
+                    (mevedel-view--restore-composer-snapshot
+                     snapshot session))
                   (user-error
                    "Goal handoff is reserved -- use C-c TAB for a follow-up")))))
         (cond
@@ -1902,8 +2047,10 @@ fork."
            (lambda ()
              (mevedel-view-history-add input)
              (mevedel-view--fork-if-pending))))))))
-  ;; Ensure point ends up in the input zone.
-  (goto-char (point-max)))
+  ;; Accepted sends clear the draft and land at the new composer end.
+  ;; Rejected sends preserve the exact input-relative point.
+  (unless (mevedel-view--point-in-input-region-p)
+    (goto-char (point-max))))
 
 (defun mevedel-view--send-local-goal (input args)
   "Run pre-send check and start local `/goal' with ARGS.
