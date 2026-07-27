@@ -115,6 +115,10 @@
                   "mevedel-view-agent" (&optional event))
 (defvar mevedel-view--agent-transcript-p)
 
+;; `mevedel-pending-inputs'
+(declare-function mevedel-pending-inputs-clear
+                  "mevedel-pending-inputs" ())
+
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--effective-permission-mode
                   "mevedel-view-composer" ())
@@ -128,8 +132,6 @@
 (declare-function mevedel-view--position-in-input-region-p
                   "mevedel-view-composer" (position))
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
-(declare-function mevedel-view-clear-pending-input
-                  "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-initialize
                   "mevedel-view-composer" ())
 (defvar mevedel-view--composer-keymap-overlay)
@@ -463,7 +465,7 @@ above `mevedel-view--input-marker'."
   "C-g" #'mevedel-view-abort
   "C-c C-k" #'mevedel-view-abort
   "C-c C-o" #'mevedel-menu
-  "C-c C-q" #'mevedel-view-clear-pending-input)
+  "C-c C-q" #'mevedel-pending-inputs-clear)
 
 (defun mevedel-view--display-fragment-keymap (&rest maps)
   "Return a composed display-fragment keymap from MAPS.

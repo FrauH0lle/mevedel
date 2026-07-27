@@ -1426,20 +1426,6 @@ longer accepts the prepared input."
       (message "mevedel: queued steering for this turn")
       entry)))
 
-(defun mevedel-view-clear-pending-input ()
-  "Clear all pending input for the current session."
-  (interactive)
-  (mevedel-view--ensure-interactive-chat-view)
-  (let ((session (mevedel-view--session)))
-    (unless (and session (mevedel-view--pending-follow-ups session))
-      (user-error "No pending input"))
-    (dolist (entry (reverse (mevedel-view--pending-follow-ups session)))
-      (when-let* ((submission (plist-get entry :submission)))
-        (mevedel-prompt-submission-restore submission)))
-    (mevedel-view--set-pending-follow-ups nil session)
-    (mevedel-view--interaction-rebuild)
-    (message "mevedel: cleared pending input")))
-
 (defun mevedel-view--delete-skill-argument-hint ()
   "Remove the composer skill argument hint overlay."
   (when (overlayp mevedel-view--skill-argument-hint-overlay)

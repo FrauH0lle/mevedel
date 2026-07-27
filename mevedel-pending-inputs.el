@@ -16,8 +16,11 @@
 (declare-function gptel--fsm-transition "ext:gptel-request"
                   (machine &optional new-state))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 
 ;; `mevedel-cockpit'
+(declare-function mevedel-cockpit-context-data-buffer
+                  "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-context-view-buffer
@@ -39,9 +42,15 @@
 (declare-function mevedel-mention-bindings-copy-text
                   "mevedel-mention-bindings" (text))
 
+;; `mevedel-prompt-submission'
+(declare-function mevedel-prompt-submission-restore
+                  "mevedel-prompt-submission" (submission))
+
 ;; `mevedel-structs'
+(declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-input-paused
@@ -52,6 +61,7 @@
                   "mevedel-structs" (session paused))
 (declare-function mevedel-session-set-pending-inputs
                   "mevedel-structs" (session category entries))
+(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 
 ;; `mevedel-view-composer'
@@ -84,10 +94,19 @@
                   "mevedel-view-interaction" ())
 
 ;; `tabulated-list'
+(declare-function tabulated-list-get-id "tabulated-list" ())
 (declare-function tabulated-list-mode "tabulated-list" ())
+(declare-function tabulated-list-put-tag
+                  "tabulated-list" (tag &optional advance))
 
 (defconst mevedel-pending-inputs-buffer-name "*mevedel pending inputs*"
   "Name of the Pending Inputs cockpit buffer.")
+
+(defvar-local mevedel-pending-inputs--marked-ids nil
+  "Pending-input identities marked for deletion.")
+
+(defvar-local mevedel-pending-inputs--converting-id nil
+  "Pending-input identity undergoing asynchronous conversion.")
 
 (defun mevedel-pending-inputs--session (&optional context)
   "Return the Pending Inputs session for CONTEXT."
@@ -155,6 +174,33 @@
   "Return the selected pending-input row projection."
   (mevedel-cockpit-surface-selected))
 
+(defun mevedel-pending-inputs--entries (session category)
+  "Return SESSION pending entries in CATEGORY."
+  (if (eq category 'steering)
+      (mevedel-session-pending-steering session)
+    (mevedel-session-pending-follow-ups session)))
+
+(defun mevedel-pending-inputs--refresh (&optional selected-id)
+  "Refresh live pending-input UI, preserving SELECTED-ID and deletion marks."
+  (let* ((context (mevedel-cockpit-surface-context))
+         (view (mevedel-cockpit-context-view-buffer context)))
+    (when (buffer-live-p view)
+      (with-current-buffer view
+        (mevedel-view--interaction-rebuild)))
+    (mevedel-cockpit-surface-refresh selected-id)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when (member (tabulated-list-get-id)
+                      mevedel-pending-inputs--marked-ids)
+          (tabulated-list-put-tag "D"))
+        (forward-line 1)))))
+
+(defun mevedel-pending-inputs-refresh ()
+  "Refresh the live Pending Inputs cockpit."
+  (interactive)
+  (mevedel-pending-inputs--refresh (tabulated-list-get-id)))
+
 (defun mevedel-pending-inputs--replace
     (session category id replacement)
   "Replace pending entry ID in SESSION CATEGORY with REPLACEMENT."
@@ -171,6 +217,25 @@
     (let ((updated (copy-sequence entries)))
       (setcar (nthcdr position updated) replacement)
       (mevedel-session-set-pending-inputs session category updated))
+    replacement))
+
+(defun mevedel-pending-inputs--move-between
+    (session source target id replacement)
+  "Move ID from SESSION SOURCE to TARGET tail as REPLACEMENT."
+  (let ((source-entries (mevedel-pending-inputs--entries session source)))
+    (unless (cl-find id source-entries
+                     :key (lambda (entry) (plist-get entry :id))
+                     :test #'equal)
+      (user-error "Pending input is no longer queued"))
+    (mevedel-session-set-pending-inputs
+     session source
+     (cl-remove id source-entries
+                :key (lambda (entry) (plist-get entry :id))
+                :test #'equal))
+    (mevedel-session-set-pending-inputs
+     session target
+     (append (mevedel-pending-inputs--entries session target)
+             (list replacement)))
     replacement))
 
 (defun mevedel-pending-inputs--restore-entry-metadata
@@ -343,6 +408,236 @@
     (mevedel-pending-inputs--return-to-cockpit state)
     (message "mevedel: pending-input edit cancelled")))
 
+(defun mevedel-pending-inputs--move (offset)
+  "Move selected pending input by OFFSET inside its category."
+  (let* ((context (mevedel-cockpit-surface-context))
+         (session (mevedel-pending-inputs--session context))
+         (item (mevedel-pending-inputs--selected))
+         (category (plist-get item :category))
+         (id (plist-get item :id))
+         (entries (copy-sequence
+                   (mevedel-pending-inputs--entries session category)))
+         (index (cl-position id entries
+                             :key (lambda (entry) (plist-get entry :id))
+                             :test #'equal))
+         (target (and index (+ index offset))))
+    (unless (and target (>= target 0) (< target (length entries)))
+      (user-error "Pending input is already at the category boundary"))
+    (cl-rotatef (nth index entries) (nth target entries))
+    (mevedel-session-set-pending-inputs session category entries)
+    (mevedel-pending-inputs--refresh id)))
+
+(defun mevedel-pending-inputs-move-up ()
+  "Move the selected pending input up within its category."
+  (interactive)
+  (mevedel-pending-inputs--move -1))
+
+(defun mevedel-pending-inputs-move-down ()
+  "Move the selected pending input down within its category."
+  (interactive)
+  (mevedel-pending-inputs--move 1))
+
+(defun mevedel-pending-inputs--current-request (context)
+  "Return CONTEXT's current root request, or nil."
+  (when-let* ((data-buffer
+               (mevedel-cockpit-context-data-buffer context))
+              ((buffer-live-p data-buffer)))
+    (buffer-local-value 'mevedel--current-request data-buffer)))
+
+(defun mevedel-pending-inputs--copy-input (entry)
+  "Return ENTRY's propertized input copy."
+  (require 'mevedel-mention-bindings)
+  (mevedel-mention-bindings-copy-text (plist-get entry :input)))
+
+(defun mevedel-pending-inputs--conversion-finished
+    (cockpit context selected-id)
+  "Refresh COCKPIT and CONTEXT after converting SELECTED-ID."
+  (if (buffer-live-p cockpit)
+      (with-current-buffer cockpit
+        (setq mevedel-pending-inputs--converting-id nil)
+        (mevedel-pending-inputs--refresh selected-id))
+    (when-let* ((view (mevedel-cockpit-context-view-buffer context)))
+      (with-current-buffer view
+        (mevedel-view--interaction-rebuild)))))
+
+(defun mevedel-pending-inputs-make-steering ()
+  "Convert the selected follow-up to steering after full preparation."
+  (interactive)
+  (let* ((context (mevedel-cockpit-surface-context))
+         (session (mevedel-pending-inputs--session context))
+         (item (mevedel-pending-inputs--selected))
+         (entry (plist-get item :entry))
+         (id (plist-get item :id))
+         (request (mevedel-pending-inputs--current-request context))
+         (fsm (and request (mevedel-request-fsm request)))
+         (view (mevedel-cockpit-context-view-buffer context))
+         (cockpit (current-buffer)))
+    (unless (eq (plist-get item :category) 'follow-up)
+      (user-error "Pending input is already steering"))
+    (when mevedel-pending-inputs--converting-id
+      (user-error "Pending-input conversion is still running"))
+    (unless (and fsm
+                 (not (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT))))
+      (user-error "No steerable root turn is active"))
+    (unless (buffer-live-p view)
+      (user-error "No live owning view"))
+    (setq mevedel-pending-inputs--converting-id id)
+    (with-current-buffer view
+      (mevedel-view--submit-planned-input
+       (mevedel-pending-inputs--copy-input entry)
+       nil
+       (lambda ()
+         (when (buffer-live-p cockpit)
+           (with-current-buffer cockpit
+             (setq mevedel-pending-inputs--converting-id nil)))
+         (message "mevedel: follow-up remains unchanged"))
+       (lambda (submission)
+         (if-let* ((prepared
+                    (mevedel-view--prepare-steering-entry
+                     submission request)))
+             (condition-case err
+                 (let ((replacement
+                        (mevedel-pending-inputs--restore-entry-metadata
+                         prepared entry)))
+                   (setq replacement
+                         (plist-put replacement :category 'steering)
+                         replacement
+                         (plist-put replacement :state 'pending))
+                   (mevedel-pending-inputs--move-between
+                    session 'follow-up 'steering id replacement)
+                   (mevedel-pending-inputs--conversion-finished
+                    cockpit context id))
+               (error
+                (mevedel-prompt-submission-restore submission)
+                (when (buffer-live-p cockpit)
+                  (with-current-buffer cockpit
+                    (setq mevedel-pending-inputs--converting-id nil)))
+                (message "mevedel: follow-up remains unchanged: %s"
+                         (error-message-string err))))
+           (when (buffer-live-p cockpit)
+             (with-current-buffer cockpit
+               (setq mevedel-pending-inputs--converting-id nil)))))))))
+
+(defun mevedel-pending-inputs-make-follow-up ()
+  "Convert the selected steering entry to a follow-up at the target tail."
+  (interactive)
+  (let* ((context (mevedel-cockpit-surface-context))
+         (session (mevedel-pending-inputs--session context))
+         (item (mevedel-pending-inputs--selected))
+         (entry (plist-get item :entry))
+         (id (plist-get item :id)))
+    (unless (eq (plist-get item :category) 'steering)
+      (user-error "Pending input is already a follow-up"))
+    (when-let* ((submission (plist-get entry :submission)))
+      (mevedel-prompt-submission-restore submission))
+    (let ((replacement
+           (list
+            :id id
+            :category 'follow-up
+            :input (mevedel-pending-inputs--copy-input entry)
+            :dropped-file-grants
+            (copy-sequence (plist-get entry :dropped-file-grants))
+            :queued-at-time (float-time)
+            :queued-at-goal-id
+            (when-let* ((goal (mevedel-session-goal session)))
+              (mevedel-goal-id goal))
+            :queued-at-turn
+            (or (mevedel-session-turn-count session) 0)
+            :state 'pending)))
+      (mevedel-pending-inputs--move-between
+       session 'steering 'follow-up id replacement)
+      (mevedel-pending-inputs--refresh id))))
+
+(defun mevedel-pending-inputs-mark-delete ()
+  "Mark the selected pending input for deletion."
+  (interactive)
+  (let ((id (plist-get (mevedel-pending-inputs--selected) :id)))
+    (cl-pushnew id mevedel-pending-inputs--marked-ids :test #'equal)
+    (tabulated-list-put-tag "D" t)))
+
+(defun mevedel-pending-inputs-unmark ()
+  "Remove the deletion mark from the selected pending input."
+  (interactive)
+  (let ((id (plist-get (mevedel-pending-inputs--selected) :id)))
+    (setq mevedel-pending-inputs--marked-ids
+          (delete id mevedel-pending-inputs--marked-ids))
+    (tabulated-list-put-tag " " t)))
+
+(defun mevedel-pending-inputs--discard (entries)
+  "Release reserved prompt context owned by ENTRIES."
+  (dolist (entry entries)
+    (when-let* ((submission (plist-get entry :submission)))
+      (mevedel-prompt-submission-restore submission))))
+
+(defun mevedel-pending-inputs-execute-deletions ()
+  "Confirm and delete every marked pending input."
+  (interactive)
+  (let* ((context (mevedel-cockpit-surface-context))
+         (session (mevedel-pending-inputs--session context))
+         (steering
+          (cl-remove-if-not
+           (lambda (entry)
+             (member (plist-get entry :id)
+                     mevedel-pending-inputs--marked-ids))
+           (mevedel-session-pending-steering session)))
+         (follow-ups
+          (cl-remove-if-not
+           (lambda (entry)
+             (member (plist-get entry :id)
+                     mevedel-pending-inputs--marked-ids))
+           (mevedel-session-pending-follow-ups session))))
+    (unless (or steering follow-ups)
+      (user-error "No pending input is marked for deletion"))
+    (when (yes-or-no-p
+           (format "Delete %d steering and %d follow-up pending input%s? "
+                   (length steering) (length follow-ups)
+                   (if (= 1 (+ (length steering) (length follow-ups)))
+                       ""
+                     "s")))
+      (mevedel-pending-inputs--discard (append steering follow-ups))
+      (mevedel-session-set-pending-inputs
+       session 'steering
+       (cl-remove-if
+        (lambda (entry) (memq entry steering))
+        (mevedel-session-pending-steering session)))
+      (mevedel-session-set-pending-inputs
+       session 'follow-up
+       (cl-remove-if
+        (lambda (entry) (memq entry follow-ups))
+        (mevedel-session-pending-follow-ups session)))
+      (setq mevedel-pending-inputs--marked-ids nil)
+      (mevedel-pending-inputs--refresh))))
+
+(defun mevedel-pending-inputs-clear ()
+  "Confirm and clear all pending input in the owning root session."
+  (interactive)
+  (let* ((context (mevedel-cockpit-current-context))
+         (session (mevedel-pending-inputs--session context))
+         (steering (mevedel-session-pending-steering session))
+         (follow-ups (mevedel-session-pending-follow-ups session))
+         (view (mevedel-cockpit-context-view-buffer context)))
+    (unless (or steering follow-ups)
+      (user-error "No pending input"))
+    (when (and (buffer-live-p view)
+               (buffer-local-value 'mevedel-view--pending-input-edit view))
+      (user-error "Save or cancel the pending-input edit first"))
+    (when (yes-or-no-p
+           (format "Clear %d steering and %d follow-up pending input%s? "
+                   (length steering) (length follow-ups)
+                   (if (= 1 (+ (length steering) (length follow-ups)))
+                       ""
+                     "s")))
+      (mevedel-pending-inputs--discard (append steering follow-ups))
+      (mevedel-session-set-pending-inputs session 'steering nil)
+      (mevedel-session-set-pending-inputs session 'follow-up nil)
+      (when (buffer-live-p view)
+        (with-current-buffer view
+          (mevedel-view--interaction-rebuild)))
+      (when (derived-mode-p 'mevedel-pending-inputs-mode)
+        (setq mevedel-pending-inputs--marked-ids nil)
+        (mevedel-cockpit-surface-refresh))
+      (message "mevedel: cleared pending input"))))
+
 (defun mevedel-pending-inputs-quit ()
   "Close the cockpit and resume eligible automatic delivery."
   (interactive)
@@ -393,6 +688,17 @@
     :setup mevedel-pending-inputs--setup
     :keys (("RET" "Edit selected pending input" mevedel-pending-inputs-edit)
            ("e" "Edit selected pending input" mevedel-pending-inputs-edit)
+           ("M-<up>" "Move up within category" mevedel-pending-inputs-move-up)
+           ("M-<down>" "Move down within category"
+            mevedel-pending-inputs-move-down)
+           ("s" "Convert to steering" mevedel-pending-inputs-make-steering)
+           ("f" "Convert to follow-up" mevedel-pending-inputs-make-follow-up)
+           ("d" "Mark for deletion" mevedel-pending-inputs-mark-delete)
+           ("u" "Unmark deletion" mevedel-pending-inputs-unmark)
+           ("x" "Delete marked pending input"
+            mevedel-pending-inputs-execute-deletions)
+           ("C-c C-q" "Clear all pending input" mevedel-pending-inputs-clear)
+           ("g" "Refresh live pending input" mevedel-pending-inputs-refresh)
            ("q" "Close and resume eligible delivery" mevedel-pending-inputs-quit)))
   "Cockpit surface spec for pending input.")
 
