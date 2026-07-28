@@ -6576,6 +6576,61 @@ The result is a plist whose :tempdir owns every created file."
     (should (eq 'identity
                 (cdr (assq 'cycle-sort-function (cdr metadata)))))))
 
+(mevedel-deftest mevedel-session-persistence-conversation-variants ()
+  ,test
+  (test)
+  :doc "finds the persisted Source and one direct Child from either variant"
+  (let* ((root (make-temp-file "mevedel-variants-" t))
+         (workspace
+          (test-mevedel-session-persistence--make-workspace root))
+         (source (mevedel-session-create "source" workspace))
+         (child (mevedel-session-create "child" workspace))
+         (source-entry
+          '(:save-path "/sessions/source/"
+            :summary (:session-id "source-id"
+                      :session-name "source"
+                      :created-at "2026-07-01T10:00:00+0200")))
+         (child-entry
+          '(:save-path "/sessions/child/"
+            :summary (:session-id "child-id"
+                      :session-name "child"
+                      :created-at "2026-07-01T10:01:00+0200"
+                      :forked-from-session-id "source-id"
+                      :forked-from-fork-point-id "fork-point-1"
+                      :fork-type conversation)))
+         (entries (list child-entry source-entry)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-session-id source) "source-id"
+                (mevedel-session-save-path source) "/sessions/source/"
+                (mevedel-session-session-id child) "child-id"
+                (mevedel-session-save-path child) "/sessions/child/"
+                (mevedel-session-forked-from-session-id child) "source-id"
+                (mevedel-session-forked-from-fork-point-id child)
+                "fork-point-1"
+                (mevedel-session-fork-type child) 'conversation)
+          (cl-letf
+              (((symbol-function
+                 'mevedel-session-persistence-list-sessions)
+                (lambda (_workspace) entries)))
+            (dolist (session (list source child))
+              (let ((variants
+                     (mevedel-session-persistence-conversation-variants
+                      session "fork-point-1")))
+                (should (equal '("source-id" "child-id")
+                               (mapcar
+                                (lambda (entry)
+                                  (plist-get
+                                   (plist-get entry :summary)
+                                   :session-id))
+                                variants)))
+                (should (equal '(source conversation)
+                               (mapcar
+                                (lambda (entry)
+                                  (plist-get entry :variant-origin))
+                                variants)))))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-persistence--read-summary ()
   ,test
   (test)

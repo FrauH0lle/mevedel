@@ -404,6 +404,156 @@
       (should (equal "rewind-point-1"
                      (plist-get called-target :fork-point-id))))))
 
+(mevedel-deftest mevedel-view--conversation-variant-button ()
+  ,test
+  (test)
+  :doc "renders the direct Source switch beside expanded and collapsed headers"
+  (mevedel-view-test--with-buffers
+    (let ((session
+           (mevedel-session--create
+            :name "source"
+            :session-id "source-id"
+            :save-path "/sessions/source/"
+            :current-segment 1))
+          (variants
+           '((:save-path "/sessions/source/"
+              :variant-origin source
+              :summary (:session-id "source-id"))
+             (:save-path "/sessions/child/"
+              :variant-origin conversation
+              :summary (:session-id "child-id")))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert (propertize "Response line one.\nResponse line two.\n"
+                            'gptel 'response))
+        (insert
+         (mevedel--format-hook-audit-record
+          '(:type fork-point :fork-point-id "fork-point-1"
+            :segment 1 :turn 1 :file-turn 1 :cum-turn 1))))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (cl-letf
+            (((symbol-function
+               'mevedel-session-persistence-conversation-variants)
+              (lambda (_session _fork-point-id) variants)))
+          (mevedel-view--full-rerender)
+          (goto-char (point-min))
+          (should (search-forward
+                   "Assistant  [⇆ Source · 2 variants]" nil t))
+          (should (functionp
+                   (get-text-property
+                    (1- (point)) 'mevedel-view-zone-activate)))
+          (goto-char (point-min))
+          (search-forward "Assistant")
+          (mevedel-view--collapse-turn)
+          (goto-char (point-min))
+          (should (search-forward "[⇆ Source · 2 variants]" nil t))
+          (should (functionp
+                   (get-text-property
+                    (1- (point)) 'mevedel-view-zone-activate))))))))
+
+(mevedel-deftest mevedel-view-switch-conversation-variant ()
+  ,test
+  (test)
+  :doc "opens the sole alternative, preserves drafts, and lands at the shared point"
+  (mevedel-view-test--with-buffers
+    (let* ((target-data (generate-new-buffer " *test-target-data*"))
+           (target-view (generate-new-buffer " *test-target-view*"))
+           (source-session
+            (mevedel-session--create
+             :name "source"
+             :session-id "source-id"
+             :save-path "/sessions/source/"
+             :working-directory "/source/"
+             :current-segment 1))
+           (target-session
+            (mevedel-session--create
+             :name "fork"
+             :session-id "child-id"
+             :save-path "/sessions/child/"
+             :working-directory "/worktree/"
+             :forked-from-session-id "source-id"
+             :forked-from-fork-point-id "fork-point-1"
+             :fork-type 'worktree
+             :current-segment 1))
+           (variants
+            '((:save-path "/sessions/source/"
+               :variant-origin source
+               :summary (:session-id "source-id"))
+              (:save-path "/sessions/child/"
+               :variant-origin worktree
+               :summary (:session-id "child-id"))))
+           displayed)
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local mevedel--session source-session)
+              (insert (propertize "Shared response.\n" 'gptel 'response))
+              (insert
+               (mevedel--format-hook-audit-record
+                '(:type fork-point :fork-point-id "fork-point-1"
+                  :segment 1 :turn 1 :file-turn 1 :cum-turn 1))))
+            (with-current-buffer target-data
+              (org-mode)
+              (setq-local gptel-response-separator "\n\n")
+              (setq-local gptel-prompt-prefix-alist
+                          '((org-mode . "*** ")))
+              (setq-local mevedel--session target-session)
+              (insert (propertize "Shared response.\n" 'gptel 'response))
+              (insert
+               (mevedel--format-hook-audit-record
+                '(:type fork-point :fork-point-id "fork-point-1"
+                  :segment 1 :turn 1 :file-turn 1 :cum-turn 1))))
+            (mevedel-view--setup target-view target-data)
+            (cl-letf
+                (((symbol-function
+                   'mevedel-session-persistence-conversation-variants)
+                  (lambda (_session _fork-point-id) variants))
+                 ((symbol-function 'mevedel-session-persistence-restore)
+                  (lambda (_save-path) target-data))
+                 ((symbol-function 'display-buffer)
+                  (lambda (buffer &optional _action)
+                    (setq displayed buffer)
+                    nil)))
+              (with-current-buffer target-view
+                (setq-local mevedel--session target-session)
+                (mevedel-view--full-rerender)
+                (mevedel-view-test--insert-composer-draft
+                 "> target draft\nsecond line"))
+              (with-current-buffer view-buf
+                (setq-local mevedel--session source-session)
+                (mevedel-view--full-rerender)
+                (mevedel-view-test--insert-composer-draft
+                 "> source draft\nsecond line")
+                (goto-char (point-min))
+                (search-forward "[⇆ Source · 2 variants]")
+                (backward-char 1)
+                (mevedel-view-activate-at-point))
+              (should (eq target-view displayed))
+              (with-current-buffer view-buf
+                (should (string-match-p
+                         "> source draft\nsecond line"
+                         (buffer-substring-no-properties
+                          (mevedel-view--input-start) (point-max)))))
+              (with-current-buffer target-view
+                (should (eq 'turn-header
+                            (get-text-property
+                             (point) 'mevedel-view-type)))
+                (should (string-match-p
+                         "> target draft\nsecond line"
+                         (buffer-substring-no-properties
+                          (mevedel-view--input-start) (point-max)))))
+              (should (equal "/source/"
+                             (mevedel-session-working-directory
+                              source-session)))
+              (should (equal "/worktree/"
+                             (mevedel-session-working-directory
+                              target-session)))))
+        (when (buffer-live-p target-view)
+          (kill-buffer target-view))
+        (when (buffer-live-p target-data)
+          (kill-buffer target-data))))))
+
 
 ;;
 ;;; Full rendering

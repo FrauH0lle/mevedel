@@ -313,6 +313,14 @@ Worktree children independently use `<source> · worktree N`; their branch and
 directory use the first suffix unused by either Git or the workspace's
 `.worktrees/` directory.
 
+Once a Fork exists, the shared assistant header shows a text switch such as
+`[⇆ Source · 2 variants]`, `[⇆ Conversation · 2 variants]`, or
+`[⇆ Worktree · 2 variants]`.  It remains available when the turn is folded.
+With one alternative, `RET` or `mouse-1` opens it directly through the normal
+session restore path and positions its view at the same stable fork point.
+Switching redraws only source-backed history; each owning view keeps its
+composer draft and the sessions keep their working directories.
+
 Arming `F` reserves that exact branch and directory. Forking from an existing
 linked worktree creates a sibling under the workspace's `.worktrees/` directory
 from that checkout's current `HEAD`. If a later staging or publication step

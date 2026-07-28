@@ -21,6 +21,10 @@
 ;; `cl-seq'
 (declare-function cl-find "cl-seq" (cl-item cl-seq &rest cl-keys))
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
+(declare-function cl-remove "cl-seq" (cl-item cl-seq &rest cl-keys))
+
+;; `gptel'
+(defvar gptel-display-buffer-action)
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-record-activity
@@ -57,9 +61,15 @@
 		  "mevedel-review" (text))
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-conversation-variants
+                  "mevedel-session-persistence"
+                  (session fork-point-id))
 (declare-function mevedel-session-persistence-fork-point-at-source
 		  "mevedel-session-persistence"
 		  (buffer source-start source-end))
+(declare-function mevedel-session-persistence-restore
+                  "mevedel-session-persistence"
+                  (session-dir &optional lifecycle-source session-override))
 (declare-function mevedel-session-persistence-rewind
 		  "mevedel-session-persistence" (buffer target))
 
@@ -74,6 +84,8 @@
 (declare-function mevedel-session-permission-queue "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
@@ -2858,6 +2870,48 @@ the render so user toggles survive streaming ticks."
             (mevedel-view--render-agent-status)
             (mevedel-view--interaction-rebuild)))))))))
 
+(defun mevedel-view--conversation-variant-button
+    (data-buf source-start source-end)
+  "Return DATA-BUF's variant switch for SOURCE-START..SOURCE-END, or nil."
+  (when-let* ((session
+               (buffer-local-value 'mevedel--session data-buf))
+              ((mevedel-session-save-path session))
+              (fork-point
+               (mevedel-session-persistence-fork-point-at-source
+                data-buf source-start source-end))
+              (fork-point-id (plist-get fork-point :fork-point-id))
+              (variants
+               (progn
+                 (require 'mevedel-session-persistence)
+                 (mevedel-session-persistence-conversation-variants
+                  session fork-point-id)))
+              ((> (length variants) 1))
+              (current
+               (cl-find
+                (mevedel-session-session-id session)
+                variants
+                :test #'equal
+                :key (lambda (entry)
+                       (plist-get (plist-get entry :summary)
+                                  :session-id)))))
+    (let* ((origin (plist-get current :variant-origin))
+           (label
+            (pcase origin
+              ('source "Source")
+              ('conversation "Conversation")
+              ('worktree "Worktree")))
+           (text
+            (format "[⇆ %s · %d variants]" label (length variants))))
+      (propertize
+       text
+       'face 'link
+       'mouse-face 'highlight
+       'help-echo "Switch conversation variant"
+       'mevedel-view-variant-fork-point-id fork-point-id
+       'mevedel-view-zone-activate
+       (lambda ()
+         (mevedel-view-switch-conversation-variant fork-point-id))))))
+
 (defun mevedel-view--render-turn (turn data-buf)
   "Render a single TURN into the view buffer at the input marker.
 DATA-BUF is the gptel data buffer for reading source content.
@@ -2887,7 +2941,10 @@ TURN is a plist with :role, :segments, :start, :end."
               ('user
                (mevedel-view--render-user-turn segments data-buf))
               ('assistant
-               (mevedel-view--render-assistant-turn segments data-buf)))
+               (mevedel-view--render-assistant-turn
+                segments data-buf
+                (mevedel-view--conversation-variant-button
+                 data-buf turn-start turn-end))))
             ;; Blank line above the trailing separator so the rule doesn't
             ;; butt up against the last response line.
             (when (eq role 'assistant)
@@ -3830,16 +3887,24 @@ added when the text before point does not already end with a blank line
                         'mevedel-view-type 'activity-separator
                         'mevedel-view-collapsed nil))))
 
-(defun mevedel-view--render-assistant-turn (segments data-buf)
+(defun mevedel-view--render-assistant-turn
+    (segments data-buf &optional variant-button)
   "Render assistant SEGMENTS from DATA-BUF.
 Response text is shown inline, tool calls as collapsed one-liners,
 reasoning blocks as collapsed summaries.  Adjacent thinking segments
-are merged into a single summary."
-  (insert (propertize "Assistant\n"
-                      'font-lock-face 'mevedel-view-assistant-header
-                      'mevedel-view-type 'turn-header
-                      'mevedel-view-turn-role 'assistant
-                      'mevedel-view-collapsed nil))
+are merged into a single summary.  VARIANT-BUTTON, when non-nil, is
+inserted beside the header."
+  (let ((header-start (point)))
+    (insert "Assistant")
+    (when variant-button
+      (insert "  " variant-button))
+    (insert "\n")
+    (add-text-properties
+     header-start (point)
+     '(font-lock-face mevedel-view-assistant-header
+       mevedel-view-type turn-header
+       mevedel-view-turn-role assistant
+       mevedel-view-collapsed nil)))
   (let ((view-buf (current-buffer))
         tool-group thinking-group request-summary-group)
     (dolist (seg segments)
@@ -4795,6 +4860,18 @@ restore the turn with all inner section state intact.  Signals a
     (let* ((turn-start (car bounds))
            (turn-end (cdr bounds))
            (stash (buffer-substring turn-start turn-end))
+           (variant-start
+            (text-property-not-all
+             turn-start turn-end
+             'mevedel-view-variant-fork-point-id nil))
+           (variant-button
+            (when variant-start
+              (buffer-substring
+               variant-start
+               (or (next-single-property-change
+                    variant-start
+                    'mevedel-view-variant-fork-point-id nil turn-end)
+                   turn-end))))
            (summary (pcase role
                       ('user (mevedel-view--user-turn-summary
                               turn-start turn-end))
@@ -4814,7 +4891,10 @@ restore the turn with all inner section state intact.  Signals a
           (unwind-protect
               (progn
                 (delete-region turn-start turn-end)
-                (insert (propertize (concat summary "\n\n")
+                (insert (propertize (concat summary
+                                            (when variant-button
+                                              (concat "  " variant-button))
+                                            "\n\n")
                                     'font-lock-face face
                                     'mevedel-view-type 'turn-summary
                                     'mevedel-view-turn-role role
@@ -4862,6 +4942,64 @@ Signal a user error when point is not on a settled assistant turn."
     (or (mevedel-session-persistence-fork-point-at-source
          mevedel--data-buffer (car source) (cdr source))
         (user-error "Assistant response is not a settled fork point"))))
+
+(defun mevedel-view-goto-conversation-variant (fork-point-id)
+  "Move point to the assistant header for FORK-POINT-ID."
+  (let ((limit (or (mevedel-view--input-marker-position) (point-max)))
+        (pos (point-min))
+        found)
+    (while (and (< pos limit) (not found))
+      (if (equal fork-point-id
+                 (get-text-property
+                  pos 'mevedel-view-variant-fork-point-id))
+          (setq found pos)
+        (setq pos
+              (or (next-single-property-change
+                   pos 'mevedel-view-variant-fork-point-id nil limit)
+                  limit))))
+    (unless found
+      (user-error "Conversation fork point is no longer available"))
+    (goto-char found)
+    (when-let* ((bounds (mevedel-view--turn-bounds)))
+      (goto-char (car bounds)))))
+
+(defun mevedel-view-switch-conversation-variant (fork-point-id)
+  "Open the sole related session at FORK-POINT-ID."
+  (let* ((session
+          (and (buffer-live-p mevedel--data-buffer)
+               (buffer-local-value 'mevedel--session
+                                   mevedel--data-buffer)))
+         (_ (unless session
+              (user-error "Active view has no mevedel session")))
+         (session-id (mevedel-session-session-id session))
+         (variants
+          (progn
+            (require 'mevedel-session-persistence)
+            (mevedel-session-persistence-conversation-variants
+             session fork-point-id)))
+         (alternatives
+          (cl-remove
+           session-id variants
+           :test #'equal
+           :key (lambda (entry)
+                  (plist-get (plist-get entry :summary) :session-id))))
+         (target
+          (pcase (length alternatives)
+            (0 (user-error "No related conversation variant survives"))
+            (1 (car alternatives))
+            (_ (user-error "Choose among multiple conversation variants"))))
+         (target-data
+          (mevedel-session-persistence-restore
+           (plist-get target :save-path)))
+         (target-view
+          (buffer-local-value 'mevedel--view-buffer target-data)))
+    (unless (buffer-live-p target-view)
+      (error "Conversation variant has no live view"))
+    (with-current-buffer target-view
+      (mevedel-view--full-rerender)
+      (mevedel-view-goto-conversation-variant fork-point-id))
+    (display-buffer target-view gptel-display-buffer-action)
+    target-data))
 
 (defun mevedel-view-rewind-at-point ()
   "Rewind the current session to the settled assistant turn at point."
