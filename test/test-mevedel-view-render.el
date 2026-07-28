@@ -695,6 +695,38 @@
         (should (equal "    " (get-text-property body-start 'wrap-prefix)))
         (goto-char body-start)
         (should (looking-at-p "CRITICAL: verify only")))))
+  :doc "renders partial Worktree Fork disclosure as an expanded warning"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat
+      "<system-reminder>\n"
+      "Worktree Fork (partial restoration)\n"
+      "Captured repository files restored: 1\n"
+      "Unrestored captured files:\n"
+      "- /repo/missing.el: backup unavailable\n"
+      "</system-reminder>\n")
+     'ignore)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Partial Worktree Fork" text))
+        (should (string-match-p "/repo/missing.el" text)))
+      (goto-char (point-min))
+      (search-forward "Partial Worktree Fork")
+      (goto-char (match-beginning 0))
+      (should-not (get-text-property (point) 'mevedel-view-collapsed))
+      (should (eq 'mevedel-view-tool-warning
+                  (get-text-property (point) 'font-lock-face)))
+      (mevedel-view-toggle-section)
+      (should-not
+       (string-match-p
+        "/repo/missing.el"
+        (buffer-substring-no-properties
+         (point-min) mevedel-view--input-marker))))
+    (with-current-buffer data-buf
+      (should (string-match-p "/repo/missing.el" (buffer-string)))))
   :doc "keeps generated system reminders separate from real thinking"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Answer first.\n" 'response)

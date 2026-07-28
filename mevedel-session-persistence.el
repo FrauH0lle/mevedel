@@ -4465,7 +4465,36 @@ mail are deliberately absent from the returned session."
       expanded)))
 
 (defun mevedel-session-persistence--retarget-worktree-state (session)
-  "Retarget SESSION's copied repository-local path state."
+  "Retarget SESSION's copied repository-local path state.
+Return descriptions of malformed grants and rules dropped from the child."
+  (let (grants rules dropped)
+    (dolist (grant (mevedel-session-resource-grants session))
+      (if (and (proper-list-p grant)
+               (stringp (plist-get grant :path))
+               (file-name-absolute-p (plist-get grant :path)))
+          (let ((copy (copy-tree grant t)))
+            (plist-put
+             copy :path
+             (mevedel-session-persistence--retarget-worktree-path
+              session (plist-get copy :path)))
+            (push copy grants))
+        (push (format "resource grant %S" grant) dropped)))
+    (dolist (rule (mevedel-session-permission-rules session))
+      (cond
+       ((not (and (consp rule) (proper-list-p (cdr rule))))
+        (push (format "permission rule %S" rule) dropped))
+       ((not (plist-member (cdr rule) :path))
+        (push (copy-tree rule t) rules))
+       ((and (stringp (plist-get (cdr rule) :path))
+             (file-name-absolute-p (plist-get (cdr rule) :path)))
+        (let ((copy (copy-tree rule t)))
+          (plist-put
+           (cdr copy) :path
+           (mevedel-session-persistence--retarget-worktree-path
+            session (plist-get (cdr copy) :path)))
+          (push copy rules)))
+       (t
+        (push (format "permission rule %S" rule) dropped))))
   (setf
    (mevedel-session-working-directory session)
    (mevedel-session-worktree-directory session)
@@ -4483,28 +4512,10 @@ mail are deliberately absent from the returned session."
         (cdr turn-entry))))
     (mevedel-session-file-snapshots session))
    (mevedel-session-resource-grants session)
-   (mapcar
-    (lambda (grant)
-      (let ((copy (copy-tree grant t)))
-        (plist-put
-         copy :path
-         (mevedel-session-persistence--retarget-worktree-path
-          session (plist-get copy :path)))
-        copy))
-    (mevedel-session-resource-grants session))
+   (nreverse grants)
    (mevedel-session-permission-rules session)
-   (mapcar
-    (lambda (rule)
-      (let* ((copy (copy-tree rule t))
-             (path (plist-get (cdr copy) :path)))
-        (when (and path (file-name-absolute-p path))
-          (plist-put
-           (cdr copy) :path
-           (mevedel-session-persistence--retarget-worktree-path
-            session path)))
-        copy))
-    (mevedel-session-permission-rules session)))
-  session)
+   (nreverse rules))
+    (nreverse dropped)))
 
 (defun mevedel-session-persistence--assert-worktree-target
     (worktree-root target)
@@ -4538,9 +4549,12 @@ mail are deliberately absent from the returned session."
           (file-name-concat
            (mevedel-session-save-path source) "file-history"))
          (restored 0)
+         plan
+         unrestored
          external)
     (unless (file-readable-p history-dir)
       (error "Captured file-history store is unreadable: %s" history-dir))
+    ;; Validate the complete plan before the first child-worktree write.
     (dolist (entry
              (mevedel-session-persistence--state-at-turn source cum-turn))
       (let ((path (car entry))
@@ -4556,51 +4570,95 @@ mail are deliberately absent from the returned session."
                  (backup-name (plist-get snapshot :backup-name)))
             (mevedel-session-persistence--assert-worktree-target
              worktree-root target)
-            (if (null backup-name)
-                (when (file-exists-p target)
-                  (delete-file target))
-              (unless
-                  (and (stringp backup-name)
-                       (equal backup-name
-                              (file-name-nondirectory backup-name)))
-                (error "Invalid captured backup name: %S" backup-name))
-              (let ((backup
-                     (mevedel-file-history--backup-path
-                      (mevedel-session-save-path source) backup-name)))
-                (unless (file-readable-p backup)
-                  (error "Captured backup is unavailable: %s" backup))
-                (make-directory (file-name-directory target) t)
-                (let ((coding-system-for-write 'no-conversion))
-                  (write-region
-                   (mevedel-file-history--read-file-raw backup)
-                   nil target nil 'silent))))
-            (cl-incf restored)))))
-    (list :restored restored :external (nreverse external))))
+            (unless
+                (or (null backup-name)
+                    (and (stringp backup-name)
+                         (equal backup-name
+                                (file-name-nondirectory backup-name))))
+              (error "Invalid captured backup name: %S" backup-name))
+            (push (list :path target :backup-name backup-name) plan)))))
+    (dolist (item (nreverse plan))
+      (let ((target (plist-get item :path))
+            (backup-name (plist-get item :backup-name)))
+        (condition-case err
+            (progn
+              (if (null backup-name)
+                  (when (file-exists-p target)
+                    (delete-file target))
+                (let ((backup
+                       (mevedel-file-history--backup-path
+                        (mevedel-session-save-path source) backup-name)))
+                  (unless (file-readable-p backup)
+                    (error "Captured backup is unavailable: %s" backup))
+                  (make-directory (file-name-directory target) t)
+                  (with-temp-buffer
+                    (set-buffer-multibyte nil)
+                    (insert
+                     (mevedel-file-history--read-file-raw backup))
+                    (mevedel-session-persistence--write-current-buffer-atomically
+                     target))))
+              (cl-incf restored))
+          (error
+           (push (list :path target
+                       :reason (error-message-string err))
+                 unrestored)))))
+    (list :restored restored
+          :unrestored (nreverse unrestored)
+          :external (nreverse external))))
 
 (defun mevedel-session-persistence--worktree-fork-disclosure
     (session report)
   "Return durable Worktree Fork disclosure for SESSION and REPORT."
-  (format
-   (concat "\n\n<system-reminder>\n"
-           "Worktree Fork\n"
+  (let* ((unrestored (plist-get report :unrestored))
+         (dropped (plist-get report :dropped))
+         (partial (or unrestored dropped)))
+    (format
+     (concat "\n\n<system-reminder>\n"
+           "%s\n"
            "Source session: %s\n"
            "Worktree directory: %s\n"
            "Branch: %s\n"
            "Base commit: %s\n"
            "Captured repository files restored: %d\n"
+           "%s"
            "Uncaptured files retain the base commit's contents. "
            "Uncommitted Source changes were not copied.\n"
            "%s"
+           "%s"
+           "%s"
            "</system-reminder>\n")
-   (mevedel-session-forked-from-session-id session)
-   (mevedel-session-worktree-directory session)
-   (mevedel-session-worktree-branch session)
-   (mevedel-session-worktree-base-commit session)
-   (plist-get report :restored)
-   (if-let* ((external (plist-get report :external)))
-       (format "External captured paths remain shared and were not restored: %s\n"
-               (string-join external ", "))
-     "")))
+     (if partial "Worktree Fork (partial restoration)" "Worktree Fork")
+     (mevedel-session-forked-from-session-id session)
+     (mevedel-session-worktree-directory session)
+     (mevedel-session-worktree-branch session)
+     (mevedel-session-worktree-base-commit session)
+     (plist-get report :restored)
+     (if partial
+         (concat
+          "WARNING: Restoration was partial; this is not an exact "
+          "historical checkout.\n")
+       "")
+     (if-let* ((external (plist-get report :external)))
+         (format
+          "External captured paths remain shared and non-isolated: %s\n"
+          (string-join external ", "))
+       "")
+     (if unrestored
+         (format
+          "Unrestored captured files:\n%s\n"
+          (mapconcat
+           (lambda (item)
+             (format "- %s: %s"
+                     (plist-get item :path)
+                     (plist-get item :reason)))
+           unrestored "\n"))
+       "")
+     (if dropped
+         (format
+          "Dropped malformed copied path state:\n%s\n"
+          (mapconcat (lambda (item) (format "- %s" item))
+                     dropped "\n"))
+       ""))))
 
 (defun mevedel-session-persistence-conversation-fork (buffer target)
   "Create and open a Conversation Fork of BUFFER at stable TARGET.
@@ -4744,7 +4802,7 @@ child data buffer without mutating the Source buffer, session, or lock."
             (mevedel-worktree-fork-preflight session)))
          (reservation
           (mevedel-worktree-fork-reservation session preflight))
-         child child-buffer report worktree-created published committed)
+         child child-buffer report dropped worktree-created published committed)
     (unwind-protect
         (progn
           (mevedel-worktree-fork-create reservation)
@@ -4768,10 +4826,12 @@ child data buffer without mutating the Source buffer, session, or lock."
            (plist-get reservation :branch)
            (mevedel-session-worktree-base-commit child)
            (plist-get reservation :base-commit))
-          (mevedel-session-persistence--retarget-worktree-state child)
+          (setq dropped
+                (mevedel-session-persistence--retarget-worktree-state child))
           (setq report
                 (mevedel-session-persistence--restore-worktree-files
                  session child picked-cum-turn))
+          (setq report (plist-put report :dropped dropped))
           (with-current-buffer staging-buffer
             (let ((org-agenda-file-menu-enabled nil))
               (org-mode)))

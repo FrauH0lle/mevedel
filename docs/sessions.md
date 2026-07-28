@@ -278,12 +278,18 @@ the conversation point and that file changes are shared with Source.
 
 Worktree Fork requires a supported Git checkout. It creates a linked worktree
 at the Source checkout's current `HEAD`, restores captured repository-local
-files from the selected turn before the first prompt, and retargets copied
+files from the selected turn before the first prompt, and retargets valid
 repository-local snapshot, permission, grant, and mention paths to the child
-checkout. Uncaptured files retain their `HEAD` contents, uncommitted Source
-changes are not copied, and captured external paths remain shared. The durable
-disclosure records the worktree path, branch, base commit, restored-file count,
-and those uncaptured-file semantics. Failure outside Git never falls back to
+checkout. An unavailable individual backup leaves that child file at `HEAD`
+and does not block the fork; the durable disclosure names every such file and
+every malformed copied path record that was dropped. Invalid restoration
+metadata, an unsafe target, or an unreadable required history store still
+aborts. Uncaptured files retain their `HEAD` contents, uncommitted Source
+changes are not copied, and captured external paths remain shared and
+non-isolated. The disclosure also records the worktree path, branch, base
+commit, restored-file count, and uncaptured-file semantics. A partial
+disclosure renders as an expanded warning by default; collapsing it changes
+only the view, never model context. Failure outside Git never falls back to
 Conversation Fork.
 
 The common fork projection copies current model, preset, effort, mode,

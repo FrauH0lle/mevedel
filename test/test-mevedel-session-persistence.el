@@ -5920,6 +5920,248 @@ The result is a plist whose :tempdir owns every created file."
           (kill-buffer child-buffer)))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
 
+(mevedel-deftest mevedel-session-persistence--retarget-worktree-state ()
+  ,test
+  (test)
+  :doc "retargets valid local paths and drops malformed copied path state"
+  (let* ((source-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-retarget-source-" t)))
+         (worktree-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-retarget-child-" t)))
+         (session
+          (mevedel-session--create
+           :working-directory source-root
+           :worktree-source-root source-root
+           :worktree-directory worktree-root
+           :file-snapshots
+           `((1 . ((,(file-name-concat source-root "local.el")
+                     . (:backup-name "local@v1")))))
+           :resource-grants
+           `((:path ,(file-name-concat source-root "grant.el")
+              :access read)
+             (:path "/external/grant.el" :access read)
+             (:path "relative-grant.el" :access read))
+           :permission-rules
+           `(("Read" :path ,(file-name-concat source-root "rule.el")
+              :action allow)
+             ("Read" :path "/external/rule.el" :action allow)
+             ("Bash" :pattern "git status" :action allow)
+             ("Read" :path 42 :action allow)))))
+    (unwind-protect
+        (let ((dropped
+               (mevedel-session-persistence--retarget-worktree-state
+                session)))
+          (should (= 2 (length dropped)))
+          (should
+           (equal
+            (file-name-concat worktree-root "local.el")
+            (caar (cdar (mevedel-session-file-snapshots session)))))
+          (should
+           (equal
+            (list (file-name-concat worktree-root "grant.el")
+                  "/external/grant.el")
+            (mapcar
+             (lambda (grant) (plist-get grant :path))
+             (mevedel-session-resource-grants session))))
+          (should
+           (equal
+            (list (file-name-concat worktree-root "rule.el")
+                  "/external/rule.el"
+                  nil)
+            (mapcar
+             (lambda (rule) (plist-get (cdr rule) :path))
+             (mevedel-session-permission-rules session)))))
+      (delete-directory source-root t)
+      (delete-directory worktree-root t))))
+
+(mevedel-deftest mevedel-session-persistence--assert-worktree-target ()
+  ,test
+  (test)
+  :doc "accepts local targets and rejects escape through a symlink"
+  (let ((worktree
+         (file-name-as-directory
+          (make-temp-file "mevedel-worktree-safe-" t)))
+        (external
+         (file-name-as-directory
+          (make-temp-file "mevedel-worktree-escape-" t))))
+    (unwind-protect
+        (progn
+          (should-not
+           (mevedel-session-persistence--assert-worktree-target
+            worktree (file-name-concat worktree "safe.el")))
+          (make-symbolic-link external
+                              (file-name-concat worktree "escape"))
+          (should-error
+           (mevedel-session-persistence--assert-worktree-target
+            worktree
+            (file-name-concat worktree "escape" "unsafe.el"))))
+      (delete-directory worktree t)
+      (delete-directory external t))))
+
+(mevedel-deftest mevedel-session-persistence--restore-worktree-files ()
+  ,test
+  (test)
+  :doc "continues after individual backup failures without touching Source"
+  (let* ((source-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-restore-source-" t)))
+         (worktree-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-restore-child-" t)))
+         (save-path
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-restore-session-" t)))
+         (external-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-restore-external-" t)))
+         (good-source (file-name-concat source-root "good.el"))
+         (bad-source (file-name-concat source-root "bad.el"))
+         (external-file (file-name-concat external-root "shared.el"))
+         (good-target (file-name-concat worktree-root "good.el"))
+         (bad-target (file-name-concat worktree-root "bad.el"))
+         (source
+          (mevedel-session--create
+           :save-path save-path
+           :file-snapshots
+           `((1 . ((,good-source . (:backup-name "good@v1"))
+                   (,bad-source . (:backup-name "missing@v1"))
+                   (,external-file . (:backup-name "external@v1")))))))
+         (child
+          (mevedel-session--create
+           :worktree-source-root source-root
+           :worktree-directory worktree-root)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat save-path "file-history") t)
+          (write-region "captured good\n" nil
+                        (mevedel-file-history--backup-path
+                         save-path "good@v1")
+                        nil 'silent)
+          (write-region "source good\n" nil good-source nil 'silent)
+          (write-region "source bad\n" nil bad-source nil 'silent)
+          (write-region "shared external\n" nil external-file nil 'silent)
+          (write-region "HEAD bad\n" nil bad-target nil 'silent)
+          (let ((report
+                 (mevedel-session-persistence--restore-worktree-files
+                  source child 1)))
+            (should (= 1 (plist-get report :restored)))
+            (should (= 1 (length (plist-get report :unrestored))))
+            (should (equal (list external-file)
+                           (plist-get report :external)))
+            (should (equal bad-target
+                           (plist-get
+                            (car (plist-get report :unrestored))
+                            :path)))
+            (should (equal "captured good\n"
+                           (mevedel-session-persistence--file-text
+                            good-target)))
+            (should (equal "HEAD bad\n"
+                           (mevedel-session-persistence--file-text
+                            bad-target)))
+            (should (equal "source good\n"
+                           (mevedel-session-persistence--file-text
+                            good-source)))
+            (should (equal "source bad\n"
+                           (mevedel-session-persistence--file-text
+                            bad-source)))
+            (should (equal "shared external\n"
+                           (mevedel-session-persistence--file-text
+                            external-file)))))
+      (delete-directory source-root t)
+      (delete-directory worktree-root t)
+      (delete-directory save-path t)
+      (delete-directory external-root t)))
+  :doc "validates the whole plan before writing any target"
+  (let* ((source-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-invalid-source-" t)))
+         (worktree-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-invalid-child-" t)))
+         (save-path
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-invalid-session-" t)))
+         (valid-source (file-name-concat source-root "valid.el"))
+         (valid-target (file-name-concat worktree-root "valid.el"))
+         (source
+          (mevedel-session--create
+           :save-path save-path
+           :file-snapshots
+           `((1 . ((,valid-source . (:backup-name "valid@v1"))
+                   ("relative.el" . (:backup-name "bad@v1")))))))
+         (child
+          (mevedel-session--create
+           :worktree-source-root source-root
+           :worktree-directory worktree-root)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat save-path "file-history") t)
+          (write-region "captured\n" nil
+                        (mevedel-file-history--backup-path
+                         save-path "valid@v1")
+                        nil 'silent)
+          (write-region "HEAD\n" nil valid-target nil 'silent)
+          (should-error
+           (mevedel-session-persistence--restore-worktree-files
+            source child 1))
+          (should (equal "HEAD\n"
+                         (mevedel-session-persistence--file-text
+                          valid-target))))
+      (delete-directory source-root t)
+      (delete-directory worktree-root t)
+      (delete-directory save-path t)))
+  :doc "rejects an unavailable required history store"
+  (let* ((source-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-store-source-" t)))
+         (worktree-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-store-child-" t)))
+         (save-path
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-store-session-" t)))
+         (source
+          (mevedel-session--create :save-path save-path))
+         (child
+          (mevedel-session--create
+           :worktree-source-root source-root
+           :worktree-directory worktree-root)))
+    (unwind-protect
+        (should-error
+         (mevedel-session-persistence--restore-worktree-files
+          source child 1))
+      (delete-directory source-root t)
+      (delete-directory worktree-root t)
+      (delete-directory save-path t))))
+
+(mevedel-deftest mevedel-session-persistence--worktree-fork-disclosure ()
+  ,test
+  (test)
+  :doc "names every partial, malformed, and external restoration gap"
+  (let ((session
+         (mevedel-session--create
+          :forked-from-session-id "source-id"
+          :worktree-directory "/repo/.worktrees/main-fork-1/"
+          :worktree-branch "worktree/main-fork-1"
+          :worktree-base-commit "0123456789abcdef")))
+    (let ((text
+           (mevedel-session-persistence--worktree-fork-disclosure
+            session
+            '(:restored 1
+              :unrestored ((:path "/child/missing.el"
+                            :reason "backup unavailable"))
+              :external ("/external/shared.el")
+              :dropped ("resource grant (:path relative.el)")))))
+      (should (string-match-p "partial restoration" text))
+      (should (string-match-p "not an exact historical checkout" text))
+      (should (string-match-p "/child/missing.el: backup unavailable"
+                              text))
+      (should (string-match-p "/external/shared.el" text))
+      (should (string-match-p "resource grant (:path relative.el)"
+                              text)))))
+
 (mevedel-deftest mevedel-session-persistence-worktree-fork ()
   ,test
   (test)
