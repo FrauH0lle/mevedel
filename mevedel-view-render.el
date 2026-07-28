@@ -61,15 +61,17 @@
 		  "mevedel-review" (text))
 
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-conversation-variants
-                  "mevedel-session-persistence"
-                  (session fork-point-id))
 (declare-function mevedel-session-persistence-choose-conversation-variant
                   "mevedel-session-persistence"
                   (variants current-session-id))
+(declare-function mevedel-session-persistence-conversation-variants
+                  "mevedel-session-persistence"
+                  (session fork-point-id &optional sessions))
 (declare-function mevedel-session-persistence-fork-point-at-source
 		  "mevedel-session-persistence"
 		  (buffer source-start source-end))
+(declare-function mevedel-session-persistence-list-sessions
+                  "mevedel-session-persistence" (workspace))
 (declare-function mevedel-session-persistence-restore
                   "mevedel-session-persistence"
                   (session-dir &optional lifecycle-source session-override))
@@ -462,6 +464,9 @@ Values are t when collapsed and nil when expanded.")
 
 (defvar-local mevedel-view--response-cache-entries 0
   "Approximate number of entries in `mevedel-view--response-fontify-cache'.")
+
+(defvar mevedel-view--conversation-variant-sessions nil
+  "Persisted session summaries bound once around a full render.")
 
 (defvar-local mevedel-view--user-pre-rendered nil
   "Non-nil when the most recent user turn was pre-rendered by the view.
@@ -2887,7 +2892,8 @@ the render so user toggles survive streaming ticks."
                (progn
                  (require 'mevedel-session-persistence)
                  (mevedel-session-persistence-conversation-variants
-                  session fork-point-id)))
+                  session fork-point-id
+                  mevedel-view--conversation-variant-sessions)))
               ((> (length variants) 1))
               (current
                (cl-find
@@ -2915,10 +2921,11 @@ the render so user toggles survive streaming ticks."
        (lambda ()
          (mevedel-view-switch-conversation-variant fork-point-id))))))
 
-(defun mevedel-view--render-turn (turn data-buf)
+(defun mevedel-view--render-turn (turn data-buf &optional decorate-variants)
   "Render a single TURN into the view buffer at the input marker.
 DATA-BUF is the gptel data buffer for reading source content.
-TURN is a plist with :role, :segments, :start, :end."
+TURN is a plist with :role, :segments, :start, :end.
+DECORATE-VARIANTS adds conversation variant switches for settled history."
   (let ((role (plist-get turn :role))
         (segments (plist-get turn :segments))
         (turn-start (plist-get turn :start))
@@ -2946,8 +2953,9 @@ TURN is a plist with :role, :segments, :start, :end."
               ('assistant
                (mevedel-view--render-assistant-turn
                 segments data-buf
-                (mevedel-view--conversation-variant-button
-                 data-buf turn-start turn-end))))
+                (and decorate-variants
+                     (mevedel-view--conversation-variant-button
+                      data-buf turn-start turn-end)))))
             ;; Blank line above the trailing separator so the rule doesn't
             ;; butt up against the last response line.
             (when (eq role 'assistant)
@@ -5001,7 +5009,6 @@ Signal a user error when point is not on a settled assistant turn."
     (unless (buffer-live-p target-view)
       (error "Conversation variant has no live view"))
     (with-current-buffer target-view
-      (mevedel-view--full-rerender)
       (mevedel-view-goto-conversation-variant fork-point-id))
     (display-buffer target-view gptel-display-buffer-action)
     target-data))
@@ -5453,6 +5460,16 @@ rerender)."
           (let* ((segments (mevedel-transcript-segments
                             (point-min) (point-max)))
                  (turns (mevedel-view--group-into-turns segments data-buf))
+                 (session
+                  (and (not render-agent-transcript-p)
+                       (buffer-local-value 'mevedel--session data-buf)))
+                 (mevedel-view--conversation-variant-sessions
+                  (when (and session
+                             (mevedel-session-save-path session)
+                             (mevedel-session-workspace session))
+                    (require 'mevedel-session-persistence)
+                    (mevedel-session-persistence-list-sessions
+                     (mevedel-session-workspace session))))
                  (view-buf (if render-agent-transcript-p
                                render-view-buf
                              (buffer-local-value 'mevedel--view-buffer
@@ -5473,7 +5490,7 @@ rerender)."
                                   data-turn-start-pos))
                       (setq last-current-assistant-turn-start
                             view-turn-start))))
-                (mevedel-view--render-turn turn data-buf))
+                (mevedel-view--render-turn turn data-buf t))
               (when saved-states
                 (mevedel-view--apply-collapse-states
                  (point-min)
