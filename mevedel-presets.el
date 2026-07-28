@@ -63,11 +63,6 @@
 (declare-function mevedel--find-directive-by-uuid
                   "mevedel-overlays" (uuid))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-fork-now
-                  "mevedel-session-persistence" (buffer))
-(defvar mevedel-session--fork-pending)
-
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--drain-pending-context
                   "mevedel-skills-invoke" (request))
@@ -567,10 +562,7 @@ alist with mevedel-specific handlers added:
   ;; 1e. Begin the mevedel-request on the first WAIT entry.  WAIT is
   ;; re-entered after each tool call loop, so the guard on
   ;; `:mevedel-request-begun' keeps request-begin idempotent per FSM.
-  ;; Materialize a fork-pending rewind preview before `request-begin'
-  ;; runs -- this catches direct data-buffer send paths (gptel-send,
-  ;; agent invocations) that bypass `mevedel-view-send'.  After
-  ;; `mevedel-request-begin' creates the request, drain any buffer-local
+  ;; After `mevedel-request-begin' creates the request, drain any buffer-local
   ;; `mevedel-skills--pending-request-context' permission/hooks into the new
   ;; request and invocation records into the session.  Model/effort was already
   ;; consumed by the pre-realization prompt transform.
@@ -585,11 +577,6 @@ alist with mevedel-specific handlers added:
                                    chat-buffer
                                    (buffer-live-p chat-buffer))
                           (with-current-buffer chat-buffer
-                            (when (bound-and-true-p
-                                   mevedel-session--fork-pending)
-                              (require 'mevedel-session-persistence)
-                              (mevedel-session-persistence-fork-now
-                               chat-buffer))
                             (when mevedel--session
                               (mevedel-request-begin
                                mevedel--session

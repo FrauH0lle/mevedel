@@ -89,8 +89,7 @@
          (view-buffer (generate-new-buffer " *mev-init-dispatch-view*"))
          sent-input
          sent-display
-         history
-         forked)
+         history)
     (unwind-protect
         (progn
           (with-current-buffer data-buffer
@@ -105,15 +104,12 @@
                        (setq sent-display (plist-get args :display-text))
                        (funcall (plist-get args :before-send))))
                     ((symbol-function 'mevedel-view-history-add)
-                     (lambda (text) (setq history text)))
-                    ((symbol-function 'mevedel-view--fork-if-pending)
-                     (lambda () (setq forked t))))
+                     (lambda (text) (setq history text))))
             (let ((result (with-current-buffer data-buffer
                             (mevedel-cmd--init "docs"))))
               (should (eq 'mevedel-view-sent result))))
           (should (equal "/init docs" sent-display))
           (should (equal "/init docs" history))
-          (should forked)
           (should (string-match-p "User-provided focus: docs" sent-input)))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer)))))

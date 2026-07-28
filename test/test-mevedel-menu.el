@@ -888,6 +888,20 @@
           (mevedel-menu--abort))
         (should (eq called-buffer view-buf))))))
 
+(mevedel-deftest mevedel-menu--rewind-here ()
+  ,test
+  (test)
+  :doc "rewind-at-point runs in the paired view buffer"
+  (mevedel-menu-test--with-buffers
+    (let (called-buffer)
+      (cl-letf (((symbol-function 'mevedel-view-rewind-at-point)
+                 (lambda ()
+                   (interactive)
+                   (setq called-buffer (current-buffer)))))
+        (with-current-buffer data-buf
+          (mevedel-menu--rewind-here))
+        (should (eq called-buffer view-buf))))))
+
 (mevedel-deftest mevedel-menu--compact ()
   ,test
   (test)

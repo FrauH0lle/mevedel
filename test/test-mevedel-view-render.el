@@ -373,7 +373,36 @@
           (should (equal "fork-point-2"
                          (plist-get target :fork-point-id)))
           (should (= 1 (plist-get target :segment)))
-          (should (= 2 (plist-get target :cum-turn))))))))
+          (should (= 2 (plist-get target :cum-turn)))))))
+  :doc "rewinds through the exact settled assistant response at point"
+  (mevedel-view-test--with-buffers
+    (let ((session
+           (mevedel-session--create
+            :name "rewind-point"
+            :current-segment 1))
+          called-buffer called-target)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert "Prompt\n")
+        (insert (propertize "Response\n" 'gptel 'response))
+        (insert
+         (mevedel--format-hook-audit-record
+          '(:type fork-point :fork-point-id "rewind-point-1"
+            :segment 1 :turn 1 :file-turn 1 :cum-turn 1))))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--full-rerender)
+        (goto-char (point-min))
+        (search-forward "Assistant")
+        (cl-letf
+            (((symbol-function 'mevedel-session-persistence-rewind)
+              (lambda (buffer target)
+                (setq called-buffer buffer
+                      called-target target))))
+          (mevedel-view-rewind-at-point)))
+      (should (eq data-buf called-buffer))
+      (should (equal "rewind-point-1"
+                     (plist-get called-target :fork-point-id))))))
 
 
 ;;

@@ -114,7 +114,6 @@
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--fork-if-pending "mevedel-view-composer" ())
 (declare-function mevedel-view--forward-input
                   "mevedel-view-composer" (input &rest args))
 (declare-function mevedel-view--run-prompt-submit-hook
@@ -1146,12 +1145,10 @@ DATA-BUFFER receives the task transcript."
                   :display-text hook-input
                   :before-send
                   (lambda ()
-                    (mevedel-view-history-add hook-input)
-                    (mevedel-view--fork-if-pending))
+                    (mevedel-view-history-add hook-input))
                   :prompt-checked t
                   :submission submission))
              (mevedel-view-history-add display)
-             (mevedel-view--fork-if-pending)
              (mevedel-view--start-fork-skill-turn
               (if hook-context
                   (concat display "\n\n" hook-context)

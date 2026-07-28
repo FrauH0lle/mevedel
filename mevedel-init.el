@@ -32,7 +32,6 @@
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--fork-if-pending "mevedel-view-composer" ())
 (declare-function mevedel-view--forward-input
                   "mevedel-view-composer" (input &rest args))
 (declare-function mevedel-view-history-add "mevedel-view-history" (text))
@@ -180,8 +179,7 @@
              :display-text display
              :before-send
              (lambda ()
-               (mevedel-view-history-add display)
-               (mevedel-view--fork-if-pending))))
+               (mevedel-view-history-add display))))
           'mevedel-view-sent)
       (message "mevedel: sending /init")
       (mevedel-init--send-direct prompt data-buffer))))
