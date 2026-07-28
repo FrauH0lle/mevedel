@@ -996,6 +996,47 @@
         (should (string-match-p "System reminder (1 line)" text))
         (should (string-match-p "Thinking... (1 lines)" text))
         (should-not (string-match-p "<system-reminder>" text)))))
+  :doc "keeps fork reminder and elapsed footers with their assistant turns"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "First prompt.\n\n" nil)
+    (mevedel-view-test--insert-data data-buf "First answer.\n\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-pipeline--format-render-data-block
+      '(:kind request-summary :elapsed-seconds 7))
+     'ignore)
+    (mevedel-view-test--insert-data
+     data-buf
+     "<system-reminder>\nConversation Fork\n</system-reminder>\n\n"
+     'ignore)
+    (mevedel-view-test--insert-data data-buf "Second prompt.\n\n" nil)
+    (mevedel-view-test--insert-data data-buf "Second answer.\n\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-pipeline--format-render-data-block
+      '(:kind request-summary :elapsed-seconds 3))
+     'ignore)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let* ((text (buffer-substring-no-properties
+                    (point-min) mevedel-view--input-marker))
+             (first-answer (string-search "First answer" text))
+             (reminder (string-search "System reminder" text))
+             (first-footer (string-search "Worked for 7s" text))
+             (second-prompt (string-search "You\nSecond prompt" text))
+             (second-answer (string-search "Second answer" text))
+             (second-footer (string-search "Worked for 3s" text)))
+        (should first-answer)
+        (should reminder)
+        (should first-footer)
+        (should second-prompt)
+        (should second-answer)
+        (should second-footer)
+        (should (< first-answer reminder first-footer
+                   second-prompt second-answer second-footer))
+        (should (= 2 (how-many "Worked for"
+                               (point-min)
+                               mevedel-view--input-marker))))))
   :doc "omits nested tool blocks from rendered reasoning text"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data

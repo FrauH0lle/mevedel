@@ -1061,10 +1061,15 @@ real user message."
           (push seg current-segs)))
         (setq prev-type
               (cond
-               (system-reminder-p 'system-reminder)
+               (system-reminder-p prev-type)
                (request-summary-p 'response)
                (hook-audit-only-p prev-type)
                (render-data-only-p prev-type)
+               ((and (eq type 'ignored)
+                     data-buf
+                     (mevedel-view--scaffolding-only-p
+                      data-buf seg-start (caddr seg)))
+                prev-type)
                (scaffolding-before-hook-audit-p prev-type)
                (t type)))
         (setq rest (cdr rest))))
