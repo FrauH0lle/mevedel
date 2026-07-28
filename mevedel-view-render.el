@@ -1557,20 +1557,22 @@ Return nil when HEADER is not a `Tool: argument' style line."
          (tool-split
           (and (not agent-p)
                (mevedel-view--split-rendering-tool-header header))))
-    (if tool-split
-        (mevedel-view--tool-call-line
-         marker marker-face
-         (nth 0 tool-split)
-         (nth 1 tool-split)
-         (nth 2 tool-split))
-      (let ((line
-             (mevedel-view--operation-line
-              marker marker-face header nil nil
-              (mevedel-view--rendering-header-face rendering))))
-        (if agent-p
-            (mevedel-view--buttonize-agent-header-label
-             line (plist-get rendering :agent-path))
-          line)))))
+    (if (eq vtype 'system-reminder-summary)
+        header
+      (if tool-split
+          (mevedel-view--tool-call-line
+           marker marker-face
+           (nth 0 tool-split)
+           (nth 1 tool-split)
+           (nth 2 tool-split))
+        (let ((line
+               (mevedel-view--operation-line
+                marker marker-face header nil nil
+                (mevedel-view--rendering-header-face rendering))))
+          (if agent-p
+              (mevedel-view--buttonize-agent-header-label
+               line (plist-get rendering :agent-path))
+            line))))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return a durable disclosure line for noteworthy sandbox SUMMARY."

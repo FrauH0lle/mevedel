@@ -931,6 +931,8 @@
         (setq collapsed-header
               (buffer-substring-no-properties
                (line-beginning-position) (line-end-position)))
+        (should (equal "  ◇ System reminder (2 lines)"
+                       collapsed-header))
         (goto-char (match-beginning 0))
         (should (eq (get-text-property (point) 'mevedel-view-type)
                     'system-reminder-summary))
@@ -958,7 +960,13 @@
                      (point-min) mevedel-view--input-marker)))
           (should (= 1 (mevedel-view-test--count-substring
                         "System reminder" text)))
-          (should-not (string-match-p "CRITICAL: verify only" text))))))
+          (should-not (string-match-p "CRITICAL: verify only" text))
+          (goto-char (point-min))
+          (search-forward "System reminder")
+          (should (equal collapsed-header
+                         (buffer-substring-no-properties
+                          (line-beginning-position)
+                          (line-end-position))))))))
   :doc "renders partial Worktree Fork disclosure as an expanded warning"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -979,6 +987,9 @@
         (should (string-match-p "/repo/missing.el" text)))
       (goto-char (point-min))
       (search-forward "Partial Worktree Fork")
+      (should (equal "  ! Partial Worktree Fork (4 lines)"
+                     (buffer-substring-no-properties
+                      (line-beginning-position) (line-end-position))))
       (goto-char (match-beginning 0))
       (should-not (get-text-property (point) 'mevedel-view-collapsed))
       (should (eq 'mevedel-view-tool-warning
@@ -988,7 +999,12 @@
        (string-match-p
         "/repo/missing.el"
         (buffer-substring-no-properties
-         (point-min) mevedel-view--input-marker))))
+         (point-min) mevedel-view--input-marker)))
+      (goto-char (point-min))
+      (search-forward "Partial Worktree Fork")
+      (should (equal "  ! Partial Worktree Fork (4 lines)"
+                     (buffer-substring-no-properties
+                      (line-beginning-position) (line-end-position)))))
     (with-current-buffer data-buf
       (should (string-match-p "/repo/missing.el" (buffer-string)))))
   :doc "keeps generated system reminders separate from real thinking"
