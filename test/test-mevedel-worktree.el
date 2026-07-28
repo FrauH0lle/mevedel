@@ -231,6 +231,87 @@
     (should (plist-get (nth 2 entries) :bare))
     (should (equal (plist-get (nth 2 entries) :prunable) "stale"))))
 
+(mevedel-deftest mevedel-worktree-fork-preflight ()
+  ,test
+  (test)
+  :doc "captures the full current HEAD and rejects non-Git sessions"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-worktree-fork-preflight-" t))))
+    (unwind-protect
+        (let* ((workspace (mevedel-worktree-test--workspace root))
+               (session (mevedel-session-create "main" workspace root)))
+          (should-error (mevedel-worktree-fork-preflight session)
+                        :type 'user-error)
+          (mevedel-worktree-test--init-repo root)
+          (let ((context (mevedel-worktree-fork-preflight session)))
+            (should (equal root (plist-get context :source-root)))
+            (should
+             (equal
+              (plist-get
+               (mevedel-worktree-test--git-ok root "rev-parse" "HEAD")
+               :output)
+              (plist-get context :base-commit)))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-worktree-fork-reservation ()
+  ,test
+  (test)
+  :doc "uses the first suffix free in both Git and the worktree directory"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-worktree-fork-reserve-" t))))
+    (unwind-protect
+        (let* ((workspace (mevedel-worktree-test--workspace root))
+               (session (mevedel-session-create "main" workspace root)))
+          (mevedel-worktree-test--init-repo root)
+          (mevedel-worktree-test--git-ok
+           root "branch" "worktree/main-fork-1")
+          (make-directory
+           (file-name-concat root ".worktrees" "main-fork-2") t)
+          (let ((reservation
+                 (mevedel-worktree-fork-reservation session)))
+            (should (equal "worktree/main-fork-3"
+                           (plist-get reservation :branch)))
+            (should
+             (equal
+              (file-name-as-directory
+               (file-name-concat root ".worktrees" "main-fork-3"))
+              (plist-get reservation :directory)))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-worktree-fork-create ()
+  ,test
+  (test)
+  :doc "creates a linked worktree and branch at the reserved base commit"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-worktree-fork-create-" t))))
+    (unwind-protect
+        (let* ((workspace (mevedel-worktree-test--workspace root))
+               (session (mevedel-session-create "main" workspace root)))
+          (mevedel-worktree-test--init-repo root)
+          (let* ((reservation
+                  (mevedel-worktree-fork-reservation session))
+                 (directory (plist-get reservation :directory)))
+            (mevedel-worktree-fork-create reservation)
+            (should (file-directory-p directory))
+            (should
+             (equal
+              (plist-get reservation :base-commit)
+              (plist-get
+               (mevedel-worktree-test--git-ok
+                directory "rev-parse" "HEAD")
+               :output)))
+            (should
+             (equal
+              (plist-get reservation :branch)
+              (plist-get
+               (mevedel-worktree-test--git-ok
+                directory "branch" "--show-current")
+               :output)))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
 
 ;;
 ;;; Status

@@ -64,6 +64,14 @@
 ;;
 ;;; Helpers
 
+(defun test-mevedel-session-persistence--git (directory &rest args)
+  "Run Git ARGS in DIRECTORY and return its trimmed output."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory directory)))
+      (unless (eq 0 (apply #'process-file "git" nil t nil args))
+        (error "Git failed: %s" (buffer-string)))
+      (string-trim (buffer-string)))))
+
 (defun test-mevedel-session-persistence--agent-backend ()
   "Return the registered backend used by retained-agent fixtures."
   (let ((name "Session Persistence Agent Test"))
@@ -177,6 +185,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :forked-from-turn nil
                :fork-type nil
                :forked-from-fork-point-id nil
+               :worktree-source-root nil
+               :worktree-directory nil
+               :worktree-branch nil
+               :worktree-base-commit nil
                :permission-mode 'ask
                :plan-mode nil
                :permission-rules nil
@@ -500,7 +512,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (null (plist-get plist :forked-from-session-id)))
           (should (null (plist-get plist :forked-from-turn)))
           (should (null (plist-get plist :fork-type)))
-          (should (null (plist-get plist :forked-from-fork-point-id))))
+          (should (null (plist-get plist :forked-from-fork-point-id)))
+          (should (null (plist-get plist :worktree-directory))))
       (when (file-directory-p root)
         (delete-directory root t))))
   :doc "serializes durable fork type and stable fork-point lineage"
@@ -510,14 +523,26 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                (test-mevedel-session-persistence--make-session root)))
           (setf (mevedel-session-forked-from-session-id session) "source"
                 (mevedel-session-forked-from-turn session) 3
-                (mevedel-session-fork-type session) 'conversation
+                (mevedel-session-fork-type session) 'worktree
                 (mevedel-session-forked-from-fork-point-id session)
-                "stable-point")
+                "stable-point"
+                (mevedel-session-worktree-source-root session) "/repo/"
+                (mevedel-session-worktree-directory session)
+                "/repo/.worktrees/main-fork-1/"
+                (mevedel-session-worktree-branch session)
+                "worktree/main-fork-1"
+                (mevedel-session-worktree-base-commit session) "abc123")
           (let ((plist (mevedel-session-persistence-serialize session)))
-            (should (eq 'conversation (plist-get plist :fork-type)))
+            (should (eq 'worktree (plist-get plist :fork-type)))
             (should (equal "stable-point"
                            (plist-get plist
-                                      :forked-from-fork-point-id)))))
+                                      :forked-from-fork-point-id)))
+            (should (equal "/repo/.worktrees/main-fork-1/"
+                           (plist-get plist :worktree-directory)))
+            (should (equal "worktree/main-fork-1"
+                           (plist-get plist :worktree-branch)))
+            (should (equal "abc123"
+                           (plist-get plist :worktree-base-commit)))))
       (when (file-directory-p root)
         (delete-directory root t))))
   :doc "materializes the canonical global mode when the session inherits it"
@@ -5885,6 +5910,156 @@ The result is a plist whose :tempdir owns every created file."
                             (plist-get fixture :parent-lock))))
             (should (equal source-state
                            (mevedel-session-persistence-serialize session)))))
+      (when (buffer-live-p child-buffer)
+        (let ((view (buffer-local-value 'mevedel--view-buffer child-buffer)))
+          (with-current-buffer child-buffer
+            (set-buffer-modified-p nil))
+          (when (buffer-live-p view)
+            (kill-buffer view)))
+        (when (buffer-live-p child-buffer)
+          (kill-buffer child-buffer)))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
+
+(mevedel-deftest mevedel-session-persistence-worktree-fork ()
+  ,test
+  (test)
+  :doc "publishes captured repository state in an isolated linked worktree"
+  (let ((fixture (test-mevedel-session-persistence--make-fork-ready))
+        child-buffer
+        lifecycle-sources)
+    (unwind-protect
+        (let* ((session (plist-get fixture :session))
+               (source-root
+                (file-name-as-directory
+                 (mevedel-session-working-directory session)))
+               (source-file (file-name-concat source-root "current.txt"))
+               (untracked-file
+                (file-name-concat source-root "source-only.txt"))
+               (backup-name "current@v1"))
+          (test-mevedel-session-persistence--git source-root "init")
+          (test-mevedel-session-persistence--git
+           source-root "config" "user.email" "mevedel@example.invalid")
+          (test-mevedel-session-persistence--git
+           source-root "config" "user.name" "Mevedel Test")
+          (write-region "HEAD state\n" nil source-file nil 'silent)
+          (test-mevedel-session-persistence--git
+           source-root "add" "current.txt")
+          (test-mevedel-session-persistence--git
+           source-root "commit" "-m" "base")
+          (let ((base-commit
+                 (test-mevedel-session-persistence--git
+                  source-root "rev-parse" "HEAD")))
+            (write-region "captured state\n" nil
+                          (mevedel-file-history--backup-path
+                           (plist-get fixture :parent-path) backup-name)
+                          nil 'silent)
+            (setf
+             (mevedel-session-file-snapshots session)
+             `((1 . ((,source-file
+                      . (:backup-name ,backup-name :version 1)))))
+             (mevedel-session-resource-grants session)
+             `((:path ,source-file :access write))
+             (mevedel-session-permission-rules session)
+             `(("Write" :path ,source-file :action allow))
+             (mevedel-session-model-provider session)
+             "test-backend:test-model")
+            (mevedel-session-persistence-write
+             (mevedel-session-persistence--sidecar-path
+              (plist-get fixture :parent-path))
+             (mevedel-session-persistence--build-sidecar
+              session (plist-get fixture :buffer)))
+            (let ((source-state
+                   (mevedel-session-persistence-serialize session))
+                  (source-sidecar
+                   (mevedel-session-persistence--file-text
+                    (mevedel-session-persistence--sidecar-path
+                     (plist-get fixture :parent-path))))
+                  (source-lock
+                   (mevedel-session-persistence--file-text
+                    (plist-get fixture :parent-lock))))
+              (write-region "dirty Source state\n" nil
+                            source-file nil 'silent)
+              (write-region "untracked Source file\n" nil
+                            untracked-file nil 'silent)
+              (cl-letf
+                  (((symbol-function 'mevedel--run-session-start-hooks)
+                    (lambda (source)
+                      (push source lifecycle-sources)))
+                   ((symbol-function 'mevedel-model-apply-session-policy)
+                    #'ignore))
+                (setq child-buffer
+                      (mevedel-session-persistence-worktree-fork
+                       (plist-get fixture :buffer)
+                       '(:fork-point-id "fixture-fork"))))
+              (should (buffer-live-p child-buffer))
+              (should (equal '("fork") lifecycle-sources))
+              (let* ((child
+                      (buffer-local-value 'mevedel--session child-buffer))
+                     (worktree
+                      (mevedel-session-worktree-directory child))
+                     (child-file
+                      (file-name-concat worktree "current.txt")))
+                (should (string= "main · worktree 1"
+                                 (mevedel-session-name child)))
+                (should (eq 'worktree
+                            (mevedel-session-fork-type child)))
+                (should (equal source-root
+                               (mevedel-session-worktree-source-root child)))
+                (should (equal worktree
+                               (mevedel-session-working-directory child)))
+                (should (equal "worktree/main-fork-1"
+                               (mevedel-session-worktree-branch child)))
+                (should (equal base-commit
+                               (mevedel-session-worktree-base-commit child)))
+                (should (equal base-commit
+                               (test-mevedel-session-persistence--git
+                                worktree "rev-parse" "HEAD")))
+                (should (equal "captured state\n"
+                               (mevedel-session-persistence--file-text
+                                child-file)))
+                (should-not
+                 (file-exists-p
+                  (file-name-concat worktree "source-only.txt")))
+                (should
+                 (equal child-file
+                        (caar
+                         (cdar
+                          (mevedel-session-file-snapshots child)))))
+                (should
+                 (equal child-file
+                        (plist-get
+                         (car (mevedel-session-resource-grants child))
+                         :path)))
+                (with-current-buffer child-buffer
+                  (should (string-match-p "Worktree Fork"
+                                          (buffer-string)))
+                  (should (string-match-p
+                           (regexp-quote worktree)
+                           (buffer-string)))
+                  (should (string-match-p
+                           (regexp-quote base-commit)
+                           (buffer-string)))
+                  (should (string-match-p
+                           "Captured repository files restored: 1"
+                           (buffer-string))))
+                (should (equal "dirty Source state\n"
+                               (mevedel-session-persistence--file-text
+                                source-file)))
+                (should (equal "untracked Source file\n"
+                               (mevedel-session-persistence--file-text
+                                untracked-file)))
+                (should (equal source-state
+                               (mevedel-session-persistence-serialize
+                                session)))
+                (should
+                 (equal source-sidecar
+                        (mevedel-session-persistence--file-text
+                         (mevedel-session-persistence--sidecar-path
+                          (plist-get fixture :parent-path)))))
+                (should
+                 (equal source-lock
+                        (mevedel-session-persistence--file-text
+                         (plist-get fixture :parent-lock))))))))
       (when (buffer-live-p child-buffer)
         (let ((view (buffer-local-value 'mevedel--view-buffer child-buffer)))
           (with-current-buffer child-buffer

@@ -172,6 +172,14 @@
 		  t)
 (declare-function mevedel-session-working-directory "mevedel-structs"
 		  (cl-x) t)
+(declare-function mevedel-session-worktree-base-commit "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-worktree-branch "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-worktree-directory "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-worktree-source-root "mevedel-structs"
+		  (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-task-blocked-by "mevedel-structs" (cl-x) t)
@@ -273,6 +281,16 @@
 (defvar mevedel--workspace)
 (defvar mevedel-permission-mode)
 (defvar mevedel-workspace-additional-roots)
+
+;; `mevedel-worktree'
+(declare-function mevedel-worktree-fork-create
+		  "mevedel-worktree" (reservation))
+(declare-function mevedel-worktree-fork-preflight
+		  "mevedel-worktree" (session))
+(declare-function mevedel-worktree-fork-reservation
+		  "mevedel-worktree" (session &optional preflight))
+(declare-function mevedel-worktree-fork-rollback
+		  "mevedel-worktree" (reservation))
 (defvar so-long-predicate)
 
 ;; `mevedel-view-render'
@@ -344,6 +362,8 @@ add more, and we don't want to act on actions we don't understand).")
     :last-task-write-turn :task-status-notes :first-user-message
     :latest-user-message :forked-from-session-id :forked-from-turn
     :fork-type :forked-from-fork-point-id
+    :worktree-source-root :worktree-directory :worktree-branch
+    :worktree-base-commit
     :permission-mode :plan-mode :permission-rules :resource-grants
     :preset-name :preset-settings :model-provider :reasoning-effort
     :last-observed-date
@@ -604,6 +624,10 @@ The resulting plist is round-trippable via
    :fork-type              (mevedel-session-fork-type session)
    :forked-from-fork-point-id
    (mevedel-session-forked-from-fork-point-id session)
+   :worktree-source-root (mevedel-session-worktree-source-root session)
+   :worktree-directory   (mevedel-session-worktree-directory session)
+   :worktree-branch      (mevedel-session-worktree-branch session)
+   :worktree-base-commit (mevedel-session-worktree-base-commit session)
    :permission-mode        permission-mode
    :plan-mode              (and (mevedel-session-plan-mode session) t)
    :permission-rules       (mevedel-session-permission-rules session)
@@ -765,6 +789,14 @@ their hygiene filters."
                      :fork-type (plist-get plist :fork-type)
                      :forked-from-fork-point-id
                      (plist-get plist :forked-from-fork-point-id)
+                     :worktree-source-root
+                     (plist-get plist :worktree-source-root)
+                     :worktree-directory
+                     (plist-get plist :worktree-directory)
+                     :worktree-branch
+                     (plist-get plist :worktree-branch)
+                     :worktree-base-commit
+                     (plist-get plist :worktree-base-commit)
                      :prompt-index     prompt-index
                      :file-snapshots   (plist-get plist :file-snapshots)
                      :plan-metadata    (plist-get plist :plan-metadata)
@@ -4412,6 +4444,164 @@ mail are deliberately absent from the returned session."
    (mevedel-session-forked-from-session-id session)
    (mevedel-session-working-directory session)))
 
+(defun mevedel-session-persistence--retarget-worktree-path (session path)
+  "Retarget absolute PATH from SESSION's Source root into its worktree."
+  (unless (and (stringp path) (file-name-absolute-p path))
+    (error "Invalid Worktree Fork path: %S" path))
+  (let* ((source-root
+          (file-name-as-directory
+           (expand-file-name
+            (or (mevedel-session-worktree-source-root session)
+                (error "Worktree Fork has no Source repository root")))))
+         (worktree-root
+          (file-name-as-directory
+           (expand-file-name
+            (or (mevedel-session-worktree-directory session)
+                (error "Worktree Fork has no worktree directory")))))
+         (expanded (expand-file-name path)))
+    (if (string-prefix-p source-root expanded)
+        (expand-file-name (substring expanded (length source-root))
+                          worktree-root)
+      expanded)))
+
+(defun mevedel-session-persistence--retarget-worktree-state (session)
+  "Retarget SESSION's copied repository-local path state."
+  (setf
+   (mevedel-session-working-directory session)
+   (mevedel-session-worktree-directory session)
+   (mevedel-session-file-snapshots session)
+   (mapcar
+    (lambda (turn-entry)
+      (cons
+       (car turn-entry)
+       (mapcar
+        (lambda (file-entry)
+          (cons
+           (mevedel-session-persistence--retarget-worktree-path
+            session (car file-entry))
+           (copy-tree (cdr file-entry) t)))
+        (cdr turn-entry))))
+    (mevedel-session-file-snapshots session))
+   (mevedel-session-resource-grants session)
+   (mapcar
+    (lambda (grant)
+      (let ((copy (copy-tree grant t)))
+        (plist-put
+         copy :path
+         (mevedel-session-persistence--retarget-worktree-path
+          session (plist-get copy :path)))
+        copy))
+    (mevedel-session-resource-grants session))
+   (mevedel-session-permission-rules session)
+   (mapcar
+    (lambda (rule)
+      (let* ((copy (copy-tree rule t))
+             (path (plist-get (cdr copy) :path)))
+        (when (and path (file-name-absolute-p path))
+          (plist-put
+           (cdr copy) :path
+           (mevedel-session-persistence--retarget-worktree-path
+            session path)))
+        copy))
+    (mevedel-session-permission-rules session)))
+  session)
+
+(defun mevedel-session-persistence--assert-worktree-target
+    (worktree-root target)
+  "Signal when TARGET could escape WORKTREE-ROOT through a symlink."
+  (let* ((root (file-name-as-directory (file-truename worktree-root)))
+         (cursor (if (file-exists-p target)
+                     target
+                   (file-name-directory target))))
+    (while (and cursor (not (file-exists-p cursor)))
+      (setq cursor
+            (file-name-directory
+             (directory-file-name cursor))))
+    (unless (and cursor
+                 (let ((resolved (file-truename cursor)))
+                   (or (file-equal-p resolved root)
+                       (file-in-directory-p resolved root))))
+      (error "Unsafe Worktree Fork target: %s" target))))
+
+(defun mevedel-session-persistence--restore-worktree-files
+    (source child cum-turn)
+  "Restore SOURCE's captured repository files into CHILD at CUM-TURN."
+  (let* ((source-root
+          (file-name-as-directory
+           (expand-file-name
+            (mevedel-session-worktree-source-root child))))
+         (worktree-root
+          (file-name-as-directory
+           (expand-file-name
+            (mevedel-session-worktree-directory child))))
+         (history-dir
+          (file-name-concat
+           (mevedel-session-save-path source) "file-history"))
+         (restored 0)
+         external)
+    (unless (file-readable-p history-dir)
+      (error "Captured file-history store is unreadable: %s" history-dir))
+    (dolist (entry
+             (mevedel-session-persistence--state-at-turn source cum-turn))
+      (let ((path (car entry))
+            (snapshot (cdr entry)))
+        (unless (and (stringp path) (file-name-absolute-p path))
+          (error "Invalid captured Worktree Fork path: %S" path))
+        (if (not
+             (string-prefix-p source-root (expand-file-name path)))
+            (push (expand-file-name path) external)
+          (let* ((target
+                  (mevedel-session-persistence--retarget-worktree-path
+                   child path))
+                 (backup-name (plist-get snapshot :backup-name)))
+            (mevedel-session-persistence--assert-worktree-target
+             worktree-root target)
+            (if (null backup-name)
+                (when (file-exists-p target)
+                  (delete-file target))
+              (unless
+                  (and (stringp backup-name)
+                       (equal backup-name
+                              (file-name-nondirectory backup-name)))
+                (error "Invalid captured backup name: %S" backup-name))
+              (let ((backup
+                     (mevedel-file-history--backup-path
+                      (mevedel-session-save-path source) backup-name)))
+                (unless (file-readable-p backup)
+                  (error "Captured backup is unavailable: %s" backup))
+                (make-directory (file-name-directory target) t)
+                (let ((coding-system-for-write 'no-conversion))
+                  (write-region
+                   (mevedel-file-history--read-file-raw backup)
+                   nil target nil 'silent))))
+            (cl-incf restored)))))
+    (list :restored restored :external (nreverse external))))
+
+(defun mevedel-session-persistence--worktree-fork-disclosure
+    (session report)
+  "Return durable Worktree Fork disclosure for SESSION and REPORT."
+  (format
+   (concat "\n\n<system-reminder>\n"
+           "Worktree Fork\n"
+           "Source session: %s\n"
+           "Worktree directory: %s\n"
+           "Branch: %s\n"
+           "Base commit: %s\n"
+           "Captured repository files restored: %d\n"
+           "Uncaptured files retain the base commit's contents. "
+           "Uncommitted Source changes were not copied.\n"
+           "%s"
+           "</system-reminder>\n")
+   (mevedel-session-forked-from-session-id session)
+   (mevedel-session-worktree-directory session)
+   (mevedel-session-worktree-branch session)
+   (mevedel-session-worktree-base-commit session)
+   (plist-get report :restored)
+   (if-let* ((external (plist-get report :external)))
+       (format "External captured paths remain shared and were not restored: %s\n"
+               (string-join external ", "))
+     "")))
+
 (defun mevedel-session-persistence-conversation-fork (buffer target)
   "Create and open a Conversation Fork of BUFFER at stable TARGET.
 
@@ -4512,6 +4702,130 @@ child data buffer without mutating the Source buffer, session, or lock."
           (ignore-errors (delete-directory new-save-path t)))
         (when (file-directory-p staging-path)
           (ignore-errors (delete-directory staging-path t))))
+      (when (buffer-live-p staging-buffer)
+        (with-current-buffer staging-buffer
+          (set-buffer-modified-p nil)
+          (setq-local kill-buffer-hook nil))
+        (kill-buffer staging-buffer)))))
+
+(defun mevedel-session-persistence-worktree-fork (buffer target)
+  "Create and open a Worktree Fork of BUFFER at stable TARGET."
+  (let* ((session (buffer-local-value 'mevedel--session buffer))
+         (_ (unless session
+              (user-error "Active buffer has no mevedel session")))
+         (target
+          (mevedel-session-persistence--resolve-fork-target session target))
+         (_ (mevedel-session-persistence--assert-stable-source
+             session buffer "forking"))
+         (parent-save-path (mevedel-session-save-path session))
+         (_ (unless parent-save-path
+              (user-error "Save the session before forking")))
+         (picked-segment (plist-get target :segment))
+         (picked-cum-turn (plist-get target :cum-turn))
+         (sessions-dir
+          (mevedel-session-persistence--sessions-dir
+           (mevedel-session-workspace session)))
+         (child-name
+          (mevedel-session-persistence--fork-child-name session 'worktree))
+         (new-id
+          (mevedel-session-persistence--allocate-session-id
+           child-name sessions-dir))
+         (new-save-path
+          (file-name-as-directory (file-name-concat sessions-dir new-id)))
+         (staging-path
+          (file-name-as-directory
+           (make-temp-file
+            (expand-file-name ".mevedel-worktree-fork-" sessions-dir) t)))
+         (staging-buffer
+          (generate-new-buffer " *mevedel-worktree-fork*"))
+         (preflight
+          (progn
+            (require 'mevedel-worktree)
+            (mevedel-worktree-fork-preflight session)))
+         (reservation
+          (mevedel-worktree-fork-reservation session preflight))
+         child child-buffer report worktree-created published committed)
+    (unwind-protect
+        (progn
+          (mevedel-worktree-fork-create reservation)
+          (setq worktree-created t
+                child
+                (mevedel-session-persistence--fork-candidate
+                 session staging-path new-id
+                 (mevedel-session-session-id session)
+                 picked-segment picked-cum-turn
+                 (format-time-string "%FT%H-%M-%S")))
+          (setf
+           (mevedel-session-name child) child-name
+           (mevedel-session-fork-type child) 'worktree
+           (mevedel-session-forked-from-fork-point-id child)
+           (plist-get target :fork-point-id)
+           (mevedel-session-worktree-source-root child)
+           (plist-get reservation :source-root)
+           (mevedel-session-worktree-directory child)
+           (plist-get reservation :directory)
+           (mevedel-session-worktree-branch child)
+           (plist-get reservation :branch)
+           (mevedel-session-worktree-base-commit child)
+           (plist-get reservation :base-commit))
+          (mevedel-session-persistence--retarget-worktree-state child)
+          (setq report
+                (mevedel-session-persistence--restore-worktree-files
+                 session child picked-cum-turn))
+          (with-current-buffer staging-buffer
+            (let ((org-agenda-file-menu-enabled nil))
+              (org-mode)))
+          (mevedel-session-persistence--load-rewind-target
+           session staging-buffer target)
+          (with-current-buffer staging-buffer
+            (goto-char (point-max))
+            (let ((start (point)))
+              (insert
+               (mevedel-session-persistence--worktree-fork-disclosure
+                child report))
+              (set-text-properties start (point) nil)))
+          (mevedel-session-persistence--stage-fork
+           child buffer staging-buffer parent-save-path staging-path
+           picked-segment picked-cum-turn)
+          (mevedel-session-persistence-lock-release staging-path)
+          (rename-file (directory-file-name staging-path)
+                       (directory-file-name new-save-path))
+          (setq published t)
+          (setf (mevedel-session-save-path child) new-save-path)
+          (with-current-buffer staging-buffer
+            (set-buffer-modified-p nil)
+            (set-visited-file-name nil t)
+            (setq-local kill-buffer-hook nil))
+          (kill-buffer staging-buffer)
+          (setq child-buffer
+                (mevedel-session-persistence-restore
+                 new-save-path "fork" child)
+                committed t)
+          child-buffer)
+      (unless committed
+        (when-let* ((failed-buffer
+                     (or child-buffer
+                         (and child
+                              (mevedel-session-persistence--find-live-buffer
+                               (mevedel-session-session-id child)
+                               (mevedel-session-buffer-name
+                                (mevedel-session-name child)
+                                (mevedel-session-workspace child)))))))
+          (when-let* ((view
+                       (buffer-local-value
+                        'mevedel--view-buffer failed-buffer))
+                      ((buffer-live-p view)))
+            (kill-buffer view))
+          (when (buffer-live-p failed-buffer)
+            (with-current-buffer failed-buffer
+              (set-buffer-modified-p nil))
+            (kill-buffer failed-buffer)))
+        (when published
+          (ignore-errors (delete-directory new-save-path t)))
+        (when (file-directory-p staging-path)
+          (ignore-errors (delete-directory staging-path t)))
+        (when worktree-created
+          (mevedel-worktree-fork-rollback reservation)))
       (when (buffer-live-p staging-buffer)
         (with-current-buffer staging-buffer
           (set-buffer-modified-p nil)
@@ -4668,7 +4982,13 @@ until restore actually reads it."
               (plist-get plist :forked-from-session-id)
               :fork-type (plist-get plist :fork-type)
               :forked-from-fork-point-id
-              (plist-get plist :forked-from-fork-point-id)))
+              (plist-get plist :forked-from-fork-point-id)
+              :worktree-source-root
+              (plist-get plist :worktree-source-root)
+              :worktree-directory (plist-get plist :worktree-directory)
+              :worktree-branch (plist-get plist :worktree-branch)
+              :worktree-base-commit
+              (plist-get plist :worktree-base-commit)))
     (error nil)))
 
 (defun mevedel-session-persistence-list-sessions (workspace)

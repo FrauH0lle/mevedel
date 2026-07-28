@@ -146,7 +146,15 @@
                   (session buffer operation))
 (declare-function mevedel-session-persistence-conversation-fork
                   "mevedel-session-persistence" (buffer target))
+(declare-function mevedel-session-persistence--retarget-worktree-path
+		  "mevedel-session-persistence" (session path))
+(declare-function mevedel-session-persistence-worktree-fork
+		  "mevedel-session-persistence" (buffer target))
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-worktree'
+(declare-function mevedel-worktree-fork-preflight
+		  "mevedel-worktree" (session))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill "mevedel-skills-core"
@@ -540,27 +548,41 @@ composer body.")
       (mevedel-view-cancel-session-fork)
     (mevedel-pending-inputs-cancel-edit)))
 
-(defun mevedel-view-arm-conversation-fork ()
-  "Arm a Conversation Fork from the settled assistant response at point."
-  (interactive)
+(defun mevedel-view--arm-session-fork (fork-type)
+  "Arm FORK-TYPE from the settled assistant response at point."
   (mevedel-view--ensure-interactive-chat-view)
   (let* ((target (mevedel-view-fork-point-at-point))
-         (session (mevedel-view--session)))
+         (session (mevedel-view--session))
+         (label (if (eq fork-type 'worktree) "worktree" "conversation")))
     (require 'mevedel-session-persistence)
     (mevedel-session-persistence--assert-stable-source
      session mevedel--data-buffer "forking")
+    (when (eq fork-type 'worktree)
+      (require 'mevedel-worktree)
+      (mevedel-worktree-fork-preflight session))
     (setq target (copy-sequence target))
-    (plist-put target :fork-type 'conversation)
+    (plist-put target :fork-type fork-type)
     (mevedel-view--interaction-register
      (list :kind 'preview
            :id 'armed-session-fork
            :body
-           (format "Fork conversation from Assistant turn %d  [Cancel]"
-                   (plist-get target :cum-turn))
+           (format "Fork %s from Assistant turn %d  [Cancel]"
+                   label (plist-get target :cum-turn))
            :keymap mevedel-view--armed-session-fork-map
-           :help-echo "Cancel Conversation Fork"))
+           :help-echo (format "Cancel %s Fork"
+                              (capitalize label))))
     (setq mevedel-view--armed-session-fork target)
     (goto-char (point-max))))
+
+(defun mevedel-view-arm-conversation-fork ()
+  "Arm a Conversation Fork from the settled assistant response at point."
+  (interactive)
+  (mevedel-view--arm-session-fork 'conversation))
+
+(defun mevedel-view-arm-worktree-fork ()
+  "Arm a Worktree Fork from the settled assistant response at point."
+  (interactive)
+  (mevedel-view--arm-session-fork 'worktree))
 
 (defvar-keymap mevedel-view--composer-keymap
   :doc "Keymap active over the editable composer body."
@@ -1957,7 +1979,8 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
     (source-view input target snapshot)
   "Publish TARGET from SOURCE-VIEW, then submit INPUT in its Child.
 SNAPSHOT is the exact Source composer state transferred on publication."
-  (let* ((source-data
+  (let* ((fork-type (plist-get target :fork-type))
+         (source-data
           (buffer-local-value 'mevedel--data-buffer source-view))
          (referenced-grants
           (cl-intersection
@@ -1967,15 +1990,36 @@ SNAPSHOT is the exact Source composer state transferred on publication."
          (child-data
           (progn
             (require 'mevedel-session-persistence)
-            (mevedel-session-persistence-conversation-fork
-             source-data target)))
+            (pcase fork-type
+              ('conversation
+               (mevedel-session-persistence-conversation-fork
+                source-data target))
+              ('worktree
+               (mevedel-session-persistence-worktree-fork
+                source-data target))
+              (_
+               (error "Unknown session fork type: %S" fork-type)))))
          (child-view
           (buffer-local-value 'mevedel--view-buffer child-data))
          (child-session
           (buffer-local-value 'mevedel--session child-data)))
     (unless (buffer-live-p child-view)
-      (error "Conversation Fork has no live view"))
+      (error "Session Fork has no live view"))
     (setq snapshot (copy-tree snapshot t))
+    (when (eq fork-type 'worktree)
+      (setq input
+            (mevedel-view--retarget-worktree-mention-bindings
+             input child-session)
+            referenced-grants
+            (mapcar
+             (lambda (path)
+               (mevedel-session-persistence--retarget-worktree-path
+                child-session path))
+             referenced-grants))
+      (plist-put
+       snapshot :text
+       (mevedel-view--retarget-worktree-mention-bindings
+        (plist-get snapshot :text) child-session)))
     (plist-put snapshot :dropped-file-grants referenced-grants)
     (with-current-buffer child-view
       (mevedel-view--restore-composer-snapshot
@@ -1989,6 +2033,27 @@ SNAPSHOT is the exact Source composer state transferred on publication."
        input nil nil nil
        (lambda () (mevedel-view-history-add input))))
     child-data))
+
+(defun mevedel-view--retarget-worktree-mention-bindings (text session)
+  "Retarget repository-local mention bindings in TEXT for SESSION."
+  (require 'mevedel-mention-bindings)
+  (let ((copy (mevedel-mention-bindings-copy-text text)))
+    (dolist (range (mevedel-mention-bindings-ranges copy))
+      (let* ((binding (copy-tree (plist-get range :binding) t))
+             (key
+              (pcase (plist-get binding :kind)
+                ('file :path)
+                ('skill :source-file))))
+        (when key
+          (plist-put
+           binding key
+           (mevedel-session-persistence--retarget-worktree-path
+            session (plist-get binding key)))
+          (mevedel-mention-bindings-set
+           (plist-get range :start)
+           (plist-get range :end)
+           binding copy))))
+    copy))
 
 (defun mevedel-view-send ()
   "Send the current composer text to the LLM via the data buffer.
