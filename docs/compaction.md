@@ -251,7 +251,7 @@ failures receive the existing maximum of three identical attempts.
 Numbered agent archives are recovery artifacts, not transcript identities.
 They are deliberately absent from the session sidecar, session browser, and
 retention index.  They remain owned by the original session directory and are
-removed with it by normal session cleanup.  Rewind forks copy only canonical
+removed with it by normal session cleanup.  Session Forks copy only canonical
 agent transcripts referenced by the fork's sidecar; they do not copy numbered
 archives.
 

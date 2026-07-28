@@ -161,6 +161,8 @@
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view-rewind-at-point "mevedel-view-render" ())
+(declare-function mevedel-view-switch-conversation-variant-at-point
+                  "mevedel-view-render" ())
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-status-summary "mevedel-worktree"
@@ -666,6 +668,13 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-view-rewind-at-point))
 
+(defun mevedel-menu--switch-variant-here ()
+  "Switch conversation variants at point in the paired view buffer."
+  (interactive)
+  (mevedel-cockpit-call-in-view
+   (mevedel-menu--context)
+   #'mevedel-view-switch-conversation-variant-at-point))
+
 (defun mevedel-menu--fork-conversation-here ()
   "Arm a Conversation Fork at point in the paired view buffer."
   (interactive)
@@ -882,6 +891,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("f" "Fork conversation" mevedel-menu--fork-conversation-here)
     ("F" "Fork worktree" mevedel-menu--fork-worktree-here)
     ("R" "Rewind here" mevedel-menu--rewind-here)
+    ("B" "Switch conversation variant" mevedel-menu--switch-variant-here)
     ("n" "Next display"
      (lambda () (interactive)
        (mevedel-cockpit-call-in-view

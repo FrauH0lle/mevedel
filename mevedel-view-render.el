@@ -5006,6 +5006,12 @@ Signal a user error when point is not on a settled assistant turn."
     (display-buffer target-view gptel-display-buffer-action)
     target-data))
 
+(defun mevedel-view-switch-conversation-variant-at-point ()
+  "Switch variants at the settled assistant turn at point."
+  (interactive)
+  (mevedel-view-switch-conversation-variant
+   (plist-get (mevedel-view-fork-point-at-point) :fork-point-id)))
+
 (defun mevedel-view-rewind-at-point ()
   "Rewind the current session to the settled assistant turn at point."
   (interactive)

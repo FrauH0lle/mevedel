@@ -41,8 +41,8 @@ Key features:
   turn and continue automatically while the session is idle.
 - Skills (`SKILL.md` packages) for reusable `$skill` commands and prompt bundles,
   scanned from user / project / bundled directories.
-- Persistent sessions per workspace with resume, rewind to any prior prompt,
-  fork-on-next-send, and workspace input history.
+- Persistent sessions per workspace with resume, true in-place Rewind,
+  Conversation and Worktree Forks, and workspace input history.
 - Interactive inline diff previews with approve/reject/edit workflow directly in
   the chat view.
 - Unified permission system covering Bash, file paths, web domains, and
@@ -250,11 +250,13 @@ that contains one:
 
 Each chat lives in its own session under
 `<workspace>/.mevedel/sessions/<name>-<timestamp>-<id>/`. Sessions auto-save at
-turn boundaries, keep tracked-file backups, and can be reopened, renamed, or
-rewound to any earlier prompt. Sending after a rewind forks the session,
-preserving the original verbatim. Session directories use lock files; if another
-Emacs owns the session, resume can open it read-only instead of corrupting the
-writer's transcript.
+turn boundaries, keep tracked-file backups, and can be reopened or renamed.
+Rewind is an in-place undo that truncates later conversation and restores
+captured files. Conversation Fork creates a child session that shares the
+current files; Worktree Fork creates a child in a linked Git worktree and
+restores captured repository files there on a best-effort basis. Session
+directories use lock files; if another Emacs owns the session, resume can open
+it read-only instead of corrupting the writer's transcript.
 
 | Command                  | Command Description                                                |
 |--------------------------|--------------------------------------------------------------------|
@@ -295,6 +297,10 @@ the next send.
 | `mevedel-view-send`                  | Send the current view input to the backing data buffer.  |
 | `mevedel-view-abort`                 | Abort the active request from the view buffer.           |
 | `mevedel-view-toggle-section`        | Expand or collapse the section or turn at point.         |
+| `mevedel-view-arm-conversation-fork` | Arm a Conversation Fork at the assistant turn at point.  |
+| `mevedel-view-arm-worktree-fork`     | Arm a Worktree Fork at the assistant turn at point.      |
+| `mevedel-view-rewind-at-point`       | Rewind in place to the assistant turn at point.          |
+| `mevedel-view-switch-conversation-variant-at-point` | Switch variants at the fork point under point. |
 | `mevedel-view-cycle-permission-mode` | Cycle the current session's permission mode.             |
 | `mevedel-view-edit-last-queued-message` | Move queued follow-ups back into the composer.          |
 | `mevedel-view-clear-queued-messages` | Clear queued follow-up prompts for the current session.  |

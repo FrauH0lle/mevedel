@@ -616,6 +616,22 @@
         (when (buffer-live-p target-data)
           (kill-buffer target-data))))))
 
+(mevedel-deftest mevedel-view-switch-conversation-variant-at-point ()
+  ,test
+  (test)
+  :doc "switches the conversation variant for the exact fork point at point"
+  (mevedel-view-test--with-buffers
+    (let (called)
+      (with-current-buffer view-buf
+        (cl-letf
+            (((symbol-function 'mevedel-view-fork-point-at-point)
+              (lambda () '(:fork-point-id "fork-point-1")))
+             ((symbol-function 'mevedel-view-switch-conversation-variant)
+              (lambda (fork-point-id)
+                (setq called fork-point-id))))
+          (mevedel-view-switch-conversation-variant-at-point)))
+      (should (equal "fork-point-1" called)))))
+
 
 ;;
 ;;; Full rendering

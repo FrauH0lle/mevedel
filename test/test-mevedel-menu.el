@@ -902,6 +902,22 @@
           (mevedel-menu--rewind-here))
         (should (eq called-buffer view-buf))))))
 
+(mevedel-deftest mevedel-menu--switch-variant-here ()
+  ,test
+  (test)
+  :doc "variant switching at point runs in the paired view buffer"
+  (mevedel-menu-test--with-buffers
+    (let (called-buffer)
+      (cl-letf
+          (((symbol-function
+             'mevedel-view-switch-conversation-variant-at-point)
+            (lambda ()
+              (interactive)
+              (setq called-buffer (current-buffer)))))
+        (with-current-buffer data-buf
+          (mevedel-menu--switch-variant-here))
+        (should (eq called-buffer view-buf))))))
+
 (mevedel-deftest mevedel-menu--fork-conversation-here ()
   ,test
   (test)
