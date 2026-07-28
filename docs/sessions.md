@@ -208,17 +208,27 @@ tail; a row with no successor becomes `lost`.
 
 An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required
-to continue. Normal rewind forks copy session preset settings but clear Goal
-state.
+to continue. Rewind preserves session preset settings but clears Goal state.
 
 ### Rewind
 
-`mevedel-rewind` picks any prior user prompt across all segments via
-`completing-read`; selection truncates the live buffer to that turn's
-response, sets `buffer-file-name` to nil so saves can't corrupt the
-original, optionally restores tracked files to their state at that turn
-(per-file plan with external-changes detection), and arms
-`mevedel-session--fork-pending`.
+`mevedel-rewind` picks a settled assistant response across all segments.
+`mevedel-view-rewind-at-point`, also available as `R` in the session cockpit,
+uses the response at point. Both routes show the same impact and require
+explicit confirmation.
+
+Rewind is an in-place transaction. It discards later transcript and session
+artifacts, restores every captured working-tree file in the plan, and keeps
+the same session identity, name, directory, working directory, and lineage.
+External working-tree changes to captured files are overwritten. Git HEAD and
+the index are not changed, so the impact identifies staged files whose index
+content will diverge from the restored working tree. Failure rolls back both
+session and file changes. Rewind creates neither a child session nor a redo
+variant.
+
+Current session settings survive. Tasks, Goal, retained agents and mailboxes,
+pending Plan state, permission queues, and execution state are cleared because
+they do not have a trustworthy per-turn journal.
 
 Rewind refuses while the session has live executions and points the user to
 `/ps` and `/stop`; hiding a process behind older history would violate its
@@ -230,28 +240,8 @@ clear them with `C-c C-q` before a destructive transcript operation.
 
 ### Fork
 
-When the user sends in a buffer with `fork-pending` set,
-`mevedel-session-persistence-fork-now` materializes a fresh fork
-session — predecessor segment files copied verbatim, picked segment
-truncated, file-history backups referenced by the target state copied,
-and referenced canonical agent transcript files copied — then the send
-proceeds onto the fork's segment file. Numbered agent compaction archives are
-unindexed recovery artifacts and are not copied. The parent session is never
-modified. Fork staging receives an empty execution registry and reconciles
-running Bash rows across the installed segment and copied predecessors before
-the new directory is published, preserving later archive/completion successors
-and marking only otherwise-stale rows `lost`.
-
-Rewind refuses while an agent turn is active, so branching never
-interrupts the source tree. A fork keeps eligible child transcript metadata and
-files as read-only historical evidence, but starts with an empty addressable
-registry and empty agent mailboxes. Historical handles remain inspectable,
-while `ListAgents` and collaboration commands see only the fork's independent
-tree. The task list, owner status notes, and last task-write marker also start
-empty, so former canonical task names are immediately reusable. Session policy,
-prompt state, skills, and reminders are independently copied; the workspace
-identity and its cache are the only session-owned reference deliberately shared
-with the source. The source sidecar and its retained tree are not modified.
+No user-facing session fork command is currently exposed. Rewind no longer
+arms or materializes a fork on the next send.
 
 Renaming a materialized session preserves live execution ownership. Retained
 artifact paths are retargeted immediately after the session directory moves,

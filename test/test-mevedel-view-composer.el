@@ -63,10 +63,9 @@
                     mevedel-view--run-prompt-submit-hook))
     (should (equal "mevedel-view-composer"
                    (mevedel-view-composer-test--owner symbol))))
-  :doc "owns pending-input, forked, and request-progress send orchestration"
+  :doc "owns pending-input and request-progress send orchestration"
   (dolist (symbol '(mevedel-view--queue-follow-up
                     mevedel-view-send-follow-up
-                    mevedel-view--fork-if-pending
                     mevedel-view--schedule-follow-up-drain
                     mevedel-view-abort))
     (should (equal "mevedel-view-composer"
@@ -3723,7 +3722,6 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      :input "expanded" :display-text "/goal draft"
                      :context "hook context" :session session))))
                 ((symbol-function 'mevedel-view-history-add) #'ignore)
-                ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
                 ((symbol-function 'mevedel-goal-start)
                  (lambda (objective submission)
@@ -3750,7 +3748,6 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      :input objective :display-text "/goal auto ship it"
                      :session session))))
                 ((symbol-function 'mevedel-view-history-add) #'ignore)
-                ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
                 ((symbol-function 'mevedel-goal-start)
                  (lambda (objective _submission) (setq started objective))))
@@ -3763,7 +3760,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   ,test
   (test)
 
-  :doc "blocking UserPromptSubmit does not fork, record history, or insert prompt"
+  :doc "blocking UserPromptSubmit does not record history or insert prompt"
   (let* ((root (make-temp-file "mevedel-view-hooks" t))
          (workspace (mevedel-workspace-get-or-create
                      'project "view-hooks" root "view-hooks"))
@@ -3773,30 +3770,24 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
              ((:matcher "*"
                         :hooks ((:type elisp
                                        :function
-                                       mevedel-view-test--stop-prompt-hook)))))))
-         fork-called)
+                                       mevedel-view-test--stop-prompt-hook))))))))
     (unwind-protect
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
             (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace)
-            (setq-local mevedel-session--fork-pending t))
-          (cl-letf (((symbol-function 'mevedel-session-persistence-fork-now)
-                     (lambda (&rest _)
-                       (setq fork-called t))))
-            (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert "blocked prompt")
-              (mevedel-view-send)
-              (should-not fork-called)
-              (should-not (mevedel-view-history--entries))
-              (should-not
-               (string-match-p
-                "blocked prompt"
-                (buffer-substring-no-properties
-                 (point-min) mevedel-view--input-marker))))
+            (setq-local mevedel--workspace workspace))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "blocked prompt")
+            (mevedel-view-send)
+            (should-not (mevedel-view-history--entries))
+            (should-not
+             (string-match-p
+              "blocked prompt"
+              (buffer-substring-no-properties
+               (point-min) mevedel-view--input-marker))))
 	      (with-current-buffer data-buf
-		(should (string-empty-p (buffer-string))))))
+		(should (string-empty-p (buffer-string)))))
       (delete-directory root t)))
 
   :doc "blocked prompt context is consumed once by the next accepted root input"
@@ -3961,7 +3952,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (= 1 (mevedel-view-test--count-matches
                       "send startup context" (buffer-string)))))))
 
-  :doc "/goal prompts run UserPromptSubmit and materialize rewind forks"
+  :doc "/goal prompts run UserPromptSubmit"
   (let* ((root (make-temp-file "mevedel-view-plan-hooks" t))
          (workspace (mevedel-workspace-get-or-create
                      'project "view-plan-hooks" root "view-plan-hooks"))
@@ -3978,14 +3969,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
             (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace)
-            (setq-local mevedel-session--fork-pending t))
+            (setq-local mevedel--workspace workspace))
           (with-current-buffer view-buf
             (setq-local mevedel--session session))
-          (cl-letf (((symbol-function 'mevedel-session-persistence-fork-now)
-                     (lambda (&rest _)
-                       (push 'fork events)))
-                    ((symbol-function 'mevedel-goal-start)
+          (cl-letf (((symbol-function 'mevedel-goal-start)
                      (lambda (objective submission)
                        (push (list objective
                                    (mevedel-prompt-submission-context submission))
@@ -3996,10 +3983,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (mevedel-view-send)
               (should (equal "draft" mevedel-view-test--seen-prompt))
               (setq events (nreverse events))
-              (should (eq 'fork (car events)))
-              (should (equal "rewritten prompt" (car (cadr events))))
+              (should (equal "rewritten prompt" (caar events)))
               (should (string-match-p "hook policy context"
-                                      (cadr (cadr events))))
+                                      (cadar events)))
               (should (string-empty-p (mevedel-view--input-text)))))
           (with-current-buffer view-buf
             (let ((text (buffer-substring-no-properties

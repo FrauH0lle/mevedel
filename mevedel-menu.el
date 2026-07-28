@@ -155,6 +155,9 @@
 (declare-function mevedel-view-previous-user-query "mevedel-view" ())
 (declare-function mevedel-view-toggle-section "mevedel-view" ())
 
+;; `mevedel-view-render'
+(declare-function mevedel-view-rewind-at-point "mevedel-view-render" ())
+
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-status-summary "mevedel-worktree"
                   (&optional context))
@@ -653,6 +656,12 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive)
   (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-view-abort))
 
+(defun mevedel-menu--rewind-here ()
+  "Rewind to the settled assistant turn at point in the view buffer."
+  (interactive)
+  (mevedel-cockpit-call-in-view
+   (mevedel-menu--context) #'mevedel-view-rewind-at-point))
+
 (defun mevedel-menu--compact ()
   "Compact the current data buffer."
   (interactive)
@@ -854,6 +863,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("v" "Verify" mevedel-menu--verify)]
    ["Navigate"
     :pad-keys t
+    ("R" "Rewind here" mevedel-menu--rewind-here)
     ("n" "Next display"
      (lambda () (interactive)
        (mevedel-cockpit-call-in-view

@@ -60,6 +60,8 @@
 (declare-function mevedel-session-persistence-fork-point-at-source
 		  "mevedel-session-persistence"
 		  (buffer source-start source-end))
+(declare-function mevedel-session-persistence-rewind
+		  "mevedel-session-persistence" (buffer target))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x)
@@ -4837,6 +4839,13 @@ Signal a user error when point is not on a settled assistant turn."
     (or (mevedel-session-persistence-fork-point-at-source
          mevedel--data-buffer (car source) (cdr source))
         (user-error "Assistant response is not a settled fork point"))))
+
+(defun mevedel-view-rewind-at-point ()
+  "Rewind the current session to the settled assistant turn at point."
+  (interactive)
+  (require 'mevedel-session-persistence)
+  (mevedel-session-persistence-rewind
+   mevedel--data-buffer (mevedel-view-fork-point-at-point)))
 
 
 ;;

@@ -165,8 +165,6 @@
  "mevedel-session-persistence" nil)
 (declare-function mevedel-session-persistence--release-on-kill
 		  "mevedel-session-persistence" nil)
-(declare-function mevedel-session-persistence-fork-now
-		  "mevedel-session-persistence" (buffer))
 (declare-function mevedel-session-persistence-header-segment
 		  "mevedel-session-persistence" nil)
 (declare-function mevedel-session-persistence-save
@@ -1121,9 +1119,6 @@ Updates directive status and overlay, handles success/failure states."
     (with-current-buffer chat-buffer
       (when mevedel--current-request
         (user-error "A request is already active -- wait or abort first"))
-      (when (bound-and-true-p mevedel-session--fork-pending)
-        (require 'mevedel-session-persistence)
-        (mevedel-session-persistence-fork-now chat-buffer))
       (setq mevedel--current-directive-uuid (overlay-get directive 'mevedel-uuid)))
 
     (save-some-buffers nil #'mevedel--directive-save-buffer-p)

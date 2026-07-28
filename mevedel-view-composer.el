@@ -141,9 +141,6 @@
 (declare-function seq-take "seq" (sequence n))
 
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-fork-now
-		  "mevedel-session-persistence" (buffer))
-(defvar mevedel-session--fork-pending)
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-skills-core'
@@ -1907,13 +1904,7 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
 Extracts text from the input zone, plans all bound `$skill' mentions,
 renders the original text in the history region, and dispatches either
 one coherent request or one leading fork command.  Slash commands retain
-their local dispatch path.
-
-If the data buffer is in rewind preview
-state (`mevedel-session--fork-pending' is set), materialize the fork
-just before the send actually reaches the LLM so empty input, unknown
-slash commands, and local-only slash commands do not spuriously create a
-fork."
+their local dispatch path."
   (interactive)
   (mevedel-view--ensure-interactive-chat-view)
   (when mevedel-view--pending-input-edit
@@ -2018,8 +2009,7 @@ fork."
                    (with-current-buffer data-buffer
                      (require 'mevedel-plan-mode)
                      (mevedel-plan-mode-enter))
-                   (mevedel-view-history-add input)
-                   (mevedel-view--fork-if-pending)))))
+                   (mevedel-view-history-add input)))))
              (local
               (let ((result (with-current-buffer mevedel--data-buffer
                               (funcall (cdr local) args))))
@@ -2036,8 +2026,7 @@ fork."
           (mevedel-view--submit-planned-input
            input
            (lambda ()
-             (mevedel-view-history-add input)
-             (mevedel-view--fork-if-pending))))))))
+             (mevedel-view-history-add input))))))))
   ;; Accepted sends clear the draft and land at the new composer end.
   ;; Rejected sends preserve the exact input-relative point.
   (unless (mevedel-view--point-in-input-region-p)
@@ -2058,21 +2047,11 @@ INPUT is the original composer text, including the slash command."
                   (buffer-live-p data-buffer))
          (with-current-buffer view-buffer
            (mevedel-view-history-add input)
-           (mevedel-view--fork-if-pending)
            (mevedel-view--clear-input))
          (with-current-buffer data-buffer
            (require 'mevedel-goal)
            (mevedel-goal-start
             (mevedel-prompt-submission-input submission) submission)))))))
-
-(defun mevedel-view--fork-if-pending ()
-  "Materialize the fork if the data buffer is in rewind preview state.
-No-op otherwise.  Shared safety net for any path that actually sends
-a turn to the LLM."
-  (when (buffer-local-value 'mevedel-session--fork-pending mevedel--data-buffer)
-    (require 'mevedel-session-persistence)
-    (mevedel-view-reset-agent-ephemeral-state)
-    (mevedel-session-persistence-fork-now mevedel--data-buffer)))
 
 (defun mevedel-view--safe-hook-decision (event decision)
   "Return plist-shaped hook DECISION for EVENT, or nil.
@@ -2366,7 +2345,6 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                       (plist-get entry :dropped-file-grants)))
                 (let ((before-send
                        (lambda ()
-                         (mevedel-view--fork-if-pending)
                          (mevedel-view--activate-dropped-file-grants
                           dropped-file-grants session)))
                       (after-insert

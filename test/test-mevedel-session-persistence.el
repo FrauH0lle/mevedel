@@ -4613,13 +4613,13 @@ rotation never saves through a rebound temporary visited filename or prompts"
                           'project "x" "/tmp" "x"))))
     (setf (mevedel-session-prompt-index session)
           '((1 . ((:turn 1 :file-turn 1 :cum-turn 1
-                   :pos 0 :preview "alpha")
+                   :pos 0 :preview "alpha" :fork-point-id "a")
                   (:turn 2 :file-turn 2 :cum-turn 2
-                   :pos 100 :preview "beta")))
+                   :pos 100 :preview "beta" :fork-point-id "b")))
             (2 . ((:turn 1 :file-turn 1 :cum-turn 3
-                   :pos 0 :preview "alpha")
+                   :pos 0 :preview "alpha" :fork-point-id "c")
                   (:turn 2 :file-turn 2 :cum-turn 4
-                   :pos 50 :preview "gamma")))))
+                   :pos 50 :preview "gamma" :fork-point-id "d")))))
     (let ((candidates
            (mevedel-session-persistence--prompt-candidates session)))
       (should (= 4 (length candidates)))
@@ -4638,7 +4638,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                           'project "x" "/tmp" "x"))))
     (setf (mevedel-session-prompt-index session)
           '((2 . ((:turn 1 :file-turn 3 :cum-turn 11
-                   :pos 100 :preview "after tail")))))
+                   :pos 100 :preview "after tail"
+                   :fork-point-id "after-tail")))))
     (let* ((candidate
             (car (mevedel-session-persistence--prompt-candidates session)))
            (plist (cdr candidate)))
@@ -4782,174 +4783,204 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (kill-buffer buf)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
-  :doc "from view buffer rewinds the data buffer and rerenders the view"
+  :doc "cancelling the impact confirmation changes no transcript or file state"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (data-buf (generate-new-buffer "*test-data-buf*"))
-               (view-buf (generate-new-buffer "*test-view-buf*")))
+               (buf (generate-new-buffer "*test-rewind-cancel*"))
+               (path (file-name-concat tempdir "tracked.el"))
+               target)
           (unwind-protect
-              (progn
-                (with-current-buffer data-buf
-                  (org-mode)
-                  (setq-local mevedel--session session)
-                  (insert "First prompt\n")
-                  (insert (propertize "First reply.\n" 'gptel 'response))
-                  (insert "Second prompt\n")
-                  (insert (propertize "Second reply.\n" 'gptel 'response))
-                  (mevedel-session-persistence-save session data-buf))
-                (mevedel-view--setup view-buf data-buf)
-                (let ((choice
-                       (caar (last (mevedel-session-persistence--prompt-candidates
-                                    session))))
-                      loaded-buffer loaded-segment loaded-turn)
-                  (cl-letf (((symbol-function 'completing-read)
-                             (lambda (&rest _args) choice))
-                            ((symbol-function
-                              'mevedel-session-persistence--load-truncated)
-                             (lambda (_session buffer segment turn
-                                               &optional _cum-turn
-                                               _logical-turn)
-                               (setq loaded-buffer buffer)
-                               (setq loaded-segment segment)
-                               (setq loaded-turn turn)
-                               (with-current-buffer buffer
-                                 (let ((inhibit-read-only t))
-                                   (erase-buffer)
-                                   (insert "First prompt\n")
-                                   (insert
-                                    (mevedel--format-hook-audit-record
-                                     '(:type prompt-rewrite
-                                       :event "UserPromptSubmit"
-                                       :original "first original"
-                                       :submitted "First prompt")))
-                                   (insert (propertize
-                                            "First reply.\n"
-                                            'gptel 'response)))
-                                 (setq buffer-file-name nil)
-                                 (setq-local
-                                  mevedel-session--fork-pending t)
-                                 (when-let* ((vb (buffer-local-value
-                                                  'mevedel--view-buffer
-                                                  buffer))
-                                             ((buffer-live-p vb)))
-                                   (with-current-buffer vb
-                                     (mevedel-view--full-rerender)))))))
-                    (with-current-buffer view-buf
-                      (mevedel-rewind)))
-                  (should (eq loaded-buffer data-buf))
-                  (should (= loaded-segment 1))
-                  (should (= loaded-turn 1)))
-                (with-current-buffer data-buf
-                  (should (string-match-p "First prompt" (buffer-string)))
+              (with-current-buffer buf
+                (org-mode)
+                (setq-local mevedel--session session)
+                (insert "First prompt\n")
+                (insert (propertize "First reply.\n" 'gptel 'response))
+                (setf (mevedel-session-turn-count session) 1)
+                (mevedel-session-persistence-save session buf t)
+                (setq target
+                      (copy-sequence
+                       (cdar
+                         (mevedel-session-persistence--prompt-candidates
+                         session))))
+                (let ((backup
+                       (mevedel-file-history--backup-name path 1)))
+                  (mevedel-file-history--write-backup
+                   (mevedel-session-save-path session) backup "first")
+                  (setf (mevedel-session-file-snapshots session)
+                        `((1 . ((,path . (:backup-name ,backup
+                                        :version 1)))))))
+                (goto-char (point-max))
+                (insert "Second prompt\n")
+                (insert (propertize "Second reply.\n" 'gptel 'response))
+                (setf (mevedel-session-turn-count session) 2)
+                (mevedel-session-persistence-save session buf t)
+                (let ((backup
+                       (mevedel-file-history--backup-name path 2)))
+                  (mevedel-file-history--write-backup
+                   (mevedel-session-save-path session) backup "second")
+                  (setf (mevedel-session-file-snapshots session)
+                        (append
+                         (mevedel-session-file-snapshots session)
+                         `((2 . ((,path . (:backup-name ,backup
+                                         :version 2))))))))
+                (write-region "second" nil path nil 'silent)
+                (mevedel-session-persistence-write
+                 (mevedel-session-persistence--sidecar-path
+                  (mevedel-session-save-path session))
+                 (mevedel-session-persistence--build-sidecar session buf))
+                (let* ((before-buffer (buffer-string))
+                       (session-id (mevedel-session-session-id session))
+                       (save-path (mevedel-session-save-path session))
+                       (before-sidecar
+                        (with-temp-buffer
+                          (insert-file-contents
+                           (mevedel-session-persistence--sidecar-path
+                            (mevedel-session-save-path session)))
+                          (buffer-string))))
+                  (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                            ((symbol-function 'yes-or-no-p)
+                             (lambda (&rest _) nil)))
+                    (mevedel-session-persistence-rewind buf target))
+                  (should (equal before-buffer (buffer-string)))
+                  (should
+                   (equal
+                    before-sidecar
+                    (with-temp-buffer
+                      (insert-file-contents
+                       (mevedel-session-persistence--sidecar-path
+                        (mevedel-session-save-path session)))
+                      (buffer-string))))
+                  (should
+                   (equal "second"
+                          (with-temp-buffer
+                            (insert-file-contents path)
+                            (buffer-string))))
+                  (should (= 2 (mevedel-session-turn-count session)))
+                  (should (equal buffer-file-name
+                                 (mevedel-session-persistence--segment-path
+                                  (mevedel-session-save-path session) 1)))
+                  (let (confirmation)
+                    (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                              ((symbol-function 'yes-or-no-p)
+                               (lambda (prompt)
+                                 (setq confirmation prompt)
+                                 t)))
+                      (mevedel-session-persistence-rewind buf target))
+                    (should (string-match-p "no redo" confirmation)))
+                  (should (equal session-id
+                                 (mevedel-session-session-id session)))
+                  (should (equal save-path
+                                 (mevedel-session-save-path session)))
+                  (should (= 1 (mevedel-session-turn-count session)))
                   (should (string-match-p "First reply" (buffer-string)))
-                  (should-not (string-match-p "Second prompt" (buffer-string)))
-                  (should mevedel-session--fork-pending))
-                (with-current-buffer view-buf
-                  (should (derived-mode-p 'mevedel-view-mode))
-                  (let ((rendered (buffer-substring-no-properties
-                                   (point-min) (point-max))))
-                    (should (string-match-p "You" rendered))
-                    (should (string-match-p "First prompt" rendered))
-                    (should (string-match-p "hook changed prompt" rendered))
-                    (should-not (string-match-p "first original" rendered))
-                    (should (string-match-p "Assistant" rendered))
-                    (should-not (string-match-p ":PROPERTIES:" rendered))
-                    (should-not (string-match-p "Second prompt" rendered)))))
-            (when (buffer-live-p view-buf) (kill-buffer view-buf))
+                  (should-not (string-match-p "Second prompt"
+                                              (buffer-string)))
+                  (should
+                   (equal "first"
+                          (with-temp-buffer
+                            (insert-file-contents path)
+                            (buffer-string))))
+                  (let ((sidecar
+                         (mevedel-session-persistence-read
+                          (mevedel-session-persistence--sidecar-path
+                           save-path))))
+                    (should (= 1 (plist-get sidecar :total-turn-count)))
+                    (should-not (plist-get sidecar
+                                           :forked-from-session-id)))))
             (test-mevedel-session-persistence--release-and-kill
-             data-buf session)))
+             buf session)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
-(mevedel-deftest mevedel-session-persistence--load-truncated ()
+(mevedel-deftest mevedel-session-persistence--commit-rewind ()
   ,test
   (test)
-  :doc "disconnects file and sets fork-pending flag"
+  :doc "restore failure rolls back files, transcript, sidecar, and session state"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*")))
+               (buf (generate-new-buffer "*test-rewind-rollback*"))
+               (path-a (file-name-concat tempdir "a.el"))
+               (path-b (file-name-concat tempdir "b.el"))
+               target)
           (unwind-protect
               (with-current-buffer buf
                 (org-mode)
-                (insert "Lone prompt\n")
-                (mevedel-session-persistence-save session buf)
-                (mevedel-session-persistence--load-truncated
-                 session buf 1 1)
-                ;; Content is reloaded from the segment file.
-                (should (string-match-p "Lone prompt" (buffer-string)))
-                ;; File-name disconnected, fork-pending set, modified flag clear.
-                (should (null buffer-file-name))
-                (should mevedel-session--fork-pending)
-                (should-not (buffer-modified-p)))
-            (test-mevedel-session-persistence--release-and-kill
-             buf session)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
-  :doc "errors when target segment file is missing"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*")))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (insert "Hi\n")
-                (mevedel-session-persistence-save session buf)
-                ;; Ask to load segment 99, which doesn't exist.
-                (should-error
-                 (mevedel-session-persistence--load-truncated
-                  session buf 99 1)
-                 :type 'user-error))
-            (test-mevedel-session-persistence--release-and-kill
-             buf session)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
-
-  :doc "file turn selects prompts after copied compaction tail"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (buf (generate-new-buffer "*test-data-buf*")))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (insert "Initial prompt\n")
-                (mevedel-session-persistence-save session buf)
-                (let ((segment-2
-                       (mevedel-session-persistence--segment-path
-                        (mevedel-session-save-path session) 2)))
-                  (make-directory (file-name-directory segment-2) t)
-                  (with-temp-file segment-2
-                    (insert ":PROPERTIES:\n")
-                    (insert ":MEVEDEL_SEGMENT_TAIL_PROMPTS: 2\n")
-                    (insert ":END:\n\n")
-                    (insert "#+begin_summary\nSummary\n#+end_summary\n")
-                    (insert "Tail prompt 1\nTail response 1\n")
-                    (insert "Tail prompt 2\nTail response 2\n")
-                    (insert "Actual prompt 1\nActual response 1\n")
-                    (insert "Actual prompt 2\nActual response 2\n"))
-                  (cl-letf (((symbol-function 'gptel-org--restore-state)
-                             (lambda ()
-                               (save-excursion
-                                 (goto-char (point-min))
-                                 (while (re-search-forward
-                                         "^.*response [0-9]+$" nil t)
-                                   (put-text-property
-                                    (line-beginning-position)
-                                    (line-end-position)
-                                    'gptel 'response))))))
-                    (mevedel-session-persistence--load-truncated
-                     session buf 2 3))
-                  (should (string-match-p "Actual prompt 1"
-                                          (buffer-string)))
-                  (should-not (string-match-p "Actual prompt 2"
-                                              (buffer-string)))))
+                (setq-local mevedel--session session)
+                (insert "First prompt\n")
+                (insert (propertize "First reply.\n" 'gptel 'response))
+                (setf (mevedel-session-turn-count session) 1)
+                (mevedel-session-persistence-save session buf t)
+                (setq target
+                      (copy-sequence
+                       (cdar
+                        (mevedel-session-persistence--prompt-candidates
+                         session))))
+                (let ((backup-a
+                       (mevedel-file-history--backup-name path-a 1))
+                      (backup-b
+                       (mevedel-file-history--backup-name path-b 1)))
+                  (mevedel-file-history--write-backup
+                   (mevedel-session-save-path session) backup-a "old-a")
+                  (mevedel-file-history--write-backup
+                   (mevedel-session-save-path session) backup-b "old-b")
+                  (setf (mevedel-session-file-snapshots session)
+                        `((1 . ((,path-a . (:backup-name ,backup-a
+                                          :version 1))
+                                (,path-b . (:backup-name ,backup-b
+                                          :version 1)))))))
+                (goto-char (point-max))
+                (insert "Second prompt\n")
+                (insert (propertize "Second reply.\n" 'gptel 'response))
+                (setf (mevedel-session-turn-count session) 2)
+                (mevedel-session-persistence-save session buf t)
+                (write-region "new-a" nil path-a nil 'silent)
+                (write-region "new-b" nil path-b nil 'silent)
+                (mevedel-session-persistence-write
+                 (mevedel-session-persistence--sidecar-path
+                  (mevedel-session-save-path session))
+                 (mevedel-session-persistence--build-sidecar session buf))
+                (let* ((plan
+                        (mevedel-session-persistence-restore-plan session 1))
+                       (before-buffer (buffer-string))
+                       (before-state
+                        (mevedel-session-persistence-serialize session))
+                       (sidecar-path
+                        (mevedel-session-persistence--sidecar-path
+                         (mevedel-session-save-path session)))
+                       (before-sidecar
+                        (mevedel-session-persistence--file-text sidecar-path))
+                       (original
+                        (symbol-function
+                         'mevedel-session-persistence--apply-restore-action))
+                       (calls 0))
+                  (cl-letf
+                      (((symbol-function
+                         'mevedel-session-persistence--apply-restore-action)
+                        (lambda (current-session entry)
+                          (cl-incf calls)
+                          (if (= calls 2)
+                              (error "Injected restore failure")
+                            (funcall original current-session entry)))))
+                    (should-error
+                     (mevedel-session-persistence--commit-rewind
+                      session buf target plan)))
+                  (should (equal before-buffer (buffer-string)))
+                  (should (equal before-state
+                                 (mevedel-session-persistence-serialize
+                                  session)))
+                  (should (equal before-sidecar
+                                 (mevedel-session-persistence--file-text
+                                  sidecar-path)))
+                  (should
+                   (equal "new-a"
+                          (mevedel-session-persistence--file-text path-a)))
+                  (should
+                   (equal "new-b"
+                          (mevedel-session-persistence--file-text path-b)))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
       (delete-directory tempdir t)
@@ -5286,8 +5317,23 @@ The result is a plist whose :tempdir owns every created file."
         (mevedel-session-persistence-write
          (mevedel-session-persistence--sidecar-path parent-path)
          (mevedel-session-persistence--build-sidecar session buf))
-        (mevedel-session-persistence--load-truncated
-         session buf 2 1 2 1)
+        (with-temp-buffer
+          (insert-file-contents
+           (mevedel-session-persistence--segment-path parent-path 2))
+          (goto-char (point-max))
+          (insert
+           (mevedel--format-hook-audit-record
+            '(:type fork-point :fork-point-id "fixture-fork"
+              :segment 2 :turn 1 :file-turn 1 :cum-turn 2
+              :captured-file-turn 2)))
+          (write-region nil nil
+                        (mevedel-session-persistence--segment-path
+                         parent-path 2)
+                        nil 'silent))
+        (mevedel-session-persistence--load-rewind-target
+         session buf
+         '(:segment 2 :fork-point-id "fixture-fork"
+           :turn 1 :file-turn 1 :cum-turn 2))
         (setq-local mevedel--view-buffer root-view-buffer))
       (with-current-buffer root-view-buffer
         (setq-local mevedel--session session)
@@ -5331,48 +5377,7 @@ The result is a plist whose :tempdir owns every created file."
            (buffer-substring (point-min) (point-max)))
          :buffer-point (with-current-buffer buf (point))
          :buffer-modified-p (with-current-buffer buf (buffer-modified-p))
-         :buffer-file-name (with-current-buffer buf buffer-file-name)
-         :rewind-context
-         (with-current-buffer buf (copy-tree mevedel-session--rewind-context)))))))
-
-(defun test-mevedel-session-persistence--assert-fork-rolled-back (fixture)
-  "Assert failed fork restored every parent invariant in FIXTURE."
-  (let ((session (plist-get fixture :session))
-        (buf (plist-get fixture :buffer))
-        (parent-path (plist-get fixture :parent-path))
-        (parent-lock (plist-get fixture :parent-lock))
-        (sessions-dir (plist-get fixture :sessions-dir)))
-    (should (equal (plist-get fixture :session-state)
-                   (mevedel-session-persistence-serialize session)))
-    (should (equal (plist-get fixture :session-save-path)
-                   (mevedel-session-save-path session)))
-    (should (equal (plist-get fixture :parent-lock-state)
-                   (mevedel-session-persistence--read-lock parent-lock)))
-    (should (equal (plist-get fixture :parent-sidecar-text)
-                   (mevedel-session-persistence--file-text
-                    (mevedel-session-persistence--sidecar-path parent-path))))
-    (with-current-buffer buf
-      (should (eq session mevedel--session))
-      (should (equal (plist-get fixture :buffer-text)
-                     (buffer-substring (point-min) (point-max))))
-      (should (= (plist-get fixture :buffer-point) (point)))
-      (should (eq (plist-get fixture :buffer-modified-p)
-                  (buffer-modified-p)))
-      (should (equal (plist-get fixture :buffer-file-name) buffer-file-name))
-      (should mevedel-session--fork-pending)
-      (should (equal (plist-get fixture :rewind-context)
-                     mevedel-session--rewind-context)))
-    (when-let ((view-buffer (plist-get fixture :root-view-buffer)))
-      (when (buffer-live-p view-buffer)
-        (should (eq session
-                    (buffer-local-value 'mevedel--session view-buffer)))))
-    (should
-     (equal (list (file-name-nondirectory
-                   (directory-file-name parent-path)))
-            (sort
-             (directory-files sessions-dir nil
-                              directory-files-no-dot-files-regexp)
-             #'string<)))))
+         :buffer-file-name (with-current-buffer buf buffer-file-name))))))
 
 (defun test-mevedel-session-persistence--cleanup-fork-fixture (fixture)
   "Delete the real files and buffer owned by FIXTURE."
@@ -5558,434 +5563,6 @@ The result is a plist whose :tempdir owns every created file."
       (when (file-directory-p staging-path)
         (delete-directory staging-path t))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
-
-(mevedel-deftest mevedel-session-persistence-fork-now ()
-  ,test
-  (test)
-  :doc "success preserves segments, history, plans, agents, metadata, and locks"
-  (let ((fixture (test-mevedel-session-persistence--make-fork-ready)))
-    (unwind-protect
-        (let* ((session (plist-get fixture :session))
-               (buf (plist-get fixture :buffer))
-               (parent-path (plist-get fixture :parent-path))
-               (stale-block
-                (mevedel-pipeline--format-render-data-block
-                 '(:execution-id "exec-stale" :state running
-                   :live-execution-p t)))
-               (parent-segment-1
-                (mevedel-session-persistence--segment-path parent-path 1))
-               (_archived-stale
-                (with-temp-buffer
-                  (insert-file-contents parent-segment-1)
-                  (goto-char (point-max))
-                  (insert stale-block)
-                  (write-region (point-min) (point-max)
-                                parent-segment-1 nil 'silent)))
-               (parent-segment-1-text
-                (mevedel-session-persistence--file-text parent-segment-1))
-               (_current-stale
-                (with-current-buffer buf
-                  (goto-char (point-max))
-                  (insert stale-block)))
-               (source-execution-state
-                (mevedel-execution--state-for-session session))
-               (source-state
-                (mevedel-session-persistence-serialize session))
-               (new-path (mevedel-session-persistence-fork-now buf))
-               (child-session
-                (buffer-local-value 'mevedel--session buf))
-               (sidecar
-                (mevedel-session-persistence-read
-                 (mevedel-session-persistence--sidecar-path new-path))))
-          (should (equal source-state
-                         (mevedel-session-persistence-serialize session)))
-          (should (equal (plist-get fixture :parent-sidecar-text)
-                         (mevedel-session-persistence--file-text
-                          (mevedel-session-persistence--sidecar-path
-                           parent-path))))
-          (should (equal parent-segment-1-text
-                         (mevedel-session-persistence--file-text
-                          (mevedel-session-persistence--segment-path
-                           parent-path 1))))
-          (should (equal (plist-get fixture :parent-segment-2-text)
-                         (mevedel-session-persistence--file-text
-                          (mevedel-session-persistence--segment-path
-                           parent-path 2))))
-          (should (string-match-p
-                   ":state archived"
-                   (mevedel-session-persistence--file-text
-                    (mevedel-session-persistence--segment-path new-path 1))))
-          (should (string-match-p
-                   "Segment two prompt"
-                   (mevedel-session-persistence--file-text
-                    (mevedel-session-persistence--segment-path new-path 2))))
-          (should (string-match-p
-                   ":state lost"
-                   (mevedel-session-persistence--file-text
-                    (mevedel-session-persistence--segment-path new-path 2))))
-          (should (equal "kept backup\n"
-                         (mevedel-session-persistence--file-text
-                          (mevedel-file-history--backup-path
-                           new-path "keep@v1"))))
-          (should-not (file-exists-p
-                       (mevedel-file-history--backup-path
-                        new-path "future@v2")))
-          (should (equal "# Parent plan\n"
-                         (mevedel-session-persistence--file-text
-                          (file-name-concat new-path "plans/current.md"))))
-          (should
-           (equal
-            (plist-get fixture :eligible-transcript)
-            (mevedel-session-persistence--file-text
-             (file-name-concat new-path "agents/eligible.chat.org"))))
-          (should-not
-           (file-exists-p
-            (file-name-concat
-             new-path "agents/eligible.compact-0001.chat.org")))
-          (should-not (file-exists-p
-                       (file-name-concat new-path "agents/future.chat.org")))
-          (should-not (file-exists-p
-                       (expand-file-name "../poison.chat.org" new-path)))
-          (should (equal (plist-get fixture :parent-id)
-                         (plist-get sidecar :forked-from-session-id)))
-          (should (= 2 (plist-get sidecar :forked-from-turn)))
-          (should (equal '(:path "plans/current.md" :status presented)
-                         (plist-get sidecar :plan-metadata)))
-          (should (assoc "eligible--1"
-                         (plist-get sidecar :agent-transcripts)))
-          (should-not (assoc "future--2"
-                             (plist-get sidecar :agent-transcripts)))
-          (should-not (plist-get sidecar :agent-registry))
-          (should-not (plist-get sidecar :messages))
-          (should (= 7 (plist-get sidecar :agent-turn-capacity)))
-          (should (assoc 1 (plist-get sidecar :file-snapshots)))
-          (should-not (assoc 3 (plist-get sidecar :file-snapshots)))
-          (should (file-exists-p
-                   (mevedel-session-persistence--lock-path new-path)))
-          (should-not (file-exists-p (plist-get fixture :parent-lock)))
-          (with-current-buffer buf
-            (should-not mevedel-session--fork-pending)
-            (should-not mevedel-session--rewind-context)
-            (should (eq child-session mevedel--session))
-            (should (string-prefix-p new-path buffer-file-name)))
-          (should (eq child-session
-                      (buffer-local-value
-                       'mevedel--session
-                       (plist-get fixture :root-view-buffer))))
-          (should-not (eq child-session session))
-          (should-not (mevedel-session-agent-registry child-session))
-          (should-not (mevedel-session-messages child-session))
-          (should (equal
-                   '((:path "/root" :role "default" :activity "idle"))
-                   (mevedel-agent-control-list-agents child-session)))
-          (let ((parent-view (generate-new-buffer
-                              " *fork-historical-parent*"))
-                historical-view
-                historical-data)
-            (unwind-protect
-                (with-current-buffer parent-view
-                  (setq-local mevedel--data-buffer buf)
-                  (let ((info
-                         (mevedel-view--resolve-agent-transcript
-                          "/root/eligible")))
-                    (should (equal
-                             (file-name-concat
-                              new-path "agents/eligible.chat.org")
-                             (plist-get info :absolute-path)))
-                    (setq historical-view
-                          (mevedel-view--ensure-agent-transcript-view
-                           "/root/eligible" info parent-view)))
-                  (with-current-buffer historical-view
-                    (setq historical-data mevedel--data-buffer)
-                    (should buffer-read-only))
-                  (with-current-buffer historical-data
-                    (should buffer-read-only)))
-              (when (buffer-live-p historical-view)
-                (kill-buffer historical-view))
-              (when (buffer-live-p historical-data)
-                (kill-buffer historical-data))
-              (when (buffer-live-p parent-view)
-                (kill-buffer parent-view))))
-          (dolist (operation
-                   (list
-                    (lambda ()
-                      (mevedel-agent-control-send-message
-                       child-session "/root/eligible" "mail"))
-                    (lambda ()
-                      (mevedel-agent-control-followup
-                       child-session "/root/eligible" "continue"))
-                    (lambda ()
-                      (mevedel-agent-control-interrupt
-                       child-session "/root/eligible"))))
-            (should-error (funcall operation) :type 'user-error))
-          (let ((mevedel--agent-invocation
-                 (mevedel-agent-invocation--create
-                  :path "/root/eligible" :parent-session child-session)))
-            (should-error
-             (mevedel-agent-control-wait child-session #'ignore 10000)))
-          (let ((fresh
-                 (mevedel-agent-control--reserve
-                  child-session "/root" "eligible" "default")))
-            (should (equal "/root/eligible"
-                           (mevedel-agent-record-path fresh)))
-            (mevedel-agent-control--rollback child-session fresh))
-          (let ((source-record (plist-get fixture :source-agent-record))
-                (source-buffer (plist-get fixture :source-agent-buffer))
-                (source-invocation (plist-get fixture :source-invocation))
-                resumed-root
-                resumed-session)
-            (should (eq source-record
-                        (cdr (assoc
-                              "/root/eligible"
-                              (mevedel-session-agent-registry session)))))
-            (should (eq 'idle
-                        (mevedel-agent-record-activity source-record)))
-            (should (equal "Source-only mail"
-                           (plist-get
-                            (car (mevedel-agent-record-mailbox source-record))
-                            :payload)))
-            (should (mevedel-agent-configuration-p
-                     (mevedel-agent-record-configuration source-record)))
-            (should (buffer-live-p source-buffer))
-            (should (eq session
-                        (buffer-local-value 'mevedel--session
-                                            source-buffer)))
-            (should (eq source-invocation
-                        (buffer-local-value 'mevedel--agent-invocation
-                                            source-buffer)))
-            (should (eq session
-                        (mevedel-agent-invocation-parent-session
-                         source-invocation)))
-            (let ((source-buffer-name (buffer-name source-buffer)))
-              (unwind-protect
-                  (progn
-                    (setq resumed-root
-                          (mevedel-session-persistence-restore parent-path)
-                          resumed-session
-                          (buffer-local-value 'mevedel--session resumed-root))
-                    (should-not (eq resumed-root source-buffer))
-                    (should-not (eq resumed-root buf))
-                    (should-not (eq resumed-session session))
-                    (should-not
-                     (buffer-local-value 'mevedel--agent-invocation
-                                         resumed-root))
-                    (should (equal (plist-get fixture :parent-id)
-                                   (mevedel-session-session-id
-                                    resumed-session)))
-                    (should (equal source-buffer-name
-                                   (buffer-name source-buffer)))
-                    (should (eq session
-                                (buffer-local-value 'mevedel--session
-                                                    source-buffer)))
-                    (should (eq source-invocation
-                                (buffer-local-value
-                                 'mevedel--agent-invocation
-                                 source-buffer))))
-                (test-mevedel-session-persistence--release-and-kill
-                 resumed-root resumed-session))))
-          (should (eq source-execution-state
-                      (mevedel-session-execution-state session)))
-          (should (equal source-state
-                         (mevedel-session-persistence-serialize session)))
-          (should-not (mevedel-session-execution-state child-session))
-          (should (= 2 (length
-                        (directory-files
-                         (plist-get fixture :sessions-dir) nil
-                         directory-files-no-dot-files-regexp))))
-          (should (equal parent-path (mevedel-session-save-path session)))
-          (should (equal new-path
-                         (mevedel-session-save-path child-session))))
-      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
-  :doc "refuses a turn activated after rewind without changing the source"
-  (let ((fixture (test-mevedel-session-persistence--make-fork-ready)))
-    (unwind-protect
-        (let* ((session (plist-get fixture :session))
-               (buffer (plist-get fixture :buffer))
-               (record (plist-get fixture :source-agent-record)))
-          (setf (mevedel-agent-record-activity record) 'running)
-          (let ((before-state
-                 (mevedel-session-persistence-serialize session))
-                (err
-                 (should-error
-                  (mevedel-session-persistence-fork-now buffer)
-                  :type 'user-error)))
-            (should (string-match-p
-                     "Interrupt active agent turns"
-                     (error-message-string err)))
-            (should (equal before-state
-                           (mevedel-session-persistence-serialize session))))
-          (should (equal
-                   (plist-get fixture :parent-sidecar-text)
-                   (mevedel-session-persistence--file-text
-                    (mevedel-session-persistence--sidecar-path
-                     (plist-get fixture :parent-path)))))
-          (with-current-buffer buffer
-            (should mevedel-session--fork-pending))
-          (should (= 1 (length
-                        (directory-files
-                         (plist-get fixture :sessions-dir) nil
-                         directory-files-no-dot-files-regexp)))))
-      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
-  :doc "retries a colliding session id before staging publication"
-  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
-         (buf (plist-get fixture :buffer))
-         (parent-id (plist-get fixture :parent-id))
-         (calls 0))
-    (unwind-protect
-        (cl-letf (((symbol-function
-                    'mevedel-session-persistence--compute-id)
-                   (lambda (_name)
-                     (if (= (cl-incf calls) 1)
-                         parent-id
-                       "fork-child"))))
-          (let ((new-path (mevedel-session-persistence-fork-now buf)))
-            (should (= calls 2))
-            (should (equal "fork-child"
-                           (file-name-nondirectory
-                            (directory-file-name new-path))))
-            (should (file-exists-p
-                     (mevedel-session-persistence--lock-path new-path)))
-            (should-not
-             (directory-files new-path nil "\\`\\.mevedel-fork-"))))
-      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
-  :doc "publish race preserves the competing session directory"
-  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
-         (buf (plist-get fixture :buffer))
-         (sessions-dir (plist-get fixture :sessions-dir))
-         (final-path (file-name-concat sessions-dir "raced-child"))
-         (sentinel (file-name-concat final-path "sentinel"))
-         (real-rename (symbol-function 'rename-file))
-         raced)
-    (unwind-protect
-        (cl-letf
-            (((symbol-function 'mevedel-session-persistence--compute-id)
-              (lambda (_name) "raced-child"))
-             ((symbol-function 'rename-file)
-              (lambda (src dst &rest args)
-                (when (and (not raced)
-                           (file-directory-p src)
-                           (equal (expand-file-name dst)
-                                  (expand-file-name final-path)))
-                  (setq raced t)
-                  (make-directory final-path)
-                  (write-region "owned by competitor\n" nil sentinel
-                                nil 'silent))
-                (apply real-rename src dst args))))
-          (should-error (mevedel-session-persistence-fork-now buf))
-          (should (equal '("sentinel")
-                         (directory-files
-                          final-path nil
-                          directory-files-no-dot-files-regexp)))
-          (delete-directory final-path t)
-          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
-      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
-  ;; These cases inject deterministic failures only at explicit transaction
-  ;; phase seams.  Session state, buffers, directories, files, and locks
-  ;; remain real so every rollback assertion observes actual filesystem state.
-  :doc "candidate failure removes staging before artifact assembly"
-  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
-         (buf (plist-get fixture :buffer)))
-    (unwind-protect
-        (cl-letf (((symbol-function
-                    'mevedel-session-persistence--reduce-prompt-index)
-                   (lambda (&rest _) (error "Injected candidate failure"))))
-          (should-error (mevedel-session-persistence-fork-now buf))
-          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
-      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
-  :doc "copy failure restores the parent and removes all fork artifacts"
-  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
-         (buf (plist-get fixture :buffer))
-         (source (file-name-concat (plist-get fixture :parent-path)
-                                   "agents/eligible.chat.org"))
-         (real-copy (symbol-function 'copy-file)))
-    (unwind-protect
-        (cl-letf (((symbol-function 'copy-file)
-                   (lambda (src dst &rest args)
-                     (if (equal (expand-file-name src)
-                                (expand-file-name source))
-                         (error "Injected fork copy failure")
-                       (apply real-copy src dst args)))))
-          (should-error (mevedel-session-persistence-fork-now buf))
-          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
-      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
-  :doc "sidecar failure restores the parent and removes staging"
-  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
-         (buf (plist-get fixture :buffer)))
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-session-persistence-write)
-                   (lambda (&rest _) (error "Injected sidecar failure"))))
-          (should-error (mevedel-session-persistence-fork-now buf))
-          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
-      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
-  :doc "instruction persistence failure rolls a complete candidate back"
-  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
-         (buf (plist-get fixture :buffer)))
-    (unwind-protect
-        (cl-letf (((symbol-function
-                    'mevedel-session-persistence--save-instructions)
-                   (lambda (&rest _) (error "Injected instruction failure"))))
-          (should-error (mevedel-session-persistence-fork-now buf))
-          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
-      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
-  :doc "child lock failure preserves the parent lock and rewind state"
-  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
-         (buf (plist-get fixture :buffer))
-         (parent-path (plist-get fixture :parent-path))
-         (real-acquire
-          (symbol-function 'mevedel-session-persistence-lock-acquire)))
-    (unwind-protect
-        (cl-letf
-            (((symbol-function 'mevedel-session-persistence-lock-acquire)
-              (lambda (path buffer-name)
-                (if (equal (file-truename path)
-                           (file-truename parent-path))
-                    (funcall real-acquire path buffer-name)
-                  (error "Injected child lock failure")))))
-          (should-error (mevedel-session-persistence-fork-now buf))
-          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
-      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
-  :doc "parent release failure after deletion reacquires the parent lock"
-  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
-         (buf (plist-get fixture :buffer))
-         (parent-path (plist-get fixture :parent-path))
-         (real-release
-          (symbol-function 'mevedel-session-persistence-lock-release))
-         injected)
-    (unwind-protect
-        (cl-letf
-            (((symbol-function 'mevedel-session-persistence-lock-release)
-              (lambda (path)
-                (funcall real-release path)
-                (when (and (not injected)
-                           (equal (file-truename path)
-                                  (file-truename parent-path)))
-                  (setq injected t)
-                  (error "Injected parent release failure")))))
-          (should-error (mevedel-session-persistence-fork-now buf))
-          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
-      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
-  :doc "publish rename failure removes staging and preserves the parent"
-  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
-         (buf (plist-get fixture :buffer))
-         (sessions-dir (plist-get fixture :sessions-dir))
-         (real-rename (symbol-function 'rename-file)))
-    (unwind-protect
-        (cl-letf
-            (((symbol-function 'rename-file)
-              (lambda (src dst &rest args)
-                (if (and (file-directory-p src)
-                         (file-equal-p (file-name-directory dst)
-                                       sessions-dir))
-                    (error "Injected fork publish failure")
-                  (apply real-rename src dst args)))))
-          (should-error (mevedel-session-persistence-fork-now buf))
-          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
-      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
-  :doc "errors when buffer is not in rewind preview state"
-  (with-temp-buffer
-    (let ((mevedel-session--fork-pending nil))
-      (should-error (mevedel-session-persistence-fork-now (current-buffer))
-                    :type 'user-error))))
 
 (mevedel-deftest mevedel-rename-session ()
   ,test
@@ -6908,220 +6485,7 @@ The result is a plist whose :tempdir owns every created file."
              (and restored
                   (buffer-local-value 'mevedel--session restored)))))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
-  :doc "rewind path calls mevedel-view--full-rerender"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*"))
-               (vb      (generate-new-buffer "*test-view-buf*"))
-               (rerender-count 0))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (setq-local mevedel--view-buffer vb)
-                (insert "Original prompt\n")
-                (mevedel-session-persistence-save session buf)
-                (cl-letf (((symbol-function 'mevedel-view--full-rerender)
-                           (lambda () (cl-incf rerender-count))))
-                  (mevedel-session-persistence--load-truncated
-                   session buf 1 1))
-                (should (>= rerender-count 1)))
-            (when (buffer-live-p vb) (kill-buffer vb))
-            (test-mevedel-session-persistence--release-and-kill
-             buf session)))
-      (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
-
-
-;;
-;;; WAIT-handler fork: data-buffer send after rewind
-
-(mevedel-deftest mevedel-session-persistence/wait-handler-fork ()
-  ,test
-  (test)
-  :doc "WAIT handler materializes fork before request-begin when fork-pending"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*"))
-               (fork-calls 0)
-               (begin-calls 0))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (setq-local mevedel--session session)
-                (setq-local mevedel-session--fork-pending t)
-                (cl-letf
-                    (((symbol-function 'mevedel-session-persistence-fork-now)
-                      (lambda (_b) (cl-incf fork-calls)))
-                     ((symbol-function 'mevedel-request-begin)
-                      (lambda (_s &optional _d) (cl-incf begin-calls))))
-                  (let* ((handlers
-                          (mevedel-preset--build-handlers
-                           '((WAIT) (TYPE) (DONE) (ERRS))))
-                         (wait-handler (car (cdr (assq 'WAIT handlers))))
-                         (info (list :buffer buf))
-                         (fsm (gptel-make-fsm :info info)))
-                    (funcall wait-handler fsm)
-                    (should (= 1 fork-calls))
-                    (should (= 1 begin-calls)))))
-            (kill-buffer buf)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
-  :doc "WAIT handler skips fork when not in rewind preview"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*"))
-               (fork-calls 0))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (setq-local mevedel--session session)
-                (cl-letf
-                    (((symbol-function 'mevedel-session-persistence-fork-now)
-                      (lambda (_b) (cl-incf fork-calls)))
-                     ((symbol-function 'mevedel-request-begin)
-                      (lambda (_s &optional _d) nil)))
-                  (let* ((handlers
-                          (mevedel-preset--build-handlers
-                           '((WAIT) (TYPE) (DONE) (ERRS))))
-                         (wait-handler (car (cdr (assq 'WAIT handlers))))
-                         (fsm (gptel-make-fsm :info (list :buffer buf))))
-                    (funcall wait-handler fsm)
-                    (should (zerop fork-calls)))))
-            (kill-buffer buf)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
-
-
-;;
-;;; View-send fork gating (empty input / local slash / unknown slash)
-
-(mevedel-deftest mevedel-session-persistence/view-send-fork-gating ()
-  ,test
-  (test)
-  :doc "empty input after rewind does not materialize the fork"
-  (let ((data-buf (generate-new-buffer " *test-data*"))
-        (view-buf (generate-new-buffer " *test-view*"))
-        (fork-calls 0))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buf
-            (org-mode)
-            (setq-local gptel-response-separator "\n\n")
-            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
-            (setq-local mevedel-session--fork-pending t))
-          (mevedel-view--setup view-buf data-buf)
-          (cl-letf (((symbol-function 'mevedel-session-persistence-fork-now)
-                     (lambda (_b) (cl-incf fork-calls))))
-            (with-current-buffer view-buf
-              ;; Empty input region.
-              (should-error (mevedel-view-send) :type 'user-error)))
-          (should (zerop fork-calls)))
-      (when (buffer-live-p view-buf) (kill-buffer view-buf))
-      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
-  :doc "local slash command after rewind does not materialize the fork"
-  (let ((data-buf (generate-new-buffer " *test-data*"))
-        (view-buf (generate-new-buffer " *test-view*"))
-        (fork-calls 0)
-        (dispatch-calls 0))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buf
-            (org-mode)
-            (setq-local gptel-response-separator "\n\n")
-            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
-            (setq-local mevedel-session--fork-pending t))
-          (mevedel-view--setup view-buf data-buf)
-          (let ((mevedel-slash-commands
-                 `(("local" . ,(lambda (&rest _) (cl-incf dispatch-calls))))))
-            (cl-letf (((symbol-function 'mevedel-session-persistence-fork-now)
-                       (lambda (_b) (cl-incf fork-calls))))
-              (with-current-buffer view-buf
-                (goto-char (point-max))
-                (insert "/local")
-                (mevedel-view-send)))
-            (should (= 1 dispatch-calls))
-            (should (zerop fork-calls))))
-      (when (buffer-live-p view-buf) (kill-buffer view-buf))
-      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
-  :doc "compaction in flight blocks view send"
-  (let ((data-buf (generate-new-buffer " *test-data*"))
-        (view-buf (generate-new-buffer " *test-view*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buf
-            (org-mode)
-            (setq-local gptel-response-separator "\n\n")
-            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
-            (setq-local mevedel--compaction-in-flight t))
-          (mevedel-view--setup view-buf data-buf)
-          (with-current-buffer view-buf
-            (goto-char (point-max))
-            (insert "hello")
-            (should-error (mevedel-view-send) :type 'user-error)))
-      (when (buffer-live-p view-buf) (kill-buffer view-buf))
-      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
-  :doc "unknown slash command after rewind does not materialize the fork"
-  (let ((data-buf (generate-new-buffer " *test-data*"))
-        (view-buf (generate-new-buffer " *test-view*"))
-        (fork-calls 0))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buf
-            (org-mode)
-            (setq-local gptel-response-separator "\n\n")
-            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
-            (setq-local mevedel-session--fork-pending t))
-          (mevedel-view--setup view-buf data-buf)
-          (let ((mevedel-slash-commands nil))
-            (cl-letf (((symbol-function 'mevedel-session-persistence-fork-now)
-                       (lambda (_b) (cl-incf fork-calls))))
-              (with-current-buffer view-buf
-                (goto-char (point-max))
-                (insert "/no-such-command")
-                (mevedel-view-send))))
-          (should (zerop fork-calls)))
-      (when (buffer-live-p view-buf) (kill-buffer view-buf))
-      (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
-
-
-;;
-;;; Fork releases parent lock
-
-(mevedel-deftest mevedel-session-persistence/fork-releases-parent-lock ()
-  ,test
-  (test)
-  :doc "fork-now deletes the parent session's .lock"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*")))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (setq-local mevedel--session session)
-                (insert "Original prompt\n")
-                (mevedel-session-persistence-save session buf)
-                (let* ((parent-path (mevedel-session-save-path session))
-                       (parent-lock
-                        (mevedel-session-persistence--lock-path parent-path)))
-                  (should (file-exists-p parent-lock))
-                  (mevedel-session-persistence--load-truncated
-                   session buf 1 1 1)
-                  (mevedel-session-persistence-fork-now buf)
-                  (should-not (file-exists-p parent-lock))))
-            (test-mevedel-session-persistence--release-and-kill
-             buf session)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
-
 
 ;;
 ;;; Sidecar missing / unreadable fallback on restore
