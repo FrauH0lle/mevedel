@@ -11,6 +11,10 @@
 (eval-when-compile (require 'cl-lib))
 (require 'subr-x)
 
+;; `mevedel-transcript-audit'
+(declare-function mevedel-transcript-audit-spans
+                  "mevedel-transcript-audit" (text &optional type))
+
 ;; `org'
 (declare-function org-entry-get
                   "ext:org" (pom property &optional inherit literal-nil))
@@ -507,13 +511,34 @@ Each segment is `(TYPE START END)'.  TYPE is `user',
 runs and incomplete control text remains ordinary transcript text."
   (let* ((segments (mevedel-transcript--property-segments start end))
          (scan-start (if segments (cadr (car segments)) start))
-         (scan-end (if segments (caddr (car (last segments))) end)))
-    (dolist (range (mevedel-transcript--structural-ranges
-                    scan-start scan-end segments))
+         (scan-end (if segments (caddr (car (last segments))) end))
+         (ranges (mevedel-transcript--structural-ranges
+                  scan-start scan-end segments)))
+    (dolist (range ranges)
       (unless (and (memq (car range) '(render-data ignored))
                    (mevedel-transcript--range-inside-tool-segment-p
                     range segments))
         (setq segments (mevedel-transcript--overlay-range segments range))))
+    (require 'mevedel-utilities)
+    (require 'mevedel-transcript-audit)
+    (dolist (span
+             (mevedel-transcript-audit-spans
+              (buffer-substring-no-properties scan-start scan-end)
+              'fork-point))
+      (let ((prompt-start (+ scan-start (plist-get span :end)))
+            prompt-end)
+        (dolist (range ranges)
+          (when (and (>= (cadr range) prompt-start)
+                     (memq (car range) '(reasoning hook-context))
+                     (or (null prompt-end) (< (cadr range) prompt-end)))
+            (setq prompt-end (cadr range))))
+        (when (and prompt-end
+                   (string-match-p
+                    "[^ \t\r\n]"
+                    (buffer-substring-no-properties prompt-start prompt-end)))
+          (setq segments
+                (mevedel-transcript--overlay-range
+                 segments (list 'user prompt-start prompt-end))))))
     (mevedel-transcript--merge-adjacent-segments
      (mevedel-transcript--repair-response-fragment-segments
       (mevedel-transcript--repair-orphan-mailbox-tail-segments
@@ -1201,10 +1226,10 @@ next persisted tool."
 (defun mevedel-transcript--repair-response-fragment-segments (segments)
   "Return SEGMENTS with stale response fragments reclassified.
 Older or externally edited transcripts can restore `GPTEL_BOUNDS' a
-few characters into an assistant response, leaving the leading text as
-a nil-property `user' segment between a tool and a response.  Such
-fragments should render as part of the assistant response, not as a
-fake thinking block or user turn."
+few characters into or before the end of an assistant response, leaving
+response text as nil-property `user' or `ignored' segments.  Such
+fragments should render as part of the assistant response, not as fake
+thinking blocks or user turns."
   (let (converted prev-type rest)
     (setq rest (mevedel-transcript--merge-adjacent-segments segments '(user)))
     (while rest
@@ -1212,16 +1237,33 @@ fake thinking block or user turn."
              (type (car seg))
              (next-type (car-safe (cadr rest)))
              (prev-seg (car converted))
+             (following (cdr rest))
+             (render-data-after-tail-p
+              (progn
+                (while (and following
+                            (memq (caar following) '(user ignored)))
+                  (setq following (cdr following)))
+                (eq (caar following) 'render-data)))
              (convert-p
-              (and (eq type 'user)
-                   (or (and (memq prev-type
+              (or (and (eq prev-type 'response)
+                       (memq type '(user ignored))
+                       render-data-after-tail-p)
+                  (and (eq type 'user)
+                       (or (and (eq prev-type 'response)
+                                (eq next-type 'ignored)
+                                (string-match-p
+                                 "\\`[ \t\r\n]*<!-- mevedel-hook-audit -->"
+                                 (buffer-substring-no-properties
+                                  (cadr (cadr rest))
+                                  (caddr (cadr rest)))))
+                       (and (memq prev-type
                                   '(tool reasoning mailbox reminder
                                     render-data ignored))
                             (eq next-type 'response)
                             (mevedel-transcript--response-fragment-segment-p
                              seg (cadr rest)))
                        (mevedel-transcript--response-continuation-segment-p
-                        prev-seg seg (cadr rest))))))
+                        prev-seg seg (cadr rest)))))))
         (push (if convert-p
                   (list 'response (cadr seg) (caddr seg))
                 seg)

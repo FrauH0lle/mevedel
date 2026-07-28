@@ -52,16 +52,19 @@
     (mevedel-view--group-into-turns segments (current-buffer))))
 
 (defun mevedel-view-render-test--write-segment
-    (path prompt response fork-point-id segment)
+    (path prompt response fork-point-id segment &optional response-bound-length)
   "Write one persisted transcript segment to PATH.
 PROMPT and RESPONSE form one settled turn identified by FORK-POINT-ID in
-SEGMENT."
+SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (with-temp-buffer
     (org-mode)
     (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
     (insert prompt "\n")
     (let ((response-start (point)))
       (insert response "\n")
+      (insert "<!-- mevedel-render-data -->\n"
+              "(:kind request-summary)\n"
+              "<!-- /mevedel-render-data -->\n")
       (insert
        (mevedel--format-hook-audit-record
         (list :type 'fork-point
@@ -77,8 +80,15 @@ SEGMENT."
         (org-entry-put
          (point-min) "GPTEL_BOUNDS"
          (prin1-to-string
-          `((response (,response-start
-                       ,(+ response-start (length response)))))))))
+          `((response
+             (,response-start
+              ,(+ response-start
+                  (or response-bound-length
+                      (length response)))))
+            ,@(when response-bound-length
+                `((ignore
+                   (,(+ response-start response-bound-length 2)
+                    ,(+ response-start (length response)))))))))))
     (write-region (point-min) (point-max) path nil 'silent)))
 
 (defmacro mevedel-view-render-test--with-segment-view (&rest body)
@@ -424,6 +434,37 @@ SEGMENT."
                 (should (string-search missing
                                        (error-message-string error)))
                 (should (equal before (buffer-string)))))))
+      (delete-directory directory t)))
+
+  :doc "does not split a complete archived response at a stale saved bound"
+  (let* ((directory (make-temp-file "mevedel-view-stale-bound-" t))
+         (session
+          (mevedel-session--create
+           :name "segments"
+           :save-path (file-name-as-directory directory)
+           :current-segment 2
+           :prompt-index
+           '((1 . ((:cum-turn 1 :preview "archived prompt")))
+             (2 . ((:cum-turn 2 :preview "live prompt")))))))
+    (unwind-protect
+        (progn
+          (mevedel-view-render-test--write-segment
+           (mevedel-session-persistence--segment-path directory 1)
+           "Archived prompt" "Complete archived answer."
+           "fork-1" 1 (length "Complete"))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (insert "Live prompt\n")
+              (insert (propertize "Live answer\n" 'gptel 'response)))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session)
+              (mevedel-view--full-rerender)
+              (mevedel-view-previous-segment)
+              (should (string-search "Complete archived answer."
+                                     (buffer-string)))
+              (should (= 1 (how-many "^You$" (point-min)
+                                     (mevedel-view--input-marker-position)))))))
       (delete-directory directory t))))
 
 (mevedel-deftest mevedel-view-next-segment ()
