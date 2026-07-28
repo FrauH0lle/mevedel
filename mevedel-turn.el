@@ -64,6 +64,9 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-view'
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
+
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--schedule-follow-up-drain
                   "mevedel-view-composer" (fsm))
@@ -160,26 +163,31 @@
         (cl-incf (mevedel-session-turn-count mevedel--session))))))
 
 (defun mevedel--turn-autosave (fsm)
-  "Persist the completed turn represented by FSM."
+  "Persist the completed turn represented by FSM and refresh its view."
   (when-let* ((info (gptel-fsm-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (when (and mevedel--session
                  (not (bound-and-true-p mevedel-session--read-only-mode)))
-        (condition-case err
-            (progn
-              (mevedel-session-persistence-save
-               mevedel--session chat-buffer t)
-              (when (bound-and-true-p mevedel-session--save-failed)
-                (setq mevedel-session--save-failed nil)
-                (force-mode-line-update)))
-          (error
-           (display-warning 'mevedel
-                            (format "Session auto-save failed: %s" err)
-                            :warning)
-           (setq-local mevedel-session--save-failed t)
-           (force-mode-line-update)))))))
+        (let (saved)
+          (condition-case err
+              (progn
+                (mevedel-session-persistence-save
+                 mevedel--session chat-buffer t)
+                (when (bound-and-true-p mevedel-session--save-failed)
+                  (setq mevedel-session--save-failed nil)
+                  (force-mode-line-update))
+                (setq saved t))
+            (error
+             (display-warning 'mevedel
+                              (format "Session auto-save failed: %s" err)
+                              :warning)
+             (setq-local mevedel-session--save-failed t)
+             (force-mode-line-update)))
+          (when (and saved (buffer-live-p mevedel--view-buffer))
+            (require 'mevedel-view)
+            (mevedel-view-rerender mevedel--view-buffer)))))))
 
 (defun mevedel--turn-restore-permission-mode (fsm)
   "Restore any temporary permission mode for FSM's request buffer."

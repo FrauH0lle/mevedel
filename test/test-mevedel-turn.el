@@ -7,9 +7,14 @@
 ;;; Code:
 
 (require 'gptel)
+(require 'mevedel)
 (require 'mevedel-hooks)
+(require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-turn)
+(require 'mevedel-view)
+(require 'mevedel-view-composer)
+(require 'mevedel-view-render)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -156,7 +161,45 @@
               (setq-local mevedel-session--read-only-mode t))
             (mevedel--turn-autosave fsm))
           (should (equal (list (list session chat-buf t)) saved)))
-      (kill-buffer chat-buf))))
+      (kill-buffer chat-buf)))
+  :doc "refreshes settled fork metadata without changing the composer draft"
+  (let ((root (make-temp-file "mevedel-turn-fork-" t)))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (let* ((root-dir (file-name-as-directory root))
+                 (workspace
+                  (mevedel-workspace-get-or-create
+                   'project root-dir root-dir "fork"))
+                 (session (mevedel-session-create "main" workspace))
+                 (fsm (gptel-make-fsm :info (list :buffer data-buf)))
+                 (mevedel-view-rerender-debounce 0)
+                 (draft "> quoted\nsecond line"))
+            (setf (mevedel-session-turn-count session) 1)
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (insert "*** Prompt\n")
+              (insert
+               (propertize "Settled response.\n" 'gptel 'response)))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session)
+              (mevedel-view--full-rerender)
+              (mevedel-view-test--insert-composer-draft draft 4)
+              (save-excursion
+                (goto-char (point-min))
+                (should (search-forward "Settled response." nil t))
+                (should-error (mevedel-view-fork-point-at-point)
+                              :type 'user-error)))
+            (mevedel--turn-autosave fsm)
+            (with-current-buffer view-buf
+              (should (equal draft (mevedel-view--input-text)))
+              (should (= (point) (+ (mevedel-view--input-start) 4)))
+              (goto-char (point-min))
+              (should (search-forward "Settled response." nil t))
+              (let ((target (mevedel-view-fork-point-at-point)))
+                (should (stringp (plist-get target :fork-point-id)))
+                (should (= 1 (plist-get target :cum-turn)))))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel--turn-restore-permission-mode ()
   ,test
