@@ -5445,17 +5445,46 @@ The result is a plist whose :tempdir owns every created file."
                  :role 'instruction
                  :origin 'user
                  :turn 1))
+               (future-invoked-skill
+                (mevedel-skill-invocation-record--create
+                 :name "future-skill"
+                 :role 'instruction
+                 :origin 'user
+                 :turn 3))
                (_ (setf (mevedel-session-preset-name session) 'test-preset
                         (mevedel-session-preset-settings session)
                         '((mevedel-test-setting base))
+                        (mevedel-session-model-provider session)
+                        "test-backend:test-model"
+                        (mevedel-session-reasoning-effort session) 'high
                         (mevedel-session-resource-grants session)
                         '((:path "/tmp/source-only" :access read))
                         (mevedel-session-reminders session)
                         (list source-reminder)
+                        (mevedel-session-pending-reminders session)
+                        '("pending once")
+                        (mevedel-session-deferred-pending session)
+                        '(deferred-tool)
+                        (mevedel-session-deferred-injected session)
+                        '(("Deferred" . 2))
+                        (mevedel-session-deferred-used session)
+                        '("Deferred")
+                        (mevedel-session-deferred-expired session)
+                        '("Expired")
                         (mevedel-session-skills session)
                         (list source-skill)
                         (mevedel-session-invoked-skills session)
-                        (list source-invoked-skill)
+                        (list source-invoked-skill future-invoked-skill)
+                        (mevedel-session-dropped-file-grants session)
+                        '("/tmp/pending.txt")
+                        (mevedel-session-active-dropped-file-grants session)
+                        '("/tmp/active.txt")
+                        (mevedel-session-hook-context-pending session)
+                        "pending hook context"
+                        (mevedel-session-pending-plan-approval session)
+                        '(:proposal source)
+                        (mevedel-session-plan-metadata session)
+                        '(:status proposed :path "plans/current.md")
                         (mevedel-session-task-status-notes session)
                         '((nil :note "Source task note" :updated-turn 1))
                         (mevedel-session-last-task-write-turn session) 1
@@ -5479,13 +5508,29 @@ The result is a plist whose :tempdir owns every created file."
           (should (equal "/tmp/staged-fork/"
                          (mevedel-session-save-path child)))
           (should (= 2 (mevedel-session-turn-count child)))
+          (should (equal "test-backend:test-model"
+                         (mevedel-session-model-provider child)))
+          (should (eq 'high (mevedel-session-reasoning-effort child)))
           (should-not (assoc 3 (mevedel-session-prompt-index child)))
           (should-not (assoc 3 (mevedel-session-file-snapshots child)))
           (should-not (assoc "future--2"
                              (mevedel-session-agent-transcripts child)))
+          (should (equal '("source-skill")
+                         (mapcar #'mevedel-skill-invocation-record-name
+                                 (mevedel-session-invoked-skills child))))
           (should-not (mevedel-session-agent-registry child))
           (should-not (mevedel-session-messages child))
           (should-not (mevedel-session-execution-state child))
+          (should-not (mevedel-session-pending-reminders child))
+          (should-not (mevedel-session-deferred-pending child))
+          (should-not (mevedel-session-deferred-injected child))
+          (should-not (mevedel-session-deferred-used child))
+          (should-not (mevedel-session-deferred-expired child))
+          (should-not (mevedel-session-dropped-file-grants child))
+          (should-not (mevedel-session-active-dropped-file-grants child))
+          (should-not (mevedel-session-hook-context-pending child))
+          (should-not (mevedel-session-pending-plan-approval child))
+          (should-not (mevedel-session-plan-metadata child))
           (should (eq 'source-execution-state
                       (mevedel-session-execution-state session)))
           (should (= 7 (mevedel-session-agent-turn-capacity child)))
@@ -5538,6 +5583,66 @@ The result is a plist whose :tempdir owns every created file."
                           (mevedel-session-persistence-serialize session)))))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
 
+(mevedel-deftest mevedel-session-persistence--assert-stable-source ()
+  ,test
+  (test)
+  :doc "blocks every live owner and permits stable Goal and Plan states"
+  (let ((session (mevedel-session--create :name "source"))
+        (buffer (generate-new-buffer " *stable-source*"))
+        execution-live
+        agent-live)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local mevedel--current-request nil))
+          (cl-letf
+              (((symbol-function 'mevedel-execution-session-live-p)
+                (lambda (_) execution-live))
+               ((symbol-function 'mevedel-agent-control-active-turn-p)
+                (lambda (_) agent-live)))
+            (setf (mevedel-session-pending-follow-ups session)
+                  '((:input "later")))
+            (should-error
+             (mevedel-session-persistence--assert-stable-source
+              session buffer "forking")
+             :type 'user-error)
+            (setf (mevedel-session-pending-follow-ups session) nil)
+            (with-current-buffer buffer
+              (setq-local mevedel--current-request t))
+            (should-error
+             (mevedel-session-persistence--assert-stable-source
+              session buffer "forking")
+             :type 'user-error)
+            (with-current-buffer buffer
+              (setq-local mevedel--current-request nil))
+            (setq execution-live t)
+            (should-error
+             (mevedel-session-persistence--assert-stable-source
+              session buffer "forking")
+             :type 'user-error)
+            (setq execution-live nil
+                  agent-live t)
+            (should-error
+             (mevedel-session-persistence--assert-stable-source
+              session buffer "forking")
+             :type 'user-error)
+            (setq agent-live nil)
+            (setf (mevedel-session-goal session)
+                  (mevedel-goal--create :status 'active))
+            (should-error
+             (mevedel-session-persistence--assert-stable-source
+              session buffer "forking")
+             :type 'user-error)
+            (setf (mevedel-goal-status (mevedel-session-goal session))
+                  'paused
+                  (mevedel-session-pending-plan-approval session)
+                  '(:proposal stable))
+            (should-not
+             (mevedel-session-persistence--assert-stable-source
+              session buffer "forking"))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (mevedel-deftest mevedel-session-persistence--stage-fork ()
   ,test
   (test)
@@ -5560,6 +5665,20 @@ The result is a plist whose :tempdir owns every created file."
             (clone-buffer " *mevedel-stage-test*" nil))))
     (unwind-protect
         (progn
+          (let ((plans-dir
+                 (file-name-concat
+                  (plist-get fixture :parent-path) "plans")))
+            (make-directory plans-dir t)
+            (write-region "mutable draft" nil
+                          (file-name-concat plans-dir "current.md")
+                          nil 'silent)
+            (write-region "accepted evidence" nil
+                          (file-name-concat plans-dir "accepted.md")
+                          nil 'silent)
+            (setf (mevedel-session-plan-metadata session)
+                  '(:status accepted
+                    :accepted-turn 2
+                    :accepted-path "plans/accepted.md")))
           (with-current-buffer staging-buffer
             (setq-local kill-buffer-hook nil))
           (mevedel-session-persistence--stage-fork
@@ -5577,7 +5696,13 @@ The result is a plist whose :tempdir owns every created file."
                    (mevedel-session-persistence--instructions-current-path
                     staging-path)))
           (should (file-exists-p
-                   (mevedel-session-persistence--lock-path staging-path))))
+                   (mevedel-session-persistence--lock-path staging-path)))
+          (should
+           (file-exists-p
+            (file-name-concat staging-path "plans" "accepted.md")))
+          (should-not
+           (file-exists-p
+            (file-name-concat staging-path "plans" "current.md"))))
       (when (buffer-live-p staging-buffer)
         (with-current-buffer staging-buffer
           (set-buffer-modified-p nil))
@@ -5591,7 +5716,9 @@ The result is a plist whose :tempdir owns every created file."
   (test)
   :doc "publishes an independent child without changing Source files or state"
   (let ((fixture (test-mevedel-session-persistence--make-fork-ready))
-        child-buffer)
+        child-buffer
+        lifecycle-sources
+        source-state)
     (unwind-protect
         (let* ((session (plist-get fixture :session))
                (source-file
@@ -5605,11 +5732,24 @@ The result is a plist whose :tempdir owns every created file."
                 (mevedel-session-persistence--file-text
                  (plist-get fixture :parent-lock))))
           (write-region "current checkout\n" nil source-file nil 'silent)
-          (setq child-buffer
-                (mevedel-session-persistence-conversation-fork
-                 (plist-get fixture :buffer)
-                 '(:fork-point-id "fixture-fork")))
+          (setf (mevedel-session-model-provider session)
+                "test-backend:test-model"
+                (mevedel-session-hook-rules session)
+                '((:event UserPromptSubmit :command "true")))
+          (setq source-state
+                (mevedel-session-persistence-serialize session))
+          (cl-letf
+              (((symbol-function 'mevedel--run-session-start-hooks)
+                (lambda (source)
+                  (push source lifecycle-sources)))
+               ((symbol-function 'mevedel-model-apply-session-policy)
+                #'ignore))
+            (setq child-buffer
+                  (mevedel-session-persistence-conversation-fork
+                   (plist-get fixture :buffer)
+                   '(:fork-point-id "fixture-fork"))))
           (should (buffer-live-p child-buffer))
+          (should (equal '("fork") lifecycle-sources))
           (should (buffer-local-value 'mevedel--session child-buffer))
           (let* ((child
                   (buffer-local-value 'mevedel--session child-buffer))
@@ -5625,6 +5765,12 @@ The result is a plist whose :tempdir owns every created file."
                            (mevedel-session-working-directory child)))
             (should (eq 'conversation
                         (mevedel-session-fork-type child)))
+            (should (equal "test-backend:test-model"
+                           (mevedel-session-model-provider child)))
+            (should-not (eq (mevedel-session-hook-rules session)
+                            (mevedel-session-hook-rules child)))
+            (should (equal (mevedel-session-hook-rules session)
+                           (mevedel-session-hook-rules child)))
             (should (equal (mevedel-session-session-id session)
                            (mevedel-session-forked-from-session-id child)))
             (should (= 2 (mevedel-session-forked-from-turn child)))
@@ -5652,7 +5798,7 @@ The result is a plist whose :tempdir owns every created file."
             (should (equal source-lock
                            (mevedel-session-persistence--file-text
                             (plist-get fixture :parent-lock))))
-            (should (equal (plist-get fixture :session-state)
+            (should (equal source-state
                            (mevedel-session-persistence-serialize session)))))
       (when (buffer-live-p child-buffer)
         (let ((view (buffer-local-value 'mevedel--view-buffer child-buffer)))

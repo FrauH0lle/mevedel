@@ -1953,12 +1953,17 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
         (mevedel-view--queue-follow-up input))))
   (goto-char (point-max)))
 
-(defun mevedel-view--dispatch-armed-session-fork
-    (source-view input target submission)
-  "Materialize TARGET from SOURCE-VIEW and send accepted INPUT.
-SUBMISSION is the accepted prompt transaction prepared in the Source."
+(defun mevedel-view--submit-armed-session-fork
+    (source-view input target snapshot)
+  "Publish TARGET from SOURCE-VIEW, then submit INPUT in its Child.
+SNAPSHOT is the exact Source composer state transferred on publication."
   (let* ((source-data
           (buffer-local-value 'mevedel--data-buffer source-view))
+         (referenced-grants
+          (cl-intersection
+           (mevedel-view--mentioned-file-paths input)
+           (plist-get snapshot :dropped-file-grants)
+           :test #'equal))
          (child-data
           (progn
             (require 'mevedel-session-persistence)
@@ -1966,25 +1971,23 @@ SUBMISSION is the accepted prompt transaction prepared in the Source."
              source-data target)))
          (child-view
           (buffer-local-value 'mevedel--view-buffer child-data))
-         (outcome (mevedel-prompt-submission-outcome submission))
-         (render-data (or (plist-get outcome :render-data) "")))
+         (child-session
+          (buffer-local-value 'mevedel--session child-data)))
     (unless (buffer-live-p child-view)
       (error "Conversation Fork has no live view"))
-    (with-current-buffer child-data
-      (setq-local mevedel-skills--pending-request-context
-                  (plist-get outcome :request-context)))
+    (setq snapshot (copy-tree snapshot t))
+    (plist-put snapshot :dropped-file-grants referenced-grants)
     (with-current-buffer child-view
-      (mevedel-view--forward-input
-       (concat (plist-get outcome :transcript-input) render-data)
-       :display-text input
-       :prompt-checked t
-       :submission submission
-       :after-insert (lambda () (mevedel-view-history-add input))
-       :model-input (concat (plist-get outcome :model-input) render-data)))
+      (mevedel-view--restore-composer-snapshot
+       snapshot child-session t))
     (with-current-buffer source-view
       (mevedel-view-cancel-session-fork)
       (mevedel-view--clear-input))
     (display-buffer child-view)
+    (with-current-buffer child-view
+      (mevedel-view--submit-planned-input
+       input nil nil nil
+       (lambda () (mevedel-view-history-add input))))
     child-data))
 
 (defun mevedel-view-send ()
@@ -2021,9 +2024,14 @@ their local dispatch path."
     (when (string-empty-p input)
       (user-error "Nothing to send"))
     (let* ((slash-parsed (mevedel-skills--parse-slash-line input))
+           (fork-target mevedel-view--armed-session-fork)
            (active-request
             (buffer-local-value 'mevedel--current-request
                                 mevedel--data-buffer)))
+      (when (and fork-target (not slash-parsed))
+        (require 'mevedel-session-persistence)
+        (mevedel-session-persistence--assert-stable-source
+         session mevedel--data-buffer "forking"))
       (if (or active-request
               (and (not slash-parsed)
                    (mevedel-view--occupied-root-workflow-p session)))
@@ -2111,18 +2119,20 @@ their local dispatch path."
              (t
               (message "Unknown slash command: /%s" name)))))
          (t
-          (let ((target mevedel-view--armed-session-fork)
-                (source-view (current-buffer)))
-            (mevedel-view--submit-planned-input
-             input
-             (unless target
+          (let ((source-view (current-buffer)))
+            (if fork-target
+                (progn
+                  ;; Parsing stays in Source so malformed skill syntax cannot
+                  ;; publish a child.  Expansion and hooks belong to Child.
+                  (require 'mevedel-skills-plan)
+                  (with-current-buffer mevedel--data-buffer
+                    (mevedel-skills-plan-user-input input session))
+                  (mevedel-view--submit-armed-session-fork
+                   source-view input fork-target snapshot))
+              (mevedel-view--submit-planned-input
+               input
                (lambda ()
-                 (mevedel-view-history-add input)))
-             nil
-             (and target
-                  (lambda (submission)
-                    (mevedel-view--dispatch-armed-session-fork
-                     source-view input target submission))))))))))
+                 (mevedel-view-history-add input))))))))))
   ;; Accepted sends clear the draft and land at the new composer end.
   ;; Rejected sends preserve the exact input-relative point.
   (unless (mevedel-view--point-in-input-region-p)
