@@ -1148,6 +1148,8 @@ Return non-nil on success."
               (let ((ins-start (point)))
                 (delete-region view-start view-end)
                 (mevedel-view--insert-rendered-tool rendering source)
+                (mevedel-view--add-display-region-properties
+                 ins-start (point) (plist-get rendering :vtype))
                 (when turn-id
                   (put-text-property ins-start (point)
                                      'mevedel-view-turn-id turn-id))
