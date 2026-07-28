@@ -906,8 +906,18 @@ branch-name grammar before any mutating Git command runs."
                 (cl-incf number)
                 t)
             nil)))
-    (append (copy-sequence preflight)
-            (list :branch branch :directory directory))))
+    (append
+     (copy-sequence preflight)
+     (list
+      :branch branch
+      :directory directory
+      :cleanup-command
+      (format
+       "git -C %s worktree remove --force %s && git -C %s branch -D %s"
+       (shell-quote-argument source-directory)
+       (shell-quote-argument directory)
+       (shell-quote-argument source-directory)
+       (shell-quote-argument branch))))))
 
 (defun mevedel-worktree-fork-create (reservation)
   "Create the linked worktree described by RESERVATION."
@@ -929,16 +939,34 @@ branch-name grammar before any mutating Git command runs."
                     branch directory (plist-get result :output))))
     reservation))
 
-(defun mevedel-worktree-fork-rollback (reservation)
-  "Remove Git artifacts created for RESERVATION."
+(defun mevedel-worktree-fork-validate-reservation (session reservation)
+  "Validate that SESSION can still create its exact RESERVATION."
   (let ((source-directory (plist-get reservation :source-directory))
         (directory (plist-get reservation :directory))
-        (branch (plist-get reservation :branch)))
-    (when (file-exists-p directory)
-      (mevedel-worktree--git-result
-       source-directory "worktree" "remove" "--force" directory))
-    (mevedel-worktree--git-result
-     source-directory "branch" "-D" branch)))
+        (branch (plist-get reservation :branch))
+        (cleanup-command (plist-get reservation :cleanup-command)))
+    (unless (and (stringp source-directory)
+                 (stringp directory)
+                 (stringp branch)
+                 (stringp cleanup-command))
+      (user-error "Worktree Fork reservation is incomplete; cancel and arm it again"))
+    (when
+        (or (file-exists-p directory)
+            (eq 0
+                (mevedel-worktree--git-exit
+                 source-directory "show-ref" "--verify" "--quiet"
+                 (concat "refs/heads/" branch))))
+      (user-error
+       "Reserved Worktree Fork artifacts already exist: branch %s, directory %s. Cleanup: %s"
+       branch directory cleanup-command))
+    (let ((current (mevedel-worktree-fork-preflight session)))
+      (dolist (key '(:source-directory :source-root :workspace-root
+                     :common-git-dir :base-commit))
+        (unless (equal (plist-get reservation key)
+                       (plist-get current key))
+          (user-error
+           "Worktree Fork source changed after arming; cancel and arm it again"))))
+    reservation))
 
 (defun mevedel-worktree--ensure-local-exclude (common-git-dir)
   "Ensure `/.worktrees/' is listed in COMMON-GIT-DIR/info/exclude."

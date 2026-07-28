@@ -155,6 +155,8 @@
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-fork-preflight
 		  "mevedel-worktree" (session))
+(declare-function mevedel-worktree-fork-reservation
+		  "mevedel-worktree" (session &optional preflight))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill "mevedel-skills-core"
@@ -553,15 +555,20 @@ composer body.")
   (mevedel-view--ensure-interactive-chat-view)
   (let* ((target (mevedel-view-fork-point-at-point))
          (session (mevedel-view--session))
-         (label (if (eq fork-type 'worktree) "worktree" "conversation")))
+         (label (if (eq fork-type 'worktree) "worktree" "conversation"))
+         reservation)
     (require 'mevedel-session-persistence)
     (mevedel-session-persistence--assert-stable-source
      session mevedel--data-buffer "forking")
     (when (eq fork-type 'worktree)
       (require 'mevedel-worktree)
-      (mevedel-worktree-fork-preflight session))
+      (let ((preflight (mevedel-worktree-fork-preflight session)))
+        (setq reservation
+              (mevedel-worktree-fork-reservation session preflight))))
     (setq target (copy-sequence target))
     (plist-put target :fork-type fork-type)
+    (when reservation
+      (plist-put target :worktree-reservation reservation))
     (mevedel-view--interaction-register
      (list :kind 'preview
            :id 'armed-session-fork

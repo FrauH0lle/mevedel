@@ -165,9 +165,13 @@ visible setup-context user turn explaining the source session, source
 directory, worktree directory, branch, purpose, and warnings. That turn is
 not sent automatically.
 
-When a saved session's working directory no longer exists, resume prompts
-for an existing replacement inside the workspace and persists that directory
-after the session opens successfully.
+When a saved session's working directory no longer exists, it remains visible
+in the resume picker. Resume prompts for an existing replacement inside the
+workspace and persists that directory after the session opens successfully.
+For a Worktree Fork this does not recreate Git state: its original worktree
+path, branch, base commit, and fork type remain origin metadata while its
+current working directory changes. The picker labels the original path as
+missing or the session as retargeted.
 
 The prompt-index is rebuilt from `mevedel-transcript-segments`
 over the live segment. Only shared `user` spans whose real prompt text
@@ -308,6 +312,15 @@ ID, cumulative fork turn, stable fork-point ID, and `conversation` fork type.
 Worktree children independently use `<source> · worktree N`; their branch and
 directory use the first suffix unused by either Git or the workspace's
 `.worktrees/` directory.
+
+Arming `F` reserves that exact branch and directory. Forking from an existing
+linked worktree creates a sibling under the workspace's `.worktrees/` directory
+from that checkout's current `HEAD`. If a later staging or publication step
+fails, the created branch and worktree remain intact and the error reports
+their names plus an exact `git worktree remove`/`git branch -D` cleanup
+command. The armed composer keeps the same reservation, draft, and grants;
+retry reports the existing-artifact conflict instead of allocating another
+suffix.
 
 Renaming a materialized session preserves live execution ownership. Retained
 artifact paths are retargeted immediately after the session directory moves,
