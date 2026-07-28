@@ -484,6 +484,9 @@
         (goto-char (mevedel-view--input-start))
         (insert "> existing\nmultiline draft")
         (goto-char (point-min))
+        (setq-local mevedel-view--historical-segment-number 1
+                    mevedel-view--historical-segment-buffer data-buf)
+        (mevedel-view--set-historical-composer-visible nil)
         (cl-letf
             (((symbol-function 'mevedel-view-fork-point-at-point)
               (lambda () target))
@@ -498,6 +501,8 @@
                        (plist-get mevedel-view--armed-session-fork
                                   :fork-point-id)))
         (should (= (point) (point-max)))
+        (should-not buffer-read-only)
+        (should-not (invisible-p (mevedel-view--input-start)))
         (should (equal "> existing\nmultiline draft"
                        (mevedel-view--input-text)))
         (let ((descriptor
@@ -510,6 +515,10 @@
                                   (plist-get descriptor :body))))
         (mevedel-view-cancel-composer-state)
         (should-not mevedel-view--armed-session-fork)
+        (should (mevedel-view-historical-segment-p))
+        (should buffer-read-only)
+        (should (invisible-p (mevedel-view--input-start)))
+        (should (= (point) (point-min)))
         (should-not (gethash 'armed-session-fork
                              mevedel-view--interaction-descriptors))
         (should (equal "> existing\nmultiline draft"
@@ -671,6 +680,31 @@
              :path))))
       (delete-directory source t)
       (delete-directory worktree t))))
+
+(mevedel-deftest mevedel-view-send/historical-segment ()
+  ,test
+  (test)
+  :doc "refuses live sends and local commands unless a model fork is armed"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (setq-local mevedel-view--historical-segment-number 1
+                  mevedel-view--historical-segment-buffer data-buf)
+      (goto-char (mevedel-view--input-start))
+      (insert "live-tip draft")
+      (let ((error (should-error (mevedel-view-send) :type 'user-error)))
+        (should (string-match-p
+                 "return to latest or fork"
+                 (error-message-string error))))
+      (mevedel-view--clear-input)
+      (goto-char (mevedel-view--input-start))
+      (insert "/clear")
+      (setq-local
+       mevedel-view--armed-session-fork
+       '(:fork-point-id "historical" :fork-type conversation))
+      (let ((error (should-error (mevedel-view-send) :type 'user-error)))
+        (should (string-match-p
+                 "Slash commands are unavailable"
+                 (error-message-string error)))))))
 
 (mevedel-deftest mevedel-view-send/conversation-fork ()
   ,test

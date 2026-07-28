@@ -72,23 +72,30 @@
 		  (buffer source-start source-end))
 (declare-function mevedel-session-persistence-list-sessions
                   "mevedel-session-persistence" (workspace))
+(declare-function mevedel-session-persistence-read-segment
+                  "mevedel-session-persistence" (session number))
 (declare-function mevedel-session-persistence-restore
                   "mevedel-session-persistence"
                   (session-dir &optional lifecycle-source session-override))
 (declare-function mevedel-session-persistence-rewind
 		  "mevedel-session-persistence" (buffer target))
+(declare-function mevedel-session-persistence-segments
+                  "mevedel-session-persistence" (session live-buffer))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x)
 		  t)
 (declare-function mevedel-session-agent-registry "mevedel-structs"
 		  (cl-x) t)
+(declare-function mevedel-session-current-segment "mevedel-structs"
+                  (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-plan-approval
 		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-queue "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
@@ -178,8 +185,13 @@
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-marker-position
                   "mevedel-view-composer" ())
+(declare-function mevedel-view--input-start
+                  "mevedel-view-composer" ())
+(declare-function mevedel-view--set-historical-composer-visible
+                  "mevedel-view-composer" (visible))
 (declare-function mevedel-view-refresh-input-prompt
                   "mevedel-view-composer" ())
+(defvar mevedel-view--armed-session-fork)
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-interaction'
@@ -481,6 +493,36 @@ assistant reply.  Tests that drive function
 send path) leave the flag nil and see user
 turns rendered as usual.")
 
+(defvar-local mevedel-view--historical-segment-number nil
+  "Archived segment number currently projected in this view.")
+
+(defvar-local mevedel-view--historical-segment-buffer nil
+  "Read-only transcript buffer currently projected in this view.")
+
+(defvar-local mevedel-view--historical-segment-states nil
+  "View-local cursor and disclosure state keyed by archived segment number.")
+
+(defvar-local mevedel-view--live-segment-state nil
+  "Cursor and window state captured before entering historical inspection.")
+
+(defun mevedel-view-historical-segment-p ()
+  "Return non-nil when this view projects an archived session segment."
+  (and mevedel-view--historical-segment-number
+       (buffer-live-p mevedel-view--historical-segment-buffer)))
+
+(defun mevedel-view--display-data-buffer ()
+  "Return the transcript buffer currently projected by this view."
+  (if (mevedel-view-historical-segment-p)
+      mevedel-view--historical-segment-buffer
+    mevedel--data-buffer))
+
+(defun mevedel-view-render--cleanup-historical-segment ()
+  "Kill the archived-segment buffer owned by the current view."
+  (when (buffer-live-p mevedel-view--historical-segment-buffer)
+    (kill-buffer mevedel-view--historical-segment-buffer))
+  (setq mevedel-view--historical-segment-buffer nil
+        mevedel-view--historical-segment-number nil))
+
 (defun mevedel-view-render-initialize ()
   "Initialize transcript-rendering state in the current view buffer."
   (setq-local mevedel-view--tool-rendering-cache
@@ -491,7 +533,11 @@ turns rendered as usual.")
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--render-cache-entries 0)
   (setq-local mevedel-view--response-cache-entries 0)
-  (setq-local mevedel-view--user-pre-rendered nil))
+  (setq-local mevedel-view--user-pre-rendered nil)
+  (setq-local mevedel-view--historical-segment-states
+              (make-hash-table :test #'eql))
+  (add-hook 'kill-buffer-hook
+            #'mevedel-view-render--cleanup-historical-segment nil t))
 
 (defun mevedel-view--rebase-data-sources (delta)
   "Shift rendered data-buffer source coordinates by DELTA."
@@ -1401,10 +1447,9 @@ response renderer.
 
 Returns nil (verbatim) when no data buffer is attached, so
 `mevedel-view--fontify-as' inserts the text without activating a mode."
-  (when (and (boundp 'mevedel--data-buffer)
-             mevedel--data-buffer
-             (buffer-live-p mevedel--data-buffer))
-    (buffer-local-value 'major-mode mevedel--data-buffer)))
+  (when-let* ((data-buffer (mevedel-view--display-data-buffer))
+              ((buffer-live-p data-buffer)))
+    (buffer-local-value 'major-mode data-buffer)))
 
 (defun mevedel-view-collapse-by-height-p (body)
   "Return non-nil when BODY should render collapsed by default.
@@ -2393,9 +2438,8 @@ place, but change when a later rewrite reuses the same numeric start."
              (consp source)
              (integer-or-marker-p (car source))
              (integer-or-marker-p (cdr source))
-             (boundp 'mevedel--data-buffer)
-             (buffer-live-p mevedel--data-buffer))
-    (let ((data-buf mevedel--data-buffer)
+             (buffer-live-p (mevedel-view--display-data-buffer)))
+    (let ((data-buf (mevedel-view--display-data-buffer))
           (in-flight-p (mevedel-view--source-in-flight-turn-p source)))
       (with-current-buffer data-buf
         (let* ((pmin (point-min))
@@ -2886,10 +2930,12 @@ the render so user toggles survive streaming ticks."
             (mevedel-view--interaction-rebuild)))))))))
 
 (defun mevedel-view--conversation-variant-button
-    (data-buf source-start source-end)
-  "Return DATA-BUF's variant switch for SOURCE-START..SOURCE-END, or nil."
+    (data-buf source-start source-end &optional session)
+  "Return DATA-BUF's variant switch for SOURCE-START..SOURCE-END, or nil.
+SESSION supplies live session context when DATA-BUF is archived."
   (when-let* ((session
-               (buffer-local-value 'mevedel--session data-buf))
+               (or session
+                   (buffer-local-value 'mevedel--session data-buf)))
               ((mevedel-session-save-path session))
               (fork-point
                (mevedel-session-persistence-fork-point-at-source
@@ -2928,11 +2974,13 @@ the render so user toggles survive streaming ticks."
        (lambda ()
          (mevedel-view-switch-conversation-variant fork-point-id))))))
 
-(defun mevedel-view--render-turn (turn data-buf &optional decorate-variants)
+(defun mevedel-view--render-turn
+    (turn data-buf &optional decorate-variants variant-session)
   "Render a single TURN into the view buffer at the input marker.
 DATA-BUF is the gptel data buffer for reading source content.
 TURN is a plist with :role, :segments, :start, :end.
-DECORATE-VARIANTS adds conversation variant switches for settled history."
+DECORATE-VARIANTS adds conversation variant switches for settled history.
+VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
   (let ((role (plist-get turn :role))
         (segments (plist-get turn :segments))
         (turn-start (plist-get turn :start))
@@ -2962,7 +3010,7 @@ DECORATE-VARIANTS adds conversation variant switches for settled history."
                 segments data-buf
                 (and decorate-variants
                      (mevedel-view--conversation-variant-button
-                      data-buf turn-start turn-end)))))
+                      data-buf turn-start turn-end variant-session)))))
             ;; Blank line above the trailing separator so the rule doesn't
             ;; butt up against the last response line.
             (when (eq role 'assistant)
@@ -3329,10 +3377,11 @@ EXPANDED means insert the disclosure body expanded."
                           (get-text-property
                            (car bounds) 'mevedel-view-hook-context-events))
                      (and source
-                          (buffer-live-p mevedel--data-buffer)
+                          (buffer-live-p
+                           (mevedel-view--display-data-buffer))
                           (mevedel-view--hook-context-events-from-text
                            (mevedel-view--data-substring
-                            mevedel--data-buffer
+                            (mevedel-view--display-data-buffer)
                             (car source)
                             (cdr source))))))
          (collapsed (and bounds
@@ -4504,7 +4553,7 @@ from signalling `args-out-of-range' on stale source coordinates."
   "Expand a collapsed section with SOURCE coordinates and VTYPE.
 Fallback disclosures retain their header; response summaries do not."
   (let* ((bounds (mevedel-view--section-bounds))
-         (data-buf mevedel--data-buffer)
+         (data-buf (mevedel-view--display-data-buffer))
          (trimmed (and data-buf
                        (buffer-live-p data-buf)
                        (eq vtype 'thinking-summary)
@@ -4644,7 +4693,7 @@ span of the buffer with a best-guess preview.
 Tool segments with a registered renderer produce the renderer's
 `:header' string; everything else falls back to the default summary."
   (let* ((bounds (mevedel-view--section-bounds))
-         (data-buf mevedel--data-buffer)
+         (data-buf (mevedel-view--display-data-buffer))
          (trimmed (and data-buf
                        (buffer-live-p data-buf)
                        (eq vtype 'thinking-summary)
@@ -4958,13 +5007,14 @@ Signal a user error when point is not on a settled assistant turn."
                      (car bounds) 'mevedel-view-turn-role)))
          (source (and bounds
                       (get-text-property
-                       (car bounds) 'mevedel-view-source))))
+                       (car bounds) 'mevedel-view-source)))
+         (data-buffer (mevedel-view--display-data-buffer)))
     (unless (and (eq role 'assistant)
                  (consp source)
-                 (buffer-live-p mevedel--data-buffer))
+                 (buffer-live-p data-buffer))
       (user-error "Point is not on an assistant response"))
     (or (mevedel-session-persistence-fork-point-at-source
-         mevedel--data-buffer (car source) (cdr source))
+         data-buffer (car source) (cdr source))
         (user-error "Assistant response is not a settled fork point"))))
 
 (defun mevedel-view-goto-conversation-variant (fork-point-id)
@@ -5022,6 +5072,22 @@ Signal a user error when point is not on a settled assistant turn."
     (unless (buffer-live-p target-view)
       (error "Conversation variant has no live view"))
     (with-current-buffer target-view
+      (when-let* ((segment
+                   (cl-loop
+                    for (number . prompts)
+                    in (mevedel-session-prompt-index
+                        (mevedel-view--segment-session))
+                    when (cl-find
+                          fork-point-id prompts
+                          :test #'equal
+                          :key (lambda (prompt)
+                                 (plist-get prompt :fork-point-id)))
+                    return number))
+                  ((/= segment
+                       (or (mevedel-session-current-segment
+                            (mevedel-view--segment-session))
+                           1))))
+        (mevedel-view-go-to-segment segment))
       (mevedel-view-goto-conversation-variant fork-point-id))
     (display-buffer target-view gptel-display-buffer-action)
     target-data))
@@ -5036,8 +5102,272 @@ Signal a user error when point is not on a settled assistant turn."
   "Rewind the current session to the settled assistant turn at point."
   (interactive)
   (require 'mevedel-session-persistence)
-  (mevedel-session-persistence-rewind
-   mevedel--data-buffer (mevedel-view-fork-point-at-point)))
+  (when (mevedel-session-persistence-rewind
+         mevedel--data-buffer (mevedel-view-fork-point-at-point))
+    (mevedel-view-return-to-latest-segment)
+    t))
+
+(defvar-keymap mevedel-view--historical-latest-map
+  :doc "Keymap for the historical-segment Latest action."
+  "RET" #'mevedel-view-return-to-latest-segment
+  "<mouse-1>" #'mevedel-view-return-to-latest-segment)
+
+(defun mevedel-view--historical-segment-banner ()
+  "Return the archived-segment banner for the current view."
+  (let* ((session (buffer-local-value 'mevedel--session
+                                      mevedel--data-buffer))
+         (current (or (mevedel-session-current-segment session) 1))
+         (latest
+          (propertize
+           "[Latest]"
+           'keymap mevedel-view--historical-latest-map
+           'mouse-face 'highlight
+           'help-echo "Return to the live session segment")))
+    (propertize
+     (format "Viewing archived segment %d of %d - read-only %s\n\n"
+             mevedel-view--historical-segment-number current latest)
+     'read-only t
+     'font-lock-face 'shadow
+     'mevedel-view-historical-banner t)))
+
+(defun mevedel-view--rendered-turn-starts ()
+  "Return rendered turn starts before the input zone."
+  (let ((pos (point-min))
+        (limit (mevedel-view--input-marker-position))
+        starts)
+    (while (< pos limit)
+      (let ((id (get-text-property pos 'mevedel-view-turn-id)))
+        (when id
+          (push pos starts))
+        (setq pos
+              (or (next-single-property-change
+                   pos 'mevedel-view-turn-id nil limit)
+                  limit))))
+    (nreverse starts)))
+
+(defun mevedel-view--capture-segment-view-state ()
+  "Capture point, window, and disclosure state for the displayed segment."
+  (let* ((input-start (mevedel-view--input-marker-position))
+         (turn-starts (mevedel-view--rendered-turn-starts))
+         (window (get-buffer-window (current-buffer) t)))
+    (list
+     :point (point)
+     :input-offset
+     (and input-start
+          (>= (point) input-start)
+          (- (point) (mevedel-view--input-start)))
+     :window-start (and window (window-start window))
+     :collapsed-turns
+     (cl-loop
+      for pos in turn-starts
+      for index from 1
+      when (get-text-property pos 'mevedel-view-collapsed)
+      collect index)
+     :collapse-states
+     (and input-start
+          (mevedel-view--capture-collapse-states
+           (point-min) input-start)))))
+
+(defun mevedel-view--restore-segment-view-state (state direction)
+  "Restore segment view STATE, using DIRECTION for a first visit."
+  (when-let* ((collapse-states (plist-get state :collapse-states)))
+    (mevedel-view--apply-collapse-states
+     (point-min) (mevedel-view--input-marker-position) collapse-states))
+  (let ((turn-starts (mevedel-view--rendered-turn-starts)))
+    (dolist (pos
+             (sort
+              (delq
+               nil
+               (mapcar
+                (lambda (index)
+                  (nth (1- index) turn-starts))
+                (plist-get state :collapsed-turns)))
+              #'>))
+      (goto-char pos)
+      (mevedel-view--collapse-turn)))
+  (cond
+   ((plist-get state :input-offset)
+    (goto-char
+     (min (point-max)
+          (+ (mevedel-view--input-start)
+             (plist-get state :input-offset)))))
+   ((plist-get state :point)
+    (goto-char
+     (max (point-min)
+          (min (plist-get state :point)
+               (mevedel-view--input-marker-position)))))
+   ((eq direction 'backward)
+    (let ((pos (point-min))
+          (limit (mevedel-view--input-marker-position))
+          target)
+      (while (< pos limit)
+        (when (get-text-property pos 'mevedel-view-turn-role)
+          (setq target pos))
+        (setq pos
+              (or (next-single-property-change
+                   pos 'mevedel-view-turn-role nil limit)
+                  limit)))
+      (when target
+        (goto-char target))))
+   (t
+    (goto-char (point-min))
+    (mevedel-view-next-turn)))
+  (when-let* ((window (get-buffer-window (current-buffer) t))
+              (start (plist-get state :window-start)))
+    (set-window-start window (min start (point-max)) t)))
+
+(defun mevedel-view--segment-session ()
+  "Return the live session associated with this view."
+  (and (buffer-live-p mevedel--data-buffer)
+       (buffer-local-value 'mevedel--session mevedel--data-buffer)))
+
+(defun mevedel-view--show-segment (number direction)
+  "Project session segment NUMBER, landing according to DIRECTION."
+  (let* ((session (or (mevedel-view--segment-session)
+                      (user-error "Active view has no mevedel session")))
+         (current (or (mevedel-session-current-segment session) 1)))
+    (if (= number current)
+        (mevedel-view-return-to-latest-segment)
+      (let* ((new-buffer
+              (progn
+                (require 'mevedel-session-persistence)
+                (mevedel-session-persistence-read-segment session number)))
+             (old-number mevedel-view--historical-segment-number)
+             (old-buffer mevedel-view--historical-segment-buffer)
+             (old-state (mevedel-view--capture-segment-view-state))
+             (target-state
+              (gethash number mevedel-view--historical-segment-states))
+             (view-buffer (current-buffer)))
+        (with-current-buffer new-buffer
+          (setq-local mevedel--view-buffer view-buffer))
+        (if old-number
+            (puthash old-number old-state
+                     mevedel-view--historical-segment-states)
+          (setq mevedel-view--live-segment-state old-state))
+        (setq mevedel-view--historical-segment-number number
+              mevedel-view--historical-segment-buffer new-buffer)
+        (condition-case err
+            (progn
+              (mevedel-view--set-historical-composer-visible t)
+              (mevedel-view--full-rerender new-buffer t)
+              (unless mevedel-view--armed-session-fork
+                (mevedel-view--set-historical-composer-visible nil))
+              (mevedel-view--restore-segment-view-state
+               target-state direction)
+              (when (and (buffer-live-p old-buffer)
+                         (not (eq old-buffer new-buffer)))
+                (kill-buffer old-buffer)))
+          (error
+           (setq mevedel-view--historical-segment-number old-number
+                 mevedel-view--historical-segment-buffer old-buffer)
+           (when (buffer-live-p new-buffer)
+             (kill-buffer new-buffer))
+           (mevedel-view--set-historical-composer-visible t)
+           (mevedel-view--full-rerender
+            (and old-number old-buffer) t)
+           (when (and old-number
+                      (not mevedel-view--armed-session-fork))
+             (mevedel-view--set-historical-composer-visible nil))
+           (mevedel-view--restore-segment-view-state old-state nil)
+           (signal (car err) (cdr err))))))))
+
+(defun mevedel-view-previous-segment ()
+  "Show the previous session segment without changing session state."
+  (interactive)
+  (let* ((session (or (mevedel-view--segment-session)
+                      (user-error "Active view has no mevedel session")))
+         (current (or mevedel-view--historical-segment-number
+                      (mevedel-session-current-segment session)))
+         (target (1- current)))
+    (if (< target 1)
+        (message "mevedel: oldest segment")
+      (mevedel-view--show-segment target 'backward))))
+
+(defun mevedel-view-next-segment ()
+  "Show the next session segment without changing session state."
+  (interactive)
+  (let* ((session (or (mevedel-view--segment-session)
+                      (user-error "Active view has no mevedel session")))
+         (latest (or (mevedel-session-current-segment session) 1))
+         (current (or mevedel-view--historical-segment-number latest))
+         (target (1+ current)))
+    (if (> target latest)
+        (message "mevedel: latest segment")
+      (mevedel-view--show-segment target 'forward))))
+
+(defun mevedel-view--segment-candidate (segment displayed)
+  "Return completion text for SEGMENT, marking DISPLAYED."
+  (let ((number (plist-get segment :number))
+        (status (plist-get segment :status))
+        (preview (or (plist-get segment :preview) "(no user message)")))
+    (format "%s S%d  %-10s  %s"
+            (if (= number displayed) "●" " ")
+            number
+            (if (plist-get segment :current-p)
+                "current"
+              (symbol-name status))
+            preview)))
+
+(defun mevedel-view-go-to-segment (&optional number)
+  "Choose and display session segment NUMBER.
+
+Interactively, offer every canonical segment, including missing and
+unreadable entries."
+  (interactive)
+  (let* ((session (or (mevedel-view--segment-session)
+                      (user-error "Active view has no mevedel session")))
+         (latest (or (mevedel-session-current-segment session) 1))
+         (displayed (or mevedel-view--historical-segment-number latest))
+         (segments
+          (progn
+            (require 'mevedel-session-persistence)
+            (mevedel-session-persistence-segments
+             session mevedel--data-buffer)))
+         (choices
+          (mapcar
+           (lambda (segment)
+             (cons (mevedel-view--segment-candidate segment displayed)
+                   (plist-get segment :number)))
+           segments))
+         (target
+          (or number
+              (cdr
+               (assoc
+                (completing-read
+                 "Go to segment: " choices nil t)
+                choices)))))
+    (unless (and (integerp target) (<= 1 target) (<= target latest))
+      (user-error "Unknown session segment: %s" target))
+    (unless (= target displayed)
+      (mevedel-view--show-segment
+       target (if (< target displayed) 'backward 'forward)))))
+
+(defun mevedel-view-return-to-latest-segment (&optional _event)
+  "Return from archived inspection to the live session segment."
+  (interactive)
+  (when (mevedel-view-historical-segment-p)
+    (let ((old-number mevedel-view--historical-segment-number)
+          (old-buffer mevedel-view--historical-segment-buffer)
+          (old-state (mevedel-view--capture-segment-view-state))
+          (live-state mevedel-view--live-segment-state))
+      (puthash old-number old-state mevedel-view--historical-segment-states)
+      (setq mevedel-view--historical-segment-number nil
+            mevedel-view--historical-segment-buffer nil)
+      (condition-case err
+          (progn
+            (mevedel-view--set-historical-composer-visible t)
+            (mevedel-view--full-rerender mevedel--data-buffer t)
+            (mevedel-view--restore-segment-view-state live-state 'forward)
+            (when (buffer-live-p old-buffer)
+              (kill-buffer old-buffer))
+            (setq mevedel-view--live-segment-state nil))
+        (error
+         (setq mevedel-view--historical-segment-number old-number
+               mevedel-view--historical-segment-buffer old-buffer)
+         (mevedel-view--full-rerender old-buffer t)
+         (mevedel-view--set-historical-composer-visible nil)
+         (mevedel-view--restore-segment-view-state old-state nil)
+         (signal (car err) (cdr err)))))))
 
 
 ;;
@@ -5193,8 +5523,8 @@ Signal a user error when point is not on a settled assistant turn."
 (defun mevedel-view-toggle-transcript ()
   "Toggle between the view buffer and the raw data buffer."
   (interactive)
-  (if mevedel--data-buffer
-      (switch-to-buffer mevedel--data-buffer)
+  (if-let* ((data-buffer (mevedel-view--display-data-buffer)))
+      (switch-to-buffer data-buffer)
     (user-error "No data buffer associated with this view")))
 
 
@@ -5323,10 +5653,13 @@ SOURCE is the source range of the skipped summary in the data buffer."
       (mevedel-view--hook-audit-records-from-text
        (buffer-substring-no-properties start end)))))
 
-(defun mevedel-view--full-rerender ()
-  "Re-render the entire view buffer from the data buffer.
+(defun mevedel-view--full-rerender (&optional transcript-buffer source-changed-p)
+  "Re-render the view from TRANSCRIPT-BUFFER or its displayed transcript.
 Wipe all rendered content and re-render from scratch.  Used after
 compaction, session resume, or manual refresh.
+
+When SOURCE-CHANGED-P is non-nil, do not carry disclosure state from the
+previously projected transcript into this render.
 
 Re-anchors `mevedel-view--in-flight-turn-start' to the rerendered
 position of the last (in-flight) turn when a turn was in flight at
@@ -5344,25 +5677,36 @@ rerender)."
   (mevedel-view-render--preserving-window-state
    (mevedel-view--call-preserving-input-text
     (lambda ()
-      (let ((start-time (float-time))
-            (data-buf mevedel--data-buffer)
+      (let* ((start-time (float-time))
+            (data-buf (or transcript-buffer
+                          (mevedel-view--display-data-buffer)))
+            (live-data-buf mevedel--data-buffer)
+            (historical-p
+             (not (eq data-buf mevedel--data-buffer)))
+            (session-data-buf
+             (if historical-p live-data-buf data-buf))
             (render-view-buf (current-buffer))
             (render-agent-transcript-p mevedel-view--agent-transcript-p)
             (inhibit-read-only t)
             (inhibit-modification-hooks t)
             (inhibit-redisplay t)
             (saved-states
-             (and (markerp mevedel-view--input-marker)
+             (and (not source-changed-p)
+                  (markerp mevedel-view--input-marker)
                   (marker-position mevedel-view--input-marker)
                   (mevedel-view--capture-collapse-states
                    (point-min)
                    (marker-position mevedel-view--input-marker))))
             (data-turn-start-pos
-             (and (markerp mevedel-view--data-turn-start)
+             (and (not historical-p)
+                  (markerp mevedel-view--data-turn-start)
                   (marker-position mevedel-view--data-turn-start)))
-            (in-flight-was (mevedel-view--in-flight-turn-start-position))
+            (in-flight-was
+             (and (not historical-p)
+                  (mevedel-view--in-flight-turn-start-position)))
             (preserved-live-tail
-             (when-let* (((not mevedel-view--agent-transcript-p))
+             (when-let* (((not historical-p))
+                         ((not mevedel-view--agent-transcript-p))
                          (tail-start
                           (mevedel-view--in-flight-turn-start-position))
                          ((markerp mevedel-view--status-marker))
@@ -5410,7 +5754,9 @@ rerender)."
           ;; end of the header so the zone ordering invariant holds after
           ;; full rerender (compaction, resume, manual refresh).
           (goto-char (point-min))
-          (insert (mevedel-view--header-string data-buf))
+          (insert (mevedel-view--header-string session-data-buf))
+          (when historical-p
+            (insert (mevedel-view--historical-segment-banner)))
           (set-marker mevedel-view--input-marker (point))
           (when (markerp mevedel-view--status-marker)
             (set-marker mevedel-view--status-marker (point)))
@@ -5475,7 +5821,8 @@ rerender)."
                  (turns (mevedel-view--group-into-turns segments data-buf))
                  (session
                   (and (not render-agent-transcript-p)
-                       (buffer-local-value 'mevedel--session data-buf)))
+                       (buffer-local-value
+                        'mevedel--session session-data-buf)))
                  (mevedel-view--conversation-variant-sessions
                   (when (and session
                              (mevedel-session-save-path session)
@@ -5503,7 +5850,7 @@ rerender)."
                                   data-turn-start-pos))
                       (setq last-current-assistant-turn-start
                             view-turn-start))))
-                (mevedel-view--render-turn turn data-buf t))
+                (mevedel-view--render-turn turn data-buf t session))
               (when saved-states
                 (mevedel-view--apply-collapse-states
                  (point-min)
@@ -5582,11 +5929,12 @@ rerender)."
             (with-current-buffer view-buf
               (unless mevedel-view--agent-transcript-p
                 (mevedel-view-refresh-input-prompt)
-                (when mevedel-view--pending-tool-calls
+                (when (and (not historical-p)
+                           mevedel-view--pending-tool-calls)
                   (mevedel-view--refresh-pending-tool-lines))
-                (mevedel-view--render-status data-buf)
+                (mevedel-view--render-status live-data-buf)
                 (mevedel-view--interaction-rebuild)
-                (mevedel-view--ensure-request-progress data-buf))
+                (mevedel-view--ensure-request-progress live-data-buf))
               (mevedel-view--debug-log
                'full-rerender-after-render
                :last-assistant-turn-start last-assistant-turn-start

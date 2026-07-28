@@ -335,6 +335,8 @@
                         prompt-summary-source hook-audits))
 (declare-function mevedel-view-fork-point-at-point
                   "mevedel-view-render" ())
+(declare-function mevedel-view-historical-segment-p
+                  "mevedel-view-render" ())
 (declare-function mevedel-view-reset-agent-ephemeral-state
                   "mevedel-view-render" (&optional data-buf))
 (defvar mevedel-view--display-map)
@@ -532,6 +534,30 @@ composer body.")
 (defvar-local mevedel-view--armed-session-fork nil
   "Stable fork-point target armed for the next model-bound submission.")
 
+(defvar-local mevedel-view--armed-session-fork-return-point nil
+  "View position to restore when cancelling a historical session fork.")
+
+(defvar-local mevedel-view--historical-composer-overlay nil
+  "Overlay hiding the live composer during archived-segment inspection.")
+
+(defun mevedel-view--set-historical-composer-visible (visible)
+  "Show the live composer when VISIBLE, otherwise hide and lock it."
+  (when (overlayp mevedel-view--historical-composer-overlay)
+    (delete-overlay mevedel-view--historical-composer-overlay)
+    (setq mevedel-view--historical-composer-overlay nil))
+  (if visible
+      (progn
+        (remove-from-invisibility-spec 'mevedel-view-historical-composer)
+        (setq buffer-read-only nil))
+    (add-to-invisibility-spec 'mevedel-view-historical-composer)
+    (setq mevedel-view--historical-composer-overlay
+          (make-overlay
+           (mevedel-view--input-marker-position) (point-max)
+           (current-buffer) t t))
+    (overlay-put mevedel-view--historical-composer-overlay
+                 'invisible 'mevedel-view-historical-composer)
+    (setq buffer-read-only t)))
+
 (defvar-keymap mevedel-view--armed-session-fork-map
   :doc "Keymap for the armed session-fork interaction row."
   "RET" #'mevedel-view-cancel-session-fork
@@ -543,6 +569,13 @@ composer body.")
   (when mevedel-view--armed-session-fork
     (setq mevedel-view--armed-session-fork nil)
     (mevedel-view--interaction-unregister 'armed-session-fork)
+    (when (mevedel-view-historical-segment-p)
+      (mevedel-view--set-historical-composer-visible nil)
+      (when mevedel-view--armed-session-fork-return-point
+        (goto-char
+         (min mevedel-view--armed-session-fork-return-point
+              (mevedel-view--input-marker-position)))))
+    (setq mevedel-view--armed-session-fork-return-point nil)
     t))
 
 (defun mevedel-view-cancel-composer-state ()
@@ -576,6 +609,9 @@ composer body.")
     (plist-put target :fork-type fork-type)
     (when reservation
       (plist-put target :worktree-reservation reservation))
+    (when (mevedel-view-historical-segment-p)
+      (setq mevedel-view--armed-session-fork-return-point (point))
+      (mevedel-view--set-historical-composer-visible t))
     (mevedel-view--interaction-register
      (list :kind 'preview
            :id 'armed-session-fork
@@ -587,6 +623,15 @@ composer body.")
                               (capitalize label))))
     (setq mevedel-view--armed-session-fork target)
     (goto-char (point-max))))
+
+(defun mevedel-view--assert-live-tip (&optional allow-armed-fork)
+  "Refuse live-tip actions during historical inspection.
+ALLOW-ARMED-FORK permits submission of an already armed session fork."
+  (when (and (mevedel-view-historical-segment-p)
+             (not (and allow-armed-fork
+                       mevedel-view--armed-session-fork)))
+    (user-error
+     "Viewing historical segment; return to latest or fork from an assistant response")))
 
 (defun mevedel-view-arm-conversation-fork ()
   "Arm a Conversation Fork from the settled assistant response at point."
@@ -1961,6 +2006,7 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
   "Queue the composer as a follow-up, or send normally while idle."
   (interactive)
   (mevedel-view--ensure-interactive-chat-view)
+  (mevedel-view--assert-live-tip)
   (when mevedel-view--pending-input-edit
     (user-error "Save or cancel the pending-input edit first"))
   (unless (and mevedel--data-buffer (buffer-live-p mevedel--data-buffer))
@@ -2041,8 +2087,8 @@ SNAPSHOT is the exact Source composer state transferred on publication."
       (mevedel-view--restore-composer-snapshot
        snapshot child-session t))
     (with-current-buffer source-view
-      (mevedel-view-cancel-session-fork)
-      (mevedel-view--clear-input))
+      (mevedel-view--clear-input)
+      (mevedel-view-cancel-session-fork))
     (display-buffer child-view)
     (with-current-buffer child-view
       (mevedel-view--submit-planned-input
@@ -2079,6 +2125,7 @@ one coherent request or one leading fork command.  Slash commands retain
 their local dispatch path."
   (interactive)
   (mevedel-view--ensure-interactive-chat-view)
+  (mevedel-view--assert-live-tip t)
   (when mevedel-view--pending-input-edit
     (user-error "Save or cancel the pending-input edit first"))
   (unless mevedel--data-buffer
@@ -2109,6 +2156,9 @@ their local dispatch path."
            (active-request
             (buffer-local-value 'mevedel--current-request
                                 mevedel--data-buffer)))
+      (when (and slash-parsed (mevedel-view-historical-segment-p))
+        (user-error
+         "Slash commands are unavailable while viewing a historical segment"))
       (when (and fork-target (not slash-parsed))
         (require 'mevedel-session-persistence)
         (mevedel-session-persistence--assert-stable-source

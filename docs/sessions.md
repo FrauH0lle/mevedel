@@ -220,6 +220,30 @@ An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required
 to continue. Rewind preserves session preset settings but clears Goal state.
 
+### Archived segment inspection
+
+The session cockpit projects persisted segments in the existing view: `[`
+shows the previous segment, `]` shows the next, and `g` chooses one directly.
+The picker lists the canonical range from segment 1 through the live segment,
+including each segment's latest prompt preview and `readable`, `missing`, or
+`unreadable` status. Adjacent navigation reports the exact broken path instead
+of skipping it; the picker lets the user bypass that segment.
+
+Each archived projection renders exactly one segment and is read-only. It does
+not merge earlier segments, modify the authoritative data buffer, or become a
+resumable session state. The view remembers cursor, window, and fold state
+ephemerally while moving among segments. The live composer draft remains
+hidden and unchanged, and `[Latest]` returns to the live segment. Fresh resume
+always starts at latest.
+
+Live work may continue while an archived segment is displayed. Status,
+interaction, and request-progress chrome stays live, while streaming transcript
+updates wait until the user returns to latest. Live-tip actions such as Send,
+follow-up, Compact, Review, Verify, and slash commands are refused. Fork,
+Rewind, and conversation-variant switching use the historical assistant
+response at point. A successful Rewind returns to latest; cancellation and
+no-op Rewind remain on the archived projection.
+
 ### Rewind
 
 `mevedel-rewind` picks a settled assistant response across all segments.

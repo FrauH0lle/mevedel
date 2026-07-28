@@ -623,6 +623,36 @@
       (kill-buffer data)
       (kill-buffer view))))
 
+(mevedel-deftest mevedel-review ()
+  ,test
+  (test)
+  :doc "refuses direct invocation from historical segment inspection"
+  (mevedel-view-test--with-buffers
+    (let ((historical (generate-new-buffer
+                       " *mevedel-review-historical*")))
+      (unwind-protect
+          (with-current-buffer view-buf
+            (setq-local mevedel-view--historical-segment-number 1
+                        mevedel-view--historical-segment-buffer historical)
+            (should-error (mevedel-review) :type 'user-error))
+        (when (buffer-live-p historical)
+          (kill-buffer historical))))))
+
+(mevedel-deftest mevedel-verify ()
+  ,test
+  (test)
+  :doc "refuses direct invocation from historical segment inspection"
+  (mevedel-view-test--with-buffers
+    (let ((historical (generate-new-buffer
+                       " *mevedel-verify-historical*")))
+      (unwind-protect
+          (with-current-buffer view-buf
+            (setq-local mevedel-view--historical-segment-number 1
+                        mevedel-view--historical-segment-buffer historical)
+            (should-error (mevedel-verify) :type 'user-error))
+        (when (buffer-live-p historical)
+          (kill-buffer historical))))))
+
 (mevedel-deftest mevedel-review--send-from-view ()
   ,test
   (test)

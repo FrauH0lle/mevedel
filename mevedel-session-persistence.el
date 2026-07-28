@@ -1190,6 +1190,82 @@ Segments are zero-padded to four digits (`segment-0001.chat.org')."
   (file-name-concat save-path
                     (format "segment-%04d.chat.org" n)))
 
+(defvar-local mevedel-session--inspection-buffer-p nil
+  "Non-nil in a read-only archived-segment inspection buffer.")
+
+(defun mevedel-session-persistence-segments (session live-buffer)
+  "Return ordered segment descriptors for SESSION.
+
+LIVE-BUFFER supplies the current segment even when it has not reached disk.
+Each descriptor contains `:number', `:path', `:status', `:current-p', and
+`:preview'.  Missing and unreadable archived segments remain in the result."
+  (let* ((save-path (mevedel-session-save-path session))
+         (current (or (mevedel-session-current-segment session) 1))
+         (index (mevedel-session-prompt-index session)))
+    (cl-loop
+     for number from 1 to current
+     for path = (and save-path
+                     (mevedel-session-persistence--segment-path
+                      save-path number))
+     for current-p = (= number current)
+     for prompts = (cdr (assoc number index))
+     collect
+     (list
+      :number number
+      :path path
+      :status
+      (cond
+       ((and current-p (buffer-live-p live-buffer)) 'readable)
+       ((or (not path) (not (file-exists-p path))) 'missing)
+       ((and (file-regular-p path) (file-readable-p path)) 'readable)
+       (t 'unreadable))
+      :current-p current-p
+      :preview
+      (cl-loop for prompt in (reverse prompts)
+               for preview = (plist-get prompt :preview)
+               when (and (stringp preview)
+                         (not (string-empty-p (string-trim preview))))
+               return preview)))))
+
+(defun mevedel-session-persistence-read-segment (session number)
+  "Load SESSION segment NUMBER into a read-only inspection buffer.
+
+The returned buffer restores transcript properties but is never authoritative
+session state.  Signal a `user-error' naming the exact path when the segment
+cannot be read."
+  (let* ((save-path (mevedel-session-save-path session))
+         (current (or (mevedel-session-current-segment session) 1))
+         (path (and save-path
+                    (mevedel-session-persistence--segment-path
+                     save-path number))))
+    (unless (and (integerp number) (<= 1 number) (<= number current))
+      (user-error "Unknown session segment: %s" number))
+    (unless (and path (file-exists-p path))
+      (user-error "Segment file is missing: %s" (or path "(unsaved session)")))
+    (unless (and (file-regular-p path) (file-readable-p path))
+      (user-error "Segment file is unreadable: %s" path))
+    (let ((buffer (generate-new-buffer
+                   (format " *mevedel segment %d*" number))))
+      (condition-case err
+          (with-current-buffer buffer
+            (setq-local default-directory
+                        (or (mevedel-session-working-directory session)
+                            save-path))
+            (insert-file-contents path)
+            (delay-mode-hooks (org-mode))
+            (setq-local mevedel-session--inspection-buffer-p t)
+            (require 'mevedel-transcript-restore)
+            (mevedel-transcript-restore-properties)
+            (setq buffer-file-name nil
+                  buffer-read-only t)
+            (set-buffer-modified-p nil)
+            buffer)
+        (error
+         (when (buffer-live-p buffer)
+           (kill-buffer buffer))
+         (user-error "Could not read segment %s: %s"
+                     path (error-message-string err)))))))
+
 (defun mevedel-session-persistence--sidecar-path (save-path)
   "Return the absolute path to the session sidecar under SAVE-PATH."
   (file-name-concat save-path "session.meta.el"))
@@ -1488,7 +1564,8 @@ Agent conversations and both ordinary and agent-transcript view projections
 belong to different buffer roles even when they share the root session."
   (and (buffer-live-p buffer)
        (with-current-buffer buffer
-         (and (not (bound-and-true-p mevedel--agent-invocation))
+         (and (not (bound-and-true-p mevedel-session--inspection-buffer-p))
+              (not (bound-and-true-p mevedel--agent-invocation))
               (not (bound-and-true-p mevedel--data-buffer))))))
 
 (defun mevedel-session-persistence--authoritative-buffer (buffer)
@@ -4162,7 +4239,8 @@ Return descriptions of every artifact that could not be restored."
               (message "Rewound %s to S%d T%d"
                        (mevedel-session-name session)
                        (plist-get target :segment)
-                       (plist-get target :turn)))))))))
+                       (plist-get target :turn))
+              t)))))))
 
 ;;;###autoload
 (defun mevedel-rewind ()
@@ -5172,8 +5250,9 @@ SESSIONS may supply an already-loaded session summary list."
     (dolist
         (entry
          (or sessions
-             (mevedel-session-persistence-list-sessions
-              (mevedel-session-workspace session))))
+             (when-let* ((workspace
+                          (mevedel-session-workspace session)))
+               (mevedel-session-persistence-list-sessions workspace))))
       (let* ((summary (plist-get entry :summary))
              (id (plist-get summary :session-id))
              origin)

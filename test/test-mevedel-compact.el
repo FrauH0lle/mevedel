@@ -120,6 +120,21 @@
        (mevedel-workspace-clear-registry)
        (delete-directory tempdir t))))
 
+(mevedel-deftest mevedel-compact ()
+  ,test
+  (test)
+  :doc "refuses direct invocation from historical segment inspection"
+  (mevedel-view-test--with-buffers
+    (let ((historical (generate-new-buffer
+                       " *mevedel-compact-historical*")))
+      (unwind-protect
+          (with-current-buffer view-buf
+            (setq-local mevedel-view--historical-segment-number 1
+                        mevedel-view--historical-segment-buffer historical)
+            (should-error (mevedel-compact) :type 'user-error))
+        (when (buffer-live-p historical)
+          (kill-buffer historical))))))
+
 (defun test-mevedel-compact--insert-agent-task
     (invocation description prompt)
   "Insert INVOCATION's persisted task heading, DESCRIPTION, and PROMPT."
