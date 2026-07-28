@@ -536,7 +536,8 @@
             :current-segment 1))
           (target
            '(:fork-point-id "stable-2" :segment 1 :turn 2 :cum-turn 2))
-          preflight)
+          preflight
+          reserved)
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
@@ -552,12 +553,22 @@
              ((symbol-function 'mevedel-worktree-fork-preflight)
               (lambda (candidate)
                 (setq preflight candidate)
-                '(:base-commit "abc123"))))
+                '(:base-commit "abc123")))
+             ((symbol-function 'mevedel-worktree-fork-reservation)
+              (lambda (candidate context)
+                (should (eq candidate session))
+                (should (equal '(:base-commit "abc123") context))
+                (setq reserved
+                      '(:branch "worktree/source-fork-1"
+                        :directory "/repo/.worktrees/source-fork-1/")))))
           (mevedel-view-arm-worktree-fork))
         (should (eq session preflight))
         (should (eq 'worktree
                     (plist-get mevedel-view--armed-session-fork
                                :fork-type)))
+        (should (eq reserved
+                    (plist-get mevedel-view--armed-session-fork
+                               :worktree-reservation)))
         (should (equal "draft" (mevedel-view--input-text)))
         (should
          (string-match-p
@@ -653,6 +664,35 @@
                           :text)))
           (should (equal (list attachment)
                          (mevedel-session-dropped-file-grants session)))))))
+
+  :doc "Worktree failure keeps its reservation and exact Source composer"
+  (mevedel-view-test--with-source-skills nil
+    (let* ((reservation
+            '(:branch "worktree/source-fork-1"
+              :directory "/repo/.worktrees/source-fork-1/"))
+           (target
+            (list :fork-point-id "stable-1"
+                  :segment 1 :turn 1 :cum-turn 1
+                  :fork-type 'worktree
+                  :worktree-reservation reservation))
+           (attachment "/tmp/worktree-fork-failure.txt"))
+      (with-current-buffer view-buf
+        (setq-local mevedel-view--armed-session-fork target)
+        (setf (mevedel-session-dropped-file-grants session)
+              (list attachment))
+        (goto-char (mevedel-view--input-start))
+        (insert (format "> exact\n@file:%s" attachment))
+        (let ((before (mevedel-view--composer-snapshot session)))
+          (cl-letf
+              (((symbol-function
+                 'mevedel-session-persistence-worktree-fork)
+                (lambda (&rest _) (error "staging failed"))))
+            (should-error (mevedel-view-send)))
+          (should (eq reservation
+                      (plist-get mevedel-view--armed-session-fork
+                                 :worktree-reservation)))
+          (should (equal before
+                         (mevedel-view--composer-snapshot session)))))))
 
   :doc "failed prompt preflight does not publish a Child"
   (mevedel-view-test--with-source-skills nil

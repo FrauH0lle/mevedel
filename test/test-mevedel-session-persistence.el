@@ -21,6 +21,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-repair)
 (require 'mevedel-tools)
+(require 'mevedel-worktree)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -3870,6 +3871,67 @@ rotation never saves through a rebound temporary visited filename or prompts"
         (when (file-directory-p tempdir)
           (delete-directory tempdir t))
         (mevedel-workspace-clear-registry))))
+  :doc "keeps a removed Worktree Fork discoverable and preserves its origin"
+  (cl-destructuring-bind
+      (workspace tempdir missing-dir replacement-dir session-dir)
+      (test-mevedel-session-persistence--make-missing-cwd-session)
+    (let (restored)
+      (unwind-protect
+          (progn
+            (let* ((sidecar-path
+                    (mevedel-session-persistence--sidecar-path session-dir))
+                   (sidecar
+                    (mevedel-session-persistence-read sidecar-path)))
+              (plist-put sidecar :fork-type 'worktree)
+              (plist-put sidecar :forked-from-session-id "source-id")
+              (plist-put sidecar :worktree-source-root tempdir)
+              (plist-put sidecar :worktree-directory missing-dir)
+              (plist-put sidecar :worktree-branch "worktree/main-fork-1")
+              (plist-put sidecar :worktree-base-commit "abc123")
+              (mevedel-session-persistence-write sidecar-path sidecar))
+            (let* ((entry
+                    (car
+                     (mevedel-session-persistence-list-sessions workspace)))
+                   (display
+                    (mevedel-session-persistence--format-session-candidate
+                     entry)))
+              (should entry)
+              (should (string-match-p "Worktree Fork" display))
+              (should (string-match-p "missing" display)))
+            (cl-letf (((symbol-function 'read-directory-name)
+                       (lambda (&rest _) replacement-dir)))
+              (setq restored
+                    (mevedel-session-persistence-restore session-dir)))
+            (should-not (file-exists-p missing-dir))
+            (with-current-buffer restored
+              (should (eq 'worktree
+                          (mevedel-session-fork-type mevedel--session)))
+              (should (equal missing-dir
+                             (mevedel-session-worktree-directory
+                              mevedel--session)))
+              (should (equal replacement-dir
+                             (mevedel-session-working-directory
+                              mevedel--session))))
+            (let* ((summary
+                    (mevedel-session-persistence--read-summary
+                     (mevedel-session-persistence--sidecar-path
+                      session-dir)))
+                   (display
+                    (mevedel-session-persistence--format-session-candidate
+                     (list :summary summary))))
+              (should (equal missing-dir
+                             (plist-get summary :worktree-directory)))
+              (should (equal replacement-dir
+                             (plist-get summary :working-directory)))
+              (should (string-match-p "retargeted" display))
+              (should (string-match-p
+                       (regexp-quote replacement-dir) display))))
+        (test-mevedel-session-persistence--release-and-kill
+         restored
+         (and restored (buffer-local-value 'mevedel--session restored)))
+        (when (file-directory-p tempdir)
+          (delete-directory tempdir t))
+        (mevedel-workspace-clear-registry))))
   :doc "does not persist a retargeted directory in read-only mode"
   (cl-destructuring-bind
       (_workspace tempdir missing-dir replacement-dir session-dir)
@@ -6310,6 +6372,72 @@ The result is a plist whose :tempdir owns every created file."
             (kill-buffer view)))
         (when (buffer-live-p child-buffer)
           (kill-buffer child-buffer)))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+  :doc "retains one reserved Git target after staging failure and blocks retry"
+  (let ((fixture (test-mevedel-session-persistence--make-fork-ready)))
+    (unwind-protect
+        (let* ((session (plist-get fixture :session))
+               (source-root
+                (file-name-as-directory
+                 (mevedel-session-working-directory session))))
+          (test-mevedel-session-persistence--git source-root "init")
+          (test-mevedel-session-persistence--git
+           source-root "config" "user.email" "mevedel@example.invalid")
+          (test-mevedel-session-persistence--git
+           source-root "config" "user.name" "Mevedel Test")
+          (write-region "base\n" nil
+                        (file-name-concat source-root "file.txt")
+                        nil 'silent)
+          (test-mevedel-session-persistence--git source-root "add" "file.txt")
+          (test-mevedel-session-persistence--git
+           source-root "commit" "-m" "base")
+          (let* ((reservation
+                  (mevedel-worktree-fork-reservation session))
+                 (target
+                  (list :fork-point-id "fixture-fork"
+                        :worktree-reservation reservation))
+                 (directory (plist-get reservation :directory))
+                 (branch (plist-get reservation :branch))
+                 (source-state
+                  (mevedel-session-persistence-serialize session))
+                 (first-error
+                  (cl-letf
+                      (((symbol-function
+                         'mevedel-session-persistence--stage-fork)
+                        (lambda (&rest _)
+                          (error "Injected staging failure"))))
+                    (should-error
+                     (mevedel-session-persistence-worktree-fork
+                      (plist-get fixture :buffer) target)))))
+            (should (file-directory-p directory))
+            (should
+             (string-match-p
+              (regexp-quote branch)
+              (test-mevedel-session-persistence--git
+               source-root "branch" "--list" branch)))
+            (should (string-match-p
+                     (regexp-quote directory)
+                     (error-message-string first-error)))
+            (should (string-match-p
+                     "git -C.*worktree remove --force"
+                     (error-message-string first-error)))
+            (should (equal source-state
+                           (mevedel-session-persistence-serialize session)))
+            (cl-letf
+                (((symbol-function 'mevedel-worktree-fork-reservation)
+                  (lambda (&rest _)
+                    (ert-fail "Retry allocated another reservation"))))
+              (let ((retry-error
+                     (should-error
+                      (mevedel-session-persistence-worktree-fork
+                       (plist-get fixture :buffer) target)
+                      :type 'user-error)))
+                (should (string-match-p
+                         (regexp-quote branch)
+                         (error-message-string retry-error)))))
+            (should-not
+             (file-exists-p
+              (file-name-concat source-root ".worktrees" "main-fork-2")))))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
 
 (mevedel-deftest mevedel-rename-session ()

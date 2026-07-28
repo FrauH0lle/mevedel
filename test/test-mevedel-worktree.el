@@ -276,7 +276,41 @@
              (equal
               (file-name-as-directory
                (file-name-concat root ".worktrees" "main-fork-3"))
-              (plist-get reservation :directory)))))
+              (plist-get reservation :directory)))
+            (should
+             (string-match-p
+              "worktree remove --force.*main-fork-3.*branch -D.*main-fork-3"
+              (plist-get reservation :cleanup-command)))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-worktree-fork-validate-reservation ()
+  ,test
+  (test)
+  :doc "accepts the unchanged target and reports an exact artifact conflict"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-worktree-fork-validate-" t))))
+    (unwind-protect
+        (let* ((workspace (mevedel-worktree-test--workspace root))
+               (session (mevedel-session-create "main" workspace root)))
+          (mevedel-worktree-test--init-repo root)
+          (let ((reservation
+                 (mevedel-worktree-fork-reservation session)))
+            (should
+             (eq reservation
+                 (mevedel-worktree-fork-validate-reservation
+                  session reservation)))
+            (make-directory (plist-get reservation :directory) t)
+            (let ((err
+                   (should-error
+                    (mevedel-worktree-fork-validate-reservation
+                     session reservation)
+                    :type 'user-error)))
+              (should
+               (string-match-p
+                (regexp-quote
+                 (plist-get reservation :cleanup-command))
+                (error-message-string err))))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
 
@@ -308,6 +342,51 @@
               (plist-get
                (mevedel-worktree-test--git-ok
                 directory "branch" "--show-current")
+               :output)))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+  :doc "forks an existing linked worktree into a sibling at its current HEAD"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-worktree-fork-sibling-" t))))
+    (unwind-protect
+        (let* ((workspace (mevedel-worktree-test--workspace root))
+               (source
+                (file-name-as-directory
+                 (file-name-concat root ".worktrees" "source"))))
+          (mevedel-worktree-test--init-repo root)
+          (make-directory (file-name-directory
+                           (directory-file-name source))
+                          t)
+          (mevedel-worktree-test--git-ok
+           root "worktree" "add" "-b" "topic" source "HEAD")
+          (write-region "source head\n" nil
+                        (file-name-concat source "file.txt")
+                        nil 'silent)
+          (mevedel-worktree-test--git-ok source "add" "file.txt")
+          (mevedel-worktree-test--git-ok
+           source "commit" "-m" "source head")
+          (let* ((session
+                  (mevedel-session-create "nested" workspace source))
+                 (reservation
+                  (mevedel-worktree-fork-reservation session))
+                 (target (plist-get reservation :directory))
+                 (source-head
+                  (plist-get
+                   (mevedel-worktree-test--git-ok
+                    source "rev-parse" "HEAD")
+                   :output)))
+            (should
+             (equal
+              (file-name-directory (directory-file-name source))
+              (file-name-directory (directory-file-name target))))
+            (should-not (file-in-directory-p target source))
+            (mevedel-worktree-fork-create reservation)
+            (should
+             (equal
+              source-head
+              (plist-get
+               (mevedel-worktree-test--git-ok
+                target "rev-parse" "HEAD")
                :output)))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
