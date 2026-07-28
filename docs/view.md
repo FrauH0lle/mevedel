@@ -173,9 +173,8 @@ Terminology:
   Pending tool rows like `Calling Read...` are fragment-backed live-tail
   history content, not status-zone content.
 - **Status zone**: session status chrome between `mevedel-view--status-marker`
-  and `mevedel-view--interaction-marker`. Its persistent sandbox row reports
-  the currently selected sandbox, filesystem, and network boundary, including
-  unsupported/unavailable fallback; task and aggregate-agent rows follow it.
+  and `mevedel-view--interaction-marker`. Task, live-execution, and
+  aggregate-agent rows appear here.
 - **Interaction zone**: user-action chrome between
   `mevedel-view--interaction-marker` and the request progress row; it is for
   pending input and controls that require user response.
@@ -297,9 +296,9 @@ Current fragment namespaces:
   from `mevedel-view--pending-tool-calls`. They are removed and recreated
   from pending state; they must not be preserved as source-backed transcript
   text or deleted by heuristic `Calling ...` line matching.
-- `status`: the persistent `sandbox` boundary row plus `tasks` and `agents`
-  status-zone blocks. Task and aggregate-agent disclosure state is backed by
-  fragment collapse state.
+- `status`: `tasks`, live `executions`, and `agents` status-zone blocks.
+  Task and aggregate-agent disclosure state is backed by fragment collapse
+  state.
 - `interaction`: pending-input summaries and user controls plus a
   non-navigatable `:separator` fragment. Ask, permission, plan, preview, and
   pending-input
@@ -319,14 +318,14 @@ fragment updates should not bypass the data-buffer transcript.
 Revisit source-backed transcript fragments only as a separate design after a
 concrete performance or correctness problem is identified.
 
-When an owning tool or agent turn used a non-default child boundary, its
-source-backed row includes a durable `Sandbox:` line directly below the normal
-header in collapsed, expanded, and compact-event forms. Read-only additional
-mounts use the subtle `◇` marker; writes, unrestricted or unavailable
-boundaries, host `/proc`, refusals, and no-start outcomes use `!`. Default
-Bubblewrap/workspace-write/isolated/fresh-proc execution remains silent. The
-line is reconstructed from hidden transcript render-data, not from the
-transient status zone or view-only state.
+When an owning tool or agent turn used materially non-default child access,
+its source-backed row includes a durable `! Sandbox:` line directly below the
+normal header in collapsed, expanded, and compact-event forms. Additional
+writes, network access, unrestricted or unavailable confinement, host `/proc`,
+refusals, and no-start outcomes use short plain-language descriptions.
+Default Bubblewrap/workspace-write/isolated/fresh-proc execution and additional
+read-only mounts remain silent. The line is reconstructed from hidden
+transcript render-data rather than view-only state.
 
 High-level zone markers still define layout order in `mevedel-view.el`.
 `mevedel-view-interaction.el` turns the interaction marker into managed

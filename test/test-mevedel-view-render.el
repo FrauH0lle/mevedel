@@ -3756,17 +3756,52 @@ state of its inner sections"
       :sandbox bubblewrap :filesystem workspace-write
       :network isolated :proc fresh
       :additional-read-count 0 :additional-write-count 0)))
-  :doc "shows additive reads as subtle durable metadata"
+  :doc "omits additional read-only access"
+  (should-not
+   (mevedel-view--sandbox-summary-line
+    '(:attempt-count 2 :started-count 2 :refused-count 0
+      :sandbox bubblewrap :filesystem workspace-write
+      :network isolated :proc fresh
+      :additional-read-count 6 :additional-write-count 0)))
+  :doc "describes material access in plain language"
+  (dolist
+      (case
+       '(((:sandbox bubblewrap :filesystem workspace-write
+           :network isolated :proc fresh
+           :additional-read-count 0 :additional-write-count 1)
+          . "additional filesystem write access")
+         ((:sandbox bubblewrap :filesystem workspace-write
+           :network unrestricted :proc fresh
+           :additional-read-count 0 :additional-write-count 0)
+          . "network access allowed")
+         ((:sandbox escalated :filesystem unrestricted
+           :network unrestricted :proc host
+           :additional-read-count 0 :additional-write-count 0)
+          . "full execution access")
+         ((:sandbox unavailable :filesystem unrestricted
+           :network unrestricted :proc host
+           :additional-read-count 0 :additional-write-count 0)
+          . "sandbox unavailable · ran without confinement")))
+    (let ((line
+           (mevedel-view--sandbox-summary-line
+            (append
+             '(:attempt-count 1 :started-count 1 :refused-count 0)
+             (car case)))))
+      (should (string-match-p "! Sandbox:" line))
+      (should (string-match-p (regexp-quote (cdr case)) line))))
+  :doc "keeps material access visible beside a partial refusal"
   (let ((line
          (mevedel-view--sandbox-summary-line
-          '(:attempt-count 2 :started-count 2 :refused-count 0
-            :sandbox bubblewrap :filesystem workspace-write
-            :network isolated :proc fresh
-            :additional-read-count 6 :additional-write-count 0))))
-    (should (string-match-p "◇ Sandbox:" line))
-    (should (string-match-p
-             "additional filesystem: 6 read, 0 write · 2 executions"
-             line)))
+          '(:attempt-count 2 :started-count 1 :refused-count 1
+            :sandbox refused :filesystem unrestricted
+            :network unrestricted :proc host
+            :additional-read-count 0 :additional-write-count 1))))
+    (dolist (detail '("execution refused"
+                      "unrestricted filesystem access"
+                      "network access allowed"
+                      "host /proc access"
+                      "additional filesystem write access"))
+      (should (string-match-p (regexp-quote detail) line))))
   :doc "shows a total refusal as a warning without a raw reason"
   (let ((line
          (mevedel-view--sandbox-summary-line
@@ -3775,7 +3810,8 @@ state of its inner sections"
             :network unavailable :proc nil
             :additional-read-count 0 :additional-write-count 0))))
     (should (string-match-p "! Sandbox:" line))
-    (should (string-match-p "refused · no child started" line)))
+    (should
+     (string-match-p "execution refused · no child started" line)))
   :doc "shows a queued child that never started without nil policy fields"
   (let ((line
          (mevedel-view--sandbox-summary-line
@@ -3785,7 +3821,7 @@ state of its inner sections"
     (should-not (string-match-p "nil" line))))
 
 (mevedel-deftest mevedel-view--rendering-header-block
-  (:doc "places a durable sandbox disclosure directly below the tool header")
+  (:doc "hides persisted read-only sandbox metadata")
   (let ((block
          (mevedel-view--rendering-header-block
           '(:header "Read: file.pdf"
@@ -3794,7 +3830,7 @@ state of its inner sections"
              :sandbox bubblewrap :filesystem workspace-write
              :network isolated :proc fresh
              :additional-read-count 1 :additional-write-count 0)))))
-    (should (string-match-p "Read: file\\.pdf\n.*Sandbox:" block))))
+    (should (equal "  ✓ Read: file.pdf" block))))
 
 (mevedel-deftest mevedel-view--render-expanded-body ()
   ,test
@@ -3811,7 +3847,7 @@ state of its inner sections"
          (:attempt-count 1 :started-count 1 :refused-count 0
           :sandbox bubblewrap :filesystem workspace-write
           :network isolated :proc fresh
-          :additional-read-count 1 :additional-write-count 0))
+          :additional-read-count 0 :additional-write-count 1))
        (cons 1 10)))
     (goto-char (point-min))
     (should (looking-at-p "  ✓ Read: file\\.el"))
@@ -3852,7 +3888,7 @@ state of its inner sections"
       (should (eq 'tool-event
                   (get-text-property (point) 'mevedel-view-type)))
       (should (string-match-p
-               "Sandbox:.*refused · no child started"
+               "Sandbox:.*execution refused · no child started"
                (buffer-substring-no-properties (point-min) (point-max))))
       (should-not (get-text-property (point) 'mevedel-view-source))
       (let ((before (buffer-string)))

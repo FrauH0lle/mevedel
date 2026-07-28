@@ -67,13 +67,6 @@ A runtime failure carries :retry-on-execution until the next child launch.")
 (defvar mevedel-sandbox--last-facts nil
   "Most recently prepared child-confinement facts.")
 
-(defvar mevedel-sandbox--active-boundaries
-  (make-hash-table :test #'eq :weakness 'key)
-  "Active child boundaries keyed by owning session.")
-
-(defvar mevedel-sandbox-state-change-hook nil
-  "Hook run with the owning session when its visible boundary changes.")
-
 (defconst mevedel-sandbox--marker-script
   "printf '%s\\n' \"$1\"; shift; exec \"$@\""
   "Shell wrapper that records entry into the requested process boundary.")
@@ -547,79 +540,6 @@ requested process starts."
          'unavailable (plist-get availability :reason))))))
    (t
     (error "Unknown sandbox mode: %s" mevedel-sandbox-mode))))
-
-(defun mevedel-sandbox-track-active (session token facts)
-  "Set TOKEN's active boundary FACTS for SESSION, or remove it when nil.
-
-Newer entries are stored first; visibility remains conservative when a session
-has concurrent child invocations.  Return TOKEN."
-  (when session
-    (let ((entries
-           (assq-delete-all
-            token (copy-sequence
-                   (gethash session mevedel-sandbox--active-boundaries)))))
-      (when facts
-        (push (cons token facts) entries))
-      (if entries
-          (puthash session entries mevedel-sandbox--active-boundaries)
-        (remhash session mevedel-sandbox--active-boundaries))
-      (condition-case err
-          (run-hook-with-args 'mevedel-sandbox-state-change-hook session)
-        (error
-         (display-warning
-          'mevedel
-          (format "Could not refresh sandbox status: %s"
-                  (error-message-string err))
-          :warning)))))
-  token)
-
-(defun mevedel-sandbox-visible-facts (&optional session)
-  "Return a conservative summary of SESSION's active facts or its default."
-  (let (visible visible-score unrestricted-filesystem unrestricted-network
-                host-proc-p additional-read additional-write)
-    (dolist (entry (and session
-                        (gethash session mevedel-sandbox--active-boundaries)))
-      (let* ((facts (cdr entry))
-             (read-count (or (plist-get facts :additional-filesystem-read) 0))
-             (write-count
-              (or (plist-get facts :additional-filesystem-write) 0))
-             (score (cond
-                     ((eq 'unrestricted (plist-get facts :filesystem)) 4)
-                     ((> write-count 0) 3)
-                     ((> read-count 0) 2)
-                     ((eq 'unrestricted (plist-get facts :network)) 1)
-                     (t 0))))
-        (setq unrestricted-filesystem
-              (or unrestricted-filesystem
-                  (eq 'unrestricted (plist-get facts :filesystem)))
-              unrestricted-network
-              (or unrestricted-network
-                  (eq 'unrestricted (plist-get facts :network)))
-              host-proc-p
-              (or host-proc-p (eq 'host (plist-get facts :proc)))
-              additional-read (+ (or additional-read 0) read-count)
-              additional-write (+ (or additional-write 0) write-count))
-        (when (or (null visible) (> score visible-score))
-          (setq visible facts
-                visible-score score))))
-    (if (not visible)
-        (mevedel-sandbox-pending-facts)
-      (let ((summary (copy-sequence visible)))
-        (when unrestricted-filesystem
-          (setq summary (plist-put summary :filesystem 'unrestricted)))
-        (when unrestricted-network
-          (setq summary (plist-put summary :network 'unrestricted)))
-        (when host-proc-p
-          (setq summary (plist-put summary :proc 'host)))
-        (when (> (+ additional-read additional-write) 0)
-          (setq summary
-                (plist-put summary :additional-filesystem-read additional-read))
-          (setq summary
-                (plist-put summary :additional-filesystem-write additional-write))
-          (setq summary
-                (plist-put summary :additional-filesystem
-                           (+ additional-read additional-write))))
-        summary))))
 
 (defun mevedel-sandbox--direct-preparation (command sandbox reason)
   "Return direct preparation for COMMAND with SANDBOX and REASON facts."

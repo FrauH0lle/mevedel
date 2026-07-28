@@ -331,8 +331,8 @@ tool output and is preserved verbatim.
 Child-process settlement may add a model-hidden `:sandbox-summary` to this
 same payload. It contains only logical attempt/start/refusal counts, boundary
 symbols, and aggregate additional read/write mount counts. Default confined
-execution is omitted. Paths, commands, and raw launcher reasons are never
-copied into the summary.
+execution and additional read-only mounts are omitted. Paths, commands, and
+raw launcher reasons are never copied into the summary.
 
 Tool renderer input is derived from the data buffer on each rerender; it
 must not depend on durable state stored only in view overlays or text
@@ -382,14 +382,14 @@ Native tool implementations launch short-lived external helpers through
 `mevedel-execution.el`, the same process boundary used by Bash and batch Eval.
 The caller supplies a structured argv, authorized read paths, and explicit
 writable artifact directories. The module adds a private scratch working
-directory, applies `mevedel-sandbox-mode`, tracks the active boundary in the
-status zone, owns timeout/process-group cleanup, and removes the scratch
-directory after the callback. Output streams directly into a bounded temporary
-disk spool rather than an Emacs process buffer; the one-shot terminal result
-contains the captured output and structured exit, timeout, output-limit, byte,
-and wall-time facts. In `auto`, it may retry directly only after a pre-exec
-Bubblewrap failure; it never replays a helper that may have started. `required`
-fails the tool explicitly and `off` runs directly.
+directory, applies `mevedel-sandbox-mode`, owns timeout/process-group cleanup,
+and removes the scratch directory after the callback. Output streams directly
+into a bounded temporary disk spool rather than an Emacs process buffer; the
+one-shot terminal result contains the captured output and structured exit,
+timeout, output-limit, byte, and wall-time facts. In `auto`, it may retry
+directly only after a pre-exec Bubblewrap failure; it never replays a helper
+that may have started. `required` fails the tool explicitly and `off` runs
+directly.
 
 All operating-system children receive deterministic defaults for UTF-8 locale,
 no color, terminal mode, and pagers, plus `MEVEDEL_EXECUTION=1`. An invocation
@@ -399,9 +399,9 @@ stdin is closed immediately.
 The current external-helper inventory is `diff`; `rg` for Read directory
 listings, Glob, and Grep; `pdfinfo` and `pdftoppm`; and ImageMagick's `magick`
 or `convert`. Their sandbox facts stay out of successful model-visible results.
-Non-default facts are aggregated per owning tool invocation and persisted in
-its hidden render-data, so short-lived additional mounts remain inspectable
-after the status-zone row returns to the default.
+Materially non-default facts are aggregated per owning tool invocation and
+persisted in its hidden render-data as a durable warning; additional read-only
+mounts stay silent.
 Native filesystem permission checks remain the authorization boundary; helper
 confinement limits effects after that authorization.
 
@@ -558,12 +558,9 @@ does not use that child seam. Batch mode isolates interactive Emacs state and,
 when the platform sandbox is active, applies the same filesystem, protected
 path, process, and network boundaries as Bash.
 
-The main view keeps the child sandbox, filesystem, and network boundary visible
-in its status zone. It shows the selected default while idle, switches to the
-actual boundary for the lifetime of a Bash, batch-Eval, or external-helper
-child, and returns to the default on settlement. Bash and batch-Eval results
-also record the boundary that applied to their invocation. The settled owning
-tool row retains a compact disclosure for non-default boundaries, additional
-mounts, refusals, and children that never started. Additive filesystem
-state includes read and write grant counts; concurrent children are summarized
-without hiding their least-confined active dimensions.
+Bash and batch-Eval results record the boundary that applied to their
+invocation. The settled owning tool row retains a compact durable warning for
+materially non-default boundaries, additional writes, refusals, and children
+that never started. Additional read-only mounts stay silent. Agent rows
+aggregate warnings from their direct child executions, while the agent
+transcript identifies the affected tools.

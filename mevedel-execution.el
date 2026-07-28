@@ -45,8 +45,6 @@
                            additional-permissions sandbox-permissions))
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
-(declare-function mevedel-sandbox-track-active
-                  "mevedel-sandbox" (session token facts))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-push-canceller
@@ -179,7 +177,6 @@ Values below 0.25 are clamped so the UI receives at most four per second."
   resource-report-path
   retained-p
   retire-timer
-  sandbox-active-token
   sandbox-facts
   sandbox-preparation
   sandbox-summary-cell
@@ -400,7 +397,7 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
         (decode-coding-string (buffer-string) 'utf-8-unix t)))))
 
 (defun mevedel-execution--release-runtime (record)
-  "Release RECORD's process, timers, group file, and active boundary."
+  "Release RECORD's process, timers, and group file."
   (dolist (timer (list (mevedel-execution--record-timeout-timer record)
                        (mevedel-execution--record-force-timer record)
                        (mevedel-execution--record-observer-timer record)
@@ -414,15 +411,8 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
   (when-let* ((process (mevedel-execution--record-process record)))
     (set-process-query-on-exit-flag process nil)
     (ignore-errors (delete-process process)))
-  (when-let* ((active-token
-              (mevedel-execution--record-sandbox-active-token record)))
-    (mevedel-sandbox-track-active
-     (mevedel-execution--origin-session
-      (mevedel-execution--record-origin record))
-     active-token nil))
   (setf (mevedel-execution--record-process record) nil
-        (mevedel-execution--record-group-id record) nil
-        (mevedel-execution--record-sandbox-active-token record) nil))
+        (mevedel-execution--record-group-id record) nil))
 
 (defun mevedel-execution--cleanup-record (record &optional preserve-spool)
   "Release runtime and registry state for RECORD.
@@ -724,20 +714,18 @@ requested command started, and REFUSED-P records a policy refusal."
                  (car cell) facts started-p refused-p))))))
 
 (defun mevedel-execution-sandbox-summary-class (summary)
-  "Return SUMMARY's disclosure class: `warning', `metadata', or nil."
+  "Return `warning' when SUMMARY describes a material deviation."
   (and summary
        (let ((attempts (or (plist-get summary :attempt-count) 0)))
-         (cond
-          ((or (> (or (plist-get summary :additional-write-count) 0) 0)
-               (> (or (plist-get summary :refused-count) 0) 0)
-               (< (or (plist-get summary :started-count) 0) attempts)
-               (not (eq (plist-get summary :sandbox) 'bubblewrap))
-               (not (eq (plist-get summary :filesystem) 'workspace-write))
-               (not (eq (plist-get summary :network) 'isolated))
-               (eq (plist-get summary :proc) 'host))
-           'warning)
-          ((> (or (plist-get summary :additional-read-count) 0) 0)
-           'metadata)))))
+         (when
+             (or (> (or (plist-get summary :additional-write-count) 0) 0)
+                 (> (or (plist-get summary :refused-count) 0) 0)
+                 (< (or (plist-get summary :started-count) 0) attempts)
+                 (not (eq (plist-get summary :sandbox) 'bubblewrap))
+                 (not (eq (plist-get summary :filesystem) 'workspace-write))
+                 (not (eq (plist-get summary :network) 'isolated))
+                 (eq (plist-get summary :proc) 'host))
+           'warning))))
 
 (defun mevedel-execution--agent-sandbox-summary-cell (invocation)
   "Return INVOCATION's direct-child summary cell, or nil."
@@ -1279,13 +1267,6 @@ it briefly so repeated owner polls return the same result."
           (mevedel-execution--record-unread-chars record) 0
           (mevedel-execution--record-unread-head record) ""
           (mevedel-execution--record-unread-tail record) "")
-    (when-let* ((session
-                 (mevedel-execution--origin-session
-                  (mevedel-execution--record-origin record))))
-      (let ((active-token (gensym "sandbox-bash-fallback-")))
-        (setf (mevedel-execution--record-sandbox-active-token record)
-              active-token)
-        (mevedel-sandbox-track-active session active-token facts)))
     (mevedel-execution--launch-managed
      record (plist-get preparation :original-command))
     (mevedel-execution--arm-managed-timers record)))
@@ -1450,27 +1431,18 @@ it briefly so repeated owner polls return the same result."
            (mevedel-execution--record-termination record) 'spawn-failed)
      (mevedel-execution--finish-managed record))
     ((or 'unrestricted 'confined)
-     (let* ((session
-             (mevedel-execution--origin-session
-              (mevedel-execution--record-origin record)))
-            (active-token (and session (gensym "sandbox-bash-"))))
-       (setf (mevedel-execution--record-marker record)
-             (plist-get preparation :marker)
-             (mevedel-execution--record-marker-buffer record)
-             (unless (plist-get preparation :marker) :done)
-             (mevedel-execution--record-sandbox-active-token record)
-             active-token
-             (mevedel-execution--record-sandbox-facts record)
-             (plist-get preparation :facts)
-             (mevedel-execution--record-sandbox-preparation record)
-             preparation)
-       (when active-token
-         (mevedel-sandbox-track-active
-          session active-token (plist-get preparation :facts)))
-       (mevedel-execution--launch-managed
-        record (plist-get preparation :command))
-       (unless (mevedel-execution--record-finished-p record)
-         (mevedel-execution--arm-managed-timers record))))
+     (setf (mevedel-execution--record-marker record)
+           (plist-get preparation :marker)
+           (mevedel-execution--record-marker-buffer record)
+           (unless (plist-get preparation :marker) :done)
+           (mevedel-execution--record-sandbox-facts record)
+           (plist-get preparation :facts)
+           (mevedel-execution--record-sandbox-preparation record)
+           preparation)
+     (mevedel-execution--launch-managed
+      record (plist-get preparation :command))
+     (unless (mevedel-execution--record-finished-p record)
+       (mevedel-execution--arm-managed-timers record)))
     (_
      (mevedel-execution--cleanup-record record)
      (error "Unknown sandbox preparation state: %s"
@@ -2011,16 +1983,12 @@ discards the process without invoking CALLBACK."
                 session 'child-process
                 :name name :owner owner
                 :command-hash (secure-hash 'sha256 (format "%S" command)))))
-         (active-token (and session (gensym "sandbox-child-")))
          (preparation
           (mevedel-sandbox-prepare
            command workdir writable-roots additional-permissions
            sandbox-permissions)))
     (cl-labels
-        ((show-active (facts)
-           (when active-token
-             (mevedel-sandbox-track-active session active-token facts)))
-         (record-attempt ()
+        ((record-attempt ()
            (unless attempt-recorded-p
              (setq attempt-recorded-p t)
              (mevedel-execution--record-sandbox-attempt
@@ -2030,8 +1998,6 @@ discards the process without invoking CALLBACK."
          (finish (child-result facts)
            (setq current-facts facts)
            (record-attempt)
-           (when active-token
-             (mevedel-sandbox-track-active session active-token nil))
            (when telemetry-span
              (apply #'mevedel-telemetry-finish
                     telemetry-span
@@ -2050,8 +2016,6 @@ discards the process without invoking CALLBACK."
                                  (copy-tree (car summary-cell))))))
          (teardown ()
            (record-attempt)
-           (when active-token
-             (mevedel-sandbox-track-active session active-token nil))
            (mevedel-sandbox-cleanup preparation)
            (when teardown-function
              (funcall teardown-function))))
@@ -2087,7 +2051,6 @@ discards the process without invoking CALLBACK."
                   :after-confined-launch-failure nil
                   (mevedel-execution--telemetry-facts
                    (plist-get preparation :facts))))
-         (show-active (plist-get preparation :facts))
          (setq started-p
                (processp
                 (mevedel-execution--start-process
@@ -2097,7 +2060,6 @@ discards the process without invoking CALLBACK."
                  session owner #'teardown))))
         ('confined
          (setq current-facts (plist-get preparation :facts))
-         (show-active (plist-get preparation :facts))
          (setq
           started-p
           (processp
@@ -2131,7 +2093,6 @@ discards the process without invoking CALLBACK."
                                :reason-class 'sandbox-launch-failure
                                :after-confined-launch-failure t
                                (mevedel-execution--telemetry-facts facts)))
-                      (show-active facts)
                       (mevedel-sandbox-cleanup preparation)
                       (setq
                        started-p
