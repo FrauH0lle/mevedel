@@ -919,31 +919,46 @@
      "<system-reminder>\nCRITICAL: verify only.\nReport findings.\n</system-reminder>\n"
      'ignore)
     (with-current-buffer view-buf
-      (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "System reminder (2 lines)" text))
-        (should-not (string-match-p "Thinking" text))
-        (should-not (string-match-p "<system-reminder>" text)))
-      (goto-char (point-min))
-      (search-forward "System reminder")
-      (goto-char (match-beginning 0))
-      (should (eq (get-text-property (point) 'mevedel-view-type)
-                  'system-reminder-summary))
-      (mevedel-view-toggle-section)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "CRITICAL: verify only" text))
-        (should (string-match-p "Report findings" text))
-        (should-not (string-match-p "<system-reminder>" text))
-        (should-not (string-match-p "</system-reminder>" text)))
-      (goto-char (point-min))
-      (search-forward "CRITICAL: verify only")
-      (let ((body-start (match-beginning 0)))
-        (should (equal "    " (get-text-property body-start 'line-prefix)))
-        (should (equal "    " (get-text-property body-start 'wrap-prefix)))
-        (goto-char body-start)
-        (should (looking-at-p "CRITICAL: verify only")))))
+      (let (collapsed-header)
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "System reminder (2 lines)" text))
+          (should-not (string-match-p "Thinking" text))
+          (should-not (string-match-p "<system-reminder>" text)))
+        (goto-char (point-min))
+        (search-forward "System reminder")
+        (setq collapsed-header
+              (buffer-substring-no-properties
+               (line-beginning-position) (line-end-position)))
+        (goto-char (match-beginning 0))
+        (should (eq (get-text-property (point) 'mevedel-view-type)
+                    'system-reminder-summary))
+        (mevedel-view-toggle-section)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p
+                   (concat "^" (regexp-quote collapsed-header) "$")
+                   text))
+          (should (= 1 (mevedel-view-test--count-substring
+                        "System reminder" text)))
+          (should (string-match-p "CRITICAL: verify only" text))
+          (should (string-match-p "Report findings" text))
+          (should-not (string-match-p "<system-reminder>" text))
+          (should-not (string-match-p "</system-reminder>" text)))
+        (goto-char (point-min))
+        (search-forward "CRITICAL: verify only")
+        (let ((body-start (match-beginning 0)))
+          (should (equal "    " (get-text-property body-start 'line-prefix)))
+          (should (equal "    " (get-text-property body-start 'wrap-prefix)))
+          (goto-char body-start)
+          (should (looking-at-p "CRITICAL: verify only"))
+          (mevedel-view-toggle-section))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (= 1 (mevedel-view-test--count-substring
+                        "System reminder" text)))
+          (should-not (string-match-p "CRITICAL: verify only" text))))))
   :doc "renders partial Worktree Fork disclosure as an expanded warning"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -1063,7 +1078,7 @@
       (goto-char (point-min))
       (search-forward "Thinking...")
       (mevedel-view-toggle-section)
-      (goto-char (point-min))
+      (search-forward "Read: a.el")
       (search-forward "Thinking...")
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
@@ -1211,7 +1226,8 @@
         (mevedel-view-toggle-section)
         (should-not (get-text-property (point) 'mevedel-view-collapsed))
         (goto-char (point-min))
-        (search-forward "thinking")
+        (let ((case-fold-search nil))
+          (search-forward "thinking"))
         (let ((body-start (match-beginning 0)))
           (should (equal "    " (get-text-property body-start 'line-prefix)))
           (should (equal "    " (get-text-property body-start 'wrap-prefix)))
@@ -1793,6 +1809,7 @@
         ;; Expand
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Read: .*f\\.el" text))
           (should (string-match-p "full content here" text)))
         (search-forward "full content here")
         (let ((body-start (match-beginning 0)))
@@ -1800,6 +1817,42 @@
           (should (equal "    " (get-text-property body-start 'wrap-prefix)))
           (goto-char body-start)
           (should (looking-at-p "full content here"))))))
+
+  :doc "fallback prompt disclosure keeps its header when expanded"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert ":PROMPT:\nExpanded prompt body.\n:END:\n"))
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (source (cons 1 (with-current-buffer data-buf (point-max)))))
+        (goto-char mevedel-view--input-marker)
+        (mevedel-view--insert-rendered-tool
+         '(:header "Prompt"
+           :body "Expanded prompt body."
+           :body-mode markdown-mode
+           :vtype prompt-summary
+           :initially-collapsed-p t)
+         source))
+      (goto-char (point-min))
+      (search-forward "Prompt")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "^  ◆ Prompt$" text))
+        (should (= 1 (mevedel-view-test--count-substring "Prompt" text)))
+        (should (string-match-p "Expanded prompt body" text)))
+      (goto-char (point-min))
+      (search-forward "Expanded prompt body")
+      (let ((body-start (match-beginning 0)))
+        (should (equal "    " (get-text-property body-start 'line-prefix)))
+        (should (equal "    " (get-text-property body-start 'wrap-prefix)))
+        (goto-char body-start)
+        (mevedel-view-toggle-section))
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (= 1 (mevedel-view-test--count-substring "Prompt" text)))
+        (should-not (string-match-p "Expanded prompt body" text)))))
 
   :doc "non-expandable tool events remain non-toggleable and untracked"
   (mevedel-view-test--with-buffers
@@ -2050,7 +2103,7 @@ the preceding header."
               (let ((insert-start (point)))
                 (insert (propertize "Assistant\n"
                                     'font-lock-face 'mevedel-view-assistant-header))
-                (insert (propertize "Thinking... (1 lines)\n"
+                (insert (propertize "  … Thinking... (1 lines)\n"
                                     'font-lock-face 'mevedel-view-thinking-summary
                                     'mevedel-view-type 'thinking-summary
                                     'mevedel-view-collapsed t
@@ -2125,7 +2178,7 @@ when thinking-cons and turn-cons had equal-but-distinct values)."
               (let ((insert-start (point)))
                 (insert (propertize "Assistant\n"
                                     'font-lock-face 'mevedel-view-assistant-header))
-                (insert (propertize "Thinking... (1 lines)\n"
+                (insert (propertize "  … Thinking... (1 lines)\n"
                                     'font-lock-face 'mevedel-view-thinking-summary
                                     'mevedel-view-type 'thinking-summary
                                     'mevedel-view-collapsed t
@@ -2155,8 +2208,22 @@ when thinking-cons and turn-cons had equal-but-distinct values)."
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "^You$" text))
         (should (string-match-p "^Assistant$" text))
+        (should (string-match-p
+                 (concat
+                  "^"
+                  (regexp-quote "  … Thinking... (1 lines)")
+                  "$")
+                 text))
+        (should (= 1 (mevedel-view-test--count-substring
+                      "Thinking..." text)))
         (should (string-match-p "deep thoughts here" text))
-        (should-not (string-match-p "^Thinking\\.\\.\\." text)))
+        (goto-char (point-min))
+        (search-forward "deep thoughts here")
+        (let ((body-start (match-beginning 0)))
+          (should (equal "    "
+                         (get-text-property body-start 'line-prefix)))
+          (should (equal "    "
+                         (get-text-property body-start 'wrap-prefix)))))
       ;; Collapse back — the thinking summary must return and headers
       ;; must still be intact.
       (goto-char (point-min))
@@ -2167,7 +2234,8 @@ when thinking-cons and turn-cons had equal-but-distinct values)."
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "^You$" text))
         (should (string-match-p "^Assistant$" text))
-        (should (string-match-p "Thinking\\.\\.\\. (1 lines)" text))
+        (should (= 1 (mevedel-view-test--count-substring
+                      "Thinking... (1 lines)" text)))
         (should-not (string-match-p "deep thoughts here" text))))))
 
 (mevedel-deftest mevedel-view-toggle-section/response ()
@@ -2204,7 +2272,8 @@ response folding along with a dangerous best-guess preview path)."
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Second line" text))
-        (should (string-match-p "Third line" text)))))
+        (should (string-match-p "Third line" text))
+        (should-not (string-match-p "(3 lines)" text)))))
 
   :doc "response collapse and expand keep complete proposed-plan blocks hidden"
   (mevedel-view-test--with-buffers
@@ -2382,7 +2451,7 @@ state of its inner sections"
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "deep thoughts live here" text))
-        (should-not (string-match-p "Thinking\\.\\.\\." text)))
+        (should (string-match-p "Thinking\\.\\.\\." text)))
       ;; Fold the whole turn.
       (goto-char (point-min))
       (search-forward "Assistant")
@@ -2401,7 +2470,7 @@ state of its inner sections"
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "^Assistant$" text))
         (should (string-match-p "deep thoughts live here" text))
-        (should-not (string-match-p "Thinking\\.\\.\\." text))
+        (should (string-match-p "Thinking\\.\\.\\." text))
         (should (string-match-p "Visible response text" text))))))
 
 (mevedel-deftest mevedel-view-collapse-state-survives-streaming ()
@@ -2475,7 +2544,7 @@ state of its inner sections"
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "short thought" text))
           (should (string-match-p "more streamed thinking" text))
-          (should-not (string-match-p "Thinking\\.\\.\\." text)))
+          (should (string-match-p "Thinking\\.\\.\\." text)))
         (when (markerp mevedel-view--data-turn-start)
           (set-marker mevedel-view--data-turn-start nil))
         (setq mevedel-view--data-turn-start nil)
@@ -2487,7 +2556,7 @@ state of its inner sections"
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "short thought" text))
           (should (string-match-p "more streamed thinking" text))
-          (should-not (string-match-p "Thinking\\.\\.\\." text))))))
+          (should (string-match-p "Thinking\\.\\.\\." text))))))
 
   :doc "expanded source-backed agent handle survives in-flight incremental render"
   (mevedel-view-test--with-buffers
@@ -4186,6 +4255,7 @@ state of its inner sections"
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "◇ hook context added" text))
         (should (string-match-p "UserPromptSubmit" text))
         (should (string-match-p "Model-only context" text)))))
 

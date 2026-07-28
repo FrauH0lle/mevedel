@@ -4247,7 +4247,7 @@ form or the render-data block from the parser."
 
 (defvar mevedel-view--collapsible-vtypes
   '(thinking-summary tool-summary response
-    plan-summary prompt-summary hook-context hook-audit
+    prompt-summary hook-context hook-audit
     system-reminder-summary)
   "View types that `mevedel-view-toggle-section' treats as section folds.
 Turn-level folds (`turn-header', `turn-summary') are handled
@@ -4499,7 +4499,8 @@ from signalling `args-out-of-range' on stale source coordinates."
           (buffer-substring-no-properties s e))))))
 
 (defun mevedel-view--expand-section (source vtype)
-  "Expand a collapsed section with SOURCE coordinates and VTYPE."
+  "Expand a collapsed section with SOURCE coordinates and VTYPE.
+Fallback disclosures retain their header; response summaries do not."
   (let* ((bounds (mevedel-view--section-bounds))
          (data-buf mevedel--data-buffer)
          (trimmed (and data-buf
@@ -4517,6 +4518,8 @@ from signalling `args-out-of-range' on stale source coordinates."
       (let* ((inhibit-read-only t)
              (view-start (car bounds))
              (view-end (cdr bounds))
+             (header (unless (eq vtype 'response)
+                       (buffer-substring view-start view-end)))
              ;; Preserve the enclosing turn-id across delete+insert so
              ;; turn-level fold still recognises this section as part of
              ;; the turn.
@@ -4540,7 +4543,7 @@ from signalling `args-out-of-range' on stale source coordinates."
                        ins-start (point) (plist-get rendering :vtype)))
                   (let ((text (mevedel-view--data-substring
                                data-buf data-start data-end))
-                        (body-start (point)))
+                        body-start)
                     ;; Clean org scaffolding from reasoning blocks
                     (when (eq vtype 'thinking-summary)
                       (setq text
@@ -4592,6 +4595,9 @@ from signalling `args-out-of-range' on stale source coordinates."
                              'markdown-mode)))
                     (when (string-empty-p text)
                       (setq text "[section no longer available]"))
+                    (when header
+                      (insert header))
+                    (setq body-start (point))
                     (insert text)
                     (unless (eq (char-before) ?\n)
                       (insert "\n"))
@@ -4609,8 +4615,8 @@ from signalling `args-out-of-range' on stale source coordinates."
                       (mevedel-view--decorate-markdown-in-range
                        view-start (point)))
                     (when (memq vtype
-                                '(thinking-summary tool-summary plan-summary
-                                  prompt-summary system-reminder-summary
+                                '(thinking-summary tool-summary prompt-summary
+                                  system-reminder-summary
                                   agent-handle))
                       (add-text-properties
                        body-start (point)
