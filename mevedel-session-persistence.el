@@ -5092,6 +5092,49 @@ parsed are silently dropped."
              (or (plist-get (plist-get a :summary) :updated-at) "")
              (or (plist-get (plist-get b :summary) :updated-at) ""))))))
 
+(defun mevedel-session-persistence-conversation-variants
+    (session fork-point-id)
+  "Return SESSION's persisted conversation variants at FORK-POINT-ID.
+The Source is first, followed by direct Children.  Each returned session
+entry has a `:variant-origin' of `source', `conversation', or `worktree'."
+  (let* ((session-id (mevedel-session-session-id session))
+         (source-id
+          (if (equal fork-point-id
+                     (mevedel-session-forked-from-fork-point-id session))
+              (mevedel-session-forked-from-session-id session)
+            session-id))
+         variants)
+    (dolist
+        (entry
+         (mevedel-session-persistence-list-sessions
+          (mevedel-session-workspace session)))
+      (let* ((summary (plist-get entry :summary))
+             (id (plist-get summary :session-id))
+             origin)
+        (cond
+         ((equal id source-id)
+          (setq origin 'source))
+         ((and (equal source-id
+                      (plist-get summary :forked-from-session-id))
+               (equal fork-point-id
+                      (plist-get summary :forked-from-fork-point-id)))
+          (setq origin (plist-get summary :fork-type))))
+        (when (memq origin '(source conversation worktree))
+          (setq entry (copy-sequence entry))
+          (plist-put entry :variant-origin origin)
+          (push entry variants))))
+    (sort variants
+          (lambda (left right)
+            (let ((left-source
+                   (eq (plist-get left :variant-origin) 'source))
+                  (right-source
+                   (eq (plist-get right :variant-origin) 'source)))
+              (if (eq left-source right-source)
+                  (string-lessp
+                   (or (plist-get (plist-get left :summary) :created-at) "")
+                   (or (plist-get (plist-get right :summary) :created-at) ""))
+                left-source))))))
+
 (defun mevedel-session-persistence--format-session-candidate (entry)
   "Return a `completing-read' display string for session ENTRY.
 Shows a relative-time annotation first so the newest session is

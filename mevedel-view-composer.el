@@ -2012,6 +2012,8 @@ SNAPSHOT is the exact Source composer state transferred on publication."
           (buffer-local-value 'mevedel--session child-data)))
     (unless (buffer-live-p child-view)
       (error "Session Fork has no live view"))
+    (with-current-buffer source-view
+      (mevedel-view--full-rerender))
     (setq snapshot (copy-tree snapshot t))
     (when (eq fork-type 'worktree)
       (setq input
