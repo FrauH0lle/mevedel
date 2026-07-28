@@ -393,14 +393,31 @@
         (goto-char (point-max))
         (insert "> first line\nsecond line")
         (mevedel-view--render-status data-buf)
-        (should (string-suffix-p "> first line\nsecond line"
-                                 (buffer-substring-no-properties
-                                  (point-min) (point-max))))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) (point-max))))
+          (should (string-match-p
+                   (regexp-quote "1 agent: 1 running [-]") text))
+          (should (string-suffix-p "> first line\nsecond line" text)))
         (goto-char (point-min))
         (search-forward "Running /root/spec_review")
         (should (equal path
                        (get-text-property
-                        (1- (point)) 'mevedel-view-agent-path)))))))
+                        (1- (point)) 'mevedel-view-agent-path)))
+        (mevedel-view-agent-status-toggle)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) (point-max))))
+          (should (string-match-p
+                   (regexp-quote "1 agent: 1 running [+]") text))
+          (should-not (string-match-p "Running /root/spec_review" text))
+          (should (string-suffix-p "> first line\nsecond line" text)))
+        (mevedel-view-agent-status-toggle)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) (point-max))))
+          (should (string-match-p
+                   (regexp-quote "1 agent: 1 running [-]") text))
+          (should (string-match-p "Running /root/spec_review" text))
+          (should (string-suffix-p
+                   "> first line\nsecond line" text)))))))
 
 (mevedel-deftest mevedel-view--insert-attribution
   (:doc "uses canonical paths as transcript click targets")

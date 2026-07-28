@@ -944,7 +944,7 @@ status line behaves like other compact view buffer affordances."
     header))
 
 (defun mevedel-view--agent-status-string (rows expanded-p)
-  "Return the collapsed aggregate status header for ROWS.
+  "Return the aggregate status header for ROWS.
 EXPANDED-P controls whether the toggle suffix displays an expanded or
 collapsed marker; expanded row content is rendered from Agent handles."
   (let* ((summary (mevedel-view--agent-status-summary rows))
@@ -1017,7 +1017,9 @@ collapsed marker; expanded row content is rendered from Agent handles."
   (when-let* ((rows (mevedel-view--agent-status-collect)))
     (let* ((expanded-p (mevedel-view--status-agent-expanded-p))
            (body (if expanded-p
-                     (mevedel-view--agent-status-handles-string rows)
+                     (concat
+                      (mevedel-view--agent-status-string rows t)
+                      (mevedel-view--agent-status-handles-string rows))
                    (mevedel-view--agent-status-string rows nil)))
            (fragment
             (list :namespace 'status
