@@ -339,6 +339,42 @@
         (mevedel-view-previous-user-query)
         (should (= (point) first))))))
 
+(mevedel-deftest mevedel-view-fork-point-at-point ()
+  ,test
+  (test)
+  :doc "resolves the exact settled assistant response at point"
+  (mevedel-view-test--with-buffers
+    (let ((session
+           (mevedel-session--create
+            :name "fork-points"
+            :current-segment 1)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert "First prompt\n")
+        (insert (propertize "First response\n" 'gptel 'response))
+        (insert
+         (mevedel--format-hook-audit-record
+          '(:type fork-point :fork-point-id "fork-point-1"
+            :segment 1 :turn 1 :file-turn 1 :cum-turn 1)))
+        (insert "Second prompt\n")
+        (insert (propertize "Second response\n" 'gptel 'response))
+        (insert
+         (mevedel--format-hook-audit-record
+          '(:type fork-point :fork-point-id "fork-point-2"
+            :segment 1 :turn 2 :file-turn 2 :cum-turn 2))))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--full-rerender)
+        (should-not (string-search "hook audit" (buffer-string)))
+        (goto-char (point-min))
+        (search-forward "Assistant")
+        (search-forward "Assistant")
+        (let ((target (mevedel-view-fork-point-at-point)))
+          (should (equal "fork-point-2"
+                         (plist-get target :fork-point-id)))
+          (should (= 1 (plist-get target :segment)))
+          (should (= 2 (plist-get target :cum-turn))))))))
+
 
 ;;
 ;;; Full rendering

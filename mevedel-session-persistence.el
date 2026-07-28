@@ -202,7 +202,11 @@
 		  "mevedel-tool-repair-diagnostics" (session event))
 
 ;; `mevedel-transcript-audit'
+(declare-function mevedel--format-hook-audit-record
+		  "mevedel-transcript-audit" (record))
 (declare-function mevedel-transcript-audit-records
+		  "mevedel-transcript-audit" (text &optional type))
+(declare-function mevedel-transcript-audit-spans
 		  "mevedel-transcript-audit" (text &optional type))
 
 ;; `mevedel-transcript-restore'
@@ -1215,6 +1219,51 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                   "0")))
     0))
 
+(defun mevedel-session-persistence--new-fork-point-id (session)
+  "Return a fresh stable fork-point identity for SESSION."
+  (substring
+   (secure-hash
+    'sha256
+    (format "%S"
+            (list (mevedel-session-session-id session)
+                  (current-time)
+                  (random most-positive-fixnum)
+                  (emacs-pid))))
+   0 32))
+
+(defun mevedel-session-persistence--fork-point-spans (buffer)
+  "Return durable fork-point records and source spans from BUFFER."
+  (with-current-buffer buffer
+    (require 'mevedel-transcript-audit)
+    (mapcar
+     (lambda (span)
+       (append (copy-sequence (plist-get span :record))
+               (list :record-start (+ (point-min) (plist-get span :start))
+                     :transcript-cutoff
+                     (+ (point-min) (plist-get span :end)))))
+     (mevedel-transcript-audit-spans (buffer-string) 'fork-point))))
+
+(defun mevedel-session-persistence-fork-point-at-source
+    (buffer source-start source-end)
+  "Return the stable fork point inside BUFFER source bounds.
+
+SOURCE-START and SOURCE-END must bound one rendered assistant turn."
+  (cl-find-if
+   (lambda (fork-point)
+     (and (<= source-start (plist-get fork-point :record-start))
+          (<= (plist-get fork-point :transcript-cutoff) source-end)))
+   (mevedel-session-persistence--fork-point-spans buffer)))
+
+(defun mevedel-session-persistence--prompt-fork-point
+    (prompt next-position fork-points)
+  "Return PROMPT's fork point before NEXT-POSITION from FORK-POINTS."
+  (cl-find-if
+   (lambda (fork-point)
+     (let ((start (plist-get fork-point :record-start)))
+       (and (> start (plist-get prompt :pos))
+            (or (null next-position) (< start next-position)))))
+   fork-points))
+
 (defun mevedel-session-persistence--update-prompt-index (session buffer)
   "Refresh the live segment's prompt list in SESSION from BUFFER's contents.
 
@@ -1231,6 +1280,7 @@ can map a picker selection back to the snapshot taken right after
 that prompt's response completed."
   (let* ((current-seg (or (mevedel-session-current-segment session) 1))
          (index       (mevedel-session-prompt-index session))
+         (cell        (assoc current-seg index))
          (offset
           (cl-loop for (seg . prompts) in index
                    when (< seg current-seg)
@@ -1240,7 +1290,12 @@ that prompt's response completed."
                         (mevedel-session-persistence--segment-tail-prompt-count)))
          (skip-count  (min tail-count (length raw-all)))
          (raw         (nthcdr skip-count raw-all))
-         (with-cum    (cl-loop for p in raw
+         (fork-points
+          (mevedel-session-persistence--fork-point-spans buffer))
+         (with-cum    (cl-loop for remaining on raw
+                               for p = (car remaining)
+                               for next-position =
+                               (plist-get (cadr remaining) :pos)
                                for turn from 1
                                collect
                                (let ((copy (copy-sequence p)))
@@ -1248,12 +1303,44 @@ that prompt's response completed."
                                  (plist-put copy :file-turn
                                             (+ skip-count turn))
                                  (plist-put copy :cum-turn (+ offset turn))
-                                 copy)))
-         (cell        (assoc current-seg index)))
+                                 (when-let* ((fork-point
+                                              (mevedel-session-persistence--prompt-fork-point
+                                               p next-position fork-points)))
+                                   (dolist (key '(:fork-point-id
+                                                  :transcript-cutoff))
+                                     (plist-put copy key
+                                                (plist-get fork-point key))))
+                                 copy))))
     (if cell
         (setcdr cell with-cum)
       (setf (mevedel-session-prompt-index session)
             (cons (cons current-seg with-cum) index)))))
+
+(defun mevedel-session-persistence--ensure-latest-fork-point
+    (session buffer)
+  "Attach a durable fork-point marker to SESSION's latest response in BUFFER."
+  (let* ((segment (or (mevedel-session-current-segment session) 1))
+         (prompt (car (last (cdr (assoc
+                                  segment
+                                  (mevedel-session-prompt-index session)))))))
+    (when (and prompt (not (plist-get prompt :fork-point-id)))
+      (with-current-buffer buffer
+        (save-excursion
+          (goto-char (plist-get prompt :pos))
+          (when (text-property-search-forward 'gptel 'response t)
+            (require 'mevedel-transcript-audit)
+            (goto-char (point-max))
+            (insert
+             (mevedel--format-hook-audit-record
+              (list :type 'fork-point
+                    :fork-point-id
+                    (mevedel-session-persistence--new-fork-point-id session)
+                    :segment segment
+                    :turn (plist-get prompt :turn)
+                    :file-turn (plist-get prompt :file-turn)
+                    :cum-turn (plist-get prompt :cum-turn)
+                    :captured-file-turn (plist-get prompt :cum-turn))))
+            t))))))
 
 (defun mevedel-session-persistence--newer-prompt-p (candidate incumbent)
   "Return non-nil when CANDIDATE is newer than INCUMBENT."
@@ -1742,23 +1829,27 @@ restore `instructions/current.el'.  Missing snapshots are ignored."
 ;;
 ;;; Per-turn save
 
-(defun mevedel-session-persistence-save (session buffer)
+(defun mevedel-session-persistence-save (session buffer &optional settled)
   "Save SESSION's on-disk state from BUFFER's contents.
 
 Materializes lazily on first call.  Subsequent calls update the
 `updated-at' timestamp, save the data buffer, snapshot any tool-modified
 files for this turn, evict old snapshots over the cap, and rewrite the
-sidecar."
+sidecar.  When SETTLED is non-nil, mark the latest assistant response
+as a stable fork point."
   (when-let ((buffer (mevedel-session-persistence--authoritative-buffer
                       buffer)))
     (mevedel-session-persistence-ensure-files session buffer)
     (setf (mevedel-session-updated-at session)
           (format-time-string "%FT%H-%M-%S"))
+    (mevedel-session-persistence--update-prompt-index session buffer)
+    (when (and settled
+               (mevedel-session-persistence--ensure-latest-fork-point
+                session buffer))
+      (mevedel-session-persistence--update-prompt-index session buffer))
     (with-current-buffer buffer
       (when (buffer-modified-p)
         (save-buffer)))
-    ;; Refresh the live segment's prompt list (drives the rewind picker).
-    (mevedel-session-persistence--update-prompt-index session buffer)
     ;; Snapshot files modified during the just-completed turn.
     (when (and (boundp 'mevedel--current-request)
                mevedel--current-request)

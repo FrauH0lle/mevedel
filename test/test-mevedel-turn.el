@@ -148,13 +148,14 @@
             (setq-local mevedel--session session)
             (setq-local mevedel-session--read-only-mode nil))
           (cl-letf (((symbol-function 'mevedel-session-persistence-save)
-                     (lambda (saved-session saved-buffer)
-                       (push (list saved-session saved-buffer) saved))))
+                     (lambda (saved-session saved-buffer &optional settled)
+                       (push (list saved-session saved-buffer settled)
+                             saved))))
             (mevedel--turn-autosave fsm)
             (with-current-buffer chat-buf
               (setq-local mevedel-session--read-only-mode t))
             (mevedel--turn-autosave fsm))
-          (should (equal (list (list session chat-buf)) saved)))
+          (should (equal (list (list session chat-buf t)) saved)))
       (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--turn-restore-permission-mode ()
