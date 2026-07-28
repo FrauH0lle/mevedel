@@ -2946,7 +2946,8 @@ found.  Returns nil; signals `user-error' to abort the restore."
    (t
     (user-error "Session segment file %s missing" segment-path))))
 
-(defun mevedel-session-persistence-restore (session-dir)
+(defun mevedel-session-persistence-restore
+    (session-dir &optional lifecycle-source session-override)
   "Restore the chat buffer for the session at SESSION-DIR.
 
 Loads the sidecar (or synthesizes a minimal session when the sidecar
@@ -2959,6 +2960,9 @@ runs `mevedel--chat-buffer-init-common'.
 Returns the chat buffer.  If a buffer for this session is already
 alive (matched by session-id), switches to it instead of re-loading.
 
+LIFECYCLE-SOURCE defaults to \"resume\".  SESSION-OVERRIDE, when non-nil,
+is the already-projected in-memory session used by a newly published fork.
+
 Tasks are deserialized from the sidecar.  Touched-files and
 mentions-shown reset to empty hash tables on load."
   (let* ((sidecar-path     (mevedel-session-persistence--sidecar-path session-dir))
@@ -2966,7 +2970,8 @@ mentions-shown reset to empty hash tables on load."
          (had-sidecar-p    (not (null sidecar)))
          (result           (when sidecar
                              (mevedel-session-persistence-deserialize sidecar)))
-         (session          (or (plist-get result :session)
+         (session          (or session-override
+                               (plist-get result :session)
                                (mevedel-session-persistence--synthesize-session
                                 session-dir (mevedel-workspace))))
          (agent-registry-repaired-p
@@ -3072,7 +3077,8 @@ mentions-shown reset to empty hash tables on load."
                     (set-visited-file-modtime)))
                 (unless acquired
                   (mevedel-session-persistence--apply-read-only-mode buf))
-                (mevedel--chat-buffer-init-common buf workspace "resume")
+                (mevedel--chat-buffer-init-common
+                 buf workspace (or lifecycle-source "resume"))
                 (require 'mevedel-agent-persistence)
                 (setq agent-repairs
                       (mevedel-agent-persistence-restore-tree
@@ -4127,6 +4133,8 @@ mail are deliberately absent from the returned session."
           :preset-name (mevedel-session-preset-name session)
           :preset-settings
           (copy-tree (mevedel-session-preset-settings session) t)
+          :model-provider (mevedel-session-model-provider session)
+          :reasoning-effort (mevedel-session-reasoning-effort session)
           :turn-count (mevedel-session-turn-count session)
           :reminders
           (mevedel-reminders-clone-list
@@ -4136,20 +4144,15 @@ mail are deliberately absent from the returned session."
           (copy-tree (mevedel-session-agent-types-snapshot session) t)
           :skills-snapshot
           (copy-tree (mevedel-session-skills-snapshot session) t)
-          :pending-reminders
-          (copy-tree (mevedel-session-pending-reminders session) t)
+          :pending-reminders nil
           :specialist-nudge-state
           (copy-tree (mevedel-session-specialist-nudge-state session) t)
           :deferred-set
           (copy-tree (mevedel-session-deferred-set session) t)
-          :deferred-pending
-          (copy-tree (mevedel-session-deferred-pending session) t)
-          :deferred-injected
-          (copy-tree (mevedel-session-deferred-injected session) t)
-          :deferred-used
-          (copy-tree (mevedel-session-deferred-used session) t)
-          :deferred-expired
-          (copy-tree (mevedel-session-deferred-expired session) t)
+          :deferred-pending nil
+          :deferred-injected nil
+          :deferred-used nil
+          :deferred-expired nil
           :messages nil
           :agent-registry nil
           :agent-root-activity 'idle
@@ -4159,10 +4162,8 @@ mail are deliberately absent from the returned session."
           :pending-steering nil
           :pending-follow-ups nil
           :pending-input-next-id nil
-          :dropped-file-grants
-          (copy-tree (mevedel-session-dropped-file-grants session) t)
-          :active-dropped-file-grants
-          (copy-tree (mevedel-session-active-dropped-file-grants session) t)
+          :dropped-file-grants nil
+          :active-dropped-file-grants nil
           :mentions-shown (make-hash-table :test #'equal)
           :skills (copy-tree (mevedel-session-skills session) t)
           :hook-rules
@@ -4170,8 +4171,7 @@ mail are deliberately absent from the returned session."
           :hook-log nil
           :repair-log nil
           :permission-log-pending nil
-          :hook-context-pending
-          (copy-tree (mevedel-session-hook-context-pending session) t)
+          :hook-context-pending nil
           :execution-state nil
           :save-path staging-path
           :session-id new-id
@@ -4195,11 +4195,16 @@ mail are deliberately absent from the returned session."
           :agent-transcripts
           (copy-tree (mevedel-session-agent-transcripts session) t)
           :invoked-skills
-          (copy-tree (mevedel-session-invoked-skills session) t)
+          (copy-tree
+           (cl-remove-if
+            (lambda (record)
+              (> (or (mevedel-skill-invocation-record-turn record) 0)
+                 picked-cum-turn))
+            (mevedel-session-invoked-skills session))
+           t)
           :permission-queue nil
           :pending-plan-approval nil
-          :plan-metadata
-          (copy-tree (mevedel-session-plan-metadata session) t)
+          :plan-metadata nil
           :goal nil)))
     (when picked-cum-turn
       (mevedel-session-persistence--prune-agent-transcripts-after-fork
@@ -4214,13 +4219,24 @@ mail are deliberately absent from the returned session."
   (require 'mevedel-agent-persistence)
   (make-directory (file-name-concat staging-path "agents") t)
   (make-directory (file-name-concat staging-path "file-history") t)
-  (when-let* ((parent-plans-dir
-               (and parent-save-path
-                    (file-name-concat parent-save-path "plans")))
-              ((file-directory-p parent-plans-dir)))
-    (copy-directory parent-plans-dir
-                    (file-name-concat staging-path "plans")
-                    nil t t))
+  (when-let* ((source
+               (buffer-local-value 'mevedel--session buffer))
+              (metadata (mevedel-session-plan-metadata source))
+              ((eq (plist-get metadata :status) 'accepted))
+              (accepted-turn (plist-get metadata :accepted-turn))
+              ((and (integerp accepted-turn)
+                    (<= accepted-turn picked-cum-turn)))
+              (relative-path (plist-get metadata :accepted-path))
+              ((stringp relative-path))
+              (source-path (expand-file-name relative-path parent-save-path))
+              ((file-in-directory-p
+                source-path
+                (file-name-concat parent-save-path "plans"))))
+    (unless (file-readable-p source-path)
+      (error "Accepted plan artifact is unavailable: %s" source-path))
+    (let ((destination (expand-file-name relative-path staging-path)))
+      (make-directory (file-name-directory destination) t)
+      (copy-file source-path destination)))
   (cl-loop for i from 1 below picked-segment do
            (let ((src (mevedel-session-persistence--segment-path
                        parent-save-path i))
@@ -4404,10 +4420,28 @@ child data buffer without mutating the Source buffer, session, or lock."
             (setq-local kill-buffer-hook nil))
           (kill-buffer staging-buffer)
           (setq child-buffer
-                (mevedel-session-persistence-restore new-save-path)
+                (mevedel-session-persistence-restore
+                 new-save-path "fork" child)
                 committed t)
           child-buffer)
       (unless committed
+        (when-let* ((failed-buffer
+                     (or child-buffer
+                         (and child
+                              (mevedel-session-persistence--find-live-buffer
+                               (mevedel-session-session-id child)
+                               (mevedel-session-buffer-name
+                                (mevedel-session-name child)
+                                (mevedel-session-workspace child)))))))
+          (when-let* ((view
+                       (buffer-local-value
+                        'mevedel--view-buffer failed-buffer))
+                      ((buffer-live-p view)))
+            (kill-buffer view))
+          (when (buffer-live-p failed-buffer)
+            (with-current-buffer failed-buffer
+              (set-buffer-modified-p nil))
+            (kill-buffer failed-buffer)))
         (when published
           (ignore-errors (delete-directory new-save-path t)))
         (when (file-directory-p staging-path)

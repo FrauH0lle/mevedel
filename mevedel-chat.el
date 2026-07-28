@@ -417,9 +417,9 @@ Wires the FSM handler chain, header-line, visual settings, all
 per-buffer hooks, the skill set, default reminders, and the companion
 view buffer.
 
-Both `mevedel--chat-buffer-setup' (fresh path) and the resume path
+Both `mevedel--chat-buffer-setup' (fresh path) and restore paths
 \(`mevedel-session-persistence-restore') call this after planting the
-session struct. SOURCE is `startup' or `resume' as a string."
+session struct. SOURCE is \"startup\", \"resume\", or \"fork\"."
   (with-current-buffer buf
     (when (derived-mode-p 'org-mode)
       (mevedel--chat-buffer-disable-org-element-cache))

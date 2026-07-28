@@ -248,15 +248,28 @@ clear them with `C-c C-q` before a destructive transcript operation.
 assistant response at point and focuses the existing composer draft. The
 interaction row identifies the assistant turn; `[Cancel]` or `C-c C-k`
 disarms it without changing the draft. An empty prompt, a local command, a
-rejected prompt hook, or cancellation creates no child.
+failed syntax or mention preflight, or cancellation creates no child.
 
-The next accepted model-bound submission publishes an ordinary child session
-whose transcript ends at the selected response and continues with that prompt.
-The Source buffer, sidecar, lock, workflow state, and checkout remain live and
-unchanged. The child keeps the Source working directory and restores no files,
+The next preflight-valid model-bound submission publishes an ordinary child
+session whose transcript ends at the selected response. Child then emits
+`SessionStart(fork)` and owns skill expansion, `UserPromptSubmit`, and the
+request. The draft and its referenced grants transfer from Source at
+publication. A Child hook rejection keeps them in the published child for
+revision without sending a request. The Source transcript, sidecar, lock,
+workflow state, and checkout remain live and unchanged. The child keeps the
+Source working directory and restores no files,
 so Conversation Fork also works outside Git. A durable system-reminder
 disclosure tells both the user and model that current files may be newer than
 the conversation point and that file changes are shared with Source.
+
+The common fork projection copies current model, preset, effort, mode,
+permission, skill, reminder, and hook configuration into independent
+child-owned values. Prompt indexes, file snapshots, skill history, historical
+agent transcripts, and accepted-plan evidence stop at the fork point. Tasks,
+Goal, pending Plan/handoff state, addressable agents and mail, pending inputs,
+requests, interactions, queues, executions, callbacks, logs, caches, and
+one-shot prompt context start empty. Only dropped-file grants referenced by
+the transferred draft move to Child.
 
 Conversation children use the first unused direct-child name
 `<source> · conversation N`, receive a normal unique session ID, and can be

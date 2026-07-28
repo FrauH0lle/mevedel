@@ -527,14 +527,17 @@
 (mevedel-deftest mevedel-view-send/conversation-fork ()
   ,test
   (test)
-  :doc "materializes only at accepted dispatch and sends the prompt in the child"
+  :doc "publishes before Child-owned prompt preparation and preserves ownership"
   (mevedel-view-test--with-source-skills nil
     (let* ((child-session (mevedel-session-create "child" ws))
            (child-data (generate-new-buffer " *fork-child-data*"))
            (child-view (generate-new-buffer " *fork-child-view*"))
            (target
             '(:fork-point-id "stable-1" :segment 1 :turn 1 :cum-turn 1))
-           materialized sent-buffer)
+           (attachment "/tmp/fork-attachment.txt")
+           (draft (format "> exact\nplease summarize @file:%s"
+                          attachment))
+           events)
       (unwind-protect
           (progn
             (with-current-buffer child-data
@@ -544,34 +547,90 @@
             (mevedel-view--setup child-view child-data)
             (with-current-buffer view-buf
               (setq-local mevedel-view--armed-session-fork target)
+              (setf (mevedel-session-dropped-file-grants session)
+                    (list attachment "/tmp/unrelated.txt"))
               (goto-char (mevedel-view--input-start))
-              (insert "please summarize the issue")
+              (insert draft)
+              (goto-char (+ (mevedel-view--input-start) 3))
               (cl-letf
                   (((symbol-function
                      'mevedel-session-persistence-conversation-fork)
                     (lambda (buffer fork-target)
-                      (setq materialized (list buffer fork-target))
+                      (push (list 'materialized buffer fork-target) events)
                       child-data))
-                   ((symbol-function 'gptel-send)
-                    (lambda (&rest _)
-                      (setq sent-buffer (current-buffer)))))
+                   ((symbol-function 'mevedel-view--submit-planned-input)
+                    (lambda (input &rest _)
+                      (push (list 'prepared (current-buffer) input) events))))
                 (mevedel-view-send))
-              (should (equal (list data-buf target) materialized))
               (should-not mevedel-view--armed-session-fork)
               (should (string-empty-p (mevedel-view--input-text))))
-            (should (eq child-data sent-buffer))
-            (with-current-buffer child-data
-              (should (string-match-p "please summarize the issue"
-                                      (buffer-string))))
+            (should (eq 'materialized (caar (last events))))
+            (should (eq child-view (cadr (car events))))
+            (with-current-buffer child-view
+              (should (equal draft (mevedel-view--input-text)))
+              (should (= 3 (- (point)
+                              (mevedel-view--input-start)))))
+            (should (equal (list attachment)
+                           (mevedel-session-dropped-file-grants
+                            child-session)))
             (with-current-buffer data-buf
               (should-not
-               (string-match-p "please summarize the issue"
+               (string-match-p "please summarize"
                                (buffer-string)))))
         (dolist (buffer (list child-view child-data))
           (when (buffer-live-p buffer)
             (with-current-buffer buffer
               (set-buffer-modified-p nil))
-            (kill-buffer buffer)))))))
+            (kill-buffer buffer))))))
+
+  :doc "materialization failure preserves Source draft, grants, and armed point"
+  (mevedel-view-test--with-source-skills nil
+    (let ((target
+           '(:fork-point-id "stable-1" :segment 1 :turn 1 :cum-turn 1))
+          (attachment "/tmp/fork-failure.txt"))
+      (with-current-buffer view-buf
+        (setq-local mevedel-view--armed-session-fork target)
+        (setf (mevedel-session-dropped-file-grants session)
+              (list attachment))
+        (goto-char (mevedel-view--input-start))
+        (insert (format "> exact\n@file:%s" attachment))
+        (let ((before (mevedel-view--composer-snapshot session)))
+          (cl-letf
+              (((symbol-function
+                 'mevedel-session-persistence-conversation-fork)
+                (lambda (&rest _) (error "materialization failed"))))
+            (should-error (mevedel-view-send)
+                          :type 'error))
+          (should (equal target mevedel-view--armed-session-fork))
+          (should (equal (plist-get before :text)
+                         (plist-get
+                          (mevedel-view--composer-snapshot session)
+                          :text)))
+          (should (equal (list attachment)
+                         (mevedel-session-dropped-file-grants session)))))))
+
+  :doc "failed prompt preflight does not publish a Child"
+  (mevedel-view-test--with-source-skills nil
+    (let ((target
+           '(:fork-point-id "stable-1" :segment 1 :turn 1 :cum-turn 1))
+          materialized)
+      (with-current-buffer view-buf
+        (setq-local mevedel-view--armed-session-fork target)
+        (goto-char (mevedel-view--input-start))
+        (insert "invalid skill input")
+        (cl-letf
+            (((symbol-function 'mevedel-skills-plan-user-input)
+              (lambda (&rest _) (user-error "Invalid skill syntax")))
+             ((symbol-function
+               'mevedel-session-persistence-conversation-fork)
+              (lambda (&rest _)
+                (setq materialized t))))
+          (should-error (mevedel-view-send)
+                        :type 'user-error))
+        (should-not materialized)
+        (should (equal target mevedel-view--armed-session-fork))
+        (should (equal "invalid skill input"
+                       (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-view-refresh-input-prompt
   (:doc "updates the prompt prefix without disturbing draft input")
