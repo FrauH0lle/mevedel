@@ -270,16 +270,17 @@ recent tail remain visible, and later compactions update the existing anchored
 summary instead of stacking summaries.  Each rewrite first creates the next
 numbered `compact-NNNN` sibling as a recovery artifact.  Those siblings are not
 agent handles or sidecar entries; they belong only to the original session and
-are not copied by rewind forks. Each retained conversation owns this lifecycle
+are not copied by Session Forks. Each retained conversation owns this lifecycle
 independently; compacting one agent does not change its registry path or any
 other conversation.
 
-Rewind forks copy eligible canonical transcript files and metadata only as
+Session Forks copy eligible canonical transcript files and metadata only as
 historical inspection artifacts. They do not copy registry identities, frozen
 configuration, mailboxes, waiters, or active turns. Historical agent
 transcripts remain openable from their handles but are absent from the
 collaboration roster, and their former canonical task names are immediately
-available to the fork.
+available to the child. Rewind creates no child: it clears the current
+session's live agent ownership.
 
 `mevedel-view-agent.el` owns transcript lookup and inspection views plus the
 aggregate live-agent status and targeted handle refresh. The main view renders

@@ -220,6 +220,30 @@ the live view/data pair once and routes each action to the owner buffer. The
 explicit `g gptel menu` cockpit row is the advanced bridge into gptel's menu
 from the paired data buffer.
 
+Its Navigate group keeps inspection and mutation distinct:
+
+- `n` / `N` move through rendered displays without changing session state.
+- `C-n` / `C-p` move through user queries without changing session state.
+- `f` / `F` arm a Conversation Fork or Worktree Fork at the settled assistant
+  response under point.
+- `R` confirms a true in-place Rewind to that response.
+- `B` switches conversation variants at that response.
+
+Arming a Fork adds a temporary interaction row naming the selected assistant
+turn and Fork type. It focuses the existing composer, and cancellation removes
+only the row while preserving the draft. The next accepted child prompt
+publishes a new session. Conversation Fork discloses that current files may be
+newer than its conversation and remain shared; Worktree Fork discloses its
+linked worktree and best-effort historical-file restoration. These disclosures
+are model-visible transcript records. Folding changes only their presentation.
+
+At a shared fork point, the assistant header renders a variant button in both
+expanded and folded states. One alternative opens directly; several open a
+Source-first chooser with identity, working-directory, sharing, branch,
+recovery, and latest-prompt context. Switching uses ordinary session restore,
+rerenders source-backed history, and positions the target at the exact stable
+fork point. Each view retains its own composer draft and working directory.
+
 While managed Bash work is live, the status zone shows its session-wide count
 as an `Executions` fragment. Activating it opens the execution cockpit. The
 main cockpit exposes the same surface as `Processes`, and `/ps` opens it
@@ -491,9 +515,9 @@ completion, prompt submission, and integration with that history ring:
 These bindings apply only while point is in the editable composer.
 History persists at the workspace level as
 `<workspace-root>/.mevedel/input-history.el`, so new and resumed
-sessions in the same project share prompt recall. Read-only or
-rewound sessions keep history in memory only. Rewind keeps the current
-buffer-local ring.
+sessions in the same project share prompt recall. When persistence is not
+writable, the active ring remains available in memory. Rewind keeps the current
+workspace ring and composer draft.
 
 The input zone installs slash command completion, `$` skill completion,
 and display-only skill argument hints. Root slash completion offers local

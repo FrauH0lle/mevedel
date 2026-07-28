@@ -81,7 +81,7 @@ containing retained paths, frozen configurations, activity, mailboxes, and
 conversation locations. It also records `:preset-name` and the resolved
 buffer-local mevedel variables in `:preset-settings`, plus the session's exact
 `:model-provider` and explicit `:reasoning-effort`; resume restores those
-settings, and a normal fork deep-copies them so parent and child can diverge.
+settings, and a Session Fork deep-copies them so parent and child can diverge.
 gptel's other buffer-local settings continue to use its Org persistence.
 
 Pending input is live-session state, not sidecar state. Same-turn steering,
@@ -227,6 +227,11 @@ to continue. Rewind preserves session preset settings but clears Goal state.
 uses the response at point. Both routes show the same impact and require
 explicit confirmation.
 
+The cockpit's `n`/`N` actions move through rendered displays for inspection,
+while `C-n`/`C-p` move through user queries. These navigation actions change
+neither transcript nor session state; Rewind remains a separate explicit
+operation.
+
 Rewind is an in-place transaction. It discards later transcript and session
 artifacts, restores every captured working-tree file in the plan, and keeps
 the same session identity, name, directory, working directory, and lineage.
@@ -313,7 +318,8 @@ Worktree children independently use `<source> · worktree N`; their branch and
 directory use the first suffix unused by either Git or the workspace's
 `.worktrees/` directory.
 
-Once a Fork exists, the shared assistant header shows a text switch such as
+Once a Fork exists, `B` switches variants for the exact assistant response at
+point. The shared assistant header also shows a text switch such as
 `[⇆ Source · 2 variants]`, `[⇆ Conversation · 2 variants]`, or
 `[⇆ Worktree · 2 variants]`.  It remains available when the turn is folded.
 With one alternative, `RET` or `mouse-1` opens it directly through the normal
