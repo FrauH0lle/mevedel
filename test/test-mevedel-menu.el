@@ -946,6 +946,21 @@
           (mevedel-menu--fork-worktree-here))
         (should (eq called-buffer view-buf))))))
 
+(mevedel-deftest mevedel-menu--call-live-tip-data ()
+  ,test
+  (test)
+  :doc "refuses data actions while the paired view inspects history"
+  (mevedel-menu-test--with-buffers
+    (let (called)
+      (with-current-buffer view-buf
+        (setq-local mevedel-view--historical-segment-number 1
+                    mevedel-view--historical-segment-buffer data-buf)
+        (should-error
+         (mevedel-menu--call-live-tip-data
+          (lambda () (setq called t)))
+         :type 'user-error))
+      (should-not called))))
+
 (mevedel-deftest mevedel-menu--compact ()
   ,test
   (test)

@@ -1176,6 +1176,118 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   (should (equal "/x/segment-1000.chat.org"
                  (mevedel-session-persistence--segment-path "/x" 1000))))
 
+(mevedel-deftest mevedel-session-persistence-segments ()
+  ,test
+  (test)
+  :doc "lists the canonical range without hiding broken archived segments"
+  (let* ((directory (make-temp-file "mevedel-segment-list-" t))
+         (session
+          (mevedel-session--create
+           :name "segments"
+           :save-path (file-name-as-directory directory)
+           :current-segment 4
+           :prompt-index
+           '((1 . ((:cum-turn 1 :preview "first prompt")))
+             (2 . ((:cum-turn 2 :preview "missing prompt")))
+             (3 . ((:cum-turn 3 :preview "unreadable prompt")))
+             (4 . ((:cum-turn 4 :preview "live prompt"))))))
+         (live-buffer (generate-new-buffer " *segment-list-live*")))
+    (unwind-protect
+        (progn
+          (write-region "segment one\n" nil
+                        (mevedel-session-persistence--segment-path
+                         directory 1)
+                        nil 'silent)
+          (make-directory
+           (mevedel-session-persistence--segment-path directory 3))
+          (let ((segments
+                 (mevedel-session-persistence-segments
+                  session live-buffer)))
+            (should (equal '(1 2 3 4)
+                           (mapcar
+                            (lambda (entry) (plist-get entry :number))
+                            segments)))
+            (should (equal '(readable missing unreadable readable)
+                           (mapcar
+                            (lambda (entry) (plist-get entry :status))
+                            segments)))
+            (should (equal '(nil nil nil t)
+                           (mapcar
+                            (lambda (entry) (plist-get entry :current-p))
+                            segments)))
+            (should (equal
+                     '("first prompt" "missing prompt"
+                       "unreadable prompt" "live prompt")
+                     (mapcar
+                      (lambda (entry) (plist-get entry :preview))
+                      segments)))))
+      (when (buffer-live-p live-buffer)
+        (kill-buffer live-buffer))
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel-session-persistence-read-segment ()
+  ,test
+  (test)
+  :doc "loads restored transcript properties into a non-authoritative buffer"
+  (let* ((directory (make-temp-file "mevedel-segment-read-" t))
+         (path (mevedel-session-persistence--segment-path directory 1))
+         (session
+          (mevedel-session--create
+           :name "segments"
+           :save-path (file-name-as-directory directory)
+           :current-segment 2))
+         inspection)
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n"
+                    "Prompt\n"
+                    "Archived answer.\n")
+            (dotimes (_ 3)
+              (goto-char (point-min))
+              (search-forward "Archived answer.")
+              (org-entry-put
+               (point-min) "GPTEL_BOUNDS"
+               (prin1-to-string
+                `((response (,(match-beginning 0) ,(match-end 0)))))))
+            (write-region (point-min) (point-max) path nil 'silent))
+          (setq inspection
+                (mevedel-session-persistence-read-segment session 1))
+          (with-current-buffer inspection
+            (should (derived-mode-p 'org-mode))
+            (should buffer-read-only)
+            (should (bound-and-true-p
+                     mevedel-session--inspection-buffer-p))
+            (should-not (bound-and-true-p mevedel--session))
+            (should-not buffer-file-name)
+            (goto-char (point-min))
+            (search-forward "Archived answer.")
+            (should (eq 'response
+                        (get-text-property (match-beginning 0) 'gptel)))
+            (should-not
+             (mevedel-session-persistence--authoritative-buffer
+              inspection))))
+      (when (buffer-live-p inspection)
+        (kill-buffer inspection))
+      (delete-directory directory t)))
+
+  :doc "reports the exact missing path"
+  (let* ((directory (make-temp-file "mevedel-segment-missing-" t))
+         (session
+          (mevedel-session--create
+           :name "segments"
+           :save-path (file-name-as-directory directory)
+           :current-segment 2))
+         (path (mevedel-session-persistence--segment-path directory 1)))
+    (unwind-protect
+        (let ((error
+               (should-error
+                (mevedel-session-persistence-read-segment session 1)
+                :type 'user-error)))
+          (should (string-search path (error-message-string error))))
+      (delete-directory directory t))))
+
 (mevedel-deftest mevedel-session-persistence--first-user-message ()
   ,test
   (test)

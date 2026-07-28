@@ -177,6 +177,10 @@
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
 
+;; `mevedel-view-composer'
+(declare-function mevedel-view--assert-live-tip
+                  "mevedel-view-composer" (&optional allow-armed-fork))
+
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--stop-request-progress
                   "mevedel-view-stream" ())
@@ -2068,8 +2072,11 @@ before it is applied."
 (defun mevedel-compact (&optional aggressive instructions)
   "Compact the current mevedel chat buffer.
 With prefix argument AGGRESSIVE, compact without preserving a recent
-tail.  INSTRUCTIONS is an optional string of manual summary guidance."
+  tail.  INSTRUCTIONS is an optional string of manual summary guidance."
   (interactive "P")
+  (when (bound-and-true-p mevedel--data-buffer)
+    (require 'mevedel-view-composer)
+    (mevedel-view--assert-live-tip))
   (let* ((chat-buffer
           (cond
            ((and (bound-and-true-p gptel-mode) (bound-and-true-p mevedel--workspace))

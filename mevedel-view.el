@@ -144,6 +144,8 @@
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-clear
                   "mevedel-view-interaction" ())
+(declare-function mevedel-view--interaction-rebuild
+                  "mevedel-view-interaction" ())
 (declare-function mevedel-view-interaction-initialize
                   "mevedel-view-interaction" ())
 
@@ -155,19 +157,23 @@
 (declare-function mevedel-view--after-header-position
                   "mevedel-view-render" ())
 (declare-function mevedel-view--full-rerender
-                  "mevedel-view-render" ())
+                  "mevedel-view-render"
+                  (&optional transcript-buffer source-changed-p))
 (declare-function mevedel-view--history-tail-position
                   "mevedel-view-render" ())
 (declare-function mevedel-view--non-history-view-position-p
                   "mevedel-view-render" (pos))
+(declare-function mevedel-view-historical-segment-p
+                  "mevedel-view-render" ())
 (declare-function mevedel-view-next-display "mevedel-view-render" ())
 (declare-function mevedel-view-previous-display "mevedel-view-render" ())
 (declare-function mevedel-view-render-initialize
                   "mevedel-view-render" ())
 (declare-function mevedel-view-toggle-section "mevedel-view-render" ())
 (declare-function mevedel-view-toggle-transcript "mevedel-view-render" ())
-
 ;; `mevedel-view-stream'
+(declare-function mevedel-view--ensure-request-progress
+                  "mevedel-view-stream" (&optional data-buf status))
 (declare-function mevedel-view--render-stream-update
                   "mevedel-view-stream" (data-buf))
 
@@ -867,11 +873,16 @@ refresh; a full request upgrades a pending incremental refresh."
               mevedel-view--pending-render-kind nil
               mevedel-view--pending-render-data-buffer nil)
         (condition-case _
-            (pcase kind
-              ('full (mevedel-view--full-rerender))
-              ('incremental
-               (when (buffer-live-p data-buffer)
-                 (mevedel-view--render-stream-update data-buffer))))
+            (if (mevedel-view-historical-segment-p)
+                (progn
+                  (mevedel-view--render-status data-buffer)
+                  (mevedel-view--interaction-rebuild)
+                  (mevedel-view--ensure-request-progress data-buffer))
+              (pcase kind
+                ('full (mevedel-view--full-rerender))
+                ('incremental
+                 (when (buffer-live-p data-buffer)
+                   (mevedel-view--render-stream-update data-buffer)))))
           (error nil))))))
 
 (defun mevedel-view--schedule-render (kind data-buffer delay)

@@ -145,6 +145,8 @@
                   (&optional context))
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view--assert-live-tip
+                  "mevedel-view-composer" (&optional allow-armed-fork))
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
 (declare-function mevedel-view-arm-conversation-fork
                   "mevedel-view-composer" ())
@@ -160,6 +162,10 @@
 (declare-function mevedel-view-toggle-section "mevedel-view" ())
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view-go-to-segment "mevedel-view-render"
+                  (&optional number))
+(declare-function mevedel-view-next-segment "mevedel-view-render" ())
+(declare-function mevedel-view-previous-segment "mevedel-view-render" ())
 (declare-function mevedel-view-rewind-at-point "mevedel-view-render" ())
 (declare-function mevedel-view-switch-conversation-variant-at-point
                   "mevedel-view-render" ())
@@ -687,20 +693,27 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-view-arm-worktree-fork))
 
+(defun mevedel-menu--call-live-tip-data (function)
+  "Call data-buffer FUNCTION after checking the paired view is live."
+  (let ((context (mevedel-menu--context)))
+    (mevedel-cockpit-call-in-view
+     context #'mevedel-view--assert-live-tip)
+    (mevedel-cockpit-call-in-data context function)))
+
 (defun mevedel-menu--compact ()
   "Compact the current data buffer."
   (interactive)
-  (mevedel-cockpit-call-in-data (mevedel-menu--context) #'mevedel-compact))
+  (mevedel-menu--call-live-tip-data #'mevedel-compact))
 
 (defun mevedel-menu--review ()
   "Run the review picker from the data buffer."
   (interactive)
-  (mevedel-cockpit-call-in-data (mevedel-menu--context) #'mevedel-review))
+  (mevedel-menu--call-live-tip-data #'mevedel-review))
 
 (defun mevedel-menu--verify ()
   "Run the verify picker from the data buffer."
   (interactive)
-  (mevedel-cockpit-call-in-data (mevedel-menu--context) #'mevedel-verify))
+  (mevedel-menu--call-live-tip-data #'mevedel-verify))
 
 (defun mevedel-menu--toggle-data-view ()
   "Toggle between the view buffer and raw data buffer."
@@ -853,6 +866,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      "The view buffer owns the composer, compact transcript, and status strip."
      "The data buffer owns raw gptel state, tools, model, and transcript data."
      "The cockpit resolves the view/data pair once and routes actions to the owning buffer."
+     "Cockpit [ / ] / g inspect previous, next, or selected session segments."
      "The raw data buffer keeps gptel header behavior for the gptel menu.")
    "\n"))
 
@@ -892,6 +906,21 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("F" "Fork worktree" mevedel-menu--fork-worktree-here)
     ("R" "Rewind here" mevedel-menu--rewind-here)
     ("B" "Switch conversation variant" mevedel-menu--switch-variant-here)
+    ("[" "Previous segment"
+     (lambda () (interactive)
+       (mevedel-cockpit-call-in-view
+        (mevedel-menu--context) #'mevedel-view-previous-segment))
+     :transient t)
+    ("]" "Next segment"
+     (lambda () (interactive)
+       (mevedel-cockpit-call-in-view
+        (mevedel-menu--context) #'mevedel-view-next-segment))
+     :transient t)
+    ("g" "Go to segment"
+     (lambda () (interactive)
+       (mevedel-cockpit-call-in-view
+        (mevedel-menu--context) #'mevedel-view-go-to-segment))
+     :transient t)
     ("n" "Next display"
      (lambda () (interactive)
        (mevedel-cockpit-call-in-view

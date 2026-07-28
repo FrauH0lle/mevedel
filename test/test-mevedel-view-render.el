@@ -51,6 +51,68 @@
     (insert (make-string 300 ?x))
     (mevedel-view--group-into-turns segments (current-buffer))))
 
+(defun mevedel-view-render-test--write-segment
+    (path prompt response fork-point-id segment)
+  "Write one persisted transcript segment to PATH.
+PROMPT and RESPONSE form one settled turn identified by FORK-POINT-ID in
+SEGMENT."
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
+    (insert prompt "\n")
+    (let ((response-start (point)))
+      (insert response "\n")
+      (insert
+       (mevedel--format-hook-audit-record
+        (list :type 'fork-point
+              :fork-point-id fork-point-id
+              :segment segment
+              :turn 1
+              :file-turn 1
+              :cum-turn segment)))
+      (dotimes (_ 3)
+        (goto-char (point-min))
+        (search-forward response)
+        (setq response-start (match-beginning 0))
+        (org-entry-put
+         (point-min) "GPTEL_BOUNDS"
+         (prin1-to-string
+          `((response (,response-start
+                       ,(+ response-start (length response)))))))))
+    (write-region (point-min) (point-max) path nil 'silent)))
+
+(defmacro mevedel-view-render-test--with-segment-view (&rest body)
+  "Run BODY in a rendered three-segment view with two archived segments."
+  (declare (indent 0) (debug t))
+  `(let* ((directory (make-temp-file "mevedel-view-segments-" t))
+          (session
+           (mevedel-session--create
+            :name "segments"
+            :save-path (file-name-as-directory directory)
+            :current-segment 3
+            :prompt-index
+            '((1 . ((:cum-turn 1 :preview "first prompt")))
+              (2 . ((:cum-turn 2 :preview "second prompt")))
+              (3 . ((:cum-turn 3 :preview "live prompt")))))))
+     (unwind-protect
+         (progn
+           (mevedel-view-render-test--write-segment
+            (mevedel-session-persistence--segment-path directory 1)
+            "First prompt" "Archived answer one" "fork-1" 1)
+           (mevedel-view-render-test--write-segment
+            (mevedel-session-persistence--segment-path directory 2)
+            "Second prompt" "Archived answer two" "fork-2" 2)
+           (mevedel-view-test--with-buffers
+             (with-current-buffer data-buf
+               (setq-local mevedel--session session)
+               (insert "Live prompt\n")
+               (insert (propertize "Live answer\n" 'gptel 'response)))
+             (with-current-buffer view-buf
+               (setq-local mevedel--session session)
+               (mevedel-view--full-rerender)
+               ,@body)))
+       (delete-directory directory t))))
+
 
 ;;
 ;;; Turn grouping and tool summaries
@@ -304,6 +366,138 @@
 ;;
 ;;; Navigation
 
+(mevedel-deftest mevedel-view-previous-segment ()
+  ,test
+  (test)
+  :doc "shows exactly the adjacent archived segment as read-only"
+  (mevedel-view-render-test--with-segment-view
+    (mevedel-view-test--insert-composer-draft "live draft" 4)
+    (mevedel-view-previous-segment)
+    (should (eq 'assistant
+                (get-text-property (point) 'mevedel-view-turn-role)))
+    (should (string-prefix-p "segments @ mevedel\n" (buffer-string)))
+    (should (string-search
+             "Viewing archived segment 2 of 3" (buffer-string)))
+    (goto-char (point-min))
+    (search-forward "[Latest]")
+    (should
+     (eq #'mevedel-view-return-to-latest-segment
+         (lookup-key
+          (get-text-property (1- (point)) 'keymap)
+          (kbd "RET"))))
+    (should (string-search "Archived answer two" (buffer-string)))
+    (should-not (string-search "Archived answer one" (buffer-string)))
+    (should-not (string-search "Live answer" (buffer-string)))
+    (should buffer-read-only)
+    (should (invisible-p (mevedel-view--input-start))))
+
+  :doc "a missing adjacent segment leaves the current projection unchanged"
+  (let* ((directory (make-temp-file "mevedel-view-segment-gap-" t))
+         (missing (mevedel-session-persistence--segment-path directory 2))
+         (session
+          (mevedel-session--create
+           :name "segments"
+           :save-path (file-name-as-directory directory)
+           :current-segment 3
+           :prompt-index
+           '((1 . ((:cum-turn 1 :preview "first prompt")))
+             (2 . ((:cum-turn 2 :preview "missing prompt")))
+             (3 . ((:cum-turn 3 :preview "live prompt")))))))
+    (unwind-protect
+        (progn
+          (mevedel-view-render-test--write-segment
+           (mevedel-session-persistence--segment-path directory 1)
+           "First prompt" "Archived answer one" "fork-1" 1)
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (insert "Live prompt\n")
+              (insert (propertize "Live answer\n" 'gptel 'response)))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session)
+              (mevedel-view--full-rerender)
+              (let ((before (buffer-string))
+                    (error
+                     (should-error
+                      (mevedel-view-previous-segment)
+                      :type 'user-error)))
+                (should (string-search missing
+                                       (error-message-string error)))
+                (should (equal before (buffer-string)))))))
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel-view-next-segment ()
+  ,test
+  (test)
+  :doc "revisits an archived segment with its point and fold state"
+  (mevedel-view-render-test--with-segment-view
+    (mevedel-view-go-to-segment 2)
+    (goto-char (point-min))
+    (search-forward "Assistant")
+    (beginning-of-line)
+    (mevedel-view--collapse-turn)
+    (let ((archived-point (point)))
+      (should (get-text-property (point) 'mevedel-view-collapsed))
+      (mevedel-view-previous-segment)
+      (mevedel-view-next-segment)
+      (should (= archived-point (point)))
+      (should (get-text-property (point) 'mevedel-view-collapsed)))))
+
+(mevedel-deftest mevedel-view-go-to-segment ()
+  ,test
+  (test)
+  :doc "direct selection bypasses a missing intervening segment"
+  (let* ((directory (make-temp-file "mevedel-view-segment-picker-" t))
+         (session
+          (mevedel-session--create
+           :name "segments"
+           :save-path (file-name-as-directory directory)
+           :current-segment 3
+           :prompt-index
+           '((1 . ((:cum-turn 1 :preview "first prompt")))
+             (2 . ((:cum-turn 2 :preview "missing prompt")))
+             (3 . ((:cum-turn 3 :preview "live prompt")))))))
+    (unwind-protect
+        (progn
+          (mevedel-view-render-test--write-segment
+           (mevedel-session-persistence--segment-path directory 1)
+           "First prompt" "Archived answer one" "fork-1" 1)
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (insert "Live prompt\n")
+              (insert (propertize "Live answer\n" 'gptel 'response)))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session)
+              (mevedel-view--full-rerender)
+              (mevedel-view-go-to-segment 1)
+              (should (string-search "Archived answer one"
+                                     (buffer-string))))))
+      (delete-directory directory t))))
+
+(mevedel-deftest mevedel-view-return-to-latest-segment ()
+  ,test
+  (test)
+  :doc "restores the exact live composer text and point"
+  (mevedel-view-render-test--with-segment-view
+    (mevedel-view-test--insert-composer-draft
+     "> live draft\nsecond line" 7)
+    (let ((draft (buffer-substring
+                  (mevedel-view--input-start) (point-max)))
+          (point-offset (- (point) (mevedel-view--input-start))))
+      (mevedel-view-previous-segment)
+      (mevedel-view-return-to-latest-segment)
+      (should (string-search "Live answer" (buffer-string)))
+      (should-not (string-search "Viewing archived segment"
+                                 (buffer-string)))
+      (should-not buffer-read-only)
+      (should-not (invisible-p (mevedel-view--input-start)))
+      (should (equal draft
+                     (buffer-substring
+                      (mevedel-view--input-start) (point-max))))
+      (should (= point-offset
+                 (- (point) (mevedel-view--input-start)))))))
+
 (mevedel-deftest mevedel-view-user-query-navigation ()
   ,test
   (test)
@@ -380,7 +574,7 @@
            (mevedel-session--create
             :name "rewind-point"
             :current-segment 1))
-          called-buffer called-target)
+          called-buffer called-target returned-latest)
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (insert "Prompt\n")
@@ -398,9 +592,14 @@
             (((symbol-function 'mevedel-session-persistence-rewind)
               (lambda (buffer target)
                 (setq called-buffer buffer
-                      called-target target))))
+                      called-target target)
+                t))
+             ((symbol-function 'mevedel-view-return-to-latest-segment)
+              (lambda (&optional _event)
+                (setq returned-latest t))))
           (mevedel-view-rewind-at-point)))
       (should (eq data-buf called-buffer))
+      (should returned-latest)
       (should (equal "rewind-point-1"
                      (plist-get called-target :fork-point-id))))))
 
@@ -455,7 +654,37 @@
           (setq variants (list (car variants)))
           (mevedel-view--full-rerender)
           (goto-char (point-min))
-          (should-not (search-forward "variants]" nil t)))))))
+          (should-not (search-forward "variants]" nil t))))))
+
+  :doc "uses explicit live session context for an archived transcript"
+  (with-temp-buffer
+    (let ((session
+           (mevedel-session--create
+            :name "source"
+            :session-id "source-id"
+            :save-path "/sessions/source/"))
+          (variants
+           '((:variant-origin source
+              :summary (:session-id "source-id"))
+             (:variant-origin conversation
+              :summary (:session-id "child-id")))))
+      (insert (propertize "Archived response.\n" 'gptel 'response))
+      (insert
+       (mevedel--format-hook-audit-record
+        '(:type fork-point :fork-point-id "fork-point-1"
+          :segment 1 :turn 1 :file-turn 1 :cum-turn 1)))
+      (let ((mevedel-view--conversation-variant-sessions variants))
+        (cl-letf
+            (((symbol-function
+               'mevedel-session-persistence-conversation-variants)
+              (lambda (_session _fork-point-id &optional _sessions)
+                variants)))
+          (should-not (bound-and-true-p mevedel--session))
+          (should
+           (string-search
+            "[⇆ Source · 2 variants]"
+            (mevedel-view--conversation-variant-button
+             (current-buffer) (point-min) (point-max) session))))))))
 
 (mevedel-deftest mevedel-view--render-turn ()
   ,test
@@ -499,7 +728,10 @@
              :forked-from-session-id "source-id"
              :forked-from-fork-point-id "fork-point-1"
              :fork-type 'worktree
-             :current-segment 1))
+             :current-segment 2
+             :prompt-index
+             '((1 . ((:fork-point-id "fork-point-1"
+                      :cum-turn 1 :preview "shared"))))))
            (variants
             '((:save-path "/sessions/source/"
                :variant-origin source
@@ -507,7 +739,8 @@
               (:save-path "/sessions/child/"
                :variant-origin worktree
                :summary (:session-id "child-id"))))
-           displayed)
+           displayed
+           targeted-segment)
       (unwind-protect
           (progn
             (with-current-buffer data-buf
@@ -536,6 +769,9 @@
                     variants))
                  ((symbol-function 'mevedel-session-persistence-restore)
                   (lambda (_save-path) target-data))
+                 ((symbol-function 'mevedel-view-go-to-segment)
+                  (lambda (number)
+                    (setq targeted-segment number)))
                  ((symbol-function 'display-buffer)
                   (lambda (buffer &optional _action)
                     (setq displayed buffer)
@@ -555,6 +791,7 @@
                 (backward-char 1)
                 (mevedel-view-activate-at-point))
               (should (eq target-view displayed))
+              (should (= 1 targeted-segment))
               (with-current-buffer view-buf
                 (should (string-match-p
                          "> source draft\nsecond line"

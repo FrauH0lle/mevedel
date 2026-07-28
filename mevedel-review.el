@@ -114,6 +114,8 @@
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view--assert-live-tip
+                  "mevedel-view-composer" (&optional allow-armed-fork))
 (declare-function mevedel-view--forward-input
                   "mevedel-view-composer" (input &rest args))
 (declare-function mevedel-view--run-prompt-submit-hook
@@ -251,6 +253,9 @@
 
 (defun mevedel-review--current-data-buffer ()
   "Return the current mevedel data buffer, or nil outside mevedel."
+  (when (bound-and-true-p mevedel--data-buffer)
+    (require 'mevedel-view-composer)
+    (mevedel-view--assert-live-tip))
   (cond
    ((and (boundp 'mevedel--data-buffer)
          mevedel--data-buffer

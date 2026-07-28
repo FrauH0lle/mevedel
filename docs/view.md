@@ -222,12 +222,25 @@ from the paired data buffer.
 
 Its Navigate group keeps inspection and mutation distinct:
 
+- `[` / `]` project the previous or next persisted session segment in the same
+  view.
+- `g` opens the segment picker, including missing or unreadable archived
+  segments.
 - `n` / `N` move through rendered displays without changing session state.
 - `C-n` / `C-p` move through user queries without changing session state.
 - `f` / `F` arm a Conversation Fork or Worktree Fork at the settled assistant
   response under point.
 - `R` confirms a true in-place Rewind to that response.
 - `B` switches conversation variants at that response.
+
+An archived segment is a read-only projection, not a second live session.
+Its banner shows the segment number and a clickable `[Latest]` action. The
+live composer draft is hidden and preserved. Live requests continue updating
+status, interactions, and progress, but transcript redraws do not replace the
+archived projection. Send, follow-up, Compact, Review, Verify, and slash
+commands require returning to the latest segment. Fork and Rewind still target
+the settled assistant response at point; arming a Fork temporarily reveals the
+composer, while cancelling hides it and stays on the archived segment.
 
 Arming a Fork adds a temporary interaction row naming the selected assistant
 turn and Fork type. It focuses the existing composer, and cancellation removes
