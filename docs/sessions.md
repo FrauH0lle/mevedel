@@ -227,8 +227,19 @@ the same session identity, name, directory, working directory, and lineage.
 External working-tree changes to captured files are overwritten. Git HEAD and
 the index are not changed, so the impact identifies staged files whose index
 content will diverge from the restored working tree. Failure rolls back both
-session and file changes. Rewind creates neither a child session nor a redo
-variant.
+session and file changes, including a live transcript already replaced during
+publication. A failed rollback reports every inconsistent path and retains its
+temporary recovery directory; a successful Rewind removes those rollback
+bytes. Rewind creates neither a child session nor a redo variant. Existing
+child sessions and worktrees are not removed; children forked after the target
+become detached from the Source's visible history.
+
+Only a committed Rewind emits `SessionStart(rewind)`; it does not emit
+`SessionEnd`. Any context produced by that event belongs to the next accepted
+prompt. Cancellation, rollback, and an empty impact emit no Rewind lifecycle
+event. Selecting the latest response is still useful when captured files or
+live workflow state need undoing; only a target with no transcript, file, or
+state impact reports `Already at this state`.
 
 Current session settings survive. Tasks, Goal, retained agents and mailboxes,
 pending Plan state, permission queues, and execution state are cleared because

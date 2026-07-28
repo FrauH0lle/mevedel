@@ -17,6 +17,7 @@
 (require 'mevedel-chat)
 (require 'mevedel-hooks)
 (require 'mevedel-permission-log)
+(require 'mevedel-prompt-submission)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-repair)
 (require 'mevedel-tools)
@@ -4804,6 +4805,42 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (kill-buffer buf)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
+  :doc "an empty latest-point impact skips confirmation and lifecycle"
+  (let* ((session
+          (mevedel-session--create
+           :name "rewind" :turn-count 1
+           :prompt-index
+           '((1 . ((:turn 1 :cum-turn 1 :fork-point-id "point"))))))
+         (buffer (generate-new-buffer " *empty-rewind*"))
+         (target '(:segment 1 :turn 1 :cum-turn 1
+                   :fork-point-id "point"))
+         confirmed committed started)
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session)
+          (cl-letf
+              (((symbol-function
+                 'mevedel-session-persistence--assert-stable-source)
+                #'ignore)
+               ((symbol-function
+                 'mevedel-session-persistence-restore-plan)
+                (lambda (&rest _) nil))
+               ((symbol-function
+                 'mevedel-session-persistence--detached-child-count)
+                (lambda (&rest _) 0))
+               ((symbol-function 'yes-or-no-p)
+                (lambda (&rest _) (setq confirmed t)))
+               ((symbol-function
+                 'mevedel-session-persistence--commit-rewind)
+                (lambda (&rest _) (setq committed t)))
+               ((symbol-function 'mevedel--run-session-start-hooks)
+                (lambda (&rest _) (setq started t))))
+            (mevedel-session-persistence-rewind buffer target))
+          (should-not confirmed)
+          (should-not committed)
+          (should-not started))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))))
   :doc "cancelling the impact confirmation changes no transcript or file state"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -4854,6 +4891,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 (let* ((before-buffer (buffer-string))
                        (session-id (mevedel-session-session-id session))
                        (save-path (mevedel-session-save-path session))
+                       starts ended
                        (before-sidecar
                         (with-temp-buffer
                           (insert-file-contents
@@ -4862,8 +4900,13 @@ rotation never saves through a rebound temporary visited filename or prompts"
                           (buffer-string))))
                   (cl-letf (((symbol-function 'display-buffer) #'ignore)
                             ((symbol-function 'yes-or-no-p)
-                             (lambda (&rest _) nil)))
+                             (lambda (&rest _) nil))
+                            ((symbol-function
+                              'mevedel--run-session-start-hooks)
+                             (lambda (source)
+                               (push source starts))))
                     (mevedel-session-persistence-rewind buf target))
+                  (should-not starts)
                   (should (equal before-buffer (buffer-string)))
                   (should
                    (equal
@@ -4887,9 +4930,31 @@ rotation never saves through a rebound temporary visited filename or prompts"
                               ((symbol-function 'yes-or-no-p)
                                (lambda (prompt)
                                  (setq confirmation prompt)
-                                 t)))
+                                 t))
+                              ((symbol-function
+                                'mevedel--run-session-start-hooks)
+                               (lambda (source)
+                                 (push source starts)
+                                 (setf
+                                  (mevedel-session-hook-context-pending session)
+                                  `((:event SessionStart
+                                     :body ,source)))))
+                              ((symbol-function
+                                'mevedel--run-session-end-hooks)
+                               (lambda ()
+                                 (setq ended t))))
                       (mevedel-session-persistence-rewind buf target))
                     (should (string-match-p "no redo" confirmation)))
+                  (should (equal '("rewind") starts))
+                  (should-not ended)
+                  (let* ((context
+                          (mevedel-session-hook-context-pending session))
+                         (submission
+                          (mevedel-prompt-submission-create
+                           :session session :context-entries context)))
+                    (mevedel-prompt-submission-commit submission)
+                    (should-not
+                     (mevedel-session-hook-context-pending session)))
                   (should (equal session-id
                                  (mevedel-session-session-id session)))
                   (should (equal save-path
@@ -4918,7 +4983,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
 (mevedel-deftest mevedel-session-persistence--commit-rewind ()
   ,test
   (test)
-  :doc "restore failure rolls back files, transcript, sidecar, and session state"
+  :doc "post-publication failure rolls back files, transcript, sidecar, and session state"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
@@ -4974,18 +5039,18 @@ rotation never saves through a rebound temporary visited filename or prompts"
                          (mevedel-session-save-path session)))
                        (before-sidecar
                         (mevedel-session-persistence--file-text sidecar-path))
-                       (original
+                       (original-load
                         (symbol-function
-                         'mevedel-session-persistence--apply-restore-action))
-                       (calls 0))
+                         'mevedel-session-persistence--load-instructions))
+                       (load-calls 0))
                   (cl-letf
                       (((symbol-function
-                         'mevedel-session-persistence--apply-restore-action)
-                        (lambda (current-session entry)
-                          (cl-incf calls)
-                          (if (= calls 2)
-                              (error "Injected restore failure")
-                            (funcall original current-session entry)))))
+                         'mevedel-session-persistence--load-instructions)
+                        (lambda (&rest args)
+                          (cl-incf load-calls)
+                          (if (= load-calls 1)
+                              (error "Injected publication failure")
+                            (apply original-load args)))))
                     (should-error
                      (mevedel-session-persistence--commit-rewind
                       session buf target plan)))
@@ -5006,6 +5071,26 @@ rotation never saves through a rebound temporary visited filename or prompts"
              buf session)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence--rollback-restore-files ()
+  ,test
+  (test)
+  :doc "reports every file whose rollback fails"
+  (let* ((path-a "/tmp/rewind-a")
+         (path-b "/tmp/rewind-b")
+         (backups
+          `((:path ,path-a :existed t :backup "/tmp/backup-a")
+            (:path ,path-b :existed t :backup "/tmp/backup-b")))
+         (failures
+          (cl-letf (((symbol-function 'make-directory) #'ignore)
+                    ((symbol-function 'copy-file)
+                     (lambda (_source target &rest _)
+                       (error "Cannot restore %s" target))))
+            (mevedel-session-persistence--rollback-restore-files
+             backups))))
+    (should (= 2 (length failures)))
+    (should (string-match-p (regexp-quote path-a) (nth 0 failures)))
+    (should (string-match-p (regexp-quote path-b) (nth 1 failures)))))
 
 
 ;;

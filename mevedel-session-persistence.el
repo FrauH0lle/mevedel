@@ -245,6 +245,7 @@
 		  "mevedel-chat" nil)
 (declare-function mevedel--chat-buffer-init-common "mevedel-chat"
 		  (buf workspace source))
+(declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 (declare-function mevedel--normalize-session-directory "mevedel-chat"
 		  (directory workspace))
 (declare-function mevedel-request-file-snapshots "mevedel-structs"
@@ -3871,15 +3872,22 @@ bodies, and gptel org tool/reasoning scaffolding to stay consistent with
              (list :path path :existed nil))))
 
 (defun mevedel-session-persistence--rollback-restore-files (backups)
-  "Restore file BACKUPS captured for a failed Rewind."
-  (dolist (entry backups)
-    (let ((path (plist-get entry :path)))
-      (if (plist-get entry :existed)
-          (progn
-            (make-directory (file-name-directory path) t)
-            (copy-file (plist-get entry :backup) path t t t))
-        (when (file-exists-p path)
-          (delete-file path))))))
+  "Restore file BACKUPS captured for a failed Rewind.
+Return descriptions of every artifact that could not be restored."
+  (let (failures)
+    (dolist (entry backups)
+      (let ((path (plist-get entry :path)))
+        (condition-case err
+            (if (plist-get entry :existed)
+                (progn
+                  (make-directory (file-name-directory path) t)
+                  (copy-file (plist-get entry :backup) path t t t))
+              (when (file-exists-p path)
+                (delete-file path)))
+          (error
+           (push (format "%s (%s)" path (error-message-string err))
+                 failures)))))
+    (nreverse failures)))
 
 (defun mevedel-session-persistence--install-rewind-buffer
     (buffer staging-buffer session target)
@@ -3919,7 +3927,19 @@ bodies, and gptel org tool/reasoning scaffolding to stay consistent with
           (mevedel-session-persistence--rewind-candidate session target))
          (staging-buffer
           (generate-new-buffer " *mevedel-rewind-staging*"))
-         file-backups source-moved published session-installed committed)
+         (original-buffer
+          (generate-new-buffer " *mevedel-rewind-original*"))
+         (original-file-name (buffer-local-value 'buffer-file-name buffer))
+         (original-file-truename
+          (buffer-local-value 'buffer-file-truename buffer))
+         (original-buffer-modified
+          (with-current-buffer buffer (buffer-modified-p)))
+         (original-point (with-current-buffer buffer (point)))
+         (original-turn (mevedel-session-turn-count session))
+         file-backups source-moved published session-installed
+         buffer-install-started committed rollback-failures)
+    (with-current-buffer original-buffer
+      (insert-buffer-substring buffer))
     (unwind-protect
         (progn
           (with-current-buffer staging-buffer
@@ -3956,6 +3976,7 @@ bodies, and gptel org tool/reasoning scaffolding to stay consistent with
           (setq published t)
           (mevedel-session-persistence--copy-session-state candidate session)
           (setq session-installed t)
+          (setq buffer-install-started t)
           (mevedel-session-persistence--install-rewind-buffer
            buffer staging-buffer session target)
           (mevedel-session-persistence--load-instructions
@@ -3971,20 +3992,63 @@ bodies, and gptel org tool/reasoning scaffolding to stay consistent with
           (mevedel-session-persistence--copy-session-state
            original-state session))
         (when published
-          (when (file-directory-p save-path)
-            (delete-directory save-path t))
-          (setq published nil))
+          (condition-case err
+              (progn
+                (when (file-directory-p save-path)
+                  (delete-directory save-path t))
+                (setq published nil))
+            (error
+             (push (format "%s (%s)" save-path (error-message-string err))
+                   rollback-failures))))
         (when source-moved
-          (rename-file rollback-path (directory-file-name save-path)))
+          (condition-case err
+              (rename-file rollback-path (directory-file-name save-path))
+            (error
+             (push (format "%s (%s)" save-path (error-message-string err))
+                   rollback-failures))))
         (when file-backups
-          (mevedel-session-persistence--rollback-restore-files
-           file-backups)))
+          (setq rollback-failures
+                (nconc
+                 rollback-failures
+                 (mevedel-session-persistence--rollback-restore-files
+                  file-backups))))
+        (when buffer-install-started
+          (condition-case err
+              (progn
+                (with-current-buffer buffer
+                  (let ((inhibit-read-only t))
+                    (setq buffer-file-name original-file-name
+                          buffer-file-truename original-file-truename)
+                    (set-visited-file-modtime)
+                    (replace-buffer-contents original-buffer)
+                    (set-buffer-modified-p original-buffer-modified)
+                    (goto-char (min original-point (point-max)))))
+                (mevedel-session-persistence--load-instructions
+                 session buffer original-turn)
+                (when-let* ((view-buffer
+                             (buffer-local-value
+                              'mevedel--view-buffer buffer))
+                            ((buffer-live-p view-buffer)))
+                  (with-current-buffer view-buffer
+                    (mevedel-view--full-rerender))))
+            (error
+             (push (format "%s (%s)"
+                           (buffer-name buffer)
+                           (error-message-string err))
+                   rollback-failures)))))
       (when (buffer-live-p staging-buffer)
         (with-current-buffer staging-buffer
           (set-buffer-modified-p nil))
         (kill-buffer staging-buffer))
-      (when (file-directory-p temporary-root)
-        (delete-directory temporary-root t)))))
+      (when (buffer-live-p original-buffer)
+        (kill-buffer original-buffer))
+      (if rollback-failures
+          (error
+           "Rewind rollback incomplete; inconsistent artifacts: %s; recovery data: %s"
+           (string-join (nreverse rollback-failures) ", ")
+           temporary-root)
+        (when (file-directory-p temporary-root)
+          (delete-directory temporary-root t))))))
 
 (defun mevedel-session-persistence-rewind (buffer target)
   "Rewind BUFFER's session in place to stable assistant TARGET."
@@ -4018,6 +4082,8 @@ bodies, and gptel org tool/reasoning scaffolding to stay consistent with
                     (length prepared)))
               (mevedel-session-persistence--commit-rewind
                session buffer target prepared)
+              (with-current-buffer buffer
+                (mevedel--run-session-start-hooks "rewind"))
               (message "Rewound %s to S%d T%d"
                        (mevedel-session-name session)
                        (plist-get target :segment)
