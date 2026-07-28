@@ -318,11 +318,10 @@ known-safe commands, but they cannot authorize dangerous or complex Bash, live
 Eval, protected resources, or full execution escalation. An ordinary sub-agent
 may request additive or full authority only through the same user-visible queue;
 there is no separate model-visible access-request tool. The main view's
-persistent confinement row shows the default child boundary while idle and the
-actual boundary while a child runs. Concurrent children are summarized without
-hiding a less-confined active dimension, including additive filesystem read and
-write counts. Each Bash or batch-Eval result records the boundary used by that
-call.
+agent row retains durable warnings for materially non-default child access.
+Additional read-only mounts stay silent. Each Bash or batch-Eval result records
+the boundary used by that call, and the agent transcript identifies the
+affected tool.
 
 ## Task status
 

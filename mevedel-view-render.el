@@ -1620,16 +1620,14 @@ Return nil when HEADER is not a `Tool: argument' style line."
             line))))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
-  "Return a durable disclosure line for noteworthy sandbox SUMMARY."
-  (when-let* ((class
-               (and summary
-                    (progn
-                      (require 'mevedel-execution)
-                      (mevedel-execution-sandbox-summary-class summary)))))
+  "Return a durable warning line for material sandbox SUMMARY."
+  (when (and summary
+             (progn
+               (require 'mevedel-execution)
+               (mevedel-execution-sandbox-summary-class summary)))
     (let* ((attempts (or (plist-get summary :attempt-count) 0))
            (started (or (plist-get summary :started-count) 0))
            (refused (or (plist-get summary :refused-count) 0))
-           (reads (or (plist-get summary :additional-read-count) 0))
            (writes (or (plist-get summary :additional-write-count) 0))
            (sandbox (plist-get summary :sandbox))
            (filesystem (plist-get summary :filesystem))
@@ -1638,28 +1636,35 @@ Return nil when HEADER is not a `Tool: argument' style line."
            (all-refused (and (> attempts 0)
                              (= refused attempts)
                              (zerop started)))
-           (warning-p (eq class 'warning))
            details)
       (if all-refused
-          (setq details '("refused" "no child started"))
-        (when (and sandbox (not (eq sandbox 'bubblewrap)))
-          (push (pcase sandbox
-                  ('escalated "escalated")
-                  ('off "sandbox off")
-                  ('unavailable "sandbox unavailable")
-                  ('refused "refused")
-                  (_ (format "sandbox %s" sandbox)))
-                details))
-        (when (and filesystem (not (eq filesystem 'workspace-write)))
-          (push (format "filesystem %s" filesystem) details))
-        (when (and network (not (eq network 'isolated)))
-          (push (format "network %s" network) details))
-        (when (eq proc 'host)
-          (push "proc host" details))
-        (when (> (+ reads writes) 0)
-          (push (format "additional filesystem: %d read, %d write"
-                        reads writes)
-                details))
+          (setq details '("execution refused" "no child started"))
+        (pcase sandbox
+          ('escalated (push "full execution access" details))
+          ('off (push "sandbox disabled · ran without confinement" details))
+          ('unavailable
+           (push "sandbox unavailable · ran without confinement" details))
+          ('refused (push "execution refused" details))
+          ((pred (lambda (value)
+                   (and value (not (eq value 'bubblewrap)))))
+           (push (format "sandbox %s" sandbox) details)))
+        (unless (memq sandbox '(escalated off unavailable))
+          (when (and filesystem (not (eq filesystem 'workspace-write)))
+            (push (pcase filesystem
+                    ('unrestricted "unrestricted filesystem access")
+                    ('unavailable "filesystem confinement unavailable")
+                    (_ (format "filesystem %s" filesystem)))
+                  details))
+          (when (and network (not (eq network 'isolated)))
+            (push (pcase network
+                    ('unrestricted "network access allowed")
+                    ('unavailable "network confinement unavailable")
+                    (_ (format "network %s" network)))
+                  details))
+          (when (eq proc 'host)
+            (push "host /proc access" details))
+          (when (> writes 0)
+            (push "additional filesystem write access" details)))
         (when (< started attempts)
           (push (format "%d %s did not start"
                         (- attempts started)
@@ -1667,20 +1672,14 @@ Return nil when HEADER is not a `Tool: argument' style line."
                             "child"
                           "children"))
                 details))
-        (when (> attempts 1)
-          (push (format "%d executions" attempts) details))
         (setq details (nreverse details)))
       (mevedel-view--operation-line
-       (if warning-p "!" "◇")
-       (if warning-p
-           'mevedel-view-tool-warning
-         'mevedel-view-tool-metadata)
+       "!"
+       'mevedel-view-tool-warning
        "Sandbox:"
        (string-join details " · ")
        nil
-       (if warning-p
-           'mevedel-view-tool-warning
-         'mevedel-view-tool-metadata)))))
+       'mevedel-view-tool-warning))))
 
 (defun mevedel-view--rendering-header-block (rendering)
   "Return RENDERING's header plus any durable sandbox disclosure."

@@ -3569,12 +3569,28 @@
 			 (cdr (mevedel-pipeline-extract-render-data
 			       (plist-get out :result)))
 			 :status))))
-		 :doc "serializes noteworthy sandbox summaries beside existing data"
+		 :doc "omits read-only sandbox summaries beside existing data"
 		 (let* ((summary
 			 '(:attempt-count 1 :started-count 1 :refused-count 0
 			   :sandbox bubblewrap :filesystem workspace-write
 			   :network isolated :proc fresh
 			   :additional-read-count 3 :additional-write-count 0))
+			(ctx (list :result "ok"
+				   :render-data '(:kind helper)
+				   :sandbox-summary-cell (list summary)))
+			out)
+		   (mevedel-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (let ((data (cdr (mevedel-pipeline-extract-render-data
+				  (plist-get out :result)))))
+		     (should (eq 'helper (plist-get data :kind)))
+		     (should-not (plist-member data :sandbox-summary))))
+		 :doc "serializes warning sandbox summaries beside existing data"
+		 (let* ((summary
+			 '(:attempt-count 1 :started-count 1 :refused-count 0
+			   :sandbox bubblewrap :filesystem workspace-write
+			   :network isolated :proc fresh
+			   :additional-read-count 0 :additional-write-count 1))
 			(ctx (list :result "ok"
 				   :render-data '(:kind helper)
 				   :sandbox-summary-cell (list summary)))

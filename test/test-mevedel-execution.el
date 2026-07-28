@@ -686,21 +686,24 @@
     (should (= 1 (plist-get (car cell) :refused-count)))))
 
 (mevedel-deftest mevedel-execution-sandbox-summary-class
-  (:doc "classifies default, read-only, and warning disclosures")
+  (:doc "classifies only material sandbox deviations as warnings")
   (let ((default
          '(:attempt-count 1 :started-count 1 :refused-count 0
            :sandbox bubblewrap :filesystem workspace-write
            :network isolated :proc fresh
            :additional-read-count 0 :additional-write-count 0)))
     (should-not (mevedel-execution-sandbox-summary-class default))
-    (should
-     (eq 'metadata
-         (mevedel-execution-sandbox-summary-class
-          (plist-put (copy-sequence default) :additional-read-count 1))))
+    (should-not
+     (mevedel-execution-sandbox-summary-class
+      (plist-put (copy-sequence default) :additional-read-count 1)))
     (should
      (eq 'warning
          (mevedel-execution-sandbox-summary-class
-          (plist-put (copy-sequence default) :started-count 0))))))
+          (plist-put (copy-sequence default) :started-count 0))))
+    (should
+     (eq 'warning
+         (mevedel-execution-sandbox-summary-class
+          (plist-put (copy-sequence default) :additional-write-count 1))))))
 
 (mevedel-deftest mevedel-execution--agent-sandbox-summary-cell
   (:doc "returns only an invocation's private direct-child aggregation cell")

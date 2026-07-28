@@ -198,7 +198,19 @@
          :network isolated :proc fresh
          :additional-read-count 0 :additional-write-count 0))))
     :sandbox-summary))
-  :doc "keeps a noteworthy sandbox boundary"
+  :doc "omits additional read-only access"
+  (should-not
+   (plist-member
+    (mevedel-view-stream--terminal-render-data
+     '(:facts (:outcome success)
+       :observation
+       (:sandbox-summary
+        (:attempt-count 1 :started-count 1 :refused-count 0
+         :sandbox bubblewrap :filesystem workspace-write
+         :network isolated :proc fresh
+         :additional-read-count 2 :additional-write-count 0))))
+    :sandbox-summary))
+  :doc "keeps a material sandbox boundary"
   (should
    (plist-get
     (mevedel-view-stream--terminal-render-data
@@ -208,7 +220,7 @@
         (:attempt-count 1 :started-count 1 :refused-count 0
          :sandbox bubblewrap :filesystem workspace-write
          :network isolated :proc fresh
-         :additional-read-count 2 :additional-write-count 0))))
+         :additional-read-count 0 :additional-write-count 1))))
     :sandbox-summary)))
 
 (mevedel-deftest mevedel-view-stream-handle-execution-event ()
@@ -305,8 +317,8 @@
                       (:attempt-count 1 :started-count 1 :refused-count 0
                        :sandbox bubblewrap :filesystem workspace-write
                        :network isolated :proc fresh
-                       :additional-read-count 2
-                       :additional-write-count 0))
+                       :additional-read-count 0
+                       :additional-write-count 1))
                     :facts '(:execution-id "exec-000001" :state completed
                              :termination exited :exit-code 0 :outcome success
                              :wall-time-seconds 3.0 :output-bytes 21
@@ -320,16 +332,16 @@
               (should (equal "whole head\nwhole tail"
                              (plist-get (cdr parsed) :execution-output)))
               (should
-               (= 2
+               (= 1
                   (plist-get
                    (plist-get (cdr parsed) :sandbox-summary)
-                   :additional-read-count))))
+                   :additional-write-count))))
             (let ((visible (buffer-substring-no-properties
                             (point-min) (mevedel-view--input-start))))
               (should (string-match-p "whole head" visible))
               (should (string-match-p "whole tail" visible))
               (should (string-match-p
-                       "Sandbox:.*additional filesystem: 2 read, 0 write"
+                       "Sandbox:.*additional filesystem write access"
                        visible))
               (should (string-match-p "completed" visible)))
             (should-not

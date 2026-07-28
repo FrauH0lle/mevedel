@@ -869,7 +869,7 @@
           '(:attempt-count 1 :started-count 1 :refused-count 0
             :sandbox bubblewrap :filesystem workspace-write
             :network isolated :proc fresh
-            :additional-read-count 2 :additional-write-count 0))
+            :additional-read-count 0 :additional-write-count 1))
          (invocation
           (mevedel-agent-invocation--create
            :agent-id "default--summary"
@@ -913,7 +913,7 @@
             '(:attempt-count 1 :started-count 1 :refused-count 0
               :sandbox bubblewrap :filesystem workspace-write
               :network isolated :proc fresh
-              :additional-read-count 2 :additional-write-count 0))
+              :additional-read-count 0 :additional-write-count 1))
            (invocation
             (mevedel-agent-invocation--create
              :agent-id "default--summary"
@@ -950,7 +950,7 @@
           '(:attempt-count 1 :started-count 1 :refused-count 0
             :sandbox bubblewrap :filesystem workspace-write
             :network isolated :proc fresh
-            :additional-read-count 1 :additional-write-count 0))
+            :additional-read-count 0 :additional-write-count 1))
          (invocation
           (mevedel-agent-invocation--create
            :agent-id "default--race"
