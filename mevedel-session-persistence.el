@@ -5056,6 +5056,15 @@ until restore actually reads it."
               :total-turn-count   (plist-get plist :total-turn-count)
               :first-user-message (plist-get plist :first-user-message)
               :latest-user-message (plist-get plist :latest-user-message)
+              :fork-point-ids
+              (cl-loop
+               for segment in (plist-get plist :prompt-index)
+               append
+               (cl-loop
+                for prompt in (cdr segment)
+                for id = (plist-get prompt :fork-point-id)
+                when (stringp id)
+                collect id))
               :working-directory (plist-get plist :working-directory)
               :forked-from-session-id
               (plist-get plist :forked-from-session-id)
@@ -5111,14 +5120,15 @@ entry has a `:variant-origin' of `source', `conversation', or `worktree'."
       (let* ((summary (plist-get entry :summary))
              (id (plist-get summary :session-id))
              origin)
-        (cond
-         ((equal id source-id)
-          (setq origin 'source))
-         ((and (equal source-id
-                      (plist-get summary :forked-from-session-id))
-               (equal fork-point-id
-                      (plist-get summary :forked-from-fork-point-id)))
-          (setq origin (plist-get summary :fork-type))))
+        (when (member fork-point-id (plist-get summary :fork-point-ids))
+          (cond
+           ((equal id source-id)
+            (setq origin 'source))
+           ((and (equal source-id
+                        (plist-get summary :forked-from-session-id))
+                 (equal fork-point-id
+                        (plist-get summary :forked-from-fork-point-id)))
+            (setq origin (plist-get summary :fork-type)))))
         (when (memq origin '(source conversation worktree))
           (setq entry (copy-sequence entry))
           (plist-put entry :variant-origin origin)
@@ -5130,9 +5140,17 @@ entry has a `:variant-origin' of `source', `conversation', or `worktree'."
                   (right-source
                    (eq (plist-get right :variant-origin) 'source)))
               (if (eq left-source right-source)
-                  (string-lessp
-                   (or (plist-get (plist-get left :summary) :created-at) "")
-                   (or (plist-get (plist-get right :summary) :created-at) ""))
+                  (let* ((left-summary (plist-get left :summary))
+                         (right-summary (plist-get right :summary))
+                         (left-created
+                          (or (plist-get left-summary :created-at) ""))
+                         (right-created
+                          (or (plist-get right-summary :created-at) "")))
+                    (if (equal left-created right-created)
+                        (string-lessp
+                         (or (plist-get left-summary :session-id) "")
+                         (or (plist-get right-summary :session-id) ""))
+                      (string-lessp left-created right-created)))
                 left-source))))))
 
 (defun mevedel-session-persistence--format-session-candidate (entry)
@@ -5187,6 +5205,105 @@ CATEGORY is exposed as completion metadata for completion UI integrations."
           (display-sort-function . identity)
           (cycle-sort-function . identity))
       (complete-with-action action displays string pred))))
+
+(defun mevedel-session-persistence-choose-conversation-variant
+    (variants current-session-id)
+  "Choose from ordered VARIANTS, marking CURRENT-SESSION-ID in place."
+  (let* ((candidates
+          (mapcar
+           (lambda (entry)
+             (let* ((summary (plist-get entry :summary))
+                    (id (plist-get summary :session-id))
+                    (origin (plist-get entry :variant-origin))
+                    (cwd (or (plist-get summary :working-directory) "?"))
+                    (normalized-cwd
+                     (and (stringp cwd)
+                          (file-name-as-directory
+                           (expand-file-name cwd))))
+                    (shared-p
+                     (and
+                      normalized-cwd
+                      (> (cl-count
+                          normalized-cwd variants
+                          :test #'equal
+                          :key
+                          (lambda (candidate)
+                            (when-let* ((path
+                                        (plist-get
+                                         (plist-get candidate :summary)
+                                         :working-directory))
+                                       ((stringp path)))
+                              (file-name-as-directory
+                               (expand-file-name path)))))
+                         1)))
+                    (label
+                     (pcase origin
+                       ('source "Source")
+                       ('conversation "Conversation")
+                       ('worktree "Worktree")))
+                    (details
+                     (pcase origin
+                       ('conversation
+                        (if shared-p
+                            " — shared files"
+                          " — independent directory"))
+                       ('worktree
+                        (let* ((worktree
+                                (plist-get summary :worktree-directory))
+                               (branch
+                                (plist-get summary :worktree-branch))
+                               (retargeted
+                                (and
+                                 (stringp worktree)
+                                 (stringp cwd)
+                                 (not
+                                  (equal
+                                   (file-name-as-directory
+                                    (expand-file-name worktree))
+                                   normalized-cwd))))
+                               (missing
+                                (and (stringp worktree)
+                                     (not (file-directory-p worktree))))
+                               (status
+                                (cond
+                                 ((and retargeted missing)
+                                  "retargeted; original missing")
+                                 (retargeted "retargeted")
+                                 (missing "missing")
+                                 (t "active"))))
+                          (format " — branch %s — worktree %s (%s)"
+                                  (or branch "?")
+                                  (or worktree "?")
+                                  status)))
+                       (_ "")))
+                    (preview
+                     (or (plist-get summary :latest-user-message)
+                         (plist-get summary :first-user-message)
+                         ""))
+                    (display
+                     (format "%s%-12s — %s — id %s — cwd %s%s — %s"
+                             (if (equal id current-session-id) "* " "  ")
+                             label
+                             (or (plist-get summary :session-name) "?")
+                             id cwd details preview)))
+               (cons display entry)))
+           variants))
+         (displays (mapcar #'car candidates))
+         (collection
+          (mevedel-session-persistence--ordered-display-collection
+           displays 'mevedel-conversation-variant))
+         (current
+          (cl-find
+           current-session-id candidates
+           :test #'equal
+           :key (lambda (candidate)
+                  (plist-get (plist-get (cdr candidate) :summary)
+                             :session-id))))
+         (chosen
+          (completing-read
+           "Switch variant: " collection nil t nil nil
+           (or (car current) (car displays)))))
+    (cdr (assoc chosen candidates))))
 
 ;;;###autoload
 (defun mevedel-resume ()

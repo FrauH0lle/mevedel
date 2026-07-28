@@ -522,7 +522,48 @@
                    (user-error "Point is not on an assistant response"))))
         (should-error (mevedel-view-arm-conversation-fork)
                       :type 'user-error))
-      (should-not mevedel-view--armed-session-fork))))
+      (should-not mevedel-view--armed-session-fork)))
+  :doc "rejects an inherited point on Child but permits a later response"
+  (mevedel-view-test--with-buffers
+    (let* ((session
+            (mevedel-session--create
+             :name "child"
+             :session-id "child-id"
+             :forked-from-session-id "source-id"
+             :forked-from-fork-point-id "inherited-point"
+             :fork-type 'conversation
+             :current-segment 1))
+           (target
+            '(:fork-point-id "inherited-point"
+              :segment 1 :turn 1 :cum-turn 1)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (goto-char (mevedel-view--input-start))
+        (insert "> child draft\nsecond line")
+        (cl-letf
+            (((symbol-function 'mevedel-view-fork-point-at-point)
+              (lambda () target))
+             ((symbol-function
+               'mevedel-session-persistence--assert-stable-source)
+              #'ignore))
+          (let ((error
+                 (should-error
+                  (mevedel-view-arm-conversation-fork)
+                  :type 'user-error)))
+            (should (string-match-p "Source"
+                                    (error-message-string error))))
+          (should-not mevedel-view--armed-session-fork)
+          (plist-put target :fork-point-id "later-point")
+          (plist-put target :turn 2)
+          (plist-put target :cum-turn 2)
+          (mevedel-view-arm-conversation-fork)
+          (should (equal "later-point"
+                         (plist-get mevedel-view--armed-session-fork
+                                    :fork-point-id)))
+          (should (equal "> child draft\nsecond line"
+                         (mevedel-view--input-text))))))))
 
 (mevedel-deftest mevedel-view-arm-worktree-fork ()
   ,test

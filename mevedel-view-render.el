@@ -64,6 +64,9 @@
 (declare-function mevedel-session-persistence-conversation-variants
                   "mevedel-session-persistence"
                   (session fork-point-id))
+(declare-function mevedel-session-persistence-choose-conversation-variant
+                  "mevedel-session-persistence"
+                  (variants current-session-id))
 (declare-function mevedel-session-persistence-fork-point-at-source
 		  "mevedel-session-persistence"
 		  (buffer source-start source-end))
@@ -4987,7 +4990,9 @@ Signal a user error when point is not on a settled assistant turn."
           (pcase (length alternatives)
             (0 (user-error "No related conversation variant survives"))
             (1 (car alternatives))
-            (_ (user-error "Choose among multiple conversation variants"))))
+            (_
+             (mevedel-session-persistence-choose-conversation-variant
+              variants session-id))))
          (target-data
           (mevedel-session-persistence-restore
            (plist-get target :save-path)))
