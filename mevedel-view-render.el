@@ -1462,11 +1462,15 @@ buffer's font-lock refontification cycles."
 
 (defun mevedel-view--rendering-header-face (rendering)
   "Return the face for RENDERING's visible header line."
-  (if (and (eq (or (plist-get rendering :vtype) 'tool-summary)
-               'agent-handle)
-           (eq (plist-get rendering :agent-status) 'running))
-      'mevedel-view-agent-running
-    'mevedel-view-tool-summary))
+  (cond
+   ((memq (plist-get rendering :status)
+          '(error failed blocked warning))
+    'mevedel-view-tool-warning)
+   ((and (eq (or (plist-get rendering :vtype) 'tool-summary)
+             'agent-handle)
+         (eq (plist-get rendering :agent-status) 'running))
+    'mevedel-view-agent-running)
+   (t 'mevedel-view-tool-summary)))
 
 (defun mevedel-view--buttonize-agent-header-label (line agent-path)
   "Return LINE with its visible AGENT-PATH made clickable.
@@ -1947,17 +1951,29 @@ as generated control markup."
   "Return the non-empty line count for system reminder BODY."
   (length (split-string (or body "") "\n" t "[ \t]+")))
 
+(defun mevedel-view--partial-worktree-fork-reminder-p (body)
+  "Return non-nil when BODY discloses a partial Worktree Fork restore."
+  (and (stringp body)
+       (string-prefix-p "Worktree Fork (partial restoration)" body)))
+
 (defun mevedel-view--system-reminder-summary (data-buf seg-start seg-end)
   "Return collapsed summary for DATA-BUF's SEG-START..SEG-END system reminder."
   (with-current-buffer data-buf
     (let* ((text (buffer-substring-no-properties seg-start seg-end))
            (body (mevedel-view--system-reminder-body-from-text text))
-           (lines (max 1 (mevedel-view--system-reminder-line-count body))))
+           (lines (max 1 (mevedel-view--system-reminder-line-count body)))
+           (partial
+            (mevedel-view--partial-worktree-fork-reminder-p body)))
       (propertize
-       (format "  \u25c7 System reminder (%d %s)"
+       (format (if partial
+                   "  ! Partial Worktree Fork (%d %s)"
+                 "  \u25c7 System reminder (%d %s)")
                lines
                (if (= lines 1) "line" "lines"))
-       'font-lock-face 'mevedel-view-system-reminder))))
+       'font-lock-face
+       (if partial
+           'mevedel-view-tool-warning
+         'mevedel-view-system-reminder)))))
 
 (defun mevedel-view--scaffolding-only-p (data-buf seg-start seg-end)
   "Return non-nil if DATA-BUF region [SEG-START, SEG-END] is org-only glue.
@@ -3736,20 +3752,27 @@ Merges adjacent thinking/reasoning segments into a single summary."
                                      'thinking-summary)))))))
 
 (defun mevedel-view--render-system-reminder-segment (seg data-buf)
-  "Render system-reminder SEG from DATA-BUF as a collapsed control row."
+  "Render system-reminder SEG from DATA-BUF as a control row."
   (let* ((seg-start (cadr seg))
          (seg-end (caddr seg))
+         (source (cons seg-start seg-end))
+         (body
+          (with-current-buffer data-buf
+            (mevedel-view--system-reminder-body-from-text
+             (buffer-substring-no-properties seg-start seg-end))))
+         (partial
+          (mevedel-view--partial-worktree-fork-reminder-p body))
          (summary (mevedel-view--system-reminder-summary
                    data-buf seg-start seg-end)))
     (mevedel-view--insert-activity-rule-after-response)
-    (mevedel-view--insert-summary-region
-     summary
-     `(mevedel-view-type system-reminder-summary
-       mevedel-view-collapsed t
-       mevedel-view-source ,(cons seg-start seg-end)
-       mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
-                                 (cons seg-start seg-end)
-                                 'system-reminder-summary)))))
+    (mevedel-view--insert-rendered-tool
+     (list :header summary
+           :body body
+           :body-mode 'markdown-mode
+           :vtype 'system-reminder-summary
+           :status (and partial 'warning)
+           :initially-collapsed-p (not partial))
+     source)))
 
 (defun mevedel-view--request-summary-line (render-data)
   "Return the visible request summary line for RENDER-DATA."
