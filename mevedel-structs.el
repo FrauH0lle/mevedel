@@ -249,6 +249,10 @@ workspace."
   forked-from-turn  ; integer or nil: parent's turn number at fork point
   fork-type         ; conversation, worktree, or nil
   forked-from-fork-point-id ; string or nil: stable parent response identity
+  worktree-source-root ; original Git worktree root for path retargeting
+  worktree-directory ; originally allocated linked-worktree directory
+  worktree-branch   ; generated branch name for a Worktree Fork
+  worktree-base-commit ; full HEAD commit used to create a Worktree Fork
   prompt-index      ; alist: (segment-number . list of prompt plists) for picker
   file-snapshots    ; alist: (turn-number . file-map alist) for file-history restore
   ;; Sub-agent transcript index.  Alist of

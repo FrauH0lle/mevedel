@@ -74,6 +74,8 @@ the rewind picker and latest resume preview), `:file-snapshots` (per-turn map
 of tracked files to backup names), workspace identity, `:working-directory`,
 fork lineage (`:fork-type`, `:forked-from-session-id`,
 `:forked-from-turn`, and `:forked-from-fork-point-id`), and
+Worktree Fork origin (`:worktree-source-root`, `:worktree-directory`,
+`:worktree-branch`, and `:worktree-base-commit`), and
 `:agent-transcripts` presentation metadata and the explicit `:agent-registry`
 containing retained paths, frozen configurations, activity, mailboxes, and
 conversation locations. It also records `:preset-name` and the resolved
@@ -255,11 +257,12 @@ clear them with `C-c C-q` before a destructive transcript operation.
 
 ### Fork
 
-`f` in the session cockpit arms a Conversation Fork from the settled
-assistant response at point and focuses the existing composer draft. The
-interaction row identifies the assistant turn; `[Cancel]` or `C-c C-k`
-disarms it without changing the draft. An empty prompt, a local command, a
-failed syntax or mention preflight, or cancellation creates no child.
+`f` in the session cockpit arms a Conversation Fork and `F` arms a Worktree
+Fork from the settled assistant response at point. Both focus the existing
+composer draft. The interaction row identifies the assistant turn and fork
+type; `[Cancel]` or `C-c C-k` disarms it without changing the draft. An empty
+prompt, a local command, a failed syntax or mention preflight, or cancellation
+creates no child.
 
 The next preflight-valid model-bound submission publishes an ordinary child
 session whose transcript ends at the selected response. Child then emits
@@ -272,6 +275,16 @@ Source working directory and restores no files,
 so Conversation Fork also works outside Git. A durable system-reminder
 disclosure tells both the user and model that current files may be newer than
 the conversation point and that file changes are shared with Source.
+
+Worktree Fork requires a supported Git checkout. It creates a linked worktree
+at the Source checkout's current `HEAD`, restores captured repository-local
+files from the selected turn before the first prompt, and retargets copied
+repository-local snapshot, permission, grant, and mention paths to the child
+checkout. Uncaptured files retain their `HEAD` contents, uncommitted Source
+changes are not copied, and captured external paths remain shared. The durable
+disclosure records the worktree path, branch, base commit, restored-file count,
+and those uncaptured-file semantics. Failure outside Git never falls back to
+Conversation Fork.
 
 The common fork projection copies current model, preset, effort, mode,
 permission, skill, reminder, and hook configuration into independent
@@ -286,6 +299,9 @@ Conversation children use the first unused direct-child name
 `<source> · conversation N`, receive a normal unique session ID, and can be
 renamed with `mevedel-rename-session`. Their sidecars retain the Source session
 ID, cumulative fork turn, stable fork-point ID, and `conversation` fork type.
+Worktree children independently use `<source> · worktree N`; their branch and
+directory use the first suffix unused by either Git or the workspace's
+`.worktrees/` directory.
 
 Renaming a materialized session preserves live execution ownership. Retained
 artifact paths are retargeted immediately after the session directory moves,

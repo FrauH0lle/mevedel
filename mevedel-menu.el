@@ -148,6 +148,8 @@
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
 (declare-function mevedel-view-arm-conversation-fork
                   "mevedel-view-composer" ())
+(declare-function mevedel-view-arm-worktree-fork
+		  "mevedel-view-composer" ())
 (declare-function mevedel-view-send "mevedel-view-composer" ())
 
 ;; `mevedel-view'
@@ -670,6 +672,12 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-view-arm-conversation-fork))
 
+(defun mevedel-menu--fork-worktree-here ()
+  "Arm a Worktree Fork at point in the paired view buffer."
+  (interactive)
+  (mevedel-cockpit-call-in-view
+   (mevedel-menu--context) #'mevedel-view-arm-worktree-fork))
+
 (defun mevedel-menu--compact ()
   "Compact the current data buffer."
   (interactive)
@@ -872,6 +880,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
    ["Navigate"
     :pad-keys t
     ("f" "Fork conversation" mevedel-menu--fork-conversation-here)
+    ("F" "Fork worktree" mevedel-menu--fork-worktree-here)
     ("R" "Rewind here" mevedel-menu--rewind-here)
     ("n" "Next display"
      (lambda () (interactive)

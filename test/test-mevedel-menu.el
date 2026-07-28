@@ -916,6 +916,20 @@
           (mevedel-menu--fork-conversation-here))
         (should (eq called-buffer view-buf))))))
 
+(mevedel-deftest mevedel-menu--fork-worktree-here ()
+  ,test
+  (test)
+  :doc "Worktree Fork arming runs in the paired view buffer"
+  (mevedel-menu-test--with-buffers
+    (let (called-buffer)
+      (cl-letf (((symbol-function 'mevedel-view-arm-worktree-fork)
+                 (lambda ()
+                   (interactive)
+                   (setq called-buffer (current-buffer)))))
+        (with-current-buffer data-buf
+          (mevedel-menu--fork-worktree-here))
+        (should (eq called-buffer view-buf))))))
+
 (mevedel-deftest mevedel-menu--compact ()
   ,test
   (test)

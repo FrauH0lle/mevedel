@@ -524,6 +524,49 @@
                       :type 'user-error))
       (should-not mevedel-view--armed-session-fork))))
 
+(mevedel-deftest mevedel-view-arm-worktree-fork ()
+  ,test
+  (test)
+  :doc "preflights Git and arms the exact settled turn as a Worktree Fork"
+  (mevedel-view-test--with-buffers
+    (let ((session
+           (mevedel-session--create
+            :name "source"
+            :session-id "source-id"
+            :current-segment 1))
+          (target
+           '(:fork-point-id "stable-2" :segment 1 :turn 2 :cum-turn 2))
+          preflight)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (goto-char (mevedel-view--input-start))
+        (insert "draft")
+        (cl-letf
+            (((symbol-function 'mevedel-view-fork-point-at-point)
+              (lambda () target))
+             ((symbol-function
+               'mevedel-session-persistence--assert-stable-source)
+              #'ignore)
+             ((symbol-function 'mevedel-worktree-fork-preflight)
+              (lambda (candidate)
+                (setq preflight candidate)
+                '(:base-commit "abc123"))))
+          (mevedel-view-arm-worktree-fork))
+        (should (eq session preflight))
+        (should (eq 'worktree
+                    (plist-get mevedel-view--armed-session-fork
+                               :fork-type)))
+        (should (equal "draft" (mevedel-view--input-text)))
+        (should
+         (string-match-p
+          "Fork worktree from Assistant turn 2"
+          (plist-get
+           (gethash 'armed-session-fork
+                    mevedel-view--interaction-descriptors)
+           :body)))))))
+
 (mevedel-deftest mevedel-view-send/conversation-fork ()
   ,test
   (test)
@@ -533,7 +576,8 @@
            (child-data (generate-new-buffer " *fork-child-data*"))
            (child-view (generate-new-buffer " *fork-child-view*"))
            (target
-            '(:fork-point-id "stable-1" :segment 1 :turn 1 :cum-turn 1))
+            '(:fork-point-id "stable-1" :segment 1 :turn 1 :cum-turn 1
+              :fork-type conversation))
            (attachment "/tmp/fork-attachment.txt")
            (draft (format "> exact\nplease summarize @file:%s"
                           attachment))
@@ -586,7 +630,8 @@
   :doc "materialization failure preserves Source draft, grants, and armed point"
   (mevedel-view-test--with-source-skills nil
     (let ((target
-           '(:fork-point-id "stable-1" :segment 1 :turn 1 :cum-turn 1))
+           '(:fork-point-id "stable-1" :segment 1 :turn 1 :cum-turn 1
+             :fork-type conversation))
           (attachment "/tmp/fork-failure.txt"))
       (with-current-buffer view-buf
         (setq-local mevedel-view--armed-session-fork target)
@@ -612,7 +657,8 @@
   :doc "failed prompt preflight does not publish a Child"
   (mevedel-view-test--with-source-skills nil
     (let ((target
-           '(:fork-point-id "stable-1" :segment 1 :turn 1 :cum-turn 1))
+           '(:fork-point-id "stable-1" :segment 1 :turn 1 :cum-turn 1
+             :fork-type conversation))
           materialized)
       (with-current-buffer view-buf
         (setq-local mevedel-view--armed-session-fork target)
@@ -630,7 +676,47 @@
         (should-not materialized)
         (should (equal target mevedel-view--armed-session-fork))
         (should (equal "invalid skill input"
-                       (mevedel-view--input-text)))))))
+                       (mevedel-view--input-text))))))
+
+  :doc "dispatches an armed Worktree Fork through its materializer"
+  (mevedel-view-test--with-source-skills nil
+    (let* ((child-session (mevedel-session-create "child" ws))
+           (child-data (generate-new-buffer " *worktree-child-data*"))
+           (child-view (generate-new-buffer " *worktree-child-view*"))
+           (target
+            '(:fork-point-id "stable-1" :segment 1 :turn 1 :cum-turn 1
+              :fork-type worktree))
+           called)
+      (unwind-protect
+          (progn
+            (with-current-buffer child-data
+              (org-mode)
+              (setq-local mevedel--session child-session
+                          mevedel--workspace ws))
+            (mevedel-view--setup child-view child-data)
+            (with-current-buffer view-buf
+              (setq-local mevedel-view--armed-session-fork target)
+              (goto-char (mevedel-view--input-start))
+              (insert "continue here")
+              (cl-letf
+                  (((symbol-function
+                     'mevedel-session-persistence-worktree-fork)
+                    (lambda (buffer fork-target)
+                      (setq called (list buffer fork-target))
+                      child-data))
+                   ((symbol-function
+                     'mevedel-session-persistence-conversation-fork)
+                    (lambda (&rest _)
+                      (ert-fail "Conversation materializer called")))
+                   ((symbol-function 'mevedel-view--submit-planned-input)
+                    #'ignore))
+                (mevedel-view-send)))
+            (should (equal (list data-buf target) called)))
+        (dolist (buffer (list child-view child-data))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (set-buffer-modified-p nil))
+            (kill-buffer buffer)))))))
 
 (mevedel-deftest mevedel-view-refresh-input-prompt
   (:doc "updates the prompt prefix without disturbing draft input")

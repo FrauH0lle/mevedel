@@ -840,6 +840,106 @@ branch-name grammar before any mutating Git command runs."
   "Return the final path component for BRANCH."
   (file-name-nondirectory (directory-file-name branch)))
 
+(defun mevedel-worktree-fork-preflight (session)
+  "Return immutable Git context for a Worktree Fork of SESSION."
+  (let* ((source-directory
+          (file-name-as-directory
+           (expand-file-name
+            (mevedel-session-working-directory session))))
+         (inside
+          (mevedel-worktree--git-success-output
+           source-directory "rev-parse" "--is-inside-work-tree"))
+         (repo-root
+          (mevedel-worktree--git-success-output
+           source-directory "rev-parse" "--show-toplevel"))
+         (base-commit
+          (mevedel-worktree--git-success-output
+           source-directory "rev-parse" "HEAD"))
+         (common-dir
+          (mevedel-worktree--git-success-output
+           source-directory "rev-parse" "--git-common-dir"))
+         (superproject
+          (mevedel-worktree--git-success-output
+           source-directory "rev-parse" "--show-superproject-working-tree")))
+    (unless (and (string= inside "true") repo-root)
+      (user-error
+       "Worktree Fork requires a supported Git repository; use Conversation Fork to share the current files"))
+    (unless base-commit
+      (user-error "Worktree Fork requires an existing HEAD commit"))
+    (when (and superproject (not (string-empty-p superproject)))
+      (user-error "Worktree Fork does not support submodules"))
+    (list
+     :source-directory source-directory
+     :source-root (file-name-as-directory (expand-file-name repo-root))
+     :workspace-root
+     (file-name-as-directory
+      (expand-file-name
+       (mevedel-workspace-root (mevedel-session-workspace session))))
+     :common-git-dir
+     (mevedel-worktree--expand-git-path common-dir source-directory)
+     :base-commit base-commit)))
+
+(defun mevedel-worktree-fork-reservation (session &optional preflight)
+  "Return the first free branch and directory reservation for SESSION."
+  (let* ((preflight (or preflight
+                        (mevedel-worktree-fork-preflight session)))
+         (source-directory (plist-get preflight :source-directory))
+         (workspace-root (plist-get preflight :workspace-root))
+         (slug (mevedel-worktree--slugify
+                (mevedel-session-name session)))
+         (number 1)
+         branch directory)
+    (while
+        (progn
+          (setq branch (format "worktree/%s-fork-%d" slug number)
+                directory
+                (file-name-as-directory
+                 (file-name-concat
+                  workspace-root ".worktrees"
+                  (format "%s-fork-%d" slug number))))
+          (if (or (file-exists-p directory)
+                  (eq 0
+                      (mevedel-worktree--git-exit
+                       source-directory "show-ref" "--verify" "--quiet"
+                       (concat "refs/heads/" branch))))
+              (progn
+                (cl-incf number)
+                t)
+            nil)))
+    (append (copy-sequence preflight)
+            (list :branch branch :directory directory))))
+
+(defun mevedel-worktree-fork-create (reservation)
+  "Create the linked worktree described by RESERVATION."
+  (let ((source-directory (plist-get reservation :source-directory))
+        (directory (plist-get reservation :directory))
+        (branch (plist-get reservation :branch))
+        (base-commit (plist-get reservation :base-commit)))
+    (make-directory (file-name-directory
+                     (directory-file-name directory))
+                    t)
+    (mevedel-worktree--ensure-local-exclude
+     (plist-get reservation :common-git-dir))
+    (let ((result
+           (mevedel-worktree--git-result
+            source-directory
+            "worktree" "add" "-b" branch directory base-commit)))
+      (unless (eq 0 (plist-get result :exit))
+        (user-error "Git worktree add failed for %s at %s: %s"
+                    branch directory (plist-get result :output))))
+    reservation))
+
+(defun mevedel-worktree-fork-rollback (reservation)
+  "Remove Git artifacts created for RESERVATION."
+  (let ((source-directory (plist-get reservation :source-directory))
+        (directory (plist-get reservation :directory))
+        (branch (plist-get reservation :branch)))
+    (when (file-exists-p directory)
+      (mevedel-worktree--git-result
+       source-directory "worktree" "remove" "--force" directory))
+    (mevedel-worktree--git-result
+     source-directory "branch" "-D" branch)))
+
 (defun mevedel-worktree--ensure-local-exclude (common-git-dir)
   "Ensure `/.worktrees/' is listed in COMMON-GIT-DIR/info/exclude."
   (unless (and common-git-dir (file-directory-p common-git-dir))
