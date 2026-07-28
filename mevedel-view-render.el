@@ -56,6 +56,11 @@
 (declare-function mevedel-review-strip-user-action-blocks
 		  "mevedel-review" (text))
 
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-fork-point-at-source
+		  "mevedel-session-persistence"
+		  (buffer source-start source-end))
+
 ;; `mevedel-structs'
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x)
 		  t)
@@ -4813,6 +4818,25 @@ restore the turn with all inner section state intact.  Signals a
               (delete-region (car bounds) (cdr bounds))
               (insert stash))
           (set-marker-insertion-type mevedel-view--input-marker nil))))))
+
+(defun mevedel-view-fork-point-at-point ()
+  "Return the stable assistant fork point at point.
+
+Signal a user error when point is not on a settled assistant turn."
+  (let* ((bounds (mevedel-view--turn-bounds))
+         (role (and bounds
+                    (get-text-property
+                     (car bounds) 'mevedel-view-turn-role)))
+         (source (and bounds
+                      (get-text-property
+                       (car bounds) 'mevedel-view-source))))
+    (unless (and (eq role 'assistant)
+                 (consp source)
+                 (buffer-live-p mevedel--data-buffer))
+      (user-error "Point is not on an assistant response"))
+    (or (mevedel-session-persistence-fork-point-at-source
+         mevedel--data-buffer (car source) (cdr source))
+        (user-error "Assistant response is not a settled fork point"))))
 
 
 ;;

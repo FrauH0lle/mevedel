@@ -45,7 +45,15 @@
   "Return hook audit records parsed from TEXT.
 When TYPE is non-nil, return only records with matching `:type'."
   (require 'mevedel-transcript-audit)
-  (mevedel-transcript-audit-records text type))
+  (let ((records (mevedel-transcript-audit-records text type)))
+    (if type
+        records
+      (delq nil
+            (mapcar
+             (lambda (record)
+               (unless (eq (plist-get record :type) 'fork-point)
+                 record))
+             records)))))
 
 (defun mevedel-view--hook-audit-key (record)
   "Return RECORD without view-local source metadata."

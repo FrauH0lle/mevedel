@@ -40,7 +40,8 @@
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence" (session buffer))
+                  "mevedel-session-persistence"
+                  (session buffer &optional settled))
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session--save-failed)
 
@@ -168,7 +169,8 @@
                  (not (bound-and-true-p mevedel-session--read-only-mode)))
         (condition-case err
             (progn
-              (mevedel-session-persistence-save mevedel--session chat-buffer)
+              (mevedel-session-persistence-save
+               mevedel--session chat-buffer t)
               (when (bound-and-true-p mevedel-session--save-failed)
                 (setq mevedel-session--save-failed nil)
                 (force-mode-line-update)))

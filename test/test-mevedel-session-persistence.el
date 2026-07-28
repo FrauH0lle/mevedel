@@ -1793,6 +1793,69 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
 (mevedel-deftest mevedel-session-persistence-save ()
   ,test
   (test)
+  :doc "assigns stable fork-point identity only to settled responses"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf (generate-new-buffer "*test-fork-point-save*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (insert "First prompt\n")
+                (insert (propertize "First response\n" 'gptel 'response))
+                (mevedel-session-persistence-save session buf)
+                (should-not
+                 (plist-get
+                  (car (cdr (assoc 1
+                                   (mevedel-session-prompt-index session))))
+                  :fork-point-id))
+                (mevedel-session-persistence-save session buf t)
+                (let* ((entry
+                        (car (cdr (assoc
+                                   1
+                                   (mevedel-session-prompt-index session)))))
+                       (fork-point-id (plist-get entry :fork-point-id)))
+                  (should (stringp fork-point-id))
+                  (should-not (string-empty-p fork-point-id))
+                  (should
+                   (mevedel-transcript-audit-records
+                    (buffer-string) 'fork-point))
+                  (mevedel-session-persistence-save session buf t)
+                  (should
+                   (equal
+                    fork-point-id
+                    (plist-get
+                     (car (cdr (assoc
+                                1
+                                (mevedel-session-prompt-index session))))
+                     :fork-point-id)))
+                  (let* ((sidecar
+                          (mevedel-session-persistence-read
+                           (mevedel-session-persistence--sidecar-path
+                            (mevedel-session-save-path session))))
+                         (persisted
+                          (car (cdr (assoc
+                                     1
+                                     (plist-get sidecar :prompt-index))))))
+                    (should
+                     (equal fork-point-id
+                            (plist-get persisted :fork-point-id))))
+                  (erase-buffer)
+                  (insert "First prompt\n")
+                  (insert (propertize "First response\n" 'gptel 'response))
+                  (mevedel-session-persistence-save session buf t)
+                  (should-not
+                   (equal
+                    fork-point-id
+                    (plist-get
+                     (car (cdr (assoc
+                                1
+                                (mevedel-session-prompt-index session))))
+                     :fork-point-id)))))
+            (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
   :doc "advances updated-at across saves"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
