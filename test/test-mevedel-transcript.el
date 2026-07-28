@@ -80,6 +80,28 @@
         (should (eq 'user (caar segs)))
         (should (eq 'response (caadr segs))))))
 
+  :doc "restores a prompt hidden by stale ignore bounds after a fork point"
+  (mevedel-transcript-test--with-buffer
+    (mevedel-transcript-test--insert data-buf "First answer.\n" 'response)
+    (mevedel-transcript-test--insert
+     data-buf
+     (substring-no-properties
+      (mevedel--format-hook-audit-record
+       '(:type fork-point :fork-point-id "fork-1")))
+     'ignore)
+    (mevedel-transcript-test--insert data-buf "\nSecond prompt.\n\n" 'ignore)
+    (mevedel-transcript-test--insert
+     data-buf "#+begin_reasoning\nThinking.\n#+end_reasoning\n" 'ignore)
+    (mevedel-transcript-test--insert data-buf "Second answer.\n" 'response)
+    (with-current-buffer data-buf
+      (let ((segs (mevedel-transcript-segments (point-min) (point-max))))
+        (should (equal '(response ignored user reasoning response)
+                       (mapcar #'car segs)))
+        (should (string-match-p
+                 "Second prompt"
+                 (buffer-substring-no-properties
+                  (cadr (caddr segs)) (caddr (caddr segs))))))))
+
   :doc "response + tool + response segments"
   (mevedel-transcript-test--with-buffer
     (mevedel-transcript-test--insert data-buf "Some response\n" 'response)
