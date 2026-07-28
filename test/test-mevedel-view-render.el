@@ -450,7 +450,11 @@
           (should (search-forward "[⇆ Source · 2 variants]" nil t))
           (should (functionp
                    (get-text-property
-                    (1- (point)) 'mevedel-view-zone-activate))))))))
+                    (1- (point)) 'mevedel-view-zone-activate)))
+          (setq variants (list (car variants)))
+          (mevedel-view--full-rerender)
+          (goto-char (point-min))
+          (should-not (search-forward "variants]" nil t)))))))
 
 (mevedel-deftest mevedel-view-switch-conversation-variant ()
   ,test
@@ -549,6 +553,64 @@
               (should (equal "/worktree/"
                              (mevedel-session-working-directory
                               target-session)))))
+        (when (buffer-live-p target-view)
+          (kill-buffer target-view))
+        (when (buffer-live-p target-data)
+          (kill-buffer target-data)))))
+  :doc "opens the stable chooser when more than one alternative survives"
+  (mevedel-view-test--with-buffers
+    (let* ((session
+            (mevedel-session--create
+             :name "source"
+             :session-id "source-id"
+             :save-path "/sessions/source/"))
+           (target-data (generate-new-buffer " *test-choice-data*"))
+           (target-view (generate-new-buffer " *test-choice-view*"))
+           (variants
+            '((:save-path "/sessions/source/"
+               :variant-origin source
+               :summary (:session-id "source-id"))
+              (:save-path "/sessions/child-1/"
+               :variant-origin conversation
+               :summary (:session-id "child-1"))
+              (:save-path "/sessions/child-2/"
+               :variant-origin worktree
+               :summary (:session-id "child-2"))))
+           chosen)
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer target-data
+              (setq-local mevedel--session
+                          (mevedel-session--create
+                           :name "target"
+                           :session-id "child-2"))
+              (setq-local mevedel--view-buffer target-view))
+            (with-current-buffer target-view
+              (setq-local mevedel--data-buffer target-data))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session)
+              (cl-letf
+                  (((symbol-function
+                     'mevedel-session-persistence-conversation-variants)
+                    (lambda (&rest _) variants))
+                   ((symbol-function
+                     'mevedel-session-persistence-choose-conversation-variant)
+                    (lambda (choices current-id)
+                      (setq chosen (list choices current-id))
+                      (car (last choices))))
+                   ((symbol-function 'mevedel-session-persistence-restore)
+                    (lambda (_save-path) target-data))
+                   ((symbol-function 'mevedel-view--full-rerender)
+                    #'ignore)
+                   ((symbol-function
+                     'mevedel-view-goto-conversation-variant)
+                    #'ignore)
+                   ((symbol-function 'display-buffer)
+                    #'ignore))
+                (mevedel-view-switch-conversation-variant "fork-point-1")))
+            (should (equal (list variants "source-id") chosen)))
         (when (buffer-live-p target-view)
           (kill-buffer target-view))
         (when (buffer-live-p target-data)

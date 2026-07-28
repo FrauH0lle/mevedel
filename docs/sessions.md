@@ -318,8 +318,21 @@ Once a Fork exists, the shared assistant header shows a text switch such as
 `[⇆ Worktree · 2 variants]`.  It remains available when the turn is folded.
 With one alternative, `RET` or `mouse-1` opens it directly through the normal
 session restore path and positions its view at the same stable fork point.
-Switching redraws only source-backed history; each owning view keeps its
-composer draft and the sessions keep their working directories.
+With several alternatives, the same action opens a stable chooser ordered
+Source first and then direct Forks oldest to newest. It marks the current
+session without moving it and shows each session identity, working directory,
+latest prompt, sharing status, and Worktree branch/recovery state. Switching
+redraws only source-backed history; each owning view keeps its composer draft
+and the sessions keep their working directories.
+
+A fork-point group is a star discovered from persisted Source identity plus
+stable fork-point identity; Source stores no child list. A Child cannot fork
+its inherited response again and is directed back to Source, but a later Child
+response can become the Source of a separate group. Deleted, expired, or
+rewound-past variants disappear independently. If Source disappears or no
+longer contains the exact stable point, surviving direct Children remain a
+detached sibling group and Source is omitted. Reusing a descriptive turn number
+cannot reconnect that group.
 
 Arming `F` reserves that exact branch and directory. Forking from an existing
 linked worktree creates a sibling under the workspace's `.worktrees/` directory

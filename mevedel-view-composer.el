@@ -228,6 +228,8 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-enqueue-pending-input
                   "mevedel-structs" (session category entry))
+(declare-function mevedel-session-forked-from-fork-point-id
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-hook-context-pending
 		  "mevedel-structs" (cl-x) t)
@@ -558,6 +560,11 @@ composer body.")
          (label (if (eq fork-type 'worktree) "worktree" "conversation"))
          reservation)
     (require 'mevedel-session-persistence)
+    (when (equal
+           (plist-get target :fork-point-id)
+           (mevedel-session-forked-from-fork-point-id session))
+      (user-error
+       "Fork the inherited response from Source; switch variants first"))
     (mevedel-session-persistence--assert-stable-source
      session mevedel--data-buffer "forking")
     (when (eq fork-type 'worktree)

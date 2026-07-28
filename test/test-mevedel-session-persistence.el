@@ -6586,19 +6586,45 @@ The result is a plist whose :tempdir owns every created file."
          (source (mevedel-session-create "source" workspace))
          (child (mevedel-session-create "child" workspace))
          (source-entry
-          '(:save-path "/sessions/source/"
-            :summary (:session-id "source-id"
-                      :session-name "source"
-                      :created-at "2026-07-01T10:00:00+0200")))
+          (copy-tree
+           '(:save-path "/sessions/source/"
+             :summary (:session-id "source-id"
+                       :session-name "source"
+                       :created-at "2026-07-01T10:00:00+0200"
+                       :fork-point-ids ("fork-point-1")
+                       :working-directory "/repo/"))))
          (child-entry
           '(:save-path "/sessions/child/"
             :summary (:session-id "child-id"
                       :session-name "child"
                       :created-at "2026-07-01T10:01:00+0200"
+                      :fork-point-ids ("fork-point-1" "later-point")
+                      :working-directory "/repo/"
                       :forked-from-session-id "source-id"
                       :forked-from-fork-point-id "fork-point-1"
                       :fork-type conversation)))
-         (entries (list child-entry source-entry)))
+         (worktree-entry
+          '(:save-path "/sessions/worktree/"
+            :summary (:session-id "worktree-id"
+                      :session-name "worktree"
+                      :created-at "2026-07-01T10:02:00+0200"
+                      :fork-point-ids ("fork-point-1")
+                      :working-directory "/repo/.worktrees/fork/"
+                      :forked-from-session-id "source-id"
+                      :forked-from-fork-point-id "fork-point-1"
+                      :fork-type worktree)))
+         (grandchild-entry
+          '(:save-path "/sessions/grandchild/"
+            :summary (:session-id "grandchild-id"
+                      :session-name "grandchild"
+                      :created-at "2026-07-01T10:03:00+0200"
+                      :fork-point-ids ("later-point")
+                      :working-directory "/repo/"
+                      :forked-from-session-id "child-id"
+                      :forked-from-fork-point-id "later-point"
+                      :fork-type conversation)))
+         (entries
+          (list grandchild-entry worktree-entry child-entry source-entry)))
     (unwind-protect
         (progn
           (setf (mevedel-session-session-id source) "source-id"
@@ -6617,19 +6643,115 @@ The result is a plist whose :tempdir owns every created file."
               (let ((variants
                      (mevedel-session-persistence-conversation-variants
                       session "fork-point-1")))
-                (should (equal '("source-id" "child-id")
+                (should (equal '("source-id" "child-id" "worktree-id")
                                (mapcar
                                 (lambda (entry)
                                   (plist-get
                                    (plist-get entry :summary)
                                    :session-id))
                                 variants)))
-                (should (equal '(source conversation)
+                (should (equal '(source conversation worktree)
                                (mapcar
                                 (lambda (entry)
                                   (plist-get entry :variant-origin))
-                                variants)))))))
+                                variants)))))
+            ;; Forking a later Child response makes that Child the Source of
+            ;; an independent group; inherited lineage is not flattened.
+            (let ((later
+                   (mevedel-session-persistence-conversation-variants
+                    child "later-point")))
+              (should
+               (equal '("child-id" "grandchild-id")
+                      (mapcar
+                       (lambda (entry)
+                         (plist-get (plist-get entry :summary) :session-id))
+                       later)))
+              (should
+               (equal '(source conversation)
+                      (mapcar
+                       (lambda (entry)
+                         (plist-get entry :variant-origin))
+                       later))))
+            ;; Rewind detaches Source by removing the stable point, but the
+            ;; surviving direct Children remain a sibling group.
+            (plist-put (plist-get source-entry :summary)
+                       :fork-point-ids '("different-point"))
+            (should
+             (equal '("child-id" "worktree-id")
+                    (mapcar
+                     (lambda (entry)
+                       (plist-get (plist-get entry :summary) :session-id))
+                     (mevedel-session-persistence-conversation-variants
+                      child "fork-point-1"))))
+            ;; Removing a sibling removes only that entry and the affordance
+            ;; naturally disappears when the current session is alone.
+            (setq entries (list child-entry))
+            (should
+             (equal '("child-id")
+                    (mapcar
+                     (lambda (entry)
+                       (plist-get (plist-get entry :summary) :session-id))
+                     (mevedel-session-persistence-conversation-variants
+                      child "fork-point-1"))))))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-persistence-choose-conversation-variant ()
+  ,test
+  (test)
+  :doc "shows stable rich entries and marks the current variant without moving it"
+  (let* ((source
+          '(:save-path "/sessions/source/"
+            :variant-origin source
+            :summary (:session-id "source-id"
+                      :session-name "source"
+                      :working-directory "/repo/"
+                      :latest-user-message "original prompt")))
+         (conversation
+          '(:save-path "/sessions/conversation/"
+            :variant-origin conversation
+            :summary (:session-id "conversation-id"
+                      :session-name "conversation"
+                      :working-directory "/repo/"
+                      :latest-user-message "shared prompt")))
+         (worktree
+          '(:save-path "/sessions/worktree/"
+            :variant-origin worktree
+            :summary (:session-id "worktree-id"
+                      :session-name "worktree"
+                      :working-directory "/replacement/"
+                      :latest-user-message "isolated prompt"
+                      :worktree-directory "/missing-worktree/"
+                      :worktree-branch "worktree/source-fork-1")))
+         displays)
+    (cl-letf
+        (((symbol-function 'completing-read)
+          (lambda (_prompt collection &rest _)
+            (setq displays (all-completions "" collection))
+            (car (last displays)))))
+      (should
+       (eq worktree
+           (mevedel-session-persistence-choose-conversation-variant
+            (list source conversation worktree) "worktree-id"))))
+    (should (string-prefix-p "  Source" (nth 0 displays)))
+    (should (string-match-p "/repo/" (nth 0 displays)))
+    (should (string-prefix-p "  Conversation" (nth 1 displays)))
+    (should (string-match-p "shared files" (nth 1 displays)))
+    (should (string-match-p "shared prompt" (nth 1 displays)))
+    (should (string-prefix-p "* Worktree" (nth 2 displays)))
+    (should (string-match-p "worktree/source-fork-1" (nth 2 displays)))
+    (should (string-match-p "retargeted; original missing"
+                            (nth 2 displays)))
+    (should (string-match-p "isolated prompt" (nth 2 displays)))
+    (plist-put (plist-get conversation :summary)
+               :working-directory "/other/")
+    (cl-letf
+        (((symbol-function 'completing-read)
+          (lambda (_prompt collection &rest _)
+            (setq displays (all-completions "" collection))
+            (car displays))))
+      (mevedel-session-persistence-choose-conversation-variant
+       (list source conversation worktree) "source-id"))
+    (should (string-match-p "independent directory" (nth 1 displays)))))
 
 (mevedel-deftest mevedel-session-persistence--read-summary ()
   ,test
@@ -6645,12 +6767,20 @@ The result is a plist whose :tempdir owns every created file."
               :session-id "demo-1234"
               :updated-at "2026-04-23T12-00-00"
               :first-user-message "Hello"
-              :latest-user-message "Latest")))
+              :latest-user-message "Latest"
+              :prompt-index
+              ((1 . ((:turn 1 :file-turn 1 :cum-turn 1
+                      :fork-point-id "fork-point-1")
+                     (:turn 2 :file-turn 2 :cum-turn 2)
+                     (:turn 3 :file-turn 3 :cum-turn 3
+                      :fork-point-id "fork-point-2")))))))
           (let ((s (mevedel-session-persistence--read-summary tmp)))
             (should (equal "demo" (plist-get s :session-name)))
             (should (equal "demo-1234" (plist-get s :session-id)))
             (should (equal "Hello" (plist-get s :first-user-message)))
-            (should (equal "Latest" (plist-get s :latest-user-message)))))
+            (should (equal "Latest" (plist-get s :latest-user-message)))
+            (should (equal '("fork-point-1" "fork-point-2")
+                           (plist-get s :fork-point-ids)))))
       (when (file-exists-p tmp) (delete-file tmp))))
   :doc "returns nil on unreadable file"
   (should (null (mevedel-session-persistence--read-summary
