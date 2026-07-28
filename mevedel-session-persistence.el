@@ -22,6 +22,7 @@
 ;;    :latest-user-message "..."
 ;;    :task-status-notes ((nil :note "..." :updated-turn 12) ...)
 ;;    :forked-from-session-id nil :forked-from-turn nil
+;;    :fork-type nil :forked-from-fork-point-id nil
 ;;    :permission-mode ask
 ;;    :plan-mode nil
 ;;    :permission-rules ((TOOL-NAME ...) ...)
@@ -135,8 +136,11 @@
 		  (cl-x) t)
 (declare-function mevedel-session-forked-from-session-id
 		  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-forked-from-fork-point-id
+		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-forked-from-turn "mevedel-structs"
 		  (cl-x) t)
+(declare-function mevedel-session-fork-type "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-input-p
@@ -338,6 +342,7 @@ add more, and we don't want to act on actions we don't understand).")
     :created-at :updated-at :current-segment :total-turn-count
     :last-task-write-turn :task-status-notes :first-user-message
     :latest-user-message :forked-from-session-id :forked-from-turn
+    :fork-type :forked-from-fork-point-id
     :permission-mode :plan-mode :permission-rules :resource-grants
     :preset-name :preset-settings :model-provider :reasoning-effort
     :last-observed-date
@@ -595,6 +600,9 @@ The resulting plist is round-trippable via
    :latest-user-message    latest-user-message
    :forked-from-session-id (mevedel-session-forked-from-session-id session)
    :forked-from-turn       (mevedel-session-forked-from-turn session)
+   :fork-type              (mevedel-session-fork-type session)
+   :forked-from-fork-point-id
+   (mevedel-session-forked-from-fork-point-id session)
    :permission-mode        permission-mode
    :plan-mode              (and (mevedel-session-plan-mode session) t)
    :permission-rules       (mevedel-session-permission-rules session)
@@ -753,6 +761,9 @@ their hygiene filters."
                      :forked-from-session-id
                      (plist-get plist :forked-from-session-id)
                      :forked-from-turn (plist-get plist :forked-from-turn)
+                     :fork-type (plist-get plist :fork-type)
+                     :forked-from-fork-point-id
+                     (plist-get plist :forked-from-fork-point-id)
                      :prompt-index     prompt-index
                      :file-snapshots   (plist-get plist :file-snapshots)
                      :plan-metadata    (plist-get plist :plan-metadata)
@@ -4276,6 +4287,137 @@ mail are deliberately absent from the returned session."
                    (mevedel-session-session-id child))
       (error "Fork staging validation failed"))))
 
+(defun mevedel-session-persistence--fork-child-name (session fork-type)
+  "Return the first unused direct-child name for SESSION and FORK-TYPE."
+  (let* ((source-id (mevedel-session-session-id session))
+         (source-name (mevedel-session-name session))
+         (type-name (symbol-name fork-type))
+         (regexp
+          (format "\\`%s · %s \\([0-9]+\\)\\'"
+                  (regexp-quote source-name)
+                  (regexp-quote type-name)))
+         used)
+    (dolist (entry
+             (mevedel-session-persistence-list-sessions
+              (mevedel-session-workspace session)))
+      (let ((summary (plist-get entry :summary)))
+        (when (and (equal source-id
+                          (plist-get summary :forked-from-session-id))
+                   (eq fork-type (plist-get summary :fork-type))
+                   (string-match regexp
+                                 (or (plist-get summary :session-name) "")))
+          (push (string-to-number (match-string 1
+                                                (plist-get summary
+                                                           :session-name)))
+                used))))
+    (let ((number 1))
+      (while (memq number used)
+        (cl-incf number))
+      (format "%s · %s %d" source-name type-name number))))
+
+(defun mevedel-session-persistence--conversation-fork-disclosure
+    (session)
+  "Return durable disclosure text for conversation fork SESSION."
+  (format
+   (concat "\n\n<system-reminder>\n"
+           "Conversation Fork\n"
+           "Source session: %s\n"
+           "Working directory: %s\n"
+           "Files were not restored.  This fork uses the current files in "
+           "the Source working directory, so they may be newer than the "
+           "selected conversation point and changes are shared.\n"
+           "</system-reminder>\n")
+   (mevedel-session-forked-from-session-id session)
+   (mevedel-session-working-directory session)))
+
+(defun mevedel-session-persistence-conversation-fork (buffer target)
+  "Create and open a Conversation Fork of BUFFER at stable TARGET.
+
+The child receives truncated conversation history and the Source working
+directory.  Working files are neither restored nor copied.  Return the new
+child data buffer without mutating the Source buffer, session, or lock."
+  (let* ((session (buffer-local-value 'mevedel--session buffer))
+         (_ (unless session
+              (user-error "Active buffer has no mevedel session")))
+         (target
+          (mevedel-session-persistence--resolve-fork-target session target))
+         (_ (mevedel-session-persistence--assert-stable-source
+             session buffer "forking"))
+         (parent-save-path (mevedel-session-save-path session))
+         (_ (unless parent-save-path
+              (user-error "Save the session before forking")))
+         (picked-segment (plist-get target :segment))
+         (picked-cum-turn (plist-get target :cum-turn))
+         (sessions-dir
+          (mevedel-session-persistence--sessions-dir
+           (mevedel-session-workspace session)))
+         (child-name
+          (mevedel-session-persistence--fork-child-name
+           session 'conversation))
+         (new-id
+          (mevedel-session-persistence--allocate-session-id
+           child-name sessions-dir))
+         (new-save-path
+          (file-name-as-directory (file-name-concat sessions-dir new-id)))
+         (staging-path
+          (file-name-as-directory
+           (make-temp-file
+            (expand-file-name ".mevedel-fork-" sessions-dir) t)))
+         (staging-buffer
+          (generate-new-buffer " *mevedel-conversation-fork*"))
+         child child-buffer published committed)
+    (unwind-protect
+        (progn
+          (setq child
+                (mevedel-session-persistence--fork-candidate
+                 session staging-path new-id
+                 (mevedel-session-session-id session)
+                 picked-segment picked-cum-turn
+                 (format-time-string "%FT%H-%M-%S")))
+          (setf (mevedel-session-name child) child-name
+                (mevedel-session-fork-type child) 'conversation
+                (mevedel-session-forked-from-fork-point-id child)
+                (plist-get target :fork-point-id))
+          (with-current-buffer staging-buffer
+            (let ((org-agenda-file-menu-enabled nil))
+              (org-mode)))
+          (mevedel-session-persistence--load-rewind-target
+           session staging-buffer target)
+          (with-current-buffer staging-buffer
+            (goto-char (point-max))
+            (let ((start (point)))
+              (insert
+               (mevedel-session-persistence--conversation-fork-disclosure
+                child))
+              (set-text-properties start (point) nil)))
+          (mevedel-session-persistence--stage-fork
+           child buffer staging-buffer parent-save-path staging-path
+           picked-segment picked-cum-turn)
+          (mevedel-session-persistence-lock-release staging-path)
+          (rename-file (directory-file-name staging-path)
+                       (directory-file-name new-save-path))
+          (setq published t)
+          (setf (mevedel-session-save-path child) new-save-path)
+          (with-current-buffer staging-buffer
+            (set-buffer-modified-p nil)
+            (set-visited-file-name nil t)
+            (setq-local kill-buffer-hook nil))
+          (kill-buffer staging-buffer)
+          (setq child-buffer
+                (mevedel-session-persistence-restore new-save-path)
+                committed t)
+          child-buffer)
+      (unless committed
+        (when published
+          (ignore-errors (delete-directory new-save-path t)))
+        (when (file-directory-p staging-path)
+          (ignore-errors (delete-directory staging-path t))))
+      (when (buffer-live-p staging-buffer)
+        (with-current-buffer staging-buffer
+          (set-buffer-modified-p nil)
+          (setq-local kill-buffer-hook nil))
+        (kill-buffer staging-buffer)))))
+
 (defun mevedel-session-persistence--reduce-prompt-index
     (index picked-segment picked-cum-turn)
   "Return a copy of INDEX trimmed to the fork's picked turn.
@@ -4423,7 +4565,10 @@ until restore actually reads it."
               :first-user-message (plist-get plist :first-user-message)
               :latest-user-message (plist-get plist :latest-user-message)
               :forked-from-session-id
-              (plist-get plist :forked-from-session-id)))
+              (plist-get plist :forked-from-session-id)
+              :fork-type (plist-get plist :fork-type)
+              :forked-from-fork-point-id
+              (plist-get plist :forked-from-fork-point-id)))
     (error nil)))
 
 (defun mevedel-session-persistence-list-sessions (workspace)

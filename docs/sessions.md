@@ -26,11 +26,14 @@ flowchart TD
     E -- Yes --> F[Load segment and sidecar]
     F --> G[Rebuild data buffer]
     G --> H[Render view]
-    E -- No --> I{Compact or rewind?}
+    E -- No --> I{Compact, Rewind, or Fork?}
     I -- Compact --> J[Rotate segment]
-    I -- Rewind --> K[Truncate into fork-pending buffer]
+    I -- Rewind --> K[Transactionally truncate session and restore files]
+    I -- Fork --> L[Arm settled assistant response]
     J --> B
-    K --> L[Materialize fork on next send]
+    K --> B
+    L --> M[Accepted model-bound follow-up]
+    M --> N[Publish and open independent child]
 ```
 
 ## Session persistence
@@ -69,7 +72,8 @@ holds session-wide state that doesn't live in the buffer text:
 permission rules, exact session resource grants, tasks, prompt-index (driving
 the rewind picker and latest resume preview), `:file-snapshots` (per-turn map
 of tracked files to backup names), workspace identity, `:working-directory`,
-fork lineage (`:forked-from-session-id` / `:forked-from-turn`), and
+fork lineage (`:fork-type`, `:forked-from-session-id`,
+`:forked-from-turn`, and `:forked-from-fork-point-id`), and
 `:agent-transcripts` presentation metadata and the explicit `:agent-registry`
 containing retained paths, frozen configurations, activity, mailboxes, and
 conversation locations. It also records `:preset-name` and the resolved
@@ -240,8 +244,24 @@ clear them with `C-c C-q` before a destructive transcript operation.
 
 ### Fork
 
-No user-facing session fork command is currently exposed. Rewind no longer
-arms or materializes a fork on the next send.
+`f` in the session cockpit arms a Conversation Fork from the settled
+assistant response at point and focuses the existing composer draft. The
+interaction row identifies the assistant turn; `[Cancel]` or `C-c C-k`
+disarms it without changing the draft. An empty prompt, a local command, a
+rejected prompt hook, or cancellation creates no child.
+
+The next accepted model-bound submission publishes an ordinary child session
+whose transcript ends at the selected response and continues with that prompt.
+The Source buffer, sidecar, lock, workflow state, and checkout remain live and
+unchanged. The child keeps the Source working directory and restores no files,
+so Conversation Fork also works outside Git. A durable system-reminder
+disclosure tells both the user and model that current files may be newer than
+the conversation point and that file changes are shared with Source.
+
+Conversation children use the first unused direct-child name
+`<source> · conversation N`, receive a normal unique session ID, and can be
+renamed with `mevedel-rename-session`. Their sidecars retain the Source session
+ID, cumulative fork turn, stable fork-point ID, and `conversation` fork type.
 
 Renaming a materialized session preserves live execution ownership. Retained
 artifact paths are retargeted immediately after the session directory moves,
