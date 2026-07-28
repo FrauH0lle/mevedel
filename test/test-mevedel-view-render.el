@@ -435,7 +435,8 @@
         (cl-letf
             (((symbol-function
                'mevedel-session-persistence-conversation-variants)
-              (lambda (_session _fork-point-id) variants)))
+              (lambda (_session _fork-point-id &optional _sessions)
+                variants)))
           (mevedel-view--full-rerender)
           (goto-char (point-min))
           (should (search-forward
@@ -455,6 +456,25 @@
           (mevedel-view--full-rerender)
           (goto-char (point-min))
           (should-not (search-forward "variants]" nil t)))))))
+
+(mevedel-deftest mevedel-view--render-turn ()
+  ,test
+  (test)
+  :doc "does not scan fork points while incrementally rendering a live turn"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert (propertize "Streaming response.\n" 'gptel 'response)))
+    (with-current-buffer view-buf
+      (cl-letf
+          (((symbol-function
+             'mevedel-session-persistence-fork-point-at-source)
+            (lambda (&rest _)
+              (ert-fail "Incremental render scanned fork points"))))
+        (mevedel-view--render-turn
+         '(:role assistant
+           :segments ((response 1 21))
+           :start 1 :end 21)
+         data-buf)))))
 
 (mevedel-deftest mevedel-view-switch-conversation-variant ()
   ,test
@@ -512,7 +532,8 @@
             (cl-letf
                 (((symbol-function
                    'mevedel-session-persistence-conversation-variants)
-                  (lambda (_session _fork-point-id) variants))
+                  (lambda (_session _fork-point-id &optional _sessions)
+                    variants))
                  ((symbol-function 'mevedel-session-persistence-restore)
                   (lambda (_save-path) target-data))
                  ((symbol-function 'display-buffer)
@@ -1402,7 +1423,47 @@
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Read files" text))
         (should (string-match-p "Assistant" text))
-        (should (string-match-p "Calling Read" text))))))
+        (should (string-match-p "Calling Read" text)))))
+
+  :doc "loads persisted session summaries once for a full transcript render"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace
+            (mevedel-workspace--create
+             :type 'project :id "test" :root "/workspace/" :name "test"))
+           (session
+            (mevedel-session--create
+             :name "source"
+             :session-id "source-id"
+             :save-path "/sessions/source/"
+             :workspace workspace
+             :current-segment 1))
+           (entries
+            '((:save-path "/sessions/source/"
+               :summary
+               (:session-id "source-id"
+                :fork-point-ids ("fork-point-1" "fork-point-2")))))
+           (calls 0))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert (propertize "First response.\n" 'gptel 'response))
+        (insert
+         (mevedel--format-hook-audit-record
+          '(:type fork-point :fork-point-id "fork-point-1")))
+        (insert "\nPrompt\n")
+        (insert (propertize "Second response.\n" 'gptel 'response))
+        (insert
+         (mevedel--format-hook-audit-record
+          '(:type fork-point :fork-point-id "fork-point-2"))))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (cl-letf
+            (((symbol-function
+               'mevedel-session-persistence-list-sessions)
+              (lambda (_workspace)
+                (cl-incf calls)
+                entries)))
+          (mevedel-view--full-rerender))
+        (should (= 1 calls))))))
 
 
 (mevedel-deftest mevedel-view--rebase-data-sources ()

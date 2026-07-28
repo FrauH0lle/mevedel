@@ -619,6 +619,59 @@
                     mevedel-view--interaction-descriptors)
            :body)))))))
 
+(mevedel-deftest mevedel-view--retarget-worktree-mention-bindings ()
+  ,test
+  (test)
+  :doc "retargets file and skill bindings without mutating Source text"
+  (let* ((source
+          (file-name-as-directory
+           (make-temp-file "mevedel-mentions-source-" t)))
+         (worktree
+          (file-name-as-directory
+           (make-temp-file "mevedel-mentions-worktree-" t)))
+         (session
+          (mevedel-session--create
+           :worktree-source-root source
+           :worktree-directory worktree))
+         (text (copy-sequence "Use @file:local and $skill"))
+         result)
+    (unwind-protect
+        (progn
+          (string-match "@file:local" text)
+          (mevedel-mention-bindings-set
+           (match-beginning 0) (match-end 0)
+           (list :kind 'file :path (file-name-concat source "local"))
+           text)
+          (string-match "\\$skill" text)
+          (mevedel-mention-bindings-set
+           (match-beginning 0) (match-end 0)
+           (list :kind 'skill
+                 :source-file (file-name-concat source "SKILL.md"))
+           text)
+          (setq result
+                (mevedel-view--retarget-worktree-mention-bindings
+                 text session))
+          (should
+           (equal
+            (list (file-name-concat worktree "local")
+                  (file-name-concat worktree "SKILL.md"))
+            (mapcar
+             (lambda (range)
+               (let ((binding (plist-get range :binding)))
+                 (or (plist-get binding :path)
+                     (plist-get binding :source-file))))
+             (mevedel-mention-bindings-ranges result))))
+          (should
+           (equal
+            (file-name-concat source "local")
+            (plist-get
+             (plist-get
+              (car (mevedel-mention-bindings-ranges text))
+              :binding)
+             :path))))
+      (delete-directory source t)
+      (delete-directory worktree t))))
+
 (mevedel-deftest mevedel-view-send/conversation-fork ()
   ,test
   (test)

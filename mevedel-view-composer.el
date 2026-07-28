@@ -144,19 +144,13 @@
 (declare-function mevedel-session-persistence--assert-stable-source
                   "mevedel-session-persistence"
                   (session buffer operation))
-(declare-function mevedel-session-persistence-conversation-fork
-                  "mevedel-session-persistence" (buffer target))
 (declare-function mevedel-session-persistence--retarget-worktree-path
 		  "mevedel-session-persistence" (session path))
+(declare-function mevedel-session-persistence-conversation-fork
+                  "mevedel-session-persistence" (buffer target))
 (declare-function mevedel-session-persistence-worktree-fork
 		  "mevedel-session-persistence" (buffer target))
 (defvar mevedel-session--read-only-mode)
-
-;; `mevedel-worktree'
-(declare-function mevedel-worktree-fork-preflight
-		  "mevedel-worktree" (session))
-(declare-function mevedel-worktree-fork-reservation
-		  "mevedel-worktree" (session &optional preflight))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill "mevedel-skills-core"
@@ -357,6 +351,12 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-ensure-generated-state-ignored
                   "mevedel-workspace" (workspace))
+
+;; `mevedel-worktree'
+(declare-function mevedel-worktree-fork-preflight
+		  "mevedel-worktree" (session))
+(declare-function mevedel-worktree-fork-reservation
+		  "mevedel-worktree" (session &optional preflight))
 
 ;; `select'
 (declare-function gui-get-selection "select" (selection-symbol target-type))

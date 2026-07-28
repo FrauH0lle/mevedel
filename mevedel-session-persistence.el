@@ -52,6 +52,19 @@
 ;; `diff'
 (declare-function diff "diff" (old new &optional switches no-async))
 
+;; `gptel'
+(declare-function gptel--get-buffer-bounds "ext:gptel" nil)
+(declare-function gptel--save-state "ext:gptel" nil)
+(declare-function gptel-get-preset "ext:gptel" (name))
+(declare-function gptel-mode "ext:gptel" (&optional arg))
+(defvar gptel--preset)
+(defvar gptel-display-buffer-action)
+(defvar gptel-mode)
+(defvar gptel-system-prompt)
+
+;; `gptel-org'
+(declare-function gptel-org--restore-state "ext:gptel-org" nil)
+
 ;; `mevedel'
 (declare-function mevedel-version "mevedel" (&optional here message))
 
@@ -72,6 +85,15 @@
 (declare-function mevedel-agent-persistence-transcript-path-p
 		  "mevedel-agent-persistence" (path save-path))
 
+;; `mevedel-chat'
+(declare-function mevedel--chat-buffer-disable-org-element-cache
+		  "mevedel-chat" nil)
+(declare-function mevedel--chat-buffer-init-common "mevedel-chat"
+		  (buf workspace source))
+(declare-function mevedel--normalize-session-directory "mevedel-chat"
+		  (directory workspace))
+(declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-relocate-artifacts
 		  "mevedel-execution" (session old-root new-root))
@@ -87,6 +109,9 @@
 ;; `mevedel-permission-log'
 (declare-function mevedel-permission-log--persist
 		  "mevedel-permission-log" (session entry))
+
+;; `mevedel-permissions'
+(defvar mevedel-permission-mode)
 
 ;; `mevedel-persistence'
 (declare-function mevedel--load-instructions-file
@@ -124,19 +149,23 @@
 (declare-function mevedel-goal-tokens-used "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-turns-run "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-updated-at "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-file-snapshots "mevedel-structs"
+		  (cl-x) t)
 (declare-function mevedel-session--create "mevedel-structs"
 		  (&rest slots))
 (declare-function mevedel-session-agent-turn-capacity
 		  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-buffer-name "mevedel-structs"
+		  (session-name workspace))
 (declare-function mevedel-session-created-at "mevedel-structs" (cl-x)
 		  t)
 (declare-function mevedel-session-current-segment "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-file-snapshots "mevedel-structs"
 		  (cl-x) t)
-(declare-function mevedel-session-forked-from-session-id
-		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-forked-from-fork-point-id
+		  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-forked-from-session-id
 		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-forked-from-turn "mevedel-structs"
 		  (cl-x) t)
@@ -196,9 +225,16 @@
 		  "mevedel-structs" (tasks))
 (declare-function mevedel-task-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task-subject "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-get-or-create "mevedel-structs"
+		  (type id root name))
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
+(defvar mevedel--agent-invocation)
+(defvar mevedel--current-request)
+(defvar mevedel--session)
+(defvar mevedel--workspace)
 (defvar mevedel-workspace--registry)
 
 ;; `mevedel-telemetry'
@@ -241,45 +277,20 @@
 (defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-history'
-(declare-function advice-add "nadvice"
-		  (symbol where function &optional props))
-(declare-function advice-member-p "nadvice" (advice symbol))
-(declare-function gptel--get-buffer-bounds "ext:gptel" nil)
-(declare-function gptel--save-state "ext:gptel" nil)
-(declare-function gptel-get-preset "ext:gptel" (name))
-(declare-function gptel-mode "ext:gptel" (&optional arg))
-(declare-function gptel-org--restore-state "ext:gptel-org" nil)
-(declare-function mevedel--chat-buffer-disable-org-element-cache
-		  "mevedel-chat" nil)
-(declare-function mevedel--chat-buffer-init-common "mevedel-chat"
-		  (buf workspace source))
-(declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
-(declare-function mevedel--normalize-session-directory "mevedel-chat"
-		  (directory workspace))
-(declare-function mevedel-request-file-snapshots "mevedel-structs"
-		  (cl-x) t)
-(declare-function mevedel-session-buffer-name "mevedel-structs"
-		  (session-name workspace))
 (declare-function mevedel-view-history-load "mevedel-view-history"
 		  (&optional session))
 (declare-function mevedel-view-history-save "mevedel-view-history"
 		  (&optional view-buffer))
+
+;; `mevedel-view-render'
+(declare-function mevedel-view--rebase-data-sources
+		  "mevedel-view-render" (delta))
+
+;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace"
 		  (&optional buffer))
 (declare-function mevedel-workspace-ensure-generated-state-ignored
 		  "mevedel-workspace" (workspace))
-(declare-function mevedel-workspace-get-or-create "mevedel-structs"
-		  (type id root name))
-(declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
-(defvar gptel--preset)
-(defvar gptel-display-buffer-action)
-(defvar gptel-mode)
-(defvar gptel-system-prompt)
-(defvar mevedel--agent-invocation)
-(defvar mevedel--current-request)
-(defvar mevedel--session)
-(defvar mevedel--workspace)
-(defvar mevedel-permission-mode)
 (defvar mevedel-workspace-additional-roots)
 
 ;; `mevedel-worktree'
@@ -291,11 +302,11 @@
 		  "mevedel-worktree" (session &optional preflight))
 (declare-function mevedel-worktree-fork-validate-reservation
 		  "mevedel-worktree" (session reservation))
-(defvar so-long-predicate)
 
-;; `mevedel-view-render'
-(declare-function mevedel-view--rebase-data-sources
-		  "mevedel-view-render" (delta))
+;; `nadvice'
+(declare-function advice-add "nadvice"
+		  (symbol where function &optional props))
+(declare-function advice-member-p "nadvice" (advice symbol))
 
 ;; `org'
 (declare-function org-entry-delete "ext:org" (pom property))
@@ -303,6 +314,9 @@
 		  (pom property &optional inherit literal-nil))
 (declare-function org-entry-put "ext:org" (epom property value))
 (defvar org-agenda-file-menu-enabled)
+
+;; `so-long'
+(defvar so-long-predicate)
 
 ;;
 ;;; Customization
@@ -1275,17 +1289,33 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                   (emacs-pid))))
    0 32))
 
+(defvar-local mevedel-session-persistence--fork-point-spans-cache nil
+  "Cached transcript fork-point spans keyed by modification tick.")
+
 (defun mevedel-session-persistence--fork-point-spans (buffer)
   "Return durable fork-point records and source spans from BUFFER."
   (with-current-buffer buffer
-    (require 'mevedel-transcript-audit)
-    (mapcar
-     (lambda (span)
-       (append (copy-sequence (plist-get span :record))
-               (list :record-start (+ (point-min) (plist-get span :start))
-                     :transcript-cutoff
-                     (+ (point-min) (plist-get span :end)))))
-     (mevedel-transcript-audit-spans (buffer-string) 'fork-point))))
+    (let ((tick (buffer-chars-modified-tick)))
+      (if (eq tick
+              (car-safe
+               mevedel-session-persistence--fork-point-spans-cache))
+          (cdr mevedel-session-persistence--fork-point-spans-cache)
+        (require 'mevedel-transcript-audit)
+        (let ((spans
+               (mapcar
+                (lambda (span)
+                  (append
+                   (copy-sequence (plist-get span :record))
+                   (list
+                    :record-start
+                    (+ (point-min) (plist-get span :start))
+                    :transcript-cutoff
+                    (+ (point-min) (plist-get span :end)))))
+                (mevedel-transcript-audit-spans
+                 (buffer-string) 'fork-point))))
+          (setq mevedel-session-persistence--fork-point-spans-cache
+                (cons tick spans))
+          spans)))))
 
 (defun mevedel-session-persistence-fork-point-at-source
     (buffer source-start source-end)
@@ -3446,7 +3476,7 @@ after saves.  Returns nil when the restore should be aborted."
             (?d
              (dolist (buf buffers)
                (with-current-buffer buf
-                 (set-buffer-modified-p nil)))
+                 (revert-buffer t t t)))
              (setq done t))
             (?a
              (setq current-plan :abort
@@ -3848,8 +3878,8 @@ bodies, and gptel org tool/reasoning scaffolding to stay consistent with
     (aset to index (aref from index))))
 
 (defun mevedel-session-persistence--stage-rewind
-    (session candidate target buffer staging-path staging-buffer)
-  "Stage CANDIDATE and TARGET from SESSION and BUFFER under STAGING-PATH."
+    (session candidate target staging-path staging-buffer)
+  "Stage CANDIDATE and TARGET from SESSION under STAGING-PATH."
   (copy-directory (mevedel-session-save-path session) staging-path nil t t)
   (mevedel-session-persistence--load-rewind-target
    session staging-buffer target)
@@ -3974,7 +4004,8 @@ Return descriptions of every artifact that could not be restored."
          (original-point (with-current-buffer buffer (point)))
          (original-turn (mevedel-session-turn-count session))
          file-backups source-moved published session-installed
-         buffer-install-started committed rollback-failures)
+         file-restore-started buffer-install-started committed
+         rollback-failures)
     (with-current-buffer original-buffer
       (insert-buffer-substring buffer))
     (unwind-protect
@@ -3986,7 +4017,7 @@ Return descriptions of every artifact that could not be restored."
                 (mevedel-session-persistence--backup-restore-files
                  plan file-backup-dir))
           (mevedel-session-persistence--stage-rewind
-           session candidate target buffer staging-path staging-buffer)
+           session candidate target staging-path staging-buffer)
           (let ((rechecked
                  (mevedel-session-persistence-restore-plan
                   session (plist-get target :cum-turn))))
@@ -4000,6 +4031,7 @@ Return descriptions of every artifact that could not be restored."
                              (string< (plist-get a :path)
                                       (plist-get b :path)))))
               (error "Captured files changed after Rewind confirmation")))
+          (setq file-restore-started t)
           (let ((result
                  (mevedel-session-persistence-execute-restore session plan)))
             (when (plist-get result :failed)
@@ -4021,8 +4053,14 @@ Return descriptions of every artifact that could not be restored."
           (delete-directory rollback-path t)
           (setq source-moved nil
                 committed t)
-          (mevedel-session-persistence--refresh-restored-buffers
-           plan (list :succeeded (length plan)))
+          (condition-case err
+              (mevedel-session-persistence--refresh-restored-buffers
+               plan (list :succeeded (length plan)))
+            (error
+             (display-warning
+              'mevedel
+              (format "Rewind committed, but buffers could not refresh: %s"
+                      (error-message-string err)))))
           t)
       (unless committed
         (when session-installed
@@ -4043,7 +4081,7 @@ Return descriptions of every artifact that could not be restored."
             (error
              (push (format "%s (%s)" save-path (error-message-string err))
                    rollback-failures))))
-        (when file-backups
+        (when file-restore-started
           (setq rollback-failures
                 (nconc
                  rollback-failures
@@ -4317,7 +4355,7 @@ mail are deliberately absent from the returned session."
 
 (defun mevedel-session-persistence--stage-fork
     (child buffer staging-buffer parent-save-path staging-path
-           picked-segment picked-cum-turn)
+           picked-segment picked-cum-turn &optional additional-roots)
   "Materialize CHILD under STAGING-PATH using STAGING-BUFFER."
   (require 'mevedel-agent-persistence)
   (make-directory (file-name-concat staging-path "agents") t)
@@ -4349,6 +4387,8 @@ mail are deliberately absent from the returned session."
                (copy-file src dst))))
   (with-current-buffer staging-buffer
     (setq-local mevedel--session child)
+    (setq-local mevedel-workspace-additional-roots
+                (copy-tree additional-roots t))
     (setq buffer-file-name
           (mevedel-session-persistence--segment-path
            staging-path picked-segment)
@@ -4392,7 +4432,7 @@ mail are deliberately absent from the returned session."
           (copy-file src dst)))))
   (mevedel-session-persistence-write
    (mevedel-session-persistence--sidecar-path staging-path)
-   (mevedel-session-persistence--build-sidecar child buffer))
+   (mevedel-session-persistence--build-sidecar child staging-buffer))
   (mevedel-session-persistence--save-instructions child buffer)
   (unless (mevedel-session-persistence-lock-acquire
            staging-path (buffer-name buffer))
@@ -4406,13 +4446,65 @@ mail are deliberately absent from the returned session."
                    (mevedel-session-session-id child))
       (error "Fork staging validation failed"))))
 
+(defun mevedel-session-persistence--publish-fork
+    (child buffer staging-buffer parent-save-path staging-path new-save-path
+           picked-segment picked-cum-turn additional-roots)
+  "Stage, publish, and restore CHILD as one session-artifact transaction."
+  (let (child-buffer published committed)
+    (unwind-protect
+        (progn
+          (mevedel-session-persistence--stage-fork
+           child buffer staging-buffer parent-save-path staging-path
+           picked-segment picked-cum-turn additional-roots)
+          (mevedel-session-persistence-lock-release staging-path)
+          (rename-file (directory-file-name staging-path)
+                       (directory-file-name new-save-path))
+          (setq published t)
+          (setf (mevedel-session-save-path child) new-save-path)
+          (with-current-buffer staging-buffer
+            (set-buffer-modified-p nil)
+            (set-visited-file-name nil t)
+            (setq-local kill-buffer-hook nil))
+          (kill-buffer staging-buffer)
+          (setq child-buffer
+                (mevedel-session-persistence-restore
+                 new-save-path "fork" child)
+                committed t)
+          child-buffer)
+      (unless committed
+        (when-let* ((failed-buffer
+                     (or child-buffer
+                         (mevedel-session-persistence--find-live-buffer
+                          (mevedel-session-session-id child)
+                          (mevedel-session-buffer-name
+                           (mevedel-session-name child)
+                           (mevedel-session-workspace child))))))
+          (when-let* ((view
+                       (buffer-local-value
+                        'mevedel--view-buffer failed-buffer))
+                      ((buffer-live-p view)))
+            (kill-buffer view))
+          (when (buffer-live-p failed-buffer)
+            (with-current-buffer failed-buffer
+              (set-buffer-modified-p nil))
+            (kill-buffer failed-buffer)))
+        (when published
+          (ignore-errors (delete-directory new-save-path t)))
+        (when (file-directory-p staging-path)
+          (ignore-errors (delete-directory staging-path t))))
+      (when (buffer-live-p staging-buffer)
+        (with-current-buffer staging-buffer
+          (set-buffer-modified-p nil)
+          (setq-local kill-buffer-hook nil))
+        (kill-buffer staging-buffer)))))
+
 (defun mevedel-session-persistence--fork-child-name (session fork-type)
   "Return the first unused direct-child name for SESSION and FORK-TYPE."
   (let* ((source-id (mevedel-session-session-id session))
          (source-name (mevedel-session-name session))
          (type-name (symbol-name fork-type))
          (regexp
-          (format "\\`%s · %s \\([0-9]+\\)\\'"
+          (format "\\`%s \u00b7 %s \\([0-9]+\\)\\'"
                   (regexp-quote source-name)
                   (regexp-quote type-name)))
          used)
@@ -4468,6 +4560,29 @@ mail are deliberately absent from the returned session."
         (expand-file-name (substring expanded (length source-root))
                           worktree-root)
       expanded)))
+
+(defun mevedel-session-persistence--retarget-worktree-roots
+    (session roots)
+  "Retarget checkout-local paths in session-local ROOTS for SESSION.
+Return `(:roots ALIST :dropped LIST)'."
+  (let (retargeted dropped)
+    (dolist (entry roots)
+      (if (and (consp entry)
+               (stringp (car entry))
+               (file-name-absolute-p (car entry))
+               (proper-list-p (cdr entry)))
+          (let (paths)
+            (dolist (path (cdr entry))
+              (if (and (stringp path) (file-name-absolute-p path))
+                  (push
+                   (mevedel-session-persistence--retarget-worktree-path
+                    session path)
+                   paths)
+                (push (format "additional root %S" path) dropped)))
+            (push (cons (car entry) (nreverse paths)) retargeted))
+        (push (format "additional roots entry %S" entry) dropped)))
+    (list :roots (nreverse retargeted)
+          :dropped (nreverse dropped))))
 
 (defun mevedel-session-persistence--retarget-worktree-state (session)
   "Retarget SESSION's copied repository-local path state.
@@ -4700,7 +4815,9 @@ child data buffer without mutating the Source buffer, session, or lock."
             (expand-file-name ".mevedel-fork-" sessions-dir) t)))
          (staging-buffer
           (generate-new-buffer " *mevedel-conversation-fork*"))
-         child child-buffer published committed)
+         (additional-roots
+          (buffer-local-value 'mevedel-workspace-additional-roots buffer))
+         child)
     (unwind-protect
         (progn
           (setq child
@@ -4725,46 +4842,11 @@ child data buffer without mutating the Source buffer, session, or lock."
                (mevedel-session-persistence--conversation-fork-disclosure
                 child))
               (set-text-properties start (point) nil)))
-          (mevedel-session-persistence--stage-fork
+          (mevedel-session-persistence--publish-fork
            child buffer staging-buffer parent-save-path staging-path
-           picked-segment picked-cum-turn)
-          (mevedel-session-persistence-lock-release staging-path)
-          (rename-file (directory-file-name staging-path)
-                       (directory-file-name new-save-path))
-          (setq published t)
-          (setf (mevedel-session-save-path child) new-save-path)
-          (with-current-buffer staging-buffer
-            (set-buffer-modified-p nil)
-            (set-visited-file-name nil t)
-            (setq-local kill-buffer-hook nil))
-          (kill-buffer staging-buffer)
-          (setq child-buffer
-                (mevedel-session-persistence-restore
-                 new-save-path "fork" child)
-                committed t)
-          child-buffer)
-      (unless committed
-        (when-let* ((failed-buffer
-                     (or child-buffer
-                         (and child
-                              (mevedel-session-persistence--find-live-buffer
-                               (mevedel-session-session-id child)
-                               (mevedel-session-buffer-name
-                                (mevedel-session-name child)
-                                (mevedel-session-workspace child)))))))
-          (when-let* ((view
-                       (buffer-local-value
-                        'mevedel--view-buffer failed-buffer))
-                      ((buffer-live-p view)))
-            (kill-buffer view))
-          (when (buffer-live-p failed-buffer)
-            (with-current-buffer failed-buffer
-              (set-buffer-modified-p nil))
-            (kill-buffer failed-buffer)))
-        (when published
-          (ignore-errors (delete-directory new-save-path t)))
-        (when (file-directory-p staging-path)
-          (ignore-errors (delete-directory staging-path t))))
+           new-save-path picked-segment picked-cum-turn additional-roots))
+      (when (file-directory-p staging-path)
+        (ignore-errors (delete-directory staging-path t)))
       (when (buffer-live-p staging-buffer)
         (with-current-buffer staging-buffer
           (set-buffer-modified-p nil)
@@ -4808,8 +4890,9 @@ child data buffer without mutating the Source buffer, session, or lock."
             (expand-file-name ".mevedel-worktree-fork-" sessions-dir) t)))
          (staging-buffer
           (generate-new-buffer " *mevedel-worktree-fork*"))
-         child child-buffer report dropped worktree-created published committed
-         failure result)
+         (source-roots
+          (buffer-local-value 'mevedel-workspace-additional-roots buffer))
+         child report dropped additional-roots worktree-created failure result)
     (condition-case err
         (setq result
               (unwind-protect
@@ -4837,6 +4920,12 @@ child data buffer without mutating the Source buffer, session, or lock."
                      (plist-get reservation :base-commit))
                     (setq dropped
                           (mevedel-session-persistence--retarget-worktree-state child))
+                    (let ((roots
+                           (mevedel-session-persistence--retarget-worktree-roots
+                            child source-roots)))
+                      (setq additional-roots (plist-get roots :roots)
+                            dropped
+                            (nconc dropped (plist-get roots :dropped))))
                     (setq report
                           (mevedel-session-persistence--restore-worktree-files
                            session child picked-cum-turn))
@@ -4853,46 +4942,12 @@ child data buffer without mutating the Source buffer, session, or lock."
                          (mevedel-session-persistence--worktree-fork-disclosure
                           child report))
                         (set-text-properties start (point) nil)))
-                    (mevedel-session-persistence--stage-fork
+                    (mevedel-session-persistence--publish-fork
                      child buffer staging-buffer parent-save-path staging-path
-                     picked-segment picked-cum-turn)
-                    (mevedel-session-persistence-lock-release staging-path)
-                    (rename-file (directory-file-name staging-path)
-                                 (directory-file-name new-save-path))
-                    (setq published t)
-                    (setf (mevedel-session-save-path child) new-save-path)
-                    (with-current-buffer staging-buffer
-                      (set-buffer-modified-p nil)
-                      (set-visited-file-name nil t)
-                      (setq-local kill-buffer-hook nil))
-                    (kill-buffer staging-buffer)
-                    (setq child-buffer
-                          (mevedel-session-persistence-restore
-                           new-save-path "fork" child)
-                          committed t)
-                    child-buffer)
-                (unless committed
-                  (when-let* ((failed-buffer
-                               (or child-buffer
-                                   (and child
-                                        (mevedel-session-persistence--find-live-buffer
-                                         (mevedel-session-session-id child)
-                                         (mevedel-session-buffer-name
-                                          (mevedel-session-name child)
-                                          (mevedel-session-workspace child)))))))
-                    (when-let* ((view
-                                 (buffer-local-value
-                                  'mevedel--view-buffer failed-buffer))
-                                ((buffer-live-p view)))
-                      (kill-buffer view))
-                    (when (buffer-live-p failed-buffer)
-                      (with-current-buffer failed-buffer
-                        (set-buffer-modified-p nil))
-                      (kill-buffer failed-buffer)))
-                  (when published
-                    (ignore-errors (delete-directory new-save-path t)))
-                  (when (file-directory-p staging-path)
-                    (ignore-errors (delete-directory staging-path t))))
+                     new-save-path picked-segment picked-cum-turn
+                     additional-roots))
+                (when (file-directory-p staging-path)
+                  (ignore-errors (delete-directory staging-path t)))
                 (when (buffer-live-p staging-buffer)
                   (with-current-buffer staging-buffer
                     (set-buffer-modified-p nil)
@@ -5102,10 +5157,11 @@ parsed are silently dropped."
              (or (plist-get (plist-get b :summary) :updated-at) ""))))))
 
 (defun mevedel-session-persistence-conversation-variants
-    (session fork-point-id)
+    (session fork-point-id &optional sessions)
   "Return SESSION's persisted conversation variants at FORK-POINT-ID.
 The Source is first, followed by direct Children.  Each returned session
-entry has a `:variant-origin' of `source', `conversation', or `worktree'."
+entry has a `:variant-origin' of `source', `conversation', or `worktree'.
+SESSIONS may supply an already-loaded session summary list."
   (let* ((session-id (mevedel-session-session-id session))
          (source-id
           (if (equal fork-point-id
@@ -5115,8 +5171,9 @@ entry has a `:variant-origin' of `source', `conversation', or `worktree'."
          variants)
     (dolist
         (entry
-         (mevedel-session-persistence-list-sessions
-          (mevedel-session-workspace session)))
+         (or sessions
+             (mevedel-session-persistence-list-sessions
+              (mevedel-session-workspace session))))
       (let* ((summary (plist-get entry :summary))
              (id (plist-get summary :session-id))
              origin)

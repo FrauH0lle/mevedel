@@ -2992,7 +2992,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
 (mevedel-deftest mevedel-session-persistence--prepare-buffers-for-restore ()
   ,test
   (test)
-  :doc "discard marks affected modified buffers unmodified before restore"
+  :doc "discard reverts affected modified buffers before restore"
   (let* ((tempdir (make-temp-file "mevedel-prepare-" t))
          (file (file-name-concat tempdir "source.el"))
          (plan nil)
@@ -3011,7 +3011,8 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                            (mevedel-session-persistence--prepare-buffers-for-restore
                             nil 1 plan))))
           (with-current-buffer buf
-            (should-not (buffer-modified-p))))
+            (should-not (buffer-modified-p))
+            (should (equal "old\n" (buffer-string)))))
       (when (buffer-live-p buf)
         (with-current-buffer buf (set-buffer-modified-p nil))
         (kill-buffer buf))
@@ -5157,7 +5158,48 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))
+  :doc "pre-restore failure does not overwrite a concurrent file edit"
+  (let* ((tempdir
+          (file-name-as-directory
+           (make-temp-file "mevedel-rewind-pre-restore-" t)))
+         (save-path (file-name-as-directory
+                     (file-name-concat tempdir "session")))
+         (path (file-name-concat tempdir "tracked.el"))
+         (session
+          (mevedel-session--create
+           :name "main"
+           :save-path save-path
+           :current-segment 1
+           :turn-count 1))
+         (buffer (generate-new-buffer " *rewind-pre-restore*"))
+         (target '(:segment 1 :turn 1 :cum-turn 1
+                   :fork-point-id "point"))
+         (plan (list (list :path path :action 'overwrite))))
+    (unwind-protect
+        (progn
+          (make-directory save-path t)
+          (write-region "before" nil path nil 'silent)
+          (with-current-buffer buffer
+            (insert "transcript"))
+          (cl-letf
+              (((symbol-function
+                 'mevedel-session-persistence--rewind-candidate)
+                (lambda (&rest _) (copy-sequence session)))
+               ((symbol-function
+                 'mevedel-session-persistence--stage-rewind)
+                (lambda (&rest _)
+                  (write-region "concurrent" nil path nil 'silent)
+                  (error "Injected staging failure"))))
+            (should-error
+             (mevedel-session-persistence--commit-rewind
+              session buffer target plan)))
+          (should
+           (equal "concurrent"
+                  (mevedel-session-persistence--file-text path))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (delete-directory tempdir t))))
 
 (mevedel-deftest mevedel-session-persistence--rollback-restore-files ()
   ,test
@@ -5755,6 +5797,24 @@ The result is a plist whose :tempdir owns every created file."
                           (mevedel-session-persistence-serialize session)))))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
 
+(mevedel-deftest mevedel-session-persistence--fork-point-spans ()
+  ,test
+  (test)
+  :doc "caches parsed fork points until transcript text changes"
+  (with-temp-buffer
+    (let ((calls 0))
+      (cl-letf
+          (((symbol-function 'mevedel-transcript-audit-spans)
+            (lambda (&rest _)
+              (cl-incf calls)
+              nil)))
+        (mevedel-session-persistence--fork-point-spans (current-buffer))
+        (mevedel-session-persistence--fork-point-spans (current-buffer))
+        (should (= 1 calls))
+        (insert "changed")
+        (mevedel-session-persistence--fork-point-spans (current-buffer))
+        (should (= 2 calls))))))
+
 (mevedel-deftest mevedel-session-persistence--assert-stable-source ()
   ,test
   (test)
@@ -6038,6 +6098,39 @@ The result is a plist whose :tempdir owns every created file."
       (delete-directory source-root t)
       (delete-directory worktree-root t))))
 
+(mevedel-deftest mevedel-session-persistence--retarget-worktree-roots ()
+  ,test
+  (test)
+  :doc "retargets repository roots, preserves external roots, and drops malformed roots"
+  (let* ((source
+          (file-name-as-directory
+           (make-temp-file "mevedel-roots-source-" t)))
+         (worktree
+          (file-name-as-directory
+           (make-temp-file "mevedel-roots-worktree-" t)))
+         (session
+          (mevedel-session--create
+           :worktree-source-root source
+           :worktree-directory worktree))
+         (result
+          (mevedel-session-persistence--retarget-worktree-roots
+           session
+           `((,source
+              ,(file-name-concat source "src")
+              "/tmp/external"
+              "src")))))
+    (unwind-protect
+        (progn
+          (should
+           (equal
+            `((,source
+               ,(file-name-concat worktree "src")
+               "/tmp/external"))
+            (plist-get result :roots)))
+          (should (= 1 (length (plist-get result :dropped)))))
+      (delete-directory source t)
+      (delete-directory worktree t))))
+
 (mevedel-deftest mevedel-session-persistence--assert-worktree-target ()
   ,test
   (test)
@@ -6267,6 +6360,12 @@ The result is a plist whose :tempdir owns every created file."
              `(("Write" :path ,source-file :action allow))
              (mevedel-session-model-provider session)
              "test-backend:test-model")
+            (with-current-buffer (plist-get fixture :buffer)
+              (setq-local
+               mevedel-workspace-additional-roots
+               `((,source-root
+                  ,(file-name-concat source-root "nested")
+                  "/tmp/shared"))))
             (mevedel-session-persistence-write
              (mevedel-session-persistence--sidecar-path
               (plist-get fixture :parent-path))
@@ -6335,6 +6434,12 @@ The result is a plist whose :tempdir owns every created file."
                          (car (mevedel-session-resource-grants child))
                          :path)))
                 (with-current-buffer child-buffer
+                  (should
+                   (equal
+                    `((,source-root
+                       ,(file-name-concat worktree "nested")
+                       "/tmp/shared"))
+                    mevedel-workspace-additional-roots))
                   (should (string-match-p "Worktree Fork"
                                           (buffer-string)))
                   (should (string-match-p
