@@ -417,6 +417,7 @@
            ("S-TAB" . mevedel-view-cycle-permission-mode)
            ("C-c RET" . mevedel-view-send)
            ("C-c TAB" . mevedel-view-send-follow-up)
+           ("C-c C-k" . mevedel-view-cancel-composer-state)
            ("C-c C-l" . mevedel-view-history-browse)
            ("C-c C-u" . mevedel-view-history-clear-input)
            ("C-y" . mevedel-view-yank-dwim)
@@ -462,6 +463,115 @@
                (eq (key-binding (kbd "C-<tab>"))
                    #'tab-next)))))
       (tab-bar-mode (if was-enabled 1 -1)))))
+
+(mevedel-deftest mevedel-view-arm-conversation-fork ()
+  ,test
+  (test)
+  :doc "arms the exact settled turn, renders cancellation, and preserves draft"
+  (mevedel-view-test--with-buffers
+    (let ((session
+           (mevedel-session--create
+            :name "source"
+            :session-id "source-id"
+            :current-segment 1))
+          (target
+           '(:fork-point-id "stable-2" :segment 1 :turn 2 :cum-turn 2))
+          checked)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (goto-char (mevedel-view--input-start))
+        (insert "> existing\nmultiline draft")
+        (goto-char (point-min))
+        (cl-letf
+            (((symbol-function 'mevedel-view-fork-point-at-point)
+              (lambda () target))
+             ((symbol-function
+               'mevedel-session-persistence--assert-stable-source)
+              (lambda (candidate buffer operation)
+                (setq checked (list candidate buffer operation)))))
+          (mevedel-view-arm-conversation-fork))
+        (should (equal (list session data-buf "forking")
+                       checked))
+        (should (equal "stable-2"
+                       (plist-get mevedel-view--armed-session-fork
+                                  :fork-point-id)))
+        (should (= (point) (point-max)))
+        (should (equal "> existing\nmultiline draft"
+                       (mevedel-view--input-text)))
+        (let ((descriptor
+               (gethash 'armed-session-fork
+                        mevedel-view--interaction-descriptors)))
+          (should (string-match-p
+                   "Fork conversation from Assistant turn 2"
+                   (plist-get descriptor :body)))
+          (should (string-match-p "\\[Cancel\\]"
+                                  (plist-get descriptor :body))))
+        (mevedel-view-cancel-composer-state)
+        (should-not mevedel-view--armed-session-fork)
+        (should-not (gethash 'armed-session-fork
+                             mevedel-view--interaction-descriptors))
+        (should (equal "> existing\nmultiline draft"
+                       (mevedel-view--input-text))))))
+  :doc "reports an exact selection error without arming"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (cl-letf (((symbol-function 'mevedel-view-fork-point-at-point)
+                 (lambda ()
+                   (user-error "Point is not on an assistant response"))))
+        (should-error (mevedel-view-arm-conversation-fork)
+                      :type 'user-error))
+      (should-not mevedel-view--armed-session-fork))))
+
+(mevedel-deftest mevedel-view-send/conversation-fork ()
+  ,test
+  (test)
+  :doc "materializes only at accepted dispatch and sends the prompt in the child"
+  (mevedel-view-test--with-source-skills nil
+    (let* ((child-session (mevedel-session-create "child" ws))
+           (child-data (generate-new-buffer " *fork-child-data*"))
+           (child-view (generate-new-buffer " *fork-child-view*"))
+           (target
+            '(:fork-point-id "stable-1" :segment 1 :turn 1 :cum-turn 1))
+           materialized sent-buffer)
+      (unwind-protect
+          (progn
+            (with-current-buffer child-data
+              (org-mode)
+              (setq-local mevedel--session child-session
+                          mevedel--workspace ws))
+            (mevedel-view--setup child-view child-data)
+            (with-current-buffer view-buf
+              (setq-local mevedel-view--armed-session-fork target)
+              (goto-char (mevedel-view--input-start))
+              (insert "please summarize the issue")
+              (cl-letf
+                  (((symbol-function
+                     'mevedel-session-persistence-conversation-fork)
+                    (lambda (buffer fork-target)
+                      (setq materialized (list buffer fork-target))
+                      child-data))
+                   ((symbol-function 'gptel-send)
+                    (lambda (&rest _)
+                      (setq sent-buffer (current-buffer)))))
+                (mevedel-view-send))
+              (should (equal (list data-buf target) materialized))
+              (should-not mevedel-view--armed-session-fork)
+              (should (string-empty-p (mevedel-view--input-text))))
+            (should (eq child-data sent-buffer))
+            (with-current-buffer child-data
+              (should (string-match-p "please summarize the issue"
+                                      (buffer-string))))
+            (with-current-buffer data-buf
+              (should-not
+               (string-match-p "please summarize the issue"
+                               (buffer-string)))))
+        (dolist (buffer (list child-view child-data))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (set-buffer-modified-p nil))
+            (kill-buffer buffer)))))))
 
 (mevedel-deftest mevedel-view-refresh-input-prompt
   (:doc "updates the prompt prefix without disturbing draft input")

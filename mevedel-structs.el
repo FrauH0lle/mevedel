@@ -247,6 +247,8 @@ workspace."
   current-segment   ; integer: highest-numbered segment file (1, 2, ...)
   forked-from-session-id ; string or nil: parent session's id if this is a fork
   forked-from-turn  ; integer or nil: parent's turn number at fork point
+  fork-type         ; conversation, worktree, or nil
+  forked-from-fork-point-id ; string or nil: stable parent response identity
   prompt-index      ; alist: (segment-number . list of prompt plists) for picker
   file-snapshots    ; alist: (turn-number . file-map alist) for file-history restore
   ;; Sub-agent transcript index.  Alist of

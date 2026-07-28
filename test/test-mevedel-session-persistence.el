@@ -174,6 +174,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :latest-user-message nil
                :forked-from-session-id nil
                :forked-from-turn nil
+               :fork-type nil
+               :forked-from-fork-point-id nil
                :permission-mode 'ask
                :plan-mode nil
                :permission-rules nil
@@ -495,7 +497,26 @@ ROOT is a temporary directory owned and cleaned up by the caller."
         (let* ((session (test-mevedel-session-persistence--make-session root))
                (plist (mevedel-session-persistence-serialize session)))
           (should (null (plist-get plist :forked-from-session-id)))
-          (should (null (plist-get plist :forked-from-turn))))
+          (should (null (plist-get plist :forked-from-turn)))
+          (should (null (plist-get plist :fork-type)))
+          (should (null (plist-get plist :forked-from-fork-point-id))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "serializes durable fork type and stable fork-point lineage"
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+        (let ((session
+               (test-mevedel-session-persistence--make-session root)))
+          (setf (mevedel-session-forked-from-session-id session) "source"
+                (mevedel-session-forked-from-turn session) 3
+                (mevedel-session-fork-type session) 'conversation
+                (mevedel-session-forked-from-fork-point-id session)
+                "stable-point")
+          (let ((plist (mevedel-session-persistence-serialize session)))
+            (should (eq 'conversation (plist-get plist :fork-type)))
+            (should (equal "stable-point"
+                           (plist-get plist
+                                      :forked-from-fork-point-id)))))
       (when (file-directory-p root)
         (delete-directory root t))))
   :doc "materializes the canonical global mode when the session inherits it"
@@ -5266,7 +5287,8 @@ The result is a plist whose :tempdir owns every created file."
               '(:path "plans/current.md" :status presented))
         (setf (mevedel-session-prompt-index session)
               '((1 . ((:turn 1 :file-turn 1 :cum-turn 1)))
-                (2 . ((:turn 1 :file-turn 1 :cum-turn 2)))
+                (2 . ((:turn 1 :file-turn 1 :cum-turn 2
+                       :fork-point-id "fixture-fork")))
                 (3 . ((:turn 1 :file-turn 1 :cum-turn 3)))))
         (setf (mevedel-session-file-snapshots session)
               '((1 . (("/tmp/kept.el"
@@ -5562,6 +5584,84 @@ The result is a plist whose :tempdir owns every created file."
         (kill-buffer staging-buffer))
       (when (file-directory-p staging-path)
         (delete-directory staging-path t))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
+
+(mevedel-deftest mevedel-session-persistence-conversation-fork ()
+  ,test
+  (test)
+  :doc "publishes an independent child without changing Source files or state"
+  (let ((fixture (test-mevedel-session-persistence--make-fork-ready))
+        child-buffer)
+    (unwind-protect
+        (let* ((session (plist-get fixture :session))
+               (source-file
+                (file-name-concat
+                 (mevedel-session-working-directory session)
+                 "current.txt"))
+               (source-text
+                (with-current-buffer (plist-get fixture :buffer)
+                  (buffer-string)))
+               (source-lock
+                (mevedel-session-persistence--file-text
+                 (plist-get fixture :parent-lock))))
+          (write-region "current checkout\n" nil source-file nil 'silent)
+          (setq child-buffer
+                (mevedel-session-persistence-conversation-fork
+                 (plist-get fixture :buffer)
+                 '(:fork-point-id "fixture-fork")))
+          (should (buffer-live-p child-buffer))
+          (should (buffer-local-value 'mevedel--session child-buffer))
+          (let* ((child
+                  (buffer-local-value 'mevedel--session child-buffer))
+                 (child-path (mevedel-session-save-path child))
+                 (child-sidecar
+                  (mevedel-session-persistence-read
+                   (mevedel-session-persistence--sidecar-path child-path))))
+            (should-not (equal (mevedel-session-session-id session)
+                               (mevedel-session-session-id child)))
+            (should (string= "main · conversation 1"
+                             (mevedel-session-name child)))
+            (should (equal (mevedel-session-working-directory session)
+                           (mevedel-session-working-directory child)))
+            (should (eq 'conversation
+                        (mevedel-session-fork-type child)))
+            (should (equal (mevedel-session-session-id session)
+                           (mevedel-session-forked-from-session-id child)))
+            (should (= 2 (mevedel-session-forked-from-turn child)))
+            (should (equal "fixture-fork"
+                           (mevedel-session-forked-from-fork-point-id child)))
+            (should (eq 'conversation
+                        (plist-get child-sidecar :fork-type)))
+            (with-current-buffer child-buffer
+              (should (string-match-p "Conversation Fork"
+                                      (buffer-string)))
+              (should (string-match-p "Files were not restored"
+                                      (buffer-string)))
+              (should-not (string-match-p "Future segment prompt"
+                                          (buffer-string))))
+            (should (equal "current checkout\n"
+                           (mevedel-session-persistence--file-text
+                            source-file)))
+            (with-current-buffer (plist-get fixture :buffer)
+              (should (equal source-text (buffer-string)))
+              (should (eq session mevedel--session)))
+            (should (equal (plist-get fixture :parent-sidecar-text)
+                           (mevedel-session-persistence--file-text
+                            (mevedel-session-persistence--sidecar-path
+                             (plist-get fixture :parent-path)))))
+            (should (equal source-lock
+                           (mevedel-session-persistence--file-text
+                            (plist-get fixture :parent-lock))))
+            (should (equal (plist-get fixture :session-state)
+                           (mevedel-session-persistence-serialize session)))))
+      (when (buffer-live-p child-buffer)
+        (let ((view (buffer-local-value 'mevedel--view-buffer child-buffer)))
+          (with-current-buffer child-buffer
+            (set-buffer-modified-p nil))
+          (when (buffer-live-p view)
+            (kill-buffer view)))
+        (when (buffer-live-p child-buffer)
+          (kill-buffer child-buffer)))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
 
 (mevedel-deftest mevedel-rename-session ()

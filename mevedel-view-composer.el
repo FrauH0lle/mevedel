@@ -141,6 +141,11 @@
 (declare-function seq-take "seq" (sequence n))
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--assert-stable-source
+                  "mevedel-session-persistence"
+                  (session buffer operation))
+(declare-function mevedel-session-persistence-conversation-fork
+                  "mevedel-session-persistence" (buffer target))
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-skills-core'
@@ -299,6 +304,8 @@
 		  "mevedel-view-interaction" nil)
 (declare-function mevedel-view--interaction-register
 		  "mevedel-view-interaction" (descriptor))
+(declare-function mevedel-view--interaction-unregister
+		  "mevedel-view-interaction" (id))
 
 ;; `mevedel-view-markdown'
 
@@ -320,6 +327,8 @@
                   "mevedel-view-render"
                   (text &optional kind hook-context prompt-summary-body
                         prompt-summary-source hook-audits))
+(declare-function mevedel-view-fork-point-at-point
+                  "mevedel-view-render" ())
 (declare-function mevedel-view-reset-agent-ephemeral-state
                   "mevedel-view-render" (&optional data-buf))
 (defvar mevedel-view--display-map)
@@ -508,6 +517,51 @@ chrome; everything at or below it belongs to the input zone.  The input
 zone starts with the read-only prompt prefix, followed by the editable
 composer body.")
 
+(defvar-local mevedel-view--armed-session-fork nil
+  "Stable fork-point target armed for the next model-bound submission.")
+
+(defvar-keymap mevedel-view--armed-session-fork-map
+  :doc "Keymap for the armed session-fork interaction row."
+  "RET" #'mevedel-view-cancel-session-fork
+  "<mouse-1>" #'mevedel-view-cancel-session-fork)
+
+(defun mevedel-view-cancel-session-fork (&optional _event)
+  "Disarm the pending session fork without changing the composer draft."
+  (interactive)
+  (when mevedel-view--armed-session-fork
+    (setq mevedel-view--armed-session-fork nil)
+    (mevedel-view--interaction-unregister 'armed-session-fork)
+    t))
+
+(defun mevedel-view-cancel-composer-state ()
+  "Cancel the armed session fork or the active pending-input edit."
+  (interactive)
+  (if mevedel-view--armed-session-fork
+      (mevedel-view-cancel-session-fork)
+    (mevedel-pending-inputs-cancel-edit)))
+
+(defun mevedel-view-arm-conversation-fork ()
+  "Arm a Conversation Fork from the settled assistant response at point."
+  (interactive)
+  (mevedel-view--ensure-interactive-chat-view)
+  (let* ((target (mevedel-view-fork-point-at-point))
+         (session (mevedel-view--session)))
+    (require 'mevedel-session-persistence)
+    (mevedel-session-persistence--assert-stable-source
+     session mevedel--data-buffer "forking")
+    (setq target (copy-sequence target))
+    (plist-put target :fork-type 'conversation)
+    (mevedel-view--interaction-register
+     (list :kind 'preview
+           :id 'armed-session-fork
+           :body
+           (format "Fork conversation from Assistant turn %d  [Cancel]"
+                   (plist-get target :cum-turn))
+           :keymap mevedel-view--armed-session-fork-map
+           :help-echo "Cancel Conversation Fork"))
+    (setq mevedel-view--armed-session-fork target)
+    (goto-char (point-max))))
+
 (defvar-keymap mevedel-view--composer-keymap
   :doc "Keymap active over the editable composer body."
   "C-<tab>" #'mevedel-view-toggle-plan-mode
@@ -515,7 +569,7 @@ composer body.")
   "C-c TAB" #'mevedel-view-send-follow-up
   "C-c C-c" #'mevedel-pending-inputs-save-edit
   "C-c C-e" #'mevedel-pending-inputs-open
-  "C-c C-k" #'mevedel-pending-inputs-cancel-edit
+  "C-c C-k" #'mevedel-view-cancel-composer-state
   "C-c C-l" #'mevedel-view-history-browse
   "C-c C-u" #'mevedel-view-history-clear-input
   "C-y" #'mevedel-view-yank-dwim
@@ -1899,6 +1953,40 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
         (mevedel-view--queue-follow-up input))))
   (goto-char (point-max)))
 
+(defun mevedel-view--dispatch-armed-session-fork
+    (source-view input target submission)
+  "Materialize TARGET from SOURCE-VIEW and send accepted INPUT.
+SUBMISSION is the accepted prompt transaction prepared in the Source."
+  (let* ((source-data
+          (buffer-local-value 'mevedel--data-buffer source-view))
+         (child-data
+          (progn
+            (require 'mevedel-session-persistence)
+            (mevedel-session-persistence-conversation-fork
+             source-data target)))
+         (child-view
+          (buffer-local-value 'mevedel--view-buffer child-data))
+         (outcome (mevedel-prompt-submission-outcome submission))
+         (render-data (or (plist-get outcome :render-data) "")))
+    (unless (buffer-live-p child-view)
+      (error "Conversation Fork has no live view"))
+    (with-current-buffer child-data
+      (setq-local mevedel-skills--pending-request-context
+                  (plist-get outcome :request-context)))
+    (with-current-buffer child-view
+      (mevedel-view--forward-input
+       (concat (plist-get outcome :transcript-input) render-data)
+       :display-text input
+       :prompt-checked t
+       :submission submission
+       :after-insert (lambda () (mevedel-view-history-add input))
+       :model-input (concat (plist-get outcome :model-input) render-data)))
+    (with-current-buffer source-view
+      (mevedel-view-cancel-session-fork)
+      (mevedel-view--clear-input))
+    (display-buffer child-view)
+    child-data))
+
 (defun mevedel-view-send ()
   "Send the current composer text to the LLM via the data buffer.
 Extracts text from the input zone, plans all bound `$skill' mentions,
@@ -2023,10 +2111,18 @@ their local dispatch path."
              (t
               (message "Unknown slash command: /%s" name)))))
          (t
-          (mevedel-view--submit-planned-input
-           input
-           (lambda ()
-             (mevedel-view-history-add input))))))))
+          (let ((target mevedel-view--armed-session-fork)
+                (source-view (current-buffer)))
+            (mevedel-view--submit-planned-input
+             input
+             (unless target
+               (lambda ()
+                 (mevedel-view-history-add input)))
+             nil
+             (and target
+                  (lambda (submission)
+                    (mevedel-view--dispatch-armed-session-fork
+                     source-view input target submission))))))))))
   ;; Accepted sends clear the draft and land at the new composer end.
   ;; Rejected sends preserve the exact input-relative point.
   (unless (mevedel-view--point-in-input-region-p)
