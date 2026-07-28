@@ -434,6 +434,67 @@
                        (get-text-property pos 'mevedel-view-agent-path text)))
         (should (get-text-property pos 'keymap text))))))
 
+(mevedel-deftest mevedel-view--refresh-agent-handle-at
+  (:doc "keeps sandbox warnings read-only after a targeted refresh")
+  ,test
+  (test)
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-tool--registry
+           (copy-hash-table mevedel-tool--registry))
+          (mevedel-tool--resolve-cache (make-hash-table :test #'equal))
+          (path "/root/spec_review"))
+      (mevedel-tool-register
+       (mevedel-tool--create
+        :name "RefreshAgent"
+        :category "mevedel"
+        :renderer
+        (lambda (_name _args result _data)
+          `(:header ,(concat "Started " path)
+            :body ,result
+            :vtype agent-handle
+            :agent-path ,path
+            :agent-status running
+            :initially-collapsed-p t
+            :sandbox-summary
+            (:attempt-count 1 :started-count 1 :refused-count 0
+             :sandbox bubblewrap :filesystem workspace-write
+             :network isolated :proc fresh
+             :additional-read-count 0 :additional-write-count 1)))))
+      (mevedel-view-test--insert-data
+       data-buf
+       "(:name \"RefreshAgent\" :args (:task_name \"review\"))\n\nRunning.\n"
+       '(tool . "call_refresh_agent"))
+      (let* ((source
+              (cons 1 (with-current-buffer data-buf (point-max))))
+             (rendering
+              (mevedel-view--segment-rendering
+               data-buf (car source) (cdr source) t)))
+        (with-current-buffer view-buf
+          (let ((inhibit-read-only t)
+                (start (point-min)))
+            (goto-char start)
+            (mevedel-view--insert-rendered-tool rendering source)
+            (mevedel-view--add-display-region-properties
+             start (point) 'agent-handle))
+          (goto-char (point-min))
+          (search-forward "Sandbox:")
+          (goto-char (+ (match-beginning 0) 2))
+          (should (get-text-property (point) 'read-only))
+          (should (eq mevedel-view--agent-handle-map
+                      (get-text-property (point) 'keymap)))
+          (let ((inhibit-read-only t))
+            (should (mevedel-view--refresh-agent-handle-at
+                     (point-min) path)))
+          (goto-char (point-min))
+          (search-forward "Sandbox:")
+          (goto-char (+ (match-beginning 0) 2))
+          (should (get-text-property (point) 'read-only))
+          (should (eq mevedel-view--agent-handle-map
+                      (get-text-property (point) 'keymap)))
+          (let ((before (buffer-string)))
+            (should-error (insert "  ") :type 'text-read-only)
+            (should (equal before (buffer-string)))))))))
+
 (mevedel-deftest mevedel-view-refresh-agent-rendering
   (:doc "coalesces canonical-path refreshes without altering the composer")
   ,test
