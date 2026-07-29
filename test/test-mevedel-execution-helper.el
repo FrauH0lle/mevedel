@@ -71,10 +71,10 @@
          (input (file-name-concat root "input"))
          (output (file-name-concat root "output"))
          (session (mevedel-session-create
-                   "main" (test-mevedel-execution-helper--workspace root)))
-         (mevedel-sandbox-mode 'off))
+                   "main" (test-mevedel-execution-helper--workspace root))))
     (unwind-protect
         (progn
+          (setf (mevedel-session-sandbox-mode session) 'off)
           (with-temp-file input (insert "helper-input"))
           (let ((result
                  (mevedel-execution-run-helper

@@ -649,10 +649,10 @@
 (mevedel-deftest mevedel-menu--mode-symbol ()
   ,test
   (test)
-  :doc "uses the cockpit view as the permission surface"
+  :doc "uses the session's canonical permission mode"
   (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-permission-mode session) 'full-auto)
     (with-current-buffer view-buf
-      (setq-local mevedel-permission-mode 'full-auto)
       (should (eq (mevedel-menu--mode-symbol
                    session data-buf view-buf)
                   'full-auto))
