@@ -614,7 +614,7 @@ The resulting plist is round-trippable via
              (and (boundp 'mevedel-permission-mode)
                   (default-toplevel-value 'mevedel-permission-mode))
              'ask)))
-    (unless (memq permission-mode '(ask auto full-auto))
+    (unless (memq permission-mode '(ask edits full-auto))
       (error "Invalid persisted permission mode: %S" permission-mode))
     (list
    :version                (mevedel-version)
@@ -677,7 +677,7 @@ The resulting plist is round-trippable via
   (dolist (key mevedel-session-persistence--required-sidecar-keys)
     (unless (plist-member plist key)
       (error "Missing session sidecar key: %s" key)))
-  (unless (memq (plist-get plist :permission-mode) '(ask auto full-auto))
+  (unless (memq (plist-get plist :permission-mode) '(ask edits full-auto))
     (error "Invalid persisted permission mode: %S"
            (plist-get plist :permission-mode)))
   (unless (booleanp (plist-get plist :plan-mode))

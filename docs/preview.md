@@ -4,7 +4,7 @@ Entry point: `mevedel-preview-mode-add-preview` (keyword API). Dispatches
 on `mevedel-preview-mode--effective-mode`:
 
 - `ask` → interactive inline overlay
-- `auto` / `full-auto` → `--auto-apply` (runs `apply-fn`
+- `edits` / `full-auto` → `--auto-apply` (runs `apply-fn`
   immediately, still produces a persistent diff summary in the view)
 
 Automatic application validates every hunk without prompting. A hunk that
@@ -19,7 +19,7 @@ excerpt of the offending hunk for diagnosis and audit.
 trust-rest (`S`), toggle (`TAB`).
 
 `S` approves all pending overlays and escalates permission mode to
-`auto` (not `full-auto` — shell commands still prompt). Registering
+`edits` (not `full-auto` — shell commands still prompt). Registering
 a preview leaves point where it was instead of auto-focusing the preview, and
 adds a canceller to the active request's `cancellers` list, so `mevedel-abort`
 tears everything down cleanly.
@@ -34,7 +34,7 @@ flowchart TD
     A[Edit or Write handler returns patch] --> B[Register preview]
     B --> C{Permission mode}
     C -- ask --> D[Show inline overlay]
-    C -- auto or full-auto --> E[Auto-apply patch]
+    C -- edits or full-auto --> E[Auto-apply patch]
     D --> F{User action}
     F -- Approve --> G[Apply patch]
     F -- Reject --> H[Remove overlay]

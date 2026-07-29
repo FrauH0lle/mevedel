@@ -179,19 +179,9 @@ Only values valid in configuration and persisted state are accepted."
                ((symbolp mode) mode)
                ((stringp mode) (intern (string-trim mode)))
                (t mode))))
-    (if (memq mode '(ask auto full-auto))
+    (if (memq mode '(ask edits full-auto))
         mode
       (user-error "Unknown permission mode: %s" mode))))
-
-(defun mevedel-permission-mode-parse-user-input (mode)
-  "Return canonical permission MODE from user-facing input.
-The `edit' alias names `auto' only at this interactive boundary."
-  (let ((mode (cond
-               ((symbolp mode) mode)
-               ((stringp mode) (intern (string-trim mode)))
-               (t mode))))
-    (mevedel-permission-mode-normalize
-     (if (eq mode 'edit) 'auto mode))))
 
 (defun mevedel-permission-mode-set-raw (mode)
   "Set permission MODE in the current scope without transition lifecycle.
@@ -243,7 +233,7 @@ DATA-BUFFER, the current buffer is used."
 
 (defun mevedel-permission-mode-label (&optional mode)
   "Return the compact user-facing label for permission MODE."
-  (symbol-name (if (memq mode '(ask auto full-auto)) mode 'ask)))
+  (symbol-name (if (memq mode '(ask edits full-auto)) mode 'ask)))
 
 (defun mevedel-permission-mode-apply-full-auto-lifecycle
     (previous-mode target-mode &optional session)
@@ -383,16 +373,16 @@ Controls the default permission behavior when no explicit rules match.
 
   `ask'       - Allow recognized inspection and prompt for edits,
                 uncertain Bash, and Eval.
-  `auto'      - Apply native edits inside allowed roots automatically;
+  `edits'     - Apply native edits inside allowed roots automatically;
                 Bash and Eval retain their normal checks.
   `full-auto' - Skip heuristic Bash and Eval prompts and run live Eval
                 automatically.  Explicit denies and missing protected
                 resource authority remain effective.
 
-At the generic permission layer, `auto' authorizes tools in the native
+At the generic permission layer, `edits' authorizes tools in the native
 `edit' group after their resource boundary is satisfied.  It does not
 authorize Bash, Eval, or unrelated mutating tools.  Native edit previews
-also apply without an interactive overlay in `auto'; `ask' prompts.
+also apply without an interactive overlay in `edits'; `ask' prompts.
 
 To change this mode at runtime, use `setopt' from the relevant buffer:
 when called from inside a session buffer (a data buffer or its view
@@ -416,7 +406,7 @@ old value.  See `mevedel-permission-mode--set' and
 `mevedel-permission--set-session-scoped'."
   :type '(choice
           (const :tag "Ask -- prompt for edits and uncertain execution" ask)
-          (const :tag "Auto -- apply native edits, check Bash and Eval" auto)
+          (const :tag "Edits -- apply native edits, check Bash and Eval" edits)
           (const :tag "Full Auto -- skip heuristic execution prompts" full-auto))
   :set #'mevedel-permission-mode--set
   :get #'mevedel-permission-mode--get
@@ -727,7 +717,7 @@ the native `edit' group; it never applies to Bash or Eval.
 Returns `allow', `deny', or `ask'."
   (pcase mode
     ('full-auto 'allow)
-    ('auto (if (or read-only-p native-edit-p) 'allow 'ask))
+    ('edits (if (or read-only-p native-edit-p) 'allow 'ask))
     ('ask (if read-only-p 'allow 'ask))
     ;; Unknown mode: fall through to ask
     (_ 'ask)))

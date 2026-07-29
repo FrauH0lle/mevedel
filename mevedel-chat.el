@@ -1334,7 +1334,7 @@ A no-op for sub-agent FSMs (their buffers carry
 
 (defun mevedel--implementation-permission-mode-apply (mode)
   "Temporarily apply implementation permission MODE for this request."
-  (when (and (memq mode '(ask auto full-auto))
+  (when (and (memq mode '(ask edits full-auto))
              (bound-and-true-p mevedel--session))
     (setq mevedel--implementation-permission-mode-restore
           (list (mevedel-session-permission-mode mevedel--session)))

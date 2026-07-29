@@ -232,28 +232,13 @@
   ,test
   (test)
   :doc "accepts only canonical permission modes"
-  (dolist (mode '(ask auto full-auto))
+  (dolist (mode '(ask edits full-auto))
     (should (eq mode (mevedel-permission-mode-normalize mode)))
     (should (eq mode
                 (mevedel-permission-mode-normalize (symbol-name mode)))))
-  :doc "rejects retired modes and the user-facing edit alias"
-  (dolist (mode '(default accept-edits trust-all edit edits))
+  :doc "rejects every superseded mode and alias"
+  (dolist (mode '(default accept-edits trust-all auto edit))
     (should-error (mevedel-permission-mode-normalize mode)
-                  :type 'user-error)))
-
-(mevedel-deftest mevedel-permission-mode-parse-user-input ()
-  ,test
-  (test)
-  :doc "accepts canonical mode names and maps edit to auto"
-  (progn
-    (dolist (mode '(ask auto full-auto))
-      (should (eq mode
-                  (mevedel-permission-mode-parse-user-input
-                   (symbol-name mode)))))
-    (should (eq 'auto (mevedel-permission-mode-parse-user-input "edit"))))
-  :doc "rejects retired persisted vocabulary"
-  (dolist (mode '(default accept-edits trust-all edits))
-    (should-error (mevedel-permission-mode-parse-user-input mode)
                   :type 'user-error)))
 
 (mevedel-deftest mevedel-permission-mode-transition ()
@@ -262,9 +247,9 @@
   :doc "an explicit permission choice exits Plan"
   (with-temp-buffer
     (let ((session (mevedel-session--create
-                    :name "main" :permission-mode 'auto :plan-mode t)))
+                    :name "main" :permission-mode 'edits :plan-mode t)))
       (setq-local mevedel--session session
-                  mevedel-permission-mode 'auto)
+                  mevedel-permission-mode 'edits)
       (mevedel-permission-mode-transition 'ask)
       (should-not (mevedel-session-plan-mode session))
       (should (eq 'ask (mevedel-session-permission-mode session))))))
@@ -276,11 +261,11 @@
   (progn
     (should (eq (mevedel-permission--mode-decision 'full-auto nil) 'allow))
     (should (eq (mevedel-permission--mode-decision 'full-auto t) 'allow)))
-  :doc "auto allows read-only and native edits but asks for other writes"
+  :doc "edits allows read-only and native edits but asks for other writes"
   (progn
-    (should (eq (mevedel-permission--mode-decision 'auto t) 'allow))
-    (should (eq (mevedel-permission--mode-decision 'auto nil t) 'allow))
-    (should (eq (mevedel-permission--mode-decision 'auto nil nil) 'ask)))
+    (should (eq (mevedel-permission--mode-decision 'edits t) 'allow))
+    (should (eq (mevedel-permission--mode-decision 'edits nil t) 'allow))
+    (should (eq (mevedel-permission--mode-decision 'edits nil nil) 'ask)))
   :doc "ask allows read-only and asks for writes"
   (progn
     (should (eq (mevedel-permission--mode-decision 'ask t) 'allow))
@@ -363,7 +348,7 @@
              :path "/outside/file.el" :allowed-roots ("/project")
              :mode ask)
             ("Edit" :tool-struct ,edit-tool
-             :request-rules (("Edit" :action ask)) :mode auto)
+             :request-rules (("Edit" :action ask)) :mode edits)
             ("Custom" :tool-struct ,deny-tool :mode full-auto))))
     (let ((mevedel-permission-rules nil)
           (mevedel-protected-paths '(("**/.git/**" . read-only))))
@@ -605,12 +590,12 @@
                 'ask))
     (should (eq (mevedel-check-permission
                  "Write" :tool-struct mock-tool
-                 :path "/outside/target.el" :mode 'auto
+                 :path "/outside/target.el" :mode 'edits
                  :workspace-root "/project" :resource-grants grants)
                 'allow))
     (should (eq (mevedel-check-permission
                  "Write" :tool-struct mock-tool
-                 :path "/outside/sibling.el" :mode 'auto
+                 :path "/outside/sibling.el" :mode 'edits
                  :workspace-root "/project" :resource-grants grants)
                 'ask)))
   :doc "resource grant does not override a command-specific ask"
@@ -1160,7 +1145,7 @@ must restore the prior value to avoid cross-test pollution."
             (with-current-buffer data-buf
               (setq-local mevedel--session
                           (mevedel-session--create
-                           :name "data" :permission-mode 'auto)))
+                           :name "data" :permission-mode 'edits)))
             (should (eq (mevedel-permission-mode-effective session data-buf)
                         'ask)))
         (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
@@ -1171,9 +1156,9 @@ must restore the prior value to avoid cross-test pollution."
         (with-current-buffer data-buf
           (setq-local mevedel--session
                       (mevedel-session--create
-                       :name "data" :permission-mode 'auto))
+                       :name "data" :permission-mode 'edits))
           (should (eq (mevedel-permission-mode-effective nil data-buf)
-                      'auto)))
+                      'edits)))
       (when (buffer-live-p data-buf) (kill-buffer data-buf))))
 
   :doc "uses data-buffer local mode before global fallback"
@@ -1216,15 +1201,15 @@ must restore the prior value to avoid cross-test pollution."
 
   :doc "falls back to the global mode"
   (mevedel-test--with-saved-permission-mode
-    (set-default-toplevel-value 'mevedel-permission-mode 'auto)
-    (should (eq (mevedel-permission-mode-effective) 'auto))))
+    (set-default-toplevel-value 'mevedel-permission-mode 'edits)
+    (should (eq (mevedel-permission-mode-effective) 'edits))))
 
 (mevedel-deftest mevedel-permission-mode-label ()
   ,test
   (test)
   :doc "renders compact labels for permission modes"
   (should (equal "ask" (mevedel-permission-mode-label 'ask)))
-  (should (equal "auto" (mevedel-permission-mode-label 'auto)))
+  (should (equal "edits" (mevedel-permission-mode-label 'edits)))
   (should (equal "full-auto" (mevedel-permission-mode-label 'full-auto)))
   (should (equal "ask" (mevedel-permission-mode-label 'unknown))))
 
@@ -1248,10 +1233,10 @@ must restore the prior value to avoid cross-test pollution."
               (setq-local mevedel--session session))
             (set-default-toplevel-value 'mevedel-permission-mode 'ask)
             (with-current-buffer data-buf
-              (mevedel-permission-mode--set 'mevedel-permission-mode 'auto))
-            (should (eq (mevedel-session-permission-mode session) 'auto))
+              (mevedel-permission-mode--set 'mevedel-permission-mode 'edits))
+            (should (eq (mevedel-session-permission-mode session) 'edits))
             (should (eq (buffer-local-value 'mevedel-permission-mode data-buf)
-                        'auto))
+                        'edits))
             ;; Global default is NOT touched.
             (should (eq (default-toplevel-value 'mevedel-permission-mode)
                         'ask)))
@@ -1272,12 +1257,12 @@ must restore the prior value to avoid cross-test pollution."
             (set-default-toplevel-value 'mevedel-permission-mode 'ask)
             (with-current-buffer view-buf
               (mevedel-permission-mode--set
-               'mevedel-permission-mode 'auto))
-            (should (eq (mevedel-session-permission-mode session) 'auto))
+               'mevedel-permission-mode 'edits))
+            (should (eq (mevedel-session-permission-mode session) 'edits))
             (should (eq (buffer-local-value 'mevedel-permission-mode data-buf)
-                        'auto))
+                        'edits))
             (should (eq (buffer-local-value 'mevedel-permission-mode view-buf)
-                        'auto))
+                        'edits))
             (should (eq (default-toplevel-value 'mevedel-permission-mode)
                         'ask)))
         (when (buffer-live-p data-buf) (kill-buffer data-buf))
@@ -1307,7 +1292,7 @@ must restore the prior value to avoid cross-test pollution."
           (let ((sess-a (mevedel-session--create
                          :name "a" :permission-mode 'ask))
                 (sess-b (mevedel-session--create
-                         :name "b" :permission-mode 'auto)))
+                         :name "b" :permission-mode 'edits)))
             (with-current-buffer data-a
               (setq-local mevedel--session sess-a))
             (with-current-buffer data-b
@@ -1320,7 +1305,7 @@ must restore the prior value to avoid cross-test pollution."
                           (mapcar #'mevedel-reminder-type
                                   (mevedel-session-reminders sess-a))))
             ;; Session B and the global default are untouched.
-            (should (eq (mevedel-session-permission-mode sess-b) 'auto))
+            (should (eq (mevedel-session-permission-mode sess-b) 'edits))
             (should (eq (default-toplevel-value 'mevedel-permission-mode)
                         'ask))
             ;; Buffer-local was set in data-a, not in data-b.
@@ -1358,13 +1343,13 @@ must restore the prior value to avoid cross-test pollution."
               (setq-local mevedel--session session))
             (with-current-buffer data-buf
               (mevedel-permission--set-session-scoped
-               'mevedel-permission-mode 'auto
+               'mevedel-permission-mode 'edits
                (lambda (s v) (push (cons s v) calls)
                  (setf (mevedel-session-permission-mode s) v))))
             (should (= (length calls) 1))
-            (should (eq (cdar calls) 'auto))
+            (should (eq (cdar calls) 'edits))
             (should (eq (car (car calls)) session))
-            (should (eq (mevedel-session-permission-mode session) 'auto)))
+            (should (eq (mevedel-session-permission-mode session) 'edits)))
         (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
   :doc "generic helper updates global default when no session is current"
@@ -1373,11 +1358,11 @@ must restore the prior value to avoid cross-test pollution."
       (set-default-toplevel-value 'mevedel-permission-mode 'ask)
       (with-temp-buffer
         (mevedel-permission--set-session-scoped
-         'mevedel-permission-mode 'auto
+         'mevedel-permission-mode 'edits
          (lambda (s v) (push (cons s v) calls))))
       (should-not calls)
       (should (eq (default-toplevel-value 'mevedel-permission-mode)
-                  'auto)))))
+                  'edits)))))
 
 (mevedel-deftest mevedel-permission-mode--get ()
   ,test
@@ -1394,13 +1379,13 @@ must restore the prior value to avoid cross-test pollution."
     (let ((data-buf (generate-new-buffer " *mev-test-data*")))
       (unwind-protect
           (let ((session (mevedel-session--create
-                          :name "test" :permission-mode 'auto)))
+                          :name "test" :permission-mode 'edits)))
             (with-current-buffer data-buf
               (setq-local mevedel--session session))
             (set-default-toplevel-value 'mevedel-permission-mode 'ask)
             (with-current-buffer data-buf
               (should (eq (mevedel-permission-mode--get 'mevedel-permission-mode)
-                          'auto))))
+                          'edits))))
         (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
   :doc "from view buffer: back-pointer resolves to the session slot"
@@ -1409,7 +1394,7 @@ must restore the prior value to avoid cross-test pollution."
           (view-buf (generate-new-buffer " *mev-test-view*")))
       (unwind-protect
           (let ((session (mevedel-session--create
-                          :name "test" :permission-mode 'auto)))
+                          :name "test" :permission-mode 'edits)))
             (with-current-buffer data-buf
               (setq-local mevedel--session session))
             (with-current-buffer view-buf
@@ -1417,7 +1402,7 @@ must restore the prior value to avoid cross-test pollution."
             (set-default-toplevel-value 'mevedel-permission-mode 'ask)
             (with-current-buffer view-buf
               (should (eq (mevedel-permission-mode--get 'mevedel-permission-mode)
-                          'auto))))
+                          'edits))))
         (when (buffer-live-p data-buf) (kill-buffer data-buf))
         (when (buffer-live-p view-buf) (kill-buffer view-buf))))))
 

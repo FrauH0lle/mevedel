@@ -2318,20 +2318,20 @@
     (with-current-buffer view-buf
       (mevedel-view--start-spinner "Thinking...")
       (goto-char (point-max))
-      (insert "/auto")
-      (should (equal "/auto" (mevedel-view--input-text)))
+      (insert "/edits")
+      (should (equal "/edits" (mevedel-view--input-text)))
       (mevedel-view--spinner-tick)
-      (should (equal "/auto" (mevedel-view--input-text)))
+      (should (equal "/edits" (mevedel-view--input-text)))
       (mevedel-view--stop-spinner)))
 
   :doc "spinner tick preserves composer point while drafting"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
       (mevedel-view--start-spinner "Thinking...")
-      (mevedel-view-stream-test--insert-composer-draft "/auto")
+      (mevedel-view-stream-test--insert-composer-draft "/edits")
       (let ((point-before (point)))
         (mevedel-view--spinner-tick)
-        (should (equal "/auto" (mevedel-view--input-text)))
+        (should (equal "/edits" (mevedel-view--input-text)))
         (should (= (point) point-before)))
       (mevedel-view--stop-spinner)))
 
@@ -2372,8 +2372,8 @@
     (with-current-buffer view-buf
       (mevedel-view--start-spinner "Thinking...")
       (goto-char (point-max))
-      (insert "/auto")
-      (should (equal "/auto" (mevedel-view--input-text)))))
+      (insert "/edits")
+      (should (equal "/edits" (mevedel-view--input-text)))))
 
   :doc "ASCII fallback frames can be selected"
   (mevedel-view-stream-test--with-buffers

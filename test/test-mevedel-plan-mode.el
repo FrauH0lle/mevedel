@@ -59,11 +59,11 @@
   (dolist (status '(active paused blocked))
     (let ((session
            (mevedel-session--create
-            :name "test" :permission-mode 'auto
+            :name "test" :permission-mode 'edits
             :goal (mevedel-goal--create :status status))))
       (should-error (mevedel-plan-mode-enter session) :type 'user-error)
       (should-not (mevedel-session-plan-mode session))
-      (should (eq 'auto (mevedel-session-permission-mode session)))))
+      (should (eq 'edits (mevedel-session-permission-mode session)))))
 
   :doc "allows a completed Goal to remain as history"
   (let ((session
@@ -82,7 +82,7 @@
 
   :doc "re-entering an active Plan preserves its proposal selection"
   (let* ((selection '(:location here :context current
-                      :execution goal :mode auto))
+                      :execution goal :mode edits))
          (session
           (mevedel-session--create
            :name "test" :plan-mode t
@@ -97,14 +97,14 @@
   ,test
   (test)
   (let ((session (mevedel-session--create
-                  :name "test" :permission-mode 'auto :plan-mode t)))
+                  :name "test" :permission-mode 'edits :plan-mode t)))
     (mevedel-plan-mode-exit session)
     (should-not (mevedel-session-plan-mode session))
-    (should (eq 'auto (mevedel-session-permission-mode session))))
+    (should (eq 'edits (mevedel-session-permission-mode session))))
 
   :doc "cancels a proposal into a draft and discards its selection"
   (let* ((selection '(:location here :context current
-                      :execution goal :mode auto))
+                      :execution goal :mode edits))
          (session (mevedel-session--create
                    :name "test" :plan-mode t
                    :plan-metadata
@@ -129,27 +129,27 @@
   (test)
   (mevedel-skills-test--with-model-backends
     (let ((session (mevedel-session--create
-                    :name "test" :permission-mode 'auto)))
+                    :name "test" :permission-mode 'edits)))
       (with-temp-buffer
         (setq-local mevedel-goal-token-budget 1234
                     gptel-backend (gptel-get-backend "Balanced")
                     gptel-model 'balanced-model
                     gptel-reasoning-effort 'high)
         (should (equal '(:location here :context current
-                         :execution direct :mode auto
+                         :execution direct :mode edits
                          :model-provider "Balanced:balanced-model"
                          :reasoning-effort high
                          :goal-token-budget 1234
                          :skills nil :instructions nil)
                        (mevedel-plan-mode--default-selection session))))
-      (should (eq 'auto (mevedel-session-permission-mode session))))))
+      (should (eq 'edits (mevedel-session-permission-mode session))))))
 
 (mevedel-deftest mevedel-plan-mode--invalidate-proposal
   (:doc "demotes an actionable proposal while preserving its selection")
   ,test
   (test)
   (let* ((selection '(:location here :context current
-                      :execution direct :mode auto))
+                      :execution direct :mode edits))
          (session (mevedel-session--create
                    :name "test" :plan-mode t
                    :plan-metadata
@@ -201,7 +201,7 @@
   ,test
   (test)
   (let* ((session (mevedel-session--create
-                   :name "test" :permission-mode 'auto))
+                   :name "test" :permission-mode 'edits))
          (data-buffer (generate-new-buffer " *plan-approval-data*"))
          (view-buffer (generate-new-buffer " *plan-approval-view*"))
          (selection
@@ -250,7 +250,7 @@
                             "Location    Here"
                             "Context     Current — full planning transcript"
                             "Execution   Direct — one implementation turn"
-                            "Mode        Auto"
+                            "Mode        Edits"
                             "Model       OpenAI:gpt-5 · effort low"
                             "Skills      None"
                             "Instructions None"))
@@ -327,7 +327,7 @@
             (call-interactively (lookup-key keymap (kbd "m")))
             (should rerendered)
             (should (eq 'full-auto (plist-get selection :mode)))
-            (should (eq 'auto (mevedel-session-permission-mode session)))
+            (should (eq 'edits (mevedel-session-permission-mode session)))
             (call-interactively (lookup-key keymap (kbd "RET")))
             (should (plist-get outcome :accept))
             (let ((accepted (plist-get outcome :selection)))
@@ -567,7 +567,7 @@
   :doc "cycling a setting preserves a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create
-                     :name "test" :permission-mode 'auto))
+                     :name "test" :permission-mode 'edits))
            (selection (mevedel-plan-mode--default-selection session))
            (entry (mevedel-plan-mode--approval-entry
                    "# Plan" data-buf session selection))
@@ -713,7 +713,7 @@
                    :name "test" :save-path save-dir :plan-mode t
                    :plan-metadata
                    '(:selection (:location here :context current
-                                 :execution goal :mode auto
+                                 :execution goal :mode edits
                                  :goal-token-budget 2468)))))
     (unwind-protect
         (with-temp-buffer
@@ -742,7 +742,7 @@
                           (mevedel-session-pending-plan-approval session)
                           :body)))
           (should (equal '(:location here :context current
-                           :execution goal :mode auto
+                           :execution goal :mode edits
                            :goal-token-budget 2468)
                          (plist-get
                           (mevedel-session-pending-plan-approval session)
@@ -788,7 +788,7 @@
          (plan "# Restored plan")
          (hash (mevedel-plan-hash plan))
          (selection '(:location here :context current
-                      :execution goal :mode auto
+                      :execution goal :mode edits
                       :model-provider "OpenAI:gpt-5"
                       :reasoning-effort nil
                       :goal-token-budget 1357))
@@ -904,7 +904,7 @@
   (let* ((save-dir (make-temp-file "mevedel-plan-direct-" t))
          (session (mevedel-session--create
                    :name "test" :save-path save-dir
-                   :permission-mode 'auto :plan-mode t))
+                   :permission-mode 'edits :plan-mode t))
          (data-buffer (generate-new-buffer " *plan-direct-data*"))
          (view-buffer (generate-new-buffer " *plan-direct-view*"))
          hook-input implementation)
@@ -912,7 +912,7 @@
         (progn
           (with-current-buffer data-buffer
             (setq-local mevedel--session session
-                        mevedel-permission-mode 'auto))
+                        mevedel-permission-mode 'edits))
           (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_buffer) view-buffer))
                     ((symbol-function 'mevedel-view--submit-planned-input)
@@ -956,7 +956,7 @@
   (let* ((save-dir (make-temp-file "mevedel-plan-goal-" t))
          (session (mevedel-session--create
                    :name "test" :save-path save-dir
-                   :permission-mode 'auto :plan-mode t))
+                   :permission-mode 'edits :plan-mode t))
          (data-buffer (generate-new-buffer " *plan-goal-data*"))
          (view-buffer (generate-new-buffer " *plan-goal-view*"))
          (mevedel-goal-token-budget 1234)
@@ -965,7 +965,7 @@
         (progn
           (with-current-buffer data-buffer
             (setq-local mevedel--session session
-                        mevedel-permission-mode 'auto
+                        mevedel-permission-mode 'edits
                         mevedel-goal-token-budget 1234))
           (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_buffer) view-buffer))
@@ -1070,7 +1070,7 @@
 
   :doc "feedback preserves Plan and selection while requiring a replacement"
   (let* ((selection '(:location here :context current
-                      :execution goal :mode auto
+                      :execution goal :mode edits
                       :goal-token-budget 4321))
          (session (mevedel-session--create
                    :name "test" :plan-mode t
@@ -1163,7 +1163,7 @@
          (mevedel-session--create
           :name "main"
           :plan-metadata '(:status proposed :proposal-id (1 2 "h")
-                           :selection (:mode auto)))))
+                           :selection (:mode edits)))))
     (mevedel-plan-mode--demote-proposal session nil)
     (should (eq 'draft
                 (plist-get (mevedel-session-plan-metadata session) :status)))
@@ -1188,7 +1188,7 @@
   (:doc "cycles implementation permission modes")
   ,test
   (test)
-  (should (eq 'auto (mevedel-plan-mode--next-mode 'ask)))
+  (should (eq 'edits (mevedel-plan-mode--next-mode 'ask)))
   (should (eq 'ask (mevedel-plan-mode--next-mode 'full-auto))))
 
 (mevedel-deftest mevedel-plan-mode--next-context
@@ -1263,10 +1263,10 @@
                    (lambda (&rest _) (setq dispatched t))))
           (mevedel-plan-mode--accept
            "# Plan" chat-buffer session
-           '(:location here :context current :execution direct :mode auto))
+           '(:location here :context current :execution direct :mode edits))
           (should-not (mevedel-session-plan-mode session))
           (should dispatched)
-          (should (eq 'auto selected-mode))
+          (should (eq 'edits selected-mode))
           (should (equal '("Preparing implementation..." plan-preparation)
                          status)))
       (kill-buffer view-buffer)

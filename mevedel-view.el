@@ -325,9 +325,9 @@
   "Face for the ask permission mode prompt label."
   :group 'mevedel)
 
-(defface mevedel-view-permission-mode-auto
+(defface mevedel-view-permission-mode-edits
   '((t :inherit success :weight bold))
-  "Face for the auto permission mode prompt label."
+  "Face for the edits permission mode prompt label."
   :group 'mevedel)
 
 (defface mevedel-view-permission-mode-full-auto

@@ -521,7 +521,7 @@ completion, prompt submission, and integration with that history ring:
 - `C-c C-l`: browse history
 - `C-c C-u`: clear current input
 - `C-a`: beginning of input line
-- `Shift-TAB` / `<backtab>`: cycle `ask`, `auto`, and `full-auto`
+- `Shift-TAB` / `<backtab>`: cycle `ask`, `edits`, and `full-auto`
 - `C-<tab>` in the composer: toggle Plan without changing the permission mode
 
 These bindings apply only while point is in the editable composer.

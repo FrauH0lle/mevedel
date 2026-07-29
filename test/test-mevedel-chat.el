@@ -501,7 +501,7 @@
                          sent-display display
                          sent-submission accepted))))
         (mevedel--implement-plan
-         (list :permission-mode 'auto
+         (list :permission-mode 'edits
                :display-text "Implement accepted plan as Goal"
                :prompt-submission submission)))
       (should (equal (mevedel-prompt-submission-input submission)
@@ -525,7 +525,7 @@
                  (lambda (&rest _)
                    (setq seen mevedel-skills--pending-request-context))))
         (mevedel--implement-plan
-         (list :permission-mode 'auto
+         (list :permission-mode 'edits
                :prompt-submission submission
                :prepared-outcome prepared)))
       (should (equal '(:invoked-skills (alpha)) seen)))))
@@ -1095,8 +1095,8 @@
                               (lambda () (cl-incf refreshed))))
                      (with-current-buffer buffer
                        (setq-local mevedel--session session)
-                       (mevedel--implementation-permission-mode-apply 'auto)
-                       (should (eq 'auto
+                       (mevedel--implementation-permission-mode-apply 'edits)
+                       (should (eq 'edits
                                    (mevedel-session-permission-mode session)))
                        (should (equal '(ask)
                                       mevedel--implementation-permission-mode-restore))

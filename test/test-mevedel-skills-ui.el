@@ -50,7 +50,7 @@
 (mevedel-deftest mevedel-skills-ui-ownership ()
   ,test
   (test)
-  (dolist (symbol '(mevedel-cmd--auto
+  (dolist (symbol '(mevedel-cmd--edits
                     mevedel-cmd--mode
                     mevedel-cmd--model
                     mevedel-cmd--ps
@@ -206,11 +206,11 @@ spanning lines")))
     (mevedel-skills-test--with-chat-buffer session
       (cl-letf (((symbol-function 'mevedel-menu-open)
                  (lambda (area) (setq called area))))
-        (insert "### /mode auto")
+        (insert "### /mode edits")
         (goto-char (point-max))
         (should (eq 'local (mevedel-skills--dispatch-slash-command)))
         (should-not called)
-        (should (eq 'auto
+        (should (eq 'edits
                     (mevedel-session-permission-mode session)))
         (should (equal "### " (buffer-string))))))
 
@@ -1511,7 +1511,7 @@ spanning lines")))
                ("compact" . ignore)
                ("goal" . ignore)
                ("mode" . ignore)
-               ("auto" . ignore)
+               ("edits" . ignore)
                ("clear" . ignore)
                ("help" . ignore)
                ("init" . ignore)
@@ -1552,7 +1552,7 @@ spanning lines")))
           (should (equal '("full-auto")
                          (mevedel-skills-test--capf-candidates
                           capf "fu")))
-          (should (member "auto"
+          (should (member "edits"
                           (mevedel-skills-test--capf-candidates capf)))
           (should (string-match-p "auto-allow"
                                   (funcall annot "full-auto")))))))
@@ -2075,20 +2075,20 @@ spanning lines")))
           (let ((session (mevedel-session--create
                           :name "test" :permission-mode 'ask)))
             (setq-local mevedel--session session)
-            (mevedel-cmd--mode "auto")
-            (should (eq 'auto
+            (mevedel-cmd--mode "edits")
+            (should (eq 'edits
                         (mevedel-session-permission-mode session)))
-            (should (eq 'auto mevedel-permission-mode))))
+            (should (eq 'edits mevedel-permission-mode))))
       (set-default-toplevel-value 'mevedel-permission-mode saved)))
 
-  :doc "accepts UI aliases"
+  :doc "rejects superseded UI names"
   (with-temp-buffer
     (let ((session (mevedel-session--create
                     :name "test" :permission-mode 'ask)))
       (setq-local mevedel--session session)
-      (mevedel-cmd--mode "edit")
-      (should (eq 'auto
-                  (mevedel-session-permission-mode session)))
+      (dolist (mode '("auto" "edit" "accept-edits" "trust-all"))
+        (should-error (mevedel-cmd--mode mode) :type 'user-error))
+      (should (eq 'ask (mevedel-session-permission-mode session)))
       (mevedel-cmd--mode "full-auto")
       (should (eq 'full-auto
                   (mevedel-session-permission-mode session)))
@@ -2119,11 +2119,11 @@ spanning lines")))
 
   :doc "blank args leaves the mode unchanged"
   (with-temp-buffer
-    (setq-local mevedel-permission-mode 'auto)
+    (setq-local mevedel-permission-mode 'edits)
     (cl-letf (((symbol-function 'mevedel-menu-open)
                (lambda (_area) (user-error "No cockpit"))))
       (mevedel-cmd--mode ""))
-    (should (eq 'auto mevedel-permission-mode))))
+    (should (eq 'edits mevedel-permission-mode))))
 
 (mevedel-deftest mevedel-cmd--goal ()
   ,test
@@ -2139,7 +2139,7 @@ spanning lines")))
   :doc "treats former subcommand words as ordinary objective text"
   (with-temp-buffer
     (let ((session (mevedel-session--create
-                    :name "main" :permission-mode 'auto))
+                    :name "main" :permission-mode 'edits))
           started)
       (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-goal-start)
@@ -2147,7 +2147,7 @@ spanning lines")))
         (should (eq 'mevedel-view-sent
                     (mevedel-cmd--goal "auto Ship safely"))))
       (should (equal "auto Ship safely" started))
-      (should (eq 'auto
+      (should (eq 'edits
                   (mevedel-session-permission-mode session)))))
   :doc "bare command opens the Goal cockpit with a current Goal"
   (with-temp-buffer
@@ -2201,11 +2201,11 @@ spanning lines")))
   :doc "enters Plan without changing the session permission policy"
   (with-temp-buffer
     (let ((session (mevedel-session--create
-                    :name "main" :permission-mode 'auto)))
+                    :name "main" :permission-mode 'edits)))
       (setq-local mevedel--session session)
       (mevedel-cmd--plan nil)
       (should (mevedel-session-plan-mode session))
-      (should (eq 'auto (mevedel-session-permission-mode session)))))
+      (should (eq 'edits (mevedel-session-permission-mode session)))))
 
   :doc "rejects arguments without changing Plan state"
   (with-temp-buffer
@@ -2214,18 +2214,18 @@ spanning lines")))
       (should-error (mevedel-cmd--plan "later") :type 'user-error)
       (should-not (mevedel-session-plan-mode session)))))
 
-(mevedel-deftest mevedel-cmd--auto ()
+(mevedel-deftest mevedel-cmd--edits ()
   ,test
   (test)
-  :doc "toggles auto on without authorizing full-auto execution"
+  :doc "toggles edits on without authorizing full-auto execution"
   (let ((saved (default-toplevel-value 'mevedel-permission-mode)))
     (unwind-protect
         (with-temp-buffer
           (let ((session (mevedel-session--create
                           :name "test" :permission-mode 'ask)))
             (setq-local mevedel--session session)
-            (mevedel-cmd--auto nil)
-            (should (eq 'auto
+            (mevedel-cmd--edits nil)
+            (should (eq 'edits
                         (mevedel-session-permission-mode session)))
             (should-not
              (memq 'full-auto-mode
@@ -2233,20 +2233,20 @@ spanning lines")))
                            (mevedel-session-reminders session))))))
       (set-default-toplevel-value 'mevedel-permission-mode saved)))
 
-  :doc "toggles auto off to ask"
+  :doc "toggles edits off to ask"
   (let ((saved (default-toplevel-value 'mevedel-permission-mode)))
     (unwind-protect
         (with-temp-buffer
           (let ((session (mevedel-session--create
-                          :name "test" :permission-mode 'auto)))
+                          :name "test" :permission-mode 'edits)))
             (setq-local mevedel--session session)
-            (mevedel-cmd--auto nil)
+            (mevedel-cmd--edits nil)
             (should (eq 'ask
                         (mevedel-session-permission-mode session)))
             (should-not (mevedel-session-reminders session))))
       (set-default-toplevel-value 'mevedel-permission-mode saved)))
 
-  :doc "switches full-auto to auto and records the boundary change"
+  :doc "switches full-auto to edits and records the boundary change"
   (let ((saved (default-toplevel-value 'mevedel-permission-mode)))
     (unwind-protect
         (with-temp-buffer
@@ -2255,8 +2255,8 @@ spanning lines")))
             (setf (mevedel-session-reminders session)
                   (list (mevedel-reminders-make-full-auto-mode)))
             (setq-local mevedel--session session)
-            (mevedel-cmd--auto nil)
-            (should (eq 'auto
+            (mevedel-cmd--edits nil)
+            (should (eq 'edits
                         (mevedel-session-permission-mode session)))
             (let ((types (mapcar #'mevedel-reminder-type
                                  (mevedel-session-reminders session))))
