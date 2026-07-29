@@ -330,9 +330,11 @@ place the same user-visible request in the shared permission queue.
 
 Interactive full-escalation prompts offer reusable allow only for Bash input
 that is neither dangerous nor complex and contains no glob metacharacters.
-Dangerous/complex Bash and arbitrary Eval remain once-only at the prompt;
-experts may still author an exact, scoped, or deliberately broad qualified rule
-directly. Reusable deny remains available because it can only reduce authority.
+Literal stable Bash commands, including dangerous commands, and literal batch
+Eval expressions may be remembered exactly. Dynamic, glob-bearing, or otherwise
+ambiguous Bash remains invocation-only; experts may still author an exact,
+scoped, or deliberately broad qualified rule directly. Reusable deny remains
+available because it can only reduce authority.
 
 `best-effort` executes directly when the initial probe is unavailable. For the narrow
 race where a later Bubblewrap launch fails, a marker emitted immediately before

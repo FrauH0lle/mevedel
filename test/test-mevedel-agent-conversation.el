@@ -309,14 +309,14 @@
 			worker-buf
 			nested-buf)
 		   (setf (mevedel-session-permission-mode session) 'full-auto)
+		   (setf (mevedel-session-sandbox-mode session) 'required)
 		   (setf (mevedel-session-permission-rules session)
 			 '(("Edit" :path "/tmp/protected/**" :action deny)))
 		   (setf (mevedel-session-resource-grants session)
 			 '((:path "/tmp/protected/read.txt" :access read)))
 		   (unwind-protect
 		       (let ((mevedel-protected-paths
-			      '(("/tmp/protected/**" . inaccessible)))
-			     (mevedel-sandbox-mode 'required))
+			      '(("/tmp/protected/**" . inaccessible))))
 			 (with-current-buffer parent-buf
 			   (setq-local mevedel--session session)
 			   (setq-local mevedel--workspace workspace))
@@ -332,7 +332,9 @@
 			    (eq session
 			        (buffer-local-value 'mevedel--session buffer))))
 			 (with-current-buffer nested-buf
-			   (should (eq 'required mevedel-sandbox-mode))
+			   (should
+			    (eq 'required
+			        (mevedel-sandbox-mode-effective mevedel--session)))
 			   (should
 			    (eq 'deny
 			        (mevedel-check-permission

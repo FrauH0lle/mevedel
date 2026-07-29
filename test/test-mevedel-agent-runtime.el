@@ -13,6 +13,9 @@
 (require 'mevedel-reminders)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-execution)
+(require 'mevedel-permission-queue)
+(require 'mevedel-pipeline)
+(require 'mevedel-sandbox)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-tool-task)
@@ -259,6 +262,74 @@
                (mevedel-agent-invocation-runtime-settled-p invocation)))))
       (kill-buffer agent-buffer)
       (kill-buffer parent)))
+
+  :doc "public dispatch shares root authority and routes child prompts to it"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-agent-authority-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "authority"))
+         (session (mevedel-session-create "main" workspace root))
+         (parent (generate-new-buffer " *agent-authority-parent*"))
+         (agent (mevedel-agent-runtime-test--agent))
+         (configuration
+          (mevedel-agent-runtime-test--configuration agent))
+         invocation
+         agent-buffer
+         next-called)
+    (setf (mevedel-session-permission-mode session) 'ask
+          (mevedel-session-sandbox-mode session) 'required)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session session
+                      mevedel--workspace workspace)
+          (cl-letf
+              (((symbol-function 'gptel-mode) #'ignore)
+               ((symbol-function 'mevedel-agent-runtime--setup-transcript)
+                (lambda (inv _buffer)
+                  (setf
+                   (mevedel-agent-invocation-transcript-relative-path inv)
+                   "agents/worker.chat.org")))
+               ((symbol-function 'mevedel-agent-conversation-configure)
+                #'ignore)
+               ((symbol-function 'mevedel-agent-conversation-save)
+                (lambda (&rest _) t))
+               ((symbol-function 'mevedel-agent-exec-run)
+                (lambda (&rest _) 'provider-fsm))
+               ((symbol-function 'mevedel-permission-queue--render-entry)
+                #'ignore))
+            (setq invocation
+                  (mevedel-agent-runtime-dispatch
+                   nil "Work" "Edit the file."
+                   :path "/root/worker"
+                   :frozen-configuration configuration)
+                  agent-buffer
+                  (mevedel-agent-invocation-buffer invocation))
+            (with-current-buffer agent-buffer
+              (should (eq session mevedel--session))
+              (should
+               (eq 'required
+                   (mevedel-sandbox-mode-effective mevedel--session)))
+              (let* ((tool (mevedel-tool--create
+                            :name "Edit" :read-only-p nil :groups '(edit)))
+                     (request (mevedel-request--create
+                               :id "child-request"
+                               :session session
+                               :origin "/root/worker")))
+                (mevedel-pipeline--step-permission
+                 (list :tool tool :args nil :session session :request request)
+                 (lambda (_context) (setq next-called t))
+                 #'ignore)))
+            (let ((entry (car (mevedel-session-permission-queue session))))
+              (should (equal "/root/worker" (plist-get entry :origin)))
+              (should (equal "child-request" (plist-get entry :request-id)))
+              (funcall (plist-get entry :callback) 'allow-session))
+            (should next-called)
+            (should
+             (equal '(("Edit" :action allow))
+                    (mevedel-session-permission-rules session)))))
+      (when (buffer-live-p agent-buffer) (kill-buffer agent-buffer))
+      (when (buffer-live-p parent) (kill-buffer parent))
+      (delete-directory root t)))
 
   :doc "continues a retained buffer without replaying forked context"
   (let* ((parent (generate-new-buffer " *agent-runtime-parent*"))

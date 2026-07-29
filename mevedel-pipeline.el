@@ -24,27 +24,45 @@
 (require 'mevedel-hooks)
 (require 'mevedel-utilities)
 (require 'mevedel-permission-log)
+(require 'mevedel-permission-queue)
 (require 'mevedel-tool-repair)
 
-(declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-handler "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-async-p "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-name "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-max-result-size "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-render-transform
-                  "mevedel-tool-registry" (cl-x) t)
+;; `gptel-request'
+(declare-function gptel-fsm-info "ext:gptel-request" (fsm))
+(defvar gptel-backend)
+
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-path
+                  "mevedel-agents" (cl-x) t)
+
+;; `mevedel-execution'
+(declare-function mevedel-execution-sandbox-summary-class
+                  "mevedel-execution" (summary))
+(defvar mevedel-execution--sandbox-summary-cell)
+
+;; `mevedel-goal'
+(declare-function mevedel-goal-tool-result-budget-warning
+                  "mevedel-goal" (session fsm))
+
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-context-audit-records
+                  "mevedel-hooks" (decision event type &optional omit-context))
+(declare-function mevedel-hooks-decision-reason
+                  "mevedel-hooks" (decision))
+(declare-function mevedel-hooks-run-event "mevedel-hooks"
+                  (event event-plist callback
+                         &optional session workspace request invocation))
+(declare-function mevedel-hooks-tool-event-plist
+                  "mevedel-hooks" (event context &rest extra))
+
+;; `mevedel-permissions'
 (declare-function mevedel-check-permission-async "mevedel-permissions"
                   (tool-name cont &rest args))
 (declare-function mevedel-check-permission-async-with-metadata
                   "mevedel-permissions" (tool-name cont &rest args))
-(declare-function mevedel-permission-decision-raw-outcome
-                  "mevedel-permissions" (decision))
+(declare-function mevedel-permission--apply-prompt-result
+                  "mevedel-permissions" (result tool-name &rest args))
 (declare-function mevedel-permission--checker-args
                   "mevedel-permissions" (context))
 (declare-function mevedel-permission--invocation-context
@@ -53,42 +71,20 @@
                   "mevedel-permissions" (outcome))
 (declare-function mevedel-permission--path-protected-p
                   "mevedel-permissions" (path))
-(declare-function mevedel-tool-exec--bash-decision-specifier-value
-                  "mevedel-tool-exec" (command))
-(declare-function mevedel-workspace-ensure-generated-state-ignored
-                  "mevedel-workspace" (workspace))
-(declare-function mevedel-permission--apply-prompt-result
-                  "mevedel-permissions" (result tool-name &rest args))
+(declare-function mevedel-permission-decision-raw-outcome
+                  "mevedel-permissions" (decision))
+
+;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--shallow-ensure-files
                   "mevedel-session-persistence" (session buffer))
+
+;; `mevedel-specialist-nudges'
+(declare-function mevedel-specialist-nudges-apply
+                  "mevedel-specialist-nudges" (context))
+
+;; `mevedel-structs'
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-path
-                  "mevedel-agents" (cl-x) t)
 (defvar mevedel--session)
-(defvar mevedel--workspace)
-
-(defvar mevedel-pipeline--active-tool-use-id nil
-  "Tool-use id dynamically visible while a handler starts its work.")
-
-(defvar mevedel-pipeline--auto-apply-edit-p nil
-  "Non-nil while direct user authority auto-applies a native edit.")
-
-;; `mevedel-execution'
-(declare-function mevedel-execution-sandbox-summary-class
-                  "mevedel-execution" (summary))
-(defvar mevedel-execution--sandbox-summary-cell)
-
-;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request" (fsm))
-(defvar gptel-backend)
-
-;; `mevedel-goal'
-(declare-function mevedel-goal-tool-result-budget-warning
-                  "mevedel-goal" (session fsm))
-
-;; `mevedel-tool-fs'
-(declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
@@ -97,9 +93,12 @@
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
 
-;; `mevedel-transcript-audit'
-(declare-function mevedel-transcript-audit-spans
-                  "mevedel-transcript-audit" (text &optional type))
+;; `mevedel-tool-exec'
+(declare-function mevedel-tool-exec--bash-decision-specifier-value
+                  "mevedel-tool-exec" (command))
+
+;; `mevedel-tool-fs'
+(declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
 
 ;; `mevedel-tool-media'
 (declare-function mevedel-tool-media-add-to-provider-result
@@ -119,35 +118,47 @@
 (declare-function mevedel-tool-media-strip-blocks
                   "mevedel-tool-media" (string))
 
-;; `subr'
-(defvar read-eval)
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-async-p "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-get-name "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-handler "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-max-result-size "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-render-transform
+                  "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-tool-repair-diagnostics'
 (declare-function mevedel-tool-repair-audit-record
                   "mevedel-tool-repair-diagnostics" (state repairs))
 
-;; `mevedel-specialist-nudges'
-(declare-function mevedel-specialist-nudges-apply
-                  "mevedel-specialist-nudges" (context))
-
-;; `mevedel-tool-ui'
-(require 'mevedel-permission-queue)
-
 ;; `mevedel-tools'
-(declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
 (declare-function mevedel-tools--ctx-record-used "mevedel-tools" (ctx name))
+(declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
 (defvar mevedel-tools--current-fsm)
 
-;; `mevedel-hooks'
-(declare-function mevedel-hooks-context-audit-records
-                  "mevedel-hooks" (decision event type &optional omit-context))
-(declare-function mevedel-hooks-decision-reason
-                  "mevedel-hooks" (decision))
-(declare-function mevedel-hooks-run-event "mevedel-hooks"
-                  (event event-plist callback
-                         &optional session workspace request invocation))
-(declare-function mevedel-hooks-tool-event-plist
-                  "mevedel-hooks" (event context &rest extra))
+;; `mevedel-transcript-audit'
+(declare-function mevedel-transcript-audit-spans
+                  "mevedel-transcript-audit" (text &optional type))
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace-ensure-generated-state-ignored
+                  "mevedel-workspace" (workspace))
+(defvar mevedel--workspace)
+
+;; `subr'
+(defvar read-eval)
+
+(defvar mevedel-pipeline--active-tool-use-id nil
+  "Tool-use id dynamically visible while a handler starts its work.")
+
+(defvar mevedel-pipeline--auto-apply-edit-p nil
+  "Non-nil while direct user authority auto-applies a native edit.")
 
 
 ;;
