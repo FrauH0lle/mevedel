@@ -9,6 +9,7 @@
 (require 'cl-lib)
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-permission-prompt)
+(require 'mevedel-permission-queue)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
@@ -72,6 +73,58 @@
         (should-not received)
         (should (overlay-buffer ov))))))
 
+(mevedel-deftest mevedel-permission--prompt-toggle-remember
+  ()
+  ,test
+  (test)
+  :doc "command and network toggles preserve their dependency"
+  (with-temp-buffer
+    (let* ((cell (list '(:operation t)))
+           (entry
+            `(:session session
+              :remember-authority-cell ,cell
+              :missing-additional-permissions (:network t))))
+      (insert "prompt")
+      (let ((ov (make-overlay (point-min) (point-max))))
+        (overlay-put ov 'mevedel-permission-prompt t)
+        (overlay-put ov 'mevedel-view-interaction-entry entry)
+        (goto-char (point-min))
+        (cl-letf (((symbol-function
+                    'mevedel-permission-queue--render-head)
+                   #'ignore))
+          (let ((last-command-event ?n))
+            (mevedel-permission--prompt-toggle-remember))
+          (should (plist-get (car cell) :operation))
+          (should (plist-get (car cell) :network))
+          (let ((last-command-event ?c))
+            (mevedel-permission--prompt-toggle-remember))
+          (should-not (plist-get (car cell) :operation))
+          (should-not (plist-get (car cell) :network))))))
+
+  :doc "path selection toggles one exact grant"
+  (with-temp-buffer
+    (let* ((grant '(:path "/external" :access write))
+           (cell (list '(:operation t)))
+           (entry
+            `(:session session
+              :remember-authority-cell ,cell
+              :missing-additional-permissions
+              (:file-system (,grant)))))
+      (insert "prompt")
+      (let ((ov (make-overlay (point-min) (point-max))))
+        (overlay-put ov 'mevedel-permission-prompt t)
+        (overlay-put ov 'mevedel-view-interaction-entry entry)
+        (goto-char (point-min))
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (&rest _) "Write /external"))
+                  ((symbol-function
+                    'mevedel-permission-queue--render-head)
+                   #'ignore))
+          (let ((last-command-event ?p))
+            (mevedel-permission--prompt-toggle-remember)))
+        (should (equal (list grant)
+                       (plist-get (car cell) :file-system)))))))
+
 
 ;;
 ;;; Rendering
@@ -98,6 +151,24 @@
     (should (string-match-p "\\[x\\] Read /input" text))
     (should (string-match-p "\\[ \\] Write /output" text))))
 
+(mevedel-deftest mevedel-permission--format-remember-authority
+  ()
+  ,test
+  (test)
+  :doc "shows independent command, network, and exact-path selections"
+  (let* ((write '(:path "/output" :access write))
+         (text
+          (mevedel-permission--format-remember-authority
+           `(:reusable-operation-p t
+             :remember-authority-cell
+             ((:operation t :file-system (,write)))
+             :missing-additional-permissions
+             (:network t :file-system (,write))))))
+    (should (string-match-p "\\[x\\] Command" text))
+    (should (string-match-p "\\[ \\] Network with command" text))
+    (should (string-match-p "\\[x\\] Write /output" text))
+    (should (string-match-p "p selects an exact path" text))))
+
 (mevedel-deftest mevedel-permission--prompt-body
   ()
   ,test
@@ -106,14 +177,14 @@
   (cl-letf (((symbol-function 'gptel-agent--block-bg)
              (lambda () 'ask)))
     (should (string-match-p
-             "allow-session"
+             "remember for session"
              (mevedel-permission--prompt-body "Body\n" nil))))
 
   :doc "suppresses session allow without suppressing session deny"
   (cl-letf (((symbol-function 'gptel-agent--block-bg)
              (lambda () 'ask)))
     (let ((body (mevedel-permission--prompt-body "Body\n" nil t)))
-      (should-not (string-match-p "allow-session" body))
+      (should-not (string-match-p "remember for session" body))
       (should (string-match-p "deny-session" body)))))
 
 (mevedel-deftest mevedel-permission--prompt-async-with-content
@@ -140,14 +211,41 @@
                  #'ignore))
         (mevedel-permission--prompt-async-with-content
          "Body\n" t #'ignore nil nil t))
-      (should-not (string-match-p "allow-session" captured-body))
+      (should-not (string-match-p "remember for session" captured-body))
       (should (eq (lookup-key captured-keymap (kbd "RET"))
                   #'mevedel-permission--prompt-approve-once))
       (should-not (lookup-key captured-keymap "s"))
       (should (lookup-key captured-keymap "A"))))
 
+  :doc "rememberable authority binds only the capabilities it presents"
+  (with-temp-buffer
+    (let ((target (current-buffer))
+          captured-keymap)
+      (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                 (lambda () 'ask))
+                ((symbol-function 'mevedel--prompt--data-buffer)
+                 (lambda (&optional _buffer) target))
+                ((symbol-function 'mevedel-view--interaction-target-buffer)
+                 (lambda (_data-buffer) target))
+                ((symbol-function 'mevedel-view--interaction-register)
+                 (lambda (plist)
+                   (setq captured-keymap (plist-get plist :keymap))
+                   (make-overlay (point-min) (point-min))))
+                ((symbol-function 'mevedel--prompt--register-canceller)
+                 #'ignore))
+        (mevedel-permission--prompt-async-with-content
+         "Body\n" t #'ignore nil
+         '(:reusable-operation-p t
+           :remember-authority-cell ((:operation t))
+           :missing-additional-permissions
+           (:network t
+            :file-system ((:path "/external" :access read))))))
+      (dolist (key '("c" "n" "p" "s" "A"))
+        (should (lookup-key captured-keymap key)))))
+
   :doc "does not bind permission actions globally in view mode"
-  (dolist (key (list (kbd "RET") (kbd "TAB") "a" "s" "A" "d" "D" "f"))
+  (dolist (key (list (kbd "RET") (kbd "TAB")
+                     "a" "c" "n" "p" "s" "A" "d" "D" "f"))
     (should-not (lookup-key mevedel-view-mode-map key))))
 
 (mevedel-deftest mevedel-permission--prompt-async-eval
@@ -191,6 +289,8 @@
        "Bash" "curl https://example.test" "Download the page?"
        "main" #'ignore 2
        '(:kind sandbox
+         :reusable-operation-p t
+         :remember-authority-cell ((:operation t))
          :show-operation-authority t
          :operation-pending-p nil
          :requested-additional-permissions
@@ -211,7 +311,9 @@
       (should (string-match-p
                "\\[x\\] Read /external/input" content))
       (should (string-match-p
-               "\\[ \\] Write /external/output" content)))
+               "\\[ \\] Write /external/output" content))
+      (should (string-match-p
+               "\\[x\\] Command  (c toggles)" content)))
     (should-not (nth 1 captured))
     (should (= 2 (nth 3 captured)))
     (should (eq 'sandbox (plist-get (nth 4 captured) :kind)))
@@ -227,6 +329,8 @@
        "Bash" "cat /tmp/secret" "Read the requested file?"
        "main" #'ignore 1
        '(:kind sandbox
+         :reusable-operation-p t
+         :remember-authority-cell ((:operation t))
          :show-operation-authority t
          :operation-pending-p nil
          :requested-additional-permissions

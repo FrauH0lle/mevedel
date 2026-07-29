@@ -753,6 +753,16 @@ guidance.
 Persistent rules accepted via the prompt's "always" choices are saved to
 `.mevedel/permissions.el` per workspace.
 
+Add `:network t` to a Bash or batch-Eval rule to authorize network access
+together with the matching operation. An unqualified operation rule leaves
+network isolated. Authority prompts grant every requested capability to the
+current invocation, while their Command, Network, and exact-path checkboxes
+independently choose what a session or `Always in this workspace` outcome
+remembers. Session authority survives save/resume; workspace authority is
+shared by that workspace's sessions. Open `u Permissions` from the session
+cockpit to inspect operation rules, network-qualified rules, and exact resource
+grants or revoke any one without changing the others.
+
 ### Hooks
 
 Hooks let user or project configuration run automation around prompts, tool

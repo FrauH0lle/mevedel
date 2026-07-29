@@ -485,6 +485,101 @@ recognized command authority is followed by a once-only network prompt"
     (should (equal '(:network t)
                    (plist-get entry :additional-permissions)))
     (should (eq 'allow outcome)))
+  :doc "session Bash approval:
+the default selection remembers the operation but still grants current network"
+  (let* ((root (make-temp-file "mevedel-bash-remember-" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'test root root "test"))
+         (session (mevedel-session-create "main" workspace))
+         (mevedel--session session)
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         outcome)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                   (lambda (entry &optional _session)
+                     (should
+                      (equal '(:operation t)
+                             (car
+                              (plist-get
+                               entry :remember-authority-cell))))
+                     (funcall (plist-get entry :callback)
+                              'allow-session))))
+          (mevedel-tool-exec--check-permission-async
+           nil
+           `(:command "pwd"
+             :sandbox_permissions "with_additional_permissions"
+             :additional_permissions (:network t)
+             :justification "Contact the service?"
+             :permission-context
+             (:session ,session :workspace ,workspace :mode ask))
+           (lambda (result) (setq outcome result)))
+          (should (eq 'allow outcome))
+          (should
+           (seq-some
+            (lambda (rule)
+              (and (equal "pwd" (plist-get (cdr rule) :pattern))
+                   (not (plist-get (cdr rule) :network))))
+            (mevedel-session-permission-rules session)))
+          (should-not
+           (seq-some
+            (lambda (rule) (plist-get (cdr rule) :network))
+            (mevedel-session-permission-rules session))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+  :doc "session Bash approval:
+selecting network stores qualified authority and reuses it without prompting"
+  (let* ((root (make-temp-file "mevedel-bash-network-" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'test root root "test"))
+         (session (mevedel-session-create "main" workspace))
+         (mevedel--session session)
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         (prompts 0)
+         outcome)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (entry &optional _session)
+                       (cl-incf prompts)
+                       (setcar
+                        (plist-get entry :remember-authority-cell)
+                        '(:operation t :network t))
+                       (funcall (plist-get entry :callback)
+                                'allow-session))))
+            (mevedel-tool-exec--check-permission-async
+             nil
+             `(:command "pwd"
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions (:network t)
+               :justification "Contact the service?"
+               :permission-context
+               (:session ,session :workspace ,workspace :mode ask))
+             (lambda (result) (setq outcome result))))
+          (should (eq 'allow outcome))
+          (should
+           (seq-some
+            (lambda (rule)
+              (and (equal "pwd" (plist-get (cdr rule) :pattern))
+                   (plist-get (cdr rule) :network)))
+            (mevedel-session-permission-rules session)))
+          (setq outcome nil)
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (&rest _) (cl-incf prompts))))
+            (mevedel-tool-exec--check-permission-async
+             nil
+             `(:command "pwd"
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions (:network t)
+               :justification "Contact the service?"
+               :permission-context
+               (:session ,session :workspace ,workspace :mode ask))
+             (lambda (result) (setq outcome result))))
+          (should (= 1 prompts))
+          (should (eq 'allow outcome)))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
   :doc "edits Bash:
 additive network authority still prompts in edits mode"
   (let ((mevedel-permission-mode 'edits)
@@ -519,6 +614,83 @@ network authority proceeds without a prompt"
        (lambda (result) (setq outcome result))))
     (should-not enqueued)
     (should (eq 'allow outcome)))
+  :doc "network-qualified Bash authority:
+the matching command and its network request proceed without a prompt"
+  (let* ((session
+          (mevedel-session--create
+           :name "network"
+           :permission-mode 'ask
+           :permission-rules
+           '(("Bash" :pattern "npx test" :action allow)
+             ("Bash" :pattern "npx test" :network t :action allow))))
+         (mevedel--session session)
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _) (setq enqueued t))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       `(:command "npx test"
+         :sandbox_permissions "with_additional_permissions"
+         :additional_permissions (:network t)
+         :justification "Reach the package registry?"
+         :permission-context
+         (:session ,session
+          :session-rules
+          (("Bash" :pattern "npx test" :action allow)
+           ("Bash" :pattern "npx test" :network t :action allow))))
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'allow outcome)))
+  :doc "workspace Bash approval:
+selected operation and network authority are reused by another session"
+  (let* ((root (make-temp-file "mevedel-bash-workspace-network-" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'test root root "test"))
+         (first (mevedel-session-create "first" workspace))
+         (second (mevedel-session-create "second" workspace))
+         (mevedel--session first)
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         (prompts 0)
+         outcome)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (entry &optional _session)
+                       (cl-incf prompts)
+                       (setcar
+                        (plist-get entry :remember-authority-cell)
+                        '(:operation t :network t))
+                       (funcall (plist-get entry :callback)
+                                'always-allow))))
+            (mevedel-tool-exec--check-permission-async
+             nil
+             `(:command "pwd"
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions (:network t)
+               :justification "Contact the service?"
+               :permission-context
+               (:session ,first :workspace ,workspace :mode ask))
+             (lambda (result) (setq outcome result))))
+          (setq outcome nil
+                mevedel--session second)
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (&rest _) (cl-incf prompts))))
+            (mevedel-tool-exec--check-permission-async
+             nil
+             `(:command "pwd"
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions (:network t)
+               :justification "Contact the service?"
+               :permission-context
+               (:session ,second :workspace ,workspace :mode ask))
+             (lambda (result) (setq outcome result))))
+          (should (= 1 prompts))
+          (should (eq 'allow outcome)))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
   :doc "sandbox off:
 network authority changes no boundary and does not prompt"
   (let* ((session (mevedel-session--create
@@ -557,6 +729,11 @@ an ungranted exact filesystem path still prompts and stores session authority"
           (cl-letf (((symbol-function 'mevedel-permission--enqueue)
                      (lambda (queued &optional _session)
                        (setq entry queued)
+                       (setcar
+                        (plist-get queued :remember-authority-cell)
+                        (list :operation t
+                              :file-system
+                              (list (list :path path :access 'read))))
                        (funcall (plist-get queued :callback)
                                 'allow-session))))
             (mevedel-tool-exec--check-permission-async
@@ -576,6 +753,44 @@ an ungranted exact filesystem path still prompts and stores session authority"
           (should
            (member `(:path ,path :access read)
                    (mevedel-session-resource-grants session))))
+      (delete-directory root t)))
+  :doc "session resource approval:
+an unchecked path is granted now without being remembered"
+  (let* ((root (make-temp-file "mevedel-bash-resource-once-" t))
+         (path (file-name-concat root "secret"))
+         (workspace (mevedel-workspace--create :root root))
+         (session (mevedel-session--create
+                   :name "resource" :workspace workspace
+                   :permission-mode 'full-auto))
+         (mevedel--session session)
+         (mevedel-permission-mode 'full-auto)
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths `((,path . inaccessible)))
+         outcome)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "secret"))
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (entry &optional _session)
+                       (should-not
+                        (plist-get
+                         (car
+                          (plist-get entry :remember-authority-cell))
+                         :file-system))
+                       (funcall (plist-get entry :callback)
+                                'allow-session))))
+            (mevedel-tool-exec--check-permission-async
+             nil
+             `(:command ,(format "cat %s" path)
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions (:file_system (:read [,path]))
+               :justification "Read the protected file?"
+               :permission-context
+               (:mode full-auto :session ,session :workspace ,workspace
+                :resource-grants nil))
+             (lambda (result) (setq outcome result))))
+          (should (eq 'allow outcome))
+          (should-not (mevedel-session-resource-grants session)))
       (delete-directory root t)))
   :doc "pregranted protected resource:
 an exact session grant skips only the filesystem prompt"
@@ -717,6 +932,61 @@ one prompt approves both Eval and additive network authority"
             (plist-get (car entries)
                        :missing-additional-permissions)))
     (should (eq 'allow outcome)))
+  :doc "session batch Eval approval:
+the exact expression and selected network authority are reused together"
+  (let* ((root (make-temp-file "mevedel-eval-network-" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'test root root "test"))
+         (session (mevedel-session-create "main" workspace))
+         (mevedel--session session)
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         (prompts 0)
+         outcome)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (entry &optional _session)
+                       (cl-incf prompts)
+                       (setcar
+                        (plist-get entry :remember-authority-cell)
+                        '(:operation t :network t))
+                       (funcall (plist-get entry :callback)
+                                'allow-session))))
+            (mevedel-tool-exec--eval-check-permission-async
+             nil
+             `(:expression "(+ 1 2)"
+               :mode "batch"
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions (:network t)
+               :justification "Fetch package metadata?"
+               :permission-context
+               (:session ,session :workspace ,workspace :mode ask))
+             (lambda (result) (setq outcome result))))
+          (should
+           (member '("Eval" :pattern "(+ 1 2)" :action allow)
+                   (mevedel-session-permission-rules session)))
+          (should
+           (member
+            '("Eval" :pattern "(+ 1 2)" :network t :action allow)
+            (mevedel-session-permission-rules session)))
+          (setq outcome nil)
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (&rest _) (cl-incf prompts))))
+            (mevedel-tool-exec--eval-check-permission-async
+             nil
+             `(:expression "(+ 1 2)"
+               :mode "batch"
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions (:network t)
+               :justification "Fetch package metadata?"
+               :permission-context
+               (:session ,session :workspace ,workspace :mode ask))
+             (lambda (result) (setq outcome result))))
+          (should (= 1 prompts))
+          (should (eq 'allow outcome)))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
   :doc "Bash combines multiple filesystem capabilities under one owner"
   (let* ((origin "/root/worker")
          (request (mevedel-request--create :origin origin))

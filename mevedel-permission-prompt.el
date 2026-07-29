@@ -29,6 +29,10 @@
 
 (autoload 'mevedel--prompt-attribution-line "mevedel-interaction-prompt")
 
+;; `mevedel-permission-queue'
+(declare-function mevedel-permission-queue--render-head
+                  "mevedel-permission-queue" (&optional session))
+
 ;; `mevedel-queue'
 (declare-function mevedel-queue--entry-metadata-get
                   "mevedel-queue" (entry key))
@@ -102,6 +106,58 @@
            (cons 'feedback (string-trim text)))))
     (mevedel-permission--prompt-self-insert)))
 
+(defun mevedel-permission--prompt-toggle-remember ()
+  "Toggle one remembered capability on the permission prompt at point."
+  (interactive)
+  (when-let* ((ov (mevedel--prompt--overlay-at-point
+                   'mevedel-permission-prompt))
+              (entry (overlay-get ov 'mevedel-view-interaction-entry))
+              (cell (plist-get entry :remember-authority-cell)))
+    (let* ((selection (copy-tree (car cell)))
+           (missing (plist-get entry :missing-additional-permissions))
+           (resources (plist-get missing :file-system)))
+      (pcase last-command-event
+        (?c
+         (setq selection
+               (plist-put selection :operation
+                          (not (plist-get selection :operation))))
+         (unless (plist-get selection :operation)
+           (setq selection (plist-put selection :network nil))))
+        (?n
+         (setq selection
+               (plist-put selection :network
+                          (not (plist-get selection :network))))
+         (when (plist-get selection :network)
+           (setq selection (plist-put selection :operation t))))
+        (?p
+         (when resources
+           (let* ((choices
+                   (mapcar
+                    (lambda (grant)
+                      (cons
+                       (format "%s %s"
+                               (capitalize
+                                (symbol-name (plist-get grant :access)))
+                               (plist-get grant :path))
+                       grant))
+                    resources))
+                  (grant
+                   (cdr
+                    (assoc
+                     (completing-read "Remember capability: " choices nil t)
+                     choices)))
+                  (selected (plist-get selection :file-system)))
+             (setq selection
+                   (plist-put
+                    selection :file-system
+                    (if (member grant selected)
+                        (delete grant selected)
+                      (append selected (list grant)))))))))
+      (setcar cell selection)
+      (when-let* ((session (plist-get entry :session)))
+        (require 'mevedel-permission-queue)
+        (mevedel-permission-queue--render-head session)))))
+
 (defun mevedel-permission--prompt-finish (result)
   "Settle the permission prompt overlay at point with RESULT."
   (when-let* ((ov (mevedel--prompt--overlay-at-point
@@ -119,11 +175,11 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
     content
     (propertize "Keys: " 'font-lock-face 'help-key-binding)
     (mevedel--prompt-key "RET")
-    " allow-once  "
+    " allow once  "
     (unless (or suppress-allow-session once-only)
-      (concat (mevedel--prompt-key "s") " allow-session  "))
+      (concat (mevedel--prompt-key "s") " remember for session  "))
     (when (and include-always (not once-only))
-      (concat (mevedel--prompt-key "A") " always-allow  "))
+      (concat (mevedel--prompt-key "A") " Always in this workspace  "))
     (mevedel--prompt-key "d")
     " deny-once  "
     (unless once-only
@@ -168,6 +224,19 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
         (unless once-only
           (define-key map "D" #'mevedel-permission--prompt-deny-session))
         (define-key map "f" #'mevedel-permission--prompt-feedback)
+        (when (and entry
+                   (plist-get entry :remember-authority-cell)
+                   (plist-get entry :reusable-operation-p))
+          (define-key map "c" #'mevedel-permission--prompt-toggle-remember)
+          (when (plist-get
+                 (plist-get entry :missing-additional-permissions)
+                 :network)
+            (define-key map "n"
+                        #'mevedel-permission--prompt-toggle-remember)))
+        (when (plist-get
+               (plist-get entry :missing-additional-permissions)
+               :file-system)
+          (define-key map "p" #'mevedel-permission--prompt-toggle-remember))
         (define-key map [?q] #'mevedel-permission--prompt-deny-once)
         (define-key map (kbd "C-g") #'mevedel-permission--prompt-deny-once)
         (setq ov
@@ -226,6 +295,37 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
         "\n")
        (and (plist-get requested :file-system) "\n")
        "\n"))))
+
+(defun mevedel-permission--format-remember-authority (entry)
+  "Format reusable authority selections from ENTRY."
+  (when-let* ((cell (plist-get entry :remember-authority-cell)))
+    (let* ((selection (car cell))
+           (missing (plist-get entry :missing-additional-permissions))
+           (resources (plist-get missing :file-system))
+           (operation-p (plist-get entry :reusable-operation-p))
+           (network-p (and operation-p (plist-get missing :network))))
+      (when (or operation-p network-p resources)
+        (concat
+         (propertize "Remember if approved with s/A\n"
+                     'font-lock-face '(:inherit bold))
+         (when operation-p
+           (format "[%s] Command  (c toggles)\n"
+                   (if (plist-get selection :operation) "x" " ")))
+         (when network-p
+           (format "[%s] Network with command  (n toggles)\n"
+                   (if (plist-get selection :network) "x" " ")))
+         (mapconcat
+          (lambda (grant)
+            (format
+             "[%s] %s %s"
+             (if (member grant (plist-get selection :file-system))
+                 "x"
+               " ")
+             (capitalize (symbol-name (plist-get grant :access)))
+             (plist-get grant :path)))
+          resources "\n")
+         (and resources "\n(p selects an exact path)\n")
+         "\n")))))
 
 (defun mevedel-permission--prompt-async-attributed
     (tool-name path include-always origin cont &optional count entry)
@@ -338,6 +438,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
            (propertize (format "%s\n" command)
                        'font-lock-face 'font-lock-string-face)
            (mevedel-permission--format-authority-capabilities entry)
+           (mevedel-permission--format-remember-authority entry)
            (mevedel-permission--format-bash-guardian
             guardian guardian-status)
            (when commands-summary
@@ -384,7 +485,10 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
     (content cont &optional count entry)
   "Display an Eval permission prompt and call CONT with its outcome."
   (mevedel-permission--prompt-async-with-content
-   content nil cont count entry t t))
+   content (plist-get entry :include-always)
+   cont count entry
+   (not (plist-get entry :remember-authority-cell))
+   (not (plist-get entry :remember-authority-cell))))
 
 (defun mevedel-permission--prompt-async-sandbox
     (tool-name detail justification origin cont &optional count entry)
@@ -394,7 +498,6 @@ ENTRY follow the shared permission prompt contract."
   (let* ((full-p (eq (plist-get entry :sandbox-permissions)
                      'require-escalated))
          (missing (plist-get entry :missing-additional-permissions))
-         (missing-network-p (plist-get missing :network))
          (missing-filesystem-p (plist-get missing :file-system))
          (full-rule-disabled-p
           (and full-p (not (plist-get entry :include-always))))
@@ -415,7 +518,9 @@ ENTRY follow the shared permission prompt contract."
                          'font-lock-face 'font-lock-escape-face)
              "disabled for this invocation\n"))
           (unless full-p
-            (mevedel-permission--format-authority-capabilities entry))
+            (concat
+             (mevedel-permission--format-authority-capabilities entry)
+             (mevedel-permission--format-remember-authority entry)))
           (propertize "Justification: "
                       'font-lock-face 'font-lock-escape-face)
           (format "%s\n\n" justification)
@@ -444,11 +549,14 @@ ENTRY follow the shared permission prompt contract."
     (mevedel-permission--prompt-async-with-content
      content
      (and (or missing-filesystem-p full-p)
-          (not missing-network-p)
+          (or full-p (plist-get entry :remember-authority-cell))
           (plist-get entry :include-always))
      cont count entry
-     (or missing-network-p full-rule-disabled-p)
-     (and missing-network-p (not full-p)))))
+     (if full-p
+         full-rule-disabled-p
+       (not (plist-get entry :remember-authority-cell)))
+     (and (not full-p)
+          (not (plist-get entry :remember-authority-cell))))))
 
 (provide 'mevedel-permission-prompt)
 
