@@ -262,6 +262,8 @@ transcript on click."
 
 (defvar-keymap mevedel-view--agent-label-map
   :doc "Keymap active on the visible path in Agent handles."
+  "TAB" #'mevedel-view-toggle-section
+  "<tab>" #'mevedel-view-toggle-section
   "RET" #'mevedel-view-activate-at-point
   "<mouse-1>" #'mevedel-view-activate-at-point
   "<mouse-2>" #'mevedel-view-activate-at-point)

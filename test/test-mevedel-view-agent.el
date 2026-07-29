@@ -18,6 +18,7 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
+(require 'mevedel-view-render)
 (require 'mevedel-view-zone)
 (require 'mevedel-workspace)
 
@@ -127,6 +128,129 @@
                     mevedel-view-refresh-agent-rendering))
     (should (equal "mevedel-view-agent"
                    (file-name-base (or (symbol-file symbol 'defun) ""))))))
+
+(mevedel-deftest mevedel-view-agent-handle-activate ()
+  ,test
+  (test)
+  :doc "agent handles with missing saved transcripts report unavailable"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-path "/root/missing")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "missing-transcript"
+                       :root temporary-file-directory
+                       :name "missing-transcript"))
+           (session (mevedel-session-create "main" workspace))
+           opened
+           message-text)
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons "storage-missing"
+                        `(:agent-path ,agent-path :status completed))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert "(:name \"Agent\" :args (:task_name \"explore\" :message \"Inspect.\"))\n\nraw launch payload\n"))
+      (with-current-buffer view-buf
+        (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+               (rendering
+                (plist-put
+                 (mevedel-tool-ui--render-agent
+                  "Agent"
+                  '(:task_name "explore"
+                    :message "Missing transcript task")
+                  "rendered missing transcript body\n"
+                  `(:kind collaboration-event
+                    :event started
+                    :path ,agent-path
+                    :status completed))
+                 :agent-path agent-path)))
+          (let ((inhibit-read-only t))
+            (goto-char mevedel-view--input-marker)
+            (set-marker-insertion-type mevedel-view--input-marker t)
+            (unwind-protect
+                (mevedel-view--insert-rendered-tool rendering source)
+              (set-marker-insertion-type mevedel-view--input-marker nil)))
+          (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                     (lambda (_buf _start _end) rendering))
+                    ((symbol-function 'mevedel-view-open-agent-transcript)
+                     (lambda (_id)
+                       (setq opened t)
+                       (user-error "Transcript file missing")))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (setq message-text (apply #'format fmt args)))))
+            (goto-char (point-min))
+            (search-forward "Started /root/missing")
+            (goto-char (match-beginning 0))
+            (mevedel-view-agent-handle-activate agent-path)
+            (let ((text (buffer-substring-no-properties
+                         (point-min) mevedel-view--input-marker)))
+              (should opened)
+              (should (equal "Transcript file missing" message-text))
+              (should-not (string-match-p
+                           "rendered missing transcript body" text))
+              (should-not (string-match-p "raw launch payload" text))))))))
+
+  :doc "agent handles with stale live invocations report unavailable"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-path "/root/stale")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "stale-live-transcript"
+                       :root temporary-file-directory
+                       :name "stale-live-transcript"))
+           (session (mevedel-session-create "main" workspace))
+           (inv (mevedel-agent-invocation--create
+                 :path agent-path
+                 :transcript-status 'running))
+           opened
+           message-text)
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons "storage-stale"
+                        `(:agent-path ,agent-path :status running))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert "(:name \"Agent\" :args (:task_name \"explore\" :message \"Inspect.\"))\n\nraw launch payload\n"))
+      (with-current-buffer view-buf
+        (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+               (rendering
+                (plist-put
+                 (mevedel-tool-ui--render-agent
+                  "Agent"
+                  '(:task_name "explore"
+                    :message "Stale live task")
+                  "rendered stale live body\n"
+                  `(:kind collaboration-event
+                    :event started
+                    :path ,agent-path
+                    :status running))
+                 :agent-path agent-path)))
+          (let ((inhibit-read-only t))
+            (goto-char mevedel-view--input-marker)
+            (set-marker-insertion-type mevedel-view--input-marker t)
+            (unwind-protect
+                (mevedel-view--insert-rendered-tool rendering source)
+              (set-marker-insertion-type mevedel-view--input-marker nil)))
+          (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                     (lambda (_buf _start _end) rendering))
+                    ((symbol-function 'mevedel-view--agent-invocation)
+                     (lambda (_id) inv))
+                    ((symbol-function 'mevedel-view-open-agent-transcript)
+                     (lambda (_id)
+                       (setq opened t)
+                       (user-error "Live buffer unavailable")))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (setq message-text (apply #'format fmt args)))))
+            (goto-char (point-min))
+            (search-forward "Started /root/stale")
+            (goto-char (match-beginning 0))
+            (mevedel-view-agent-handle-activate agent-path)
+            (let ((text (buffer-substring-no-properties
+                         (point-min) mevedel-view--input-marker)))
+              (should opened)
+              (should (equal "Live buffer unavailable" message-text))
+              (should-not (string-match-p "rendered stale live body" text))
+              (should-not (string-match-p "raw launch payload" text)))))))))
 
 (mevedel-deftest mevedel-view-agent-initialize
   (:doc "initializes canonical transcript inspection state")

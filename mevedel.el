@@ -106,7 +106,6 @@
 ;; `mevedel-chat'
 (declare-function mevedel--discuss-directive-prompt "mevedel-chat" (content))
 (declare-function mevedel--implement-directive-prompt "mevedel-chat" (content))
-(declare-function mevedel--main-fsm-on-error "mevedel-chat" (fsm))
 (declare-function mevedel--normalize-session-directory
                   "mevedel-chat" (directory workspace))
 (declare-function mevedel--process-directive
@@ -600,12 +599,6 @@ always prompt for the session name."
   ;; invokes `mevedel-resume').
   (require 'mevedel-session-persistence)
 
-  ;; Terminate the session when the main agent errors out.  The main
-  ;; turn is the load-bearing transcript; once gptel routes its FSM
-  ;; through ERRS the conversation state can no longer roll forward,
-  ;; so cancel any in-flight sub-agents and queued permissions.
-  (advice-add 'gptel--handle-error :after #'mevedel--main-fsm-on-error)
-
   (message "mevedel installed successfully"))
 
 ;;;###autoload
@@ -664,9 +657,6 @@ always prompt for the session name."
   ;; Remove view-specific gptel stream repair advice
   (when (featurep 'mevedel-view-stream)
     (mevedel-view-stream-uninstall))
-
-  ;; Remove main-agent error termination advice
-  (advice-remove 'gptel--handle-error #'mevedel--main-fsm-on-error)
 
   (message "mevedel uninstalled successfully"))
 

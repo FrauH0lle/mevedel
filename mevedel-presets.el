@@ -640,8 +640,9 @@ alist with mevedel-specific handlers added:
                 (append (cdr tpre-entry)
                         (list #'mevedel--compact-record-token-baseline)))
       (push (list 'TPRE #'mevedel--compact-record-token-baseline) handlers)))
-  ;; Failure terminals retain StopFailure, skip persistence and queued
-  ;; follow-up submission, and still perform all shared cleanup steps.
+  ;; Failure terminals retain StopFailure and skip queued follow-up
+  ;; submission.  Provider errors persist their failure disclosure;
+  ;; user aborts retain the outer abort command's save.
   (dolist (state '(ERRS ABRT))
     (let* ((entry (assq state handlers))
            (failure-status (if (eq state 'ABRT) 'aborted 'error))

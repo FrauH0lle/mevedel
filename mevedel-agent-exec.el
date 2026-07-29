@@ -275,8 +275,8 @@ helper buffer-locally)."
   "Run gptel's error path for FSM and finalize the transcript as `error'.
 
 `gptel-post-response-functions' fires from `gptel--handle-error', which
-writes an error region into the buffer; persisting that output is the
-audit log's job.
+runs the normal post-response bookkeeping before this handler persists
+the transcript.
 
 Captures a short reason (HTTP status + error type/message) onto the
 invocation's `terminal-reason' slot before finalize so the parent's
