@@ -2074,6 +2074,88 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
 ;;
 ;;; Folding
 
+(mevedel-deftest mevedel-view--render-request-summary-segment ()
+  ,test
+  (test)
+  :doc "provider failures render expanded, retain the request ID, and fold"
+  (mevedel-view-test--with-buffers
+    (let ((provider-message "Processing failed."))
+      (with-current-buffer data-buf
+        (insert
+         (mevedel-pipeline--format-render-data-block
+          `(:kind request-summary
+            :elapsed-seconds 7
+            :outcome error
+            :backend "Codex"
+            :status "HTTP/2 200"
+            :error-type "server_error"
+            :error-code "server_error"
+            :error-data (:type "server_error"
+                         :code "server_error"
+                         :message ,provider-message
+                         :request_id "provider-request-123")
+            :message ,provider-message
+            :retry manual))))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              (segment
+               (list 'request-summary
+                     1 (with-current-buffer data-buf (point-max)))))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (mevedel-view--render-request-summary-segment
+               segment data-buf)
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p
+                   "Codex request failed · server_error" text))
+          (should (string-match-p "HTTP/2 200" text))
+          (should (string-match-p "provider-request-123" text))
+          (should (string-match-p "Retry the request manually" text))
+          (should (string-match-p "Worked for 7s" text)))
+        (goto-char (point-min))
+        (search-forward "Codex request failed")
+        (goto-char (match-beginning 0))
+        (should-not (get-text-property (point) 'mevedel-view-collapsed))
+        (mevedel-view-toggle-section)
+        (should-not (search-forward "provider-request-123"
+                                    mevedel-view--input-marker t))
+        (goto-char (point-min))
+        (search-forward "Codex request failed")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (should (search-forward "provider-request-123"
+                                mevedel-view--input-marker t)))))
+
+  :doc "plain-string provider failures remain visible"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert
+       (mevedel-pipeline--format-render-data-block
+        '(:kind request-summary
+          :elapsed-seconds 1
+          :outcome error
+          :backend "Provider"
+          :status "Transport failure"
+          :error-data "Raw provider failure"
+          :message "Raw provider failure"
+          :retry manual))))
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (segment
+             (list 'request-summary
+                   1 (with-current-buffer data-buf (point-max)))))
+        (goto-char mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (unwind-protect
+            (mevedel-view--render-request-summary-segment segment data-buf)
+          (set-marker-insertion-type mevedel-view--input-marker nil)))
+      (goto-char (point-min))
+      (should (search-forward "Raw provider failure"
+                              mevedel-view--input-marker t)))))
+
 (mevedel-deftest mevedel-view-toggle-section ()
   ,test
   (test)
@@ -2176,7 +2258,58 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
       (should-error (mevedel-view-toggle-section) :type 'user-error)
       (should (= 0 (hash-table-count mevedel-view--source-collapse-states)))
       (should-not (search-forward "event body hidden"
-                                  mevedel-view--input-marker t)))))
+                                  mevedel-view--input-marker t))))
+
+  :doc "TAB toggles running and completed Agent rows; RET opens transcripts"
+  (dolist (status '(running completed))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer data-buf
+        (insert "agent source data\n"))
+      (let* ((agent-path (format "/root/%s" status))
+             (source (cons 1 (with-current-buffer data-buf (point-max))))
+             (rendering
+              `(:header ,(format "Started %s" agent-path)
+                :body "Agent details\n"
+                :body-mode text-mode
+                :vtype agent-handle
+                :agent-path ,agent-path
+                :agent-status ,status
+                :initially-collapsed-p t))
+             opened)
+        (with-current-buffer view-buf
+          (let ((inhibit-read-only t))
+            (goto-char mevedel-view--input-marker)
+            (mevedel-view--insert-rendered-tool rendering source))
+          (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                     (lambda (_buf _start _end &optional _collapsed-only)
+                       rendering))
+                    ((symbol-function
+                      'mevedel-view-open-agent-transcript-at-point)
+                     (lambda (&optional _event)
+                       (setq opened t))))
+            (goto-char (point-min))
+            (search-forward "Started")
+            (mevedel-view-toggle-section)
+            (should (search-forward "Agent details"
+                                    mevedel-view--input-marker t))
+            (should-not opened)
+            (goto-char (point-min))
+            (search-forward agent-path)
+            (goto-char (match-beginning 0))
+            (should (eq #'mevedel-view-toggle-section
+                        (lookup-key (get-text-property (point) 'keymap)
+                                    (kbd "TAB"))))
+            (mevedel-view-toggle-section)
+            (should-not (search-forward "Agent details"
+                                        mevedel-view--input-marker t))
+            (goto-char (point-min))
+            (search-forward agent-path)
+            (goto-char (match-beginning 0))
+            (should (eq #'mevedel-view-activate-at-point
+                        (lookup-key (get-text-property (point) 'keymap)
+                                    (kbd "RET"))))
+            (mevedel-view-activate-at-point)
+            (should opened)))))))
 
 
 (mevedel-deftest mevedel-view-toggle-section/renderer-vtype ()
@@ -2245,130 +2378,6 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                                            'mevedel-view-collapsed)
                         nil))))))))
 
-
-(mevedel-deftest mevedel-view-toggle-section/agent-unavailable ()
-  ,test
-  (test)
-  :doc "agent handles with missing saved transcripts report unavailable"
-  (mevedel-view-test--with-buffers
-    (let* ((agent-path "/root/missing")
-           (workspace (mevedel-workspace--create
-                       :type 'project
-                       :id "missing-transcript"
-                       :root temporary-file-directory
-                       :name "missing-transcript"))
-           (session (mevedel-session-create "main" workspace))
-           opened
-           message-text)
-      (setf (mevedel-session-agent-transcripts session)
-            (list (cons "storage-missing"
-                        `(:agent-path ,agent-path :status completed))))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (insert "(:name \"Agent\" :args (:task_name \"explore\" :message \"Inspect.\"))\n\nraw launch payload\n"))
-      (with-current-buffer view-buf
-        (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
-               (rendering
-                (plist-put
-                 (mevedel-tool-ui--render-agent
-                  "Agent"
-                  '(:task_name "explore"
-                    :message "Missing transcript task")
-                  "rendered missing transcript body\n"
-                  `(:kind collaboration-event
-                    :event started
-                    :path ,agent-path
-                    :status completed))
-                 :agent-path agent-path)))
-          (let ((inhibit-read-only t))
-            (goto-char mevedel-view--input-marker)
-            (set-marker-insertion-type mevedel-view--input-marker t)
-            (unwind-protect
-                (mevedel-view--insert-rendered-tool rendering source)
-              (set-marker-insertion-type mevedel-view--input-marker nil)))
-          (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
-                     (lambda (_buf _start _end) rendering))
-                    ((symbol-function 'mevedel-view-open-agent-transcript)
-                     (lambda (_id)
-                       (setq opened t)
-                       (user-error "Transcript file missing")))
-                    ((symbol-function 'message)
-                     (lambda (fmt &rest args)
-                       (setq message-text (apply #'format fmt args)))))
-            (goto-char (point-min))
-            (search-forward "Started /root/missing")
-            (goto-char (match-beginning 0))
-            (mevedel-view-toggle-section)
-            (let ((text (buffer-substring-no-properties
-                         (point-min) mevedel-view--input-marker)))
-              (should opened)
-              (should (equal "Transcript file missing" message-text))
-              (should-not (string-match-p
-                           "rendered missing transcript body" text))
-              (should-not (string-match-p "raw launch payload" text))))))))
-
-  :doc "agent handles with stale live invocations report unavailable"
-  (mevedel-view-test--with-buffers
-    (let* ((agent-path "/root/stale")
-           (workspace (mevedel-workspace--create
-                       :type 'project
-                       :id "stale-live-transcript"
-                       :root temporary-file-directory
-                       :name "stale-live-transcript"))
-           (session (mevedel-session-create "main" workspace))
-           (inv (mevedel-agent-invocation--create
-                 :path agent-path
-                 :transcript-status 'running))
-           opened
-           message-text)
-      (setf (mevedel-session-agent-transcripts session)
-            (list (cons "storage-stale"
-                        `(:agent-path ,agent-path :status running))))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (insert "(:name \"Agent\" :args (:task_name \"explore\" :message \"Inspect.\"))\n\nraw launch payload\n"))
-      (with-current-buffer view-buf
-        (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
-               (rendering
-                (plist-put
-                 (mevedel-tool-ui--render-agent
-                  "Agent"
-                  '(:task_name "explore"
-                    :message "Stale live task")
-                  "rendered stale live body\n"
-                  `(:kind collaboration-event
-                    :event started
-                    :path ,agent-path
-                    :status running))
-                 :agent-path agent-path)))
-          (let ((inhibit-read-only t))
-            (goto-char mevedel-view--input-marker)
-            (set-marker-insertion-type mevedel-view--input-marker t)
-            (unwind-protect
-                (mevedel-view--insert-rendered-tool rendering source)
-              (set-marker-insertion-type mevedel-view--input-marker nil)))
-          (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
-                     (lambda (_buf _start _end) rendering))
-                    ((symbol-function 'mevedel-view--agent-invocation)
-                     (lambda (_id) inv))
-                    ((symbol-function 'mevedel-view-open-agent-transcript)
-                     (lambda (_id)
-                       (setq opened t)
-                       (user-error "Live buffer unavailable")))
-                    ((symbol-function 'message)
-                     (lambda (fmt &rest args)
-                       (setq message-text (apply #'format fmt args)))))
-            (goto-char (point-min))
-            (search-forward "Started /root/stale")
-            (goto-char (match-beginning 0))
-            (mevedel-view-toggle-section)
-            (let ((text (buffer-substring-no-properties
-                         (point-min) mevedel-view--input-marker)))
-              (should opened)
-              (should (equal "Live buffer unavailable" message-text))
-              (should-not (string-match-p "rendered stale live body" text))
-              (should-not (string-match-p "raw launch payload" text))))))))
-)
 
 (mevedel-deftest mevedel-view--section-bounds ()
   ,test

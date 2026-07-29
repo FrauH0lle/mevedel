@@ -1299,33 +1299,6 @@ BUF defaults to the current buffer if not specified."
               (format "Could not save session after abort: %S" err)
               :warning))))))))
 
-(defun mevedel--main-fsm-on-error (fsm)
-  "Cleanup hook: when FSM is the main agent's and it errored, terminate.
-
-Recoverable failures belong to sub-agents -- the main turn's history
-is the load-bearing transcript.  When the main FSM enters ERRS, the
-session can no longer continue from the same conversation state, so
-abort all pending sub-agents, drain queued permission prompts, and
-clear ephemeral UI state.
-
-A no-op for sub-agent FSMs (their buffers carry
-`mevedel--agent-invocation' and have their own ERRS handler in
-`mevedel-agent-exec--handlers')."
-  (when (and fsm (fboundp 'gptel-fsm-info))
-    (let* ((info (gptel-fsm-info fsm))
-           (buf (and (listp info) (plist-get info :buffer))))
-      (when (and buf
-                 (buffer-live-p buf)
-                 (not (buffer-local-value 'mevedel--agent-invocation buf))
-                 (buffer-local-value 'mevedel--session buf))
-        (condition-case err
-            (mevedel-abort buf)
-          (error
-           (display-warning
-            'mevedel
-            (format "main-fsm-on-error cleanup failed: %S" err)
-            :warning)))))))
-
 ;;
 ;;; Goal implementation
 

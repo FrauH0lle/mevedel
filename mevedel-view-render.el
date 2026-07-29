@@ -166,8 +166,6 @@
                   (agent-path))
 (declare-function mevedel-view--render-agent-status
                   "mevedel-view-agent" ())
-(declare-function mevedel-view-agent-handle-activate
-                  "mevedel-view-agent" (&optional agent-path))
 (declare-function mevedel-view-agent-status-toggle
                   "mevedel-view-agent" ())
 (defvar mevedel-view--agent-handle-map)
@@ -1533,6 +1531,8 @@ buffer's font-lock refontification cycles."
 (defun mevedel-view--rendering-header-face (rendering)
   "Return the face for RENDERING's visible header line."
   (cond
+   ((eq (plist-get rendering :vtype) 'request-failure)
+    'mevedel-view-handle-error)
    ((memq (plist-get rendering :status)
           '(error failed blocked warning))
     'mevedel-view-tool-warning)
@@ -1580,6 +1580,7 @@ Return nil when HEADER is not a `Tool: argument' style line."
          (agent-p (eq vtype 'agent-handle))
          (prompt-p (eq vtype 'prompt-summary))
          (marker (cond
+                  ((eq vtype 'request-failure) "✗")
                   (prompt-p "◆")
                   ((and agent-p (eq status 'running)) "●")
                   ((and agent-p (memq status '(blocked waiting))) "!")
@@ -1871,26 +1872,61 @@ RAW is an optional precomputed expanded tool segment text."
 
 (defun mevedel-view--segment-rendering (data-buf seg-start seg-end
                                                  &optional collapsed-only)
-  "Return the rendering plist for DATA-BUF's SEG-START..SEG-END tool segment.
+  "Return rendering for DATA-BUF's SEG-START..SEG-END.
+Provider-failure request summaries and tool segments are renderable.
 Return nil only when the segment is malformed or unparseable.
 Registered renderers get first chance; otherwise a generic rendering
 keeps parseable tool calls from expanding into raw org scaffolding.
 When COLLAPSED-ONLY is non-nil, cache a header rendering that omits large
 bodies for initially collapsed tools."
-  (let* ((raw (with-current-buffer data-buf
-                (mevedel-view--tool-segment-text seg-start seg-end)))
+  (let* ((segment-text
+          (with-current-buffer data-buf
+            (buffer-substring-no-properties seg-start seg-end)))
+         (request-data
+          (mevedel-view--request-summary-render-data-from-text segment-text))
+         (failure-p (eq (plist-get request-data :outcome) 'error))
+         (raw (and (not failure-p)
+                   (with-current-buffer data-buf
+                     (mevedel-view--tool-segment-text seg-start seg-end))))
          (cache (and (hash-table-p mevedel-view--tool-rendering-cache)
                      mevedel-view--tool-rendering-cache))
-         (key (and cache
+         (key (and raw cache
                    (mevedel-view--tool-cache-key
                     data-buf seg-start seg-end collapsed-only raw))))
-    (or (and key (gethash key cache))
-        (let ((rendering (mevedel-view--compute-segment-rendering
-                          data-buf seg-start seg-end collapsed-only raw)))
-          (if (and key rendering)
-              (mevedel-view--cache-put cache key rendering
-                                       'mevedel-view--render-cache-entries)
-            rendering)))))
+    (if failure-p
+        (let ((backend (or (plist-get request-data :backend) "Provider"))
+              (status (plist-get request-data :status))
+              (type (plist-get request-data :error-type))
+              (code (plist-get request-data :error-code))
+              (error-data (plist-get request-data :error-data))
+              (message-text (plist-get request-data :message)))
+          (list
+           :header (concat backend " request failed"
+                           (if type (format " · %s" type) ""))
+           :body
+           (string-join
+            (delq nil
+                  (list (and status (format "Status: %s" status))
+                        (and type (format "Type: %s" type))
+                        (and code (format "Code: %s" code))
+                        (and (listp error-data)
+                             (format "Provider data: %S" error-data))
+                        ""
+                        (and message-text (format "%s" message-text))
+                        ""
+                        "Retry the request manually."))
+            "\n")
+           :body-mode 'text-mode
+           :vtype 'request-failure
+           :status 'error
+           :initially-collapsed-p nil))
+      (or (and key (gethash key cache))
+          (let ((rendering (mevedel-view--compute-segment-rendering
+                            data-buf seg-start seg-end collapsed-only raw)))
+            (if (and key rendering)
+                (mevedel-view--cache-put cache key rendering
+                                         'mevedel-view--render-cache-entries)
+              rendering))))))
 
 
 ;;
@@ -2150,9 +2186,11 @@ turn shows one bogus thinking summary per tool boundary."
               (started-at (mevedel-request-started-at request)))
     (float-time (time-subtract (current-time) started-at))))
 
-(defun mevedel-view--append-request-summary (data-buf search-start)
+(defun mevedel-view--append-request-summary
+    (data-buf search-start &optional extra)
   "Append hidden request-summary render-data to DATA-BUF if needed.
 SEARCH-START bounds duplicate detection to the current response tail.
+EXTRA is additional request metadata to persist.
 Return the new data-buffer end position."
   (when-let* ((elapsed (mevedel-view--request-summary-elapsed-seconds
                         data-buf)))
@@ -2165,9 +2203,12 @@ Return the new data-buffer end position."
           (goto-char (point-max))
           (unless (bolp) (insert "\n"))
           (let ((start (point)))
-            (insert (mevedel-pipeline--format-render-data-block
-                     (list :kind 'request-summary
-                           :elapsed-seconds elapsed)))
+            (insert
+             (mevedel-pipeline--format-render-data-block
+              (append
+               (list :kind 'request-summary
+                     :elapsed-seconds elapsed)
+               extra)))
             (add-text-properties start (point) '(gptel ignore))))))
     (with-current-buffer data-buf
       (point-max))))
@@ -3912,7 +3953,12 @@ Merges adjacent thinking/reasoning segments into a single summary."
             (mevedel-view--request-summary-render-data-from-text
              (buffer-substring-no-properties seg-start seg-end))))
          (line (and render-data
-                    (mevedel-view--request-summary-line render-data))))
+                    (mevedel-view--request-summary-line render-data)))
+         (failure-rendering
+          (mevedel-view--segment-rendering data-buf seg-start seg-end))
+         (source (cons seg-start seg-end)))
+    (when failure-rendering
+      (mevedel-view--insert-rendered-tool failure-rendering source))
     (when line
       (let ((start (point)))
         (insert (propertize (concat line "\n")
@@ -3920,7 +3966,7 @@ Merges adjacent thinking/reasoning segments into a single summary."
         (add-text-properties
          start (point)
          `(mevedel-view-type request-summary
-           mevedel-view-source ,(cons seg-start seg-end)
+           mevedel-view-source ,source
            mevedel-view-collapsed nil))))))
 
 (defun mevedel-view--ensure-blank-line-before-response ()
@@ -4296,7 +4342,7 @@ form or the render-data block from the parser."
 ;;; Expand/collapse
 
 (defvar mevedel-view--collapsible-vtypes
-  '(thinking-summary tool-summary response
+  '(thinking-summary tool-summary response request-failure agent-handle
     prompt-summary hook-context hook-audit
     system-reminder-summary)
   "View types that `mevedel-view-toggle-section' treats as section folds.
@@ -4347,27 +4393,11 @@ section only."
         (mevedel-view--collapse-turn)))
      ((eq vtype 'mailbox-delivery)
       (mevedel-view--toggle-mailbox-delivery))
-     ((and (eq vtype 'agent-handle)
-           (get-text-property (point) 'mevedel-view-agent-path)
-           (eq (get-text-property (point) 'mevedel-view-agent-status)
-               'running))
-      (let ((agent-path (get-text-property
-                         (point) 'mevedel-view-agent-path)))
-        (mevedel-view-agent-handle-activate agent-path)))
      ((eq vtype 'hook-context)
       (mevedel-view--toggle-hook-context))
      ((eq vtype 'hook-audit)
       (mevedel-view--toggle-hook-audit))
      ((and source (memq vtype mevedel-view--collapsible-vtypes))
-      (if collapsed
-          (mevedel-view--expand-section source vtype)
-        (mevedel-view--collapse-section source vtype)))
-     ((and (eq vtype 'agent-handle)
-           (get-text-property (point) 'mevedel-view-agent-path))
-      (let ((agent-path (get-text-property
-                         (point) 'mevedel-view-agent-path)))
-        (mevedel-view-agent-handle-activate agent-path)))
-     ((and source (eq vtype 'agent-handle))
       (if collapsed
           (mevedel-view--expand-section source vtype)
         (mevedel-view--collapse-section source vtype)))

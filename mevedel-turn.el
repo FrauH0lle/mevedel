@@ -11,6 +11,10 @@
 (require 'cl-lib)
 (require 'mevedel-structs)
 
+;; `gptel'
+(declare-function gptel-backend-name "ext:gptel" (cl-x) t)
+(defvar gptel-backend)
+
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
@@ -75,6 +79,11 @@
 (declare-function mevedel-view--interaction-rebuild
                   "mevedel-view-interaction" ())
 
+;; `mevedel-view-render'
+(declare-function mevedel-view--append-request-summary
+                  "mevedel-view-render"
+                  (data-buf search-start &optional extra))
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
@@ -124,10 +133,39 @@
          (status (plist-get info :status))
          (error-type (and (listp error) (plist-get error :type)))
          (error-message (and (listp error) (plist-get error :message))))
-    (or error-message
+    (or (and (stringp error) error)
+        error-message
         (and error-type status (format "%s: %s" error-type status))
         (and error-type (format "%s" error-type))
         (and status (format "%s" status)))))
+
+(defun mevedel--turn-record-request-failure (fsm)
+  "Add FSM's provider failure to its ignored request summary."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (let* ((error-data (plist-get info :error))
+             (backend (or (plist-get info :backend) gptel-backend))
+             (backend-name
+              (and backend
+                   (condition-case nil
+                       (gptel-backend-name backend)
+                     (error nil)))))
+        (require 'mevedel-view-render)
+        (mevedel-view--append-request-summary
+         chat-buffer
+         (plist-get info :position)
+         (list :outcome 'error
+               :backend (or backend-name "Provider")
+               :status (plist-get info :status)
+               :error-type (and (listp error-data)
+                                (plist-get error-data :type))
+               :error-code (and (listp error-data)
+                                (plist-get error-data :code))
+               :error-data error-data
+               :message (mevedel--fsm-error-message fsm)
+               :retry 'manual))))))
 
 (defun mevedel--run-turn-terminal-hook (fsm event status)
   "Run top-level turn terminal hook EVENT for FSM with STATUS."
@@ -260,20 +298,24 @@
   "Run failure cleanup for FSM with terminal STATUS."
   (mevedel--run-turn-steps
    fsm
-   (list #'mevedel--turn-increment
-         (lambda (machine)
-           (mevedel--turn-record-settlement machine status))
-         #'mevedel--compact-record-token-baseline
-         (lambda (machine)
-           (mevedel-goal-settle-failure machine status))
-         (lambda (machine)
-           (mevedel--run-turn-terminal-hook
-            machine 'StopFailure status))
-         #'mevedel--turn-restore-permission-mode
-         #'mevedel--turn-fail-pending-input
-         #'mevedel--turn-end-request
-         #'mevedel-goal-persist-failure
-         #'mevedel-goal-dispatch-after-turn)))
+   (append
+    (list #'mevedel--turn-increment
+          (lambda (machine)
+            (mevedel--turn-record-settlement machine status))
+          #'mevedel--compact-record-token-baseline
+          (lambda (machine)
+            (mevedel-goal-settle-failure machine status)))
+    (and (eq status 'error)
+         (list #'mevedel--turn-record-request-failure
+               #'mevedel--turn-autosave))
+    (list (lambda (machine)
+            (mevedel--run-turn-terminal-hook
+             machine 'StopFailure status))
+          #'mevedel--turn-restore-permission-mode
+          #'mevedel--turn-fail-pending-input
+          #'mevedel--turn-end-request
+          #'mevedel-goal-persist-failure
+          #'mevedel-goal-dispatch-after-turn))))
 
 
 (defun mevedel--handler-name (handler)

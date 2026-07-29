@@ -306,10 +306,12 @@ Current fragment namespaces:
 - `progress`: the foreground `request` progress row between the interaction
   zone and input prompt.
 
-Source-backed transcript turns, tool summaries, and agent transcript handles
-are intentionally outside this chrome-fragment model even when they are
-clickable or collapsible. They are projections of the authoritative data
-buffer and keep source-coordinate disclosure state. The incremental renderer
+Source-backed transcript turns, tool summaries, request-failure disclosures,
+and agent transcript handles are intentionally outside this chrome-fragment
+model even when they are clickable or collapsible. They are projections of
+the authoritative data buffer and keep source-coordinate disclosure state.
+Provider failures are expanded by default and preserve the complete provider
+message for manual retry. The incremental renderer
 in `mevedel-view-render.el` (`mevedel-view--render-incremental`) remains the
 correctness path for streaming
 assistant text. `mevedel-view-stream.el` schedules those updates and owns the
@@ -617,7 +619,9 @@ Agent activity rows are projections of canonical tool and lifecycle events:
 agents`, and `Finished waiting`. The view does not infer a second activity
 state from internal storage identities or runtime tables.
 
-Agent handles and attribution fragments are clickable when a transcript
+Agent handles use `TAB` to expand or collapse their details.  `RET` on the
+visible agent path, or a mouse click, opens the transcript.  Agent handles
+and attribution fragments are clickable when a transcript
 entry is available. Running agents show status/activity in the main view
 and may open a rendered read-only transcript view over the live agent
 buffer while that buffer is available. Terminal agents open a rendered

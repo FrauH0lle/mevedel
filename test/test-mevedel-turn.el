@@ -9,6 +9,7 @@
 (require 'gptel)
 (require 'mevedel)
 (require 'mevedel-hooks)
+(require 'mevedel-permission-queue)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-turn)
@@ -26,7 +27,9 @@
   ,test
   (test)
   :doc "prefers the backend message and falls back through type and status"
-  (dolist (case '(((:error (:type "api" :message "failed")
+  (dolist (case '(((:error "raw provider failure"
+                    :status rejected) "raw provider failure")
+                  ((:error (:type "api" :message "failed")
                     :status rejected) "failed")
                   ((:error (:type "api") :status rejected) "api: rejected")
                   ((:error (:type "api")) "api")
@@ -35,6 +38,101 @@
     (should (equal (cadr case)
                    (mevedel--fsm-error-message
                     (gptel-make-fsm :info (car case)))))))
+
+(mevedel-deftest mevedel--turn-record-request-failure ()
+  ,test
+  (test)
+  :doc "persists complete provider failure details in ignored render-data"
+  (let* ((session (mevedel-session--create :name "turn-failure"))
+         (request (mevedel-request--create
+                   :id "request-1" :session session :origin "/root"
+                   :started-at (current-time)))
+         (chat-buf (generate-new-buffer " *mevedel-turn-failure*"))
+         (backend
+          (gptel-make-openai
+           "Codex failure test" :key "test" :models '(test-model)))
+         (message-text "An error occurred while processing your request.")
+         (error-data
+          `(:type "server_error"
+            :code "server_error"
+            :message ,message-text
+            :request_id "provider-request-123"))
+         (fsm
+          (gptel-make-fsm
+           :info
+           (list :buffer chat-buf
+                 :position (with-current-buffer chat-buf
+                             (copy-marker (point-min)))
+                 :backend backend
+                 :status "HTTP/2 200"
+                 :error error-data))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request request)
+            (insert "Partial response\n"))
+          (mevedel--turn-record-request-failure fsm)
+          (with-current-buffer chat-buf
+            (let* ((block-start
+                    (progn
+                      (goto-char (point-min))
+                      (search-forward "<!-- mevedel-render-data -->")
+                      (match-beginning 0)))
+                   (data
+                    (cdr
+                     (mevedel-pipeline-extract-render-data
+                      (buffer-substring-no-properties
+                       block-start (point-max))))))
+              (should (eq 'request-summary (plist-get data :kind)))
+              (should (eq 'error (plist-get data :outcome)))
+              (should (equal (gptel-backend-name backend)
+                             (plist-get data :backend)))
+              (should (equal "HTTP/2 200" (plist-get data :status)))
+              (should (equal "server_error"
+                             (plist-get data :error-type)))
+              (should (equal "server_error"
+                             (plist-get data :error-code)))
+              (should (equal error-data (plist-get data :error-data)))
+              (should (equal message-text (plist-get data :message)))
+              (should (eq 'manual (plist-get data :retry)))
+              (should (eq 'ignore
+                          (get-text-property block-start 'gptel))))))
+      (kill-buffer chat-buf)))
+
+  :doc "persists plain-string provider errors without losing their text"
+  (let* ((session (mevedel-session--create :name "turn-string-failure"))
+         (request (mevedel-request--create
+                   :id "request-2" :session session :origin "/root"
+                   :started-at (current-time)))
+         (chat-buf (generate-new-buffer " *mevedel-turn-string-failure*"))
+         (message-text "Raw provider failure")
+         (fsm
+          (gptel-make-fsm
+           :info
+           (list :buffer chat-buf
+                 :position (with-current-buffer chat-buf
+                             (copy-marker (point-min)))
+                 :status "Transport failure"
+                 :error message-text))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request request)
+            (insert "Partial response\n"))
+          (mevedel--turn-record-request-failure fsm)
+          (with-current-buffer chat-buf
+            (goto-char (point-min))
+            (search-forward "<!-- mevedel-render-data -->")
+            (let ((data
+                   (cdr
+                    (mevedel-pipeline-extract-render-data
+                     (buffer-substring-no-properties
+                      (match-beginning 0) (point-max))))))
+              (should (equal message-text (plist-get data :error-data)))
+              (should (equal message-text (plist-get data :message))))))
+      (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--turn-record-settlement
   (:doc "correlates terminal provider tokens with the active request")
@@ -297,8 +395,8 @@
 (mevedel-deftest mevedel--fail-turn ()
   ,test
   (test)
-  :doc "failure statuses skip autosave and queued-message drainage"
-  (let (events saved drained)
+  :doc "errors persist once while aborts skip autosave and follow-up drainage"
+  (let (events drained)
     (cl-letf (((symbol-function 'display-warning) #'ignore)
               ((symbol-function 'mevedel--turn-increment)
                (lambda (_fsm) (push 'turn events)))
@@ -311,8 +409,10 @@
                (lambda (_fsm) (push 'goal-save events)))
               ((symbol-function 'mevedel-goal-dispatch-after-turn)
                (lambda (_fsm) (push 'goal-retry events)))
+              ((symbol-function 'mevedel--turn-record-request-failure)
+               (lambda (_fsm) (push 'failure-record events)))
               ((symbol-function 'mevedel--turn-autosave)
-               (lambda (_fsm) (setq saved t)))
+               (lambda (_fsm) (push 'save events)))
               ((symbol-function 'mevedel--run-turn-terminal-hook)
                (lambda (_fsm event status)
                  (push (list event status) events)))
@@ -328,13 +428,112 @@
       (dolist (case '((error) (aborted)))
         (setq events nil)
         (mevedel--fail-turn 'fsm (car case))
-        (should (equal (nreverse events)
-                       `(turn baseline goal-failure
-                                (StopFailure ,(car case))
-                                restore pending-input-failure
-                                request-end goal-save goal-retry))))
-    (should-not saved)
-    (should-not drained))))
+        (should
+         (equal
+          (nreverse events)
+          (append
+           '(turn baseline goal-failure)
+           (and (eq (car case) 'error)
+                '(failure-record save))
+           `((StopFailure ,(car case))
+             restore pending-input-failure
+             request-end goal-save goal-retry)))))
+    (should-not drained)))
+
+  :doc "error settlement tears down only its request-owned state"
+  (let* ((session (mevedel-session--create
+                   :name "turn-failure-isolation"
+                   :agent-root-activity 'running))
+         (request (mevedel-request--create
+                   :id "request-current"
+                   :session session
+                   :origin "/root"
+                   :started-at (current-time)))
+         (registry '(("agent-storage" . retained-agent)))
+         (chat-buf (generate-new-buffer " *mevedel-turn-isolation*"))
+         (fsm
+          (gptel-make-fsm
+           :info
+           (list :buffer chat-buf
+                 :position (with-current-buffer chat-buf
+                             (copy-marker (point-min)))
+                 :status "HTTP/2 200"
+                 :error '(:type "server_error" :message "Failed"))))
+         current-outcome
+         unrelated-outcome
+         (cancellations 0)
+         (records 0)
+         (saves 0)
+         (hooks 0)
+         drained)
+    (setf (mevedel-session-agent-registry session) registry
+          (mevedel-session-permission-queue session)
+          (list
+           (list :kind 'generic
+                 :request-id "request-current"
+                 :origin "/root"
+                 :callback (lambda (outcome)
+                             (setq current-outcome outcome)))
+           (list :kind 'generic
+                 :request-id "request-unrelated"
+                 :origin "/root/agent"
+                 :callback (lambda (outcome)
+                             (setq unrelated-outcome outcome)))))
+    (mevedel-request-push-canceller
+     request (lambda () (cl-incf cancellations)))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request request))
+          (cl-letf (((symbol-function 'display-warning) #'ignore)
+                    ((symbol-function 'mevedel-telemetry-record) #'ignore)
+                    ((symbol-function 'mevedel--turn-increment) #'ignore)
+                    ((symbol-function 'mevedel--turn-record-settlement)
+                     #'ignore)
+                    ((symbol-function
+                      'mevedel--compact-record-token-baseline)
+                     #'ignore)
+                    ((symbol-function 'mevedel-goal-settle-failure) #'ignore)
+                    ((symbol-function 'mevedel--turn-record-request-failure)
+                     (lambda (_fsm) (cl-incf records)))
+                    ((symbol-function 'mevedel--turn-autosave)
+                     (lambda (_fsm) (cl-incf saves)))
+                    ((symbol-function 'mevedel--run-turn-terminal-hook)
+                     (lambda (_fsm _event _status) (cl-incf hooks)))
+                    ((symbol-function
+                      'mevedel--turn-restore-permission-mode)
+                     #'ignore)
+                    ((symbol-function 'mevedel--turn-fail-pending-input)
+                     #'ignore)
+                    ((symbol-function 'mevedel-goal-persist-failure) #'ignore)
+                    ((symbol-function 'mevedel-goal-dispatch-after-turn)
+                     #'ignore)
+                    ((symbol-function
+                      'mevedel-permission-queue--render-entry)
+                     #'ignore)
+                    ((symbol-function
+                      'mevedel-view--schedule-follow-up-drain)
+                     (lambda (_fsm) (setq drained t))))
+            (mevedel--fail-turn fsm 'error))
+          (with-current-buffer chat-buf
+            (should-not mevedel--current-request))
+          (should (= 1 cancellations))
+          (should (= 1 records))
+          (should (= 1 saves))
+          (should (= 1 hooks))
+          (should (eq 'aborted current-outcome))
+          (should-not unrelated-outcome)
+          (should (equal registry
+                         (mevedel-session-agent-registry session)))
+          (should (eq 'idle
+                      (mevedel-session-agent-root-activity session)))
+          (let ((queue (mevedel-session-permission-queue session)))
+            (should (= 1 (length queue)))
+            (should (equal "request-unrelated"
+                           (plist-get (car queue) :request-id))))
+          (should-not drained))
+      (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--turn-fail-pending-input ()
   ,test
