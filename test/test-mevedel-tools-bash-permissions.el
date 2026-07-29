@@ -372,6 +372,25 @@ network authority proceeds without a prompt"
        (lambda (result) (setq outcome result))))
     (should-not enqueued)
     (should (eq 'allow outcome)))
+  :doc "sandbox off:
+network authority changes no boundary and does not prompt"
+  (let* ((session (mevedel-session--create
+                   :name "off" :sandbox-mode 'off))
+         (mevedel--session session)
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _args) (setq enqueued t))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd"
+         :sandbox_permissions "with_additional_permissions"
+         :additional_permissions (:network t)
+         :justification "Contact the service?")
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'allow outcome)))
   :doc "full-auto protected resource:
 an ungranted exact filesystem path still prompts and stores session authority"
   (let* ((root (make-temp-file "mevedel-bash-resource-" t))
@@ -658,6 +677,16 @@ both Eval and network authority proceed without prompts"
     (should-not enqueued)
     (should (eq 'allow outcome))))
 
+(mevedel-deftest mevedel-tool-exec--effective-sandbox-mode ()
+  ,test
+  (test)
+  :doc "uses the permission context's session policy"
+  (let ((session (mevedel-session--create :sandbox-mode 'required)))
+    (should
+     (eq 'required
+         (mevedel-tool-exec--effective-sandbox-mode
+          (list :session session))))))
+
 (mevedel-deftest mevedel-tool-exec--check-full-escalation-async ()
   ,test
   (test)
@@ -679,6 +708,27 @@ full escalation prompts without a directly authored qualified rule"
     (should (eq 'sandbox (plist-get entry :kind)))
     (should (eq 'require-escalated
                 (plist-get entry :sandbox-permissions)))
+    (should (eq 'allow outcome)))
+  :doc "sandbox off:
+full escalation adds no boundary prompt but ordinary command authority remains"
+  (let* ((session (mevedel-session--create
+                   :name "off" :sandbox-mode 'off))
+         (mevedel--session session)
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         entries outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (push entry entries)
+                 (funcall (plist-get entry :callback) 'allow-once))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "rm file"
+         :sandbox_permissions "require_escalated"
+         :justification "Confinement is already disabled")
+       (lambda (result) (setq outcome result))))
+    (should (= 1 (length entries)))
+    (should (eq 'bash (plist-get (car entries) :kind)))
     (should (eq 'allow outcome)))
   :doc "qualified direct allow:
 an exact user-authored escalation rule skips the prompt"
@@ -1339,8 +1389,8 @@ the decision log identifies complete confinement bypass authority"
                  :network isolated))
         captured-request)
     (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
-               (lambda (additional sandbox)
-                 (setq captured-request (list additional sandbox))
+               (lambda (additional sandbox mode)
+                 (setq captured-request (list additional sandbox mode))
                  facts)))
       (let ((context
              (mevedel-tool-exec--bash-guardian-context
@@ -1359,7 +1409,8 @@ the decision log identifies complete confinement bypass authority"
                 (plist-get context :additional-permissions)))
         (should (eq facts (plist-get context :sandbox-facts)))
         (should
-         (equal '((:network nil) use-default) captured-request)))))
+         (equal '((:network nil) use-default best-effort)
+                captured-request)))))
   :doc "includes only explicit allow patterns that match the command"
   (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
              (lambda (&rest _)
@@ -2531,7 +2582,7 @@ default Bash keeps bare dot inspection automatic"
     (should (string-match-p "exit_code=\"42\"" result))
     (should-not (string-match-p "Command failed" result)))
   :doc "discloses automatic unrestricted fallback"
-  (let ((mevedel-sandbox-mode 'auto)
+  (let ((mevedel-sandbox-mode 'best-effort)
         (mevedel-sandbox--probe-cache
          '(:available nil :reason "test confinement unavailable"))
         result done)

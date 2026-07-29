@@ -101,6 +101,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (file-name-as-directory
            (file-name-concat root "packages" "api")))
     (setf (mevedel-session-permission-mode session) 'ask)
+    (setf (mevedel-session-sandbox-mode session) 'required)
     (setf (mevedel-session-permission-rules session)
           '(("Read"  :path "/tmp/foo/**" :action allow)
             ("Bash"  :pattern "git log*" :action allow)
@@ -191,6 +192,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :worktree-branch nil
                :worktree-base-commit nil
                :permission-mode 'ask
+               :sandbox-mode 'best-effort
                :plan-mode nil
                :permission-rules nil
                :resource-grants nil
@@ -473,6 +475,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                           (file-name-concat root "packages" "api"))
                          (plist-get plist :working-directory)))
           (should (equal 'ask (plist-get plist :permission-mode)))
+          (should (equal 'required (plist-get plist :sandbox-mode)))
           (should (eq t (plist-get plist :plan-mode)))
           (should (eq 'test-preset (plist-get plist :preset-name)))
           (should (equal "Test:test-model"
@@ -570,6 +573,24 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should-error (mevedel-session-persistence-serialize session)
                         :type 'error))
       (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "materializes and validates the canonical global sandbox mode"
+  (let ((root (make-temp-file "mevedel-test-proj-" t))
+        (saved-mode (default-toplevel-value 'mevedel-sandbox-mode)))
+    (unwind-protect
+        (let ((session
+               (test-mevedel-session-persistence--make-session root)))
+          (setf (mevedel-session-sandbox-mode session) nil)
+          (set-default-toplevel-value 'mevedel-sandbox-mode 'off)
+          (should (eq 'off
+                      (plist-get
+                       (mevedel-session-persistence-serialize session)
+                       :sandbox-mode)))
+          (setf (mevedel-session-sandbox-mode session) 'auto)
+          (should-error (mevedel-session-persistence-serialize session)
+                        :type 'error))
+      (set-default-toplevel-value 'mevedel-sandbox-mode saved-mode)
+      (when (file-directory-p root)
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-session-persistence--validate-current-sidecar ()
@@ -603,6 +624,16 @@ ROOT is a temporary directory owned and cleaned up by the caller."
        (mevedel-session-persistence--validate-current-sidecar
        (plist-put plist :permission-mode mode))
        :type 'error)))
+  :doc "accepts only canonical persisted sandbox modes"
+  (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
+    (dolist (mode '(best-effort required off))
+      (should (eq plist
+                  (mevedel-session-persistence--validate-current-sidecar
+                   (plist-put plist :sandbox-mode mode)))))
+    (should-error
+     (mevedel-session-persistence--validate-current-sidecar
+      (plist-put plist :sandbox-mode 'auto))
+     :type 'error))
   :doc "accepts only boolean persisted Plan mode"
   (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
     (dolist (mode '(nil t))
@@ -676,6 +707,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (equal "main-2026-04-23T14-30-a9f2"
                          (mevedel-session-session-id session)))
           (should (eq 'ask (mevedel-session-permission-mode session)))
+          (should (eq 'required (mevedel-session-sandbox-mode session)))
           (should (mevedel-session-plan-mode session))
           (should (eq 'test-preset (mevedel-session-preset-name session)))
           (should (equal "Test:test-model"
@@ -5778,6 +5810,7 @@ The result is a plist whose :tempdir owns every created file."
                  :origin 'user
                  :turn 3))
                (_ (setf (mevedel-session-preset-name session) 'test-preset
+                        (mevedel-session-sandbox-mode session) 'required
                         (mevedel-session-preset-settings session)
                         '((mevedel-test-setting base))
                         (mevedel-session-model-provider session)
@@ -5837,6 +5870,7 @@ The result is a plist whose :tempdir owns every created file."
           (should (equal "test-backend:test-model"
                          (mevedel-session-model-provider child)))
           (should (eq 'high (mevedel-session-reasoning-effort child)))
+          (should (eq 'required (mevedel-session-sandbox-mode child)))
           (should-not (assoc 3 (mevedel-session-prompt-index child)))
           (should-not (assoc 3 (mevedel-session-file-snapshots child)))
           (should-not (assoc "future--2"
@@ -5880,6 +5914,8 @@ The result is a plist whose :tempdir owns every created file."
                          (mevedel-session-preset-settings child)))
           (mevedel-permission-add-session-resource-grant
            child "/tmp/child-only" 'read)
+          (setf (mevedel-session-sandbox-mode child) 'off)
+          (should (eq 'required (mevedel-session-sandbox-mode session)))
           (should-not
            (member '(:path "/tmp/child-only" :access read)
                    (mevedel-session-resource-grants session)))

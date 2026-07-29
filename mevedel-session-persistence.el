@@ -24,6 +24,7 @@
 ;;    :forked-from-session-id nil :forked-from-turn nil
 ;;    :fork-type nil :forked-from-fork-point-id nil
 ;;    :permission-mode ask
+;;    :sandbox-mode best-effort
 ;;    :plan-mode nil
 ;;    :permission-rules ((TOOL-NAME ...) ...)
 ;;    :resource-grants ((:path "/abs/path" :access read) ...)
@@ -113,6 +114,9 @@
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
 
+;; `mevedel-sandbox'
+(defvar mevedel-sandbox-mode)
+
 ;; `mevedel-persistence'
 (declare-function mevedel--load-instructions-file
 		  "mevedel-persistence"
@@ -189,6 +193,7 @@
 		  (cl-x) t)
 (declare-function mevedel-session-resource-grants "mevedel-structs"
 		  (cl-x) t)
+(declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x)
 		  t)
@@ -378,7 +383,7 @@ add more, and we don't want to act on actions we don't understand).")
     :fork-type :forked-from-fork-point-id
     :worktree-source-root :worktree-directory :worktree-branch
     :worktree-base-commit
-    :permission-mode :plan-mode :permission-rules :resource-grants
+    :permission-mode :sandbox-mode :plan-mode :permission-rules :resource-grants
     :preset-name :preset-settings :model-provider :reasoning-effort
     :last-observed-date
     :agent-types-snapshot :skills-snapshot :additional-roots :tasks
@@ -613,9 +618,16 @@ The resulting plist is round-trippable via
          (or (mevedel-session-permission-mode session)
              (and (boundp 'mevedel-permission-mode)
                   (default-toplevel-value 'mevedel-permission-mode))
-             'ask)))
+             'ask))
+        (sandbox-mode
+         (or (mevedel-session-sandbox-mode session)
+             (and (boundp 'mevedel-sandbox-mode)
+                  (default-toplevel-value 'mevedel-sandbox-mode))
+             'best-effort)))
     (unless (memq permission-mode '(ask edits full-auto))
       (error "Invalid persisted permission mode: %S" permission-mode))
+    (unless (memq sandbox-mode '(best-effort required off))
+      (error "Invalid persisted sandbox mode: %S" sandbox-mode))
     (list
    :version                (mevedel-version)
    :session-id             (mevedel-session-session-id session)
@@ -643,6 +655,7 @@ The resulting plist is round-trippable via
    :worktree-branch      (mevedel-session-worktree-branch session)
    :worktree-base-commit (mevedel-session-worktree-base-commit session)
    :permission-mode        permission-mode
+   :sandbox-mode           sandbox-mode
    :plan-mode              (and (mevedel-session-plan-mode session) t)
    :permission-rules       (mevedel-session-permission-rules session)
    :resource-grants        (mevedel-session-resource-grants session)
@@ -680,6 +693,10 @@ The resulting plist is round-trippable via
   (unless (memq (plist-get plist :permission-mode) '(ask edits full-auto))
     (error "Invalid persisted permission mode: %S"
            (plist-get plist :permission-mode)))
+  (unless (memq (plist-get plist :sandbox-mode)
+                '(best-effort required off))
+    (error "Invalid persisted sandbox mode: %S"
+           (plist-get plist :sandbox-mode)))
   (unless (booleanp (plist-get plist :plan-mode))
     (error "Invalid persisted Plan mode: %S" (plist-get plist :plan-mode)))
   (unless (or (null (plist-get plist :model-provider))
@@ -779,6 +796,7 @@ their hygiene filters."
                      :permission-rules rules
                      :resource-grants  resource-grants
                      :permission-mode  (plist-get plist :permission-mode)
+                     :sandbox-mode     (plist-get plist :sandbox-mode)
                      :plan-mode        (plist-get plist :plan-mode)
                      :preset-name      (plist-get plist :preset-name)
                      :preset-settings  (copy-tree
@@ -3045,7 +3063,8 @@ WORKSPACE is the current workspace (resolved by the caller)."
      :created-at      now
      :updated-at      now
      :turn-count      0
-     :permission-mode 'ask)))
+     :permission-mode 'ask
+     :sandbox-mode 'best-effort)))
 
 (defun mevedel-session-persistence--find-live-buffer (session-id buf-name)
   "Return live root data buffer for SESSION-ID and BUF-NAME, or nil.
@@ -4348,6 +4367,7 @@ mail are deliberately absent from the returned session."
           :resource-grants
           (copy-tree (mevedel-session-resource-grants session) t)
           :permission-mode (mevedel-session-permission-mode session)
+          :sandbox-mode (mevedel-session-sandbox-mode session)
           :plan-mode (mevedel-session-plan-mode session)
           :preset-name (mevedel-session-preset-name session)
           :preset-settings

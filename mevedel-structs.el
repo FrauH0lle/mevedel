@@ -25,6 +25,9 @@
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
 
+;; `mevedel-sandbox'
+(defvar mevedel-sandbox-mode)
+
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
@@ -200,6 +203,7 @@ workspace."
   permission-rules  ; session-scoped permission rules
   resource-grants   ; session-scoped exact path/access permission plists
   permission-mode   ; current permission mode
+  sandbox-mode      ; current child-process confinement policy
   plan-mode         ; non-nil during a sticky Plan conversation
   preset-name       ; selected mevedel preset symbol
   preset-settings   ; alist of resolved buffer-local mevedel variables
@@ -406,6 +410,10 @@ workspace root and is kept stable for the lifetime of the session."
                             (mevedel-workspace-root workspace))))
    :touched-files (make-hash-table :test #'equal)
    :mentions-shown (make-hash-table :test #'equal)
+   :sandbox-mode
+   (if (boundp 'mevedel-sandbox-mode)
+       (default-toplevel-value 'mevedel-sandbox-mode)
+     'best-effort)
    :last-observed-date (format-time-string "%F")
    :agent-types-snapshot :uninitialized
    :skills-snapshot :uninitialized
@@ -705,10 +713,12 @@ the new request struct."
     (when (fboundp 'mevedel-telemetry-record)
       (mevedel-telemetry-record
        session 'request-queued :request-id id :origin origin
-       :permission-mode (mevedel-session-permission-mode session))
+       :permission-mode (mevedel-session-permission-mode session)
+       :sandbox-mode (mevedel-session-sandbox-mode session))
       (mevedel-telemetry-record
        session 'request-start :request-id id :origin origin
-       :permission-mode (mevedel-session-permission-mode session)))
+       :permission-mode (mevedel-session-permission-mode session)
+       :sandbox-mode (mevedel-session-sandbox-mode session)))
     request))
 
 (defun mevedel-request-cancel (request &optional abort-plan-approval)

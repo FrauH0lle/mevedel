@@ -110,7 +110,31 @@
         (while (not done)
           (accept-process-output nil 0.05)))
       (should (= 7 (plist-get result :exit-code)))
-      (should (equal "recovered" (plist-get result :output))))))
+      (should (equal "recovered" (plist-get result :output)))))
+  :doc "passes the session sandbox policy to the child boundary"
+  (let ((session (mevedel-session--create :sandbox-mode 'required))
+        (mevedel-sandbox-mode 'off)
+        captured-mode done)
+    (cl-letf (((symbol-function 'mevedel-sandbox-prepare)
+               (lambda (command _workdir _roots
+                                &optional _additional _permissions mode)
+                 (setq captured-mode mode)
+                 (list :state 'unrestricted
+                       :command command
+                       :facts '(:sandbox off
+                                :filesystem unrestricted
+                                :network unrestricted)))))
+      (mevedel-execution-start-one-shot
+       (lambda (_child-result) (setq done t))
+       :name "mevedel-test-session-sandbox-mode"
+       :command '("true")
+       :workdir temporary-file-directory
+       :writable-roots (list temporary-file-directory)
+       :session session)
+      (with-timeout (2 (error "Process did not exit"))
+        (while (not done)
+          (accept-process-output nil 0.01))))
+    (should (eq 'required captured-mode))))
 
 (mevedel-deftest mevedel-execution-run-one-shot ()
   ,test

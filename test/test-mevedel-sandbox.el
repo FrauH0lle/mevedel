@@ -8,6 +8,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-sandbox)
+(require 'mevedel-structs)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -15,6 +16,73 @@
           "helpers"))
 
 (defvar mevedel-sandbox-probe-timeout)
+
+
+;;
+;;; Sandbox mode
+
+(mevedel-deftest mevedel-sandbox-mode-normalize ()
+  ,test
+  (test)
+  :doc "accepts only canonical symbols and strings"
+  (dolist (mode '(best-effort required off))
+    (should (eq mode (mevedel-sandbox-mode-normalize mode)))
+    (should (eq mode
+                (mevedel-sandbox-mode-normalize (symbol-name mode)))))
+  (dolist (mode '(auto nil unknown))
+    (should-error (mevedel-sandbox-mode-normalize mode)
+                  :type 'user-error)))
+
+(mevedel-deftest mevedel-sandbox-mode--set ()
+  ,test
+  (test)
+  :doc "updates only the current session from a session buffer"
+  (let ((saved-mode (default-toplevel-value 'mevedel-sandbox-mode))
+        (buffer (generate-new-buffer " *mevedel-sandbox-mode*")))
+    (unwind-protect
+        (let ((session (mevedel-session--create
+                        :name "sandbox" :sandbox-mode 'best-effort)))
+          (set-default-toplevel-value 'mevedel-sandbox-mode 'best-effort)
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (mevedel-sandbox-mode--set 'mevedel-sandbox-mode 'required))
+          (should (eq 'required (mevedel-session-sandbox-mode session)))
+          (should (eq 'required
+                      (buffer-local-value 'mevedel-sandbox-mode buffer)))
+          (should (eq 'best-effort
+                      (default-toplevel-value 'mevedel-sandbox-mode))))
+      (set-default-toplevel-value 'mevedel-sandbox-mode saved-mode)
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(mevedel-deftest mevedel-sandbox-mode--get ()
+  ,test
+  (test)
+  :doc "reads the current session independently of the global default"
+  (let ((saved-mode (default-toplevel-value 'mevedel-sandbox-mode))
+        (buffer (generate-new-buffer " *mevedel-sandbox-mode*")))
+    (unwind-protect
+        (let ((session (mevedel-session--create
+                        :name "sandbox" :sandbox-mode 'required)))
+          (set-default-toplevel-value 'mevedel-sandbox-mode 'best-effort)
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (should
+             (eq 'required
+                 (mevedel-sandbox-mode--get 'mevedel-sandbox-mode)))))
+      (set-default-toplevel-value 'mevedel-sandbox-mode saved-mode)
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(mevedel-deftest mevedel-sandbox-mode-effective ()
+  ,test
+  (test)
+  :doc "prefers explicit session state and rejects retired values"
+  (let ((session (mevedel-session--create :sandbox-mode 'off)))
+    (should (eq 'off (mevedel-sandbox-mode-effective session)))
+    (setf (mevedel-session-sandbox-mode session) 'auto)
+    (should-error (mevedel-sandbox-mode-effective session)
+                  :type 'user-error)))
 
 
 ;;
@@ -362,7 +430,7 @@
   ,test
   (test)
   :doc "reports the selected confined boundary without mutating launch state"
-  (let ((mevedel-sandbox-mode 'auto)
+  (let ((mevedel-sandbox-mode 'best-effort)
         (mevedel-sandbox--last-facts '(:sentinel t)))
     (cl-letf (((symbol-function 'mevedel-sandbox-probe)
                (lambda () '(:available t :executable "/test/bwrap"
@@ -384,7 +452,7 @@
             (mevedel-sandbox-pending-facts '(:network t))
             :network)))))
   :doc "reports automatic unrestricted fallback when the backend is unavailable"
-  (let ((mevedel-sandbox-mode 'auto))
+  (let ((mevedel-sandbox-mode 'best-effort))
     (cl-letf (((symbol-function 'mevedel-sandbox-probe)
                (lambda () '(:available nil :reason "probe failed"))))
       (should
@@ -393,7 +461,7 @@
           :network unrestricted :reason "probe failed")
         (mevedel-sandbox-pending-facts)))))
   :doc "keeps a retryable runtime failure visible without consuming its retry"
-  (let ((mevedel-sandbox-mode 'auto)
+  (let ((mevedel-sandbox-mode 'best-effort)
         (mevedel-sandbox--probe-cache
          '(:available nil :reason "runtime failure" :retry-on-execution t)))
     (should (string-match-p
@@ -415,7 +483,14 @@
      (equal
       '(:sandbox escalated :filesystem unrestricted :network unrestricted
         :reason "Full execution escalation requested")
-      (mevedel-sandbox-pending-facts nil 'require-escalated)))))
+      (mevedel-sandbox-pending-facts nil 'require-escalated))))
+  :doc "off remains the selected unrestricted boundary despite escalation inputs"
+  (should
+   (equal
+    '(:sandbox off :filesystem unrestricted :network unrestricted
+      :reason "Confinement disabled by mevedel-sandbox-mode")
+    (mevedel-sandbox-pending-facts
+     '(:network t) 'require-escalated 'off))))
 
 (mevedel-deftest mevedel-sandbox--confined-preparation ()
   ,test
@@ -463,7 +538,7 @@
   (let* ((executable (or (executable-find "bwrap") "bwrap"))
          (root (make-temp-file "mevedel-sandbox-root-" t))
          (workdir (file-name-as-directory root))
-         (mevedel-sandbox-mode 'auto)
+         (mevedel-sandbox-mode 'best-effort)
          (mevedel-sandbox--probe-cache
           (list :available t :executable executable :mount-proc t))
          prepared)
@@ -511,7 +586,7 @@
       (delete-directory root t)))
   :doc "automatic fallback:
 `mevedel-sandbox-prepare' discloses unrestricted direct execution"
-  (let ((mevedel-sandbox-mode 'auto)
+  (let ((mevedel-sandbox-mode 'best-effort)
         (mevedel-sandbox--probe-cache
          '(:available nil :reason "test backend unavailable")))
     (let ((prepared
@@ -525,7 +600,7 @@
                (plist-get (plist-get prepared :facts) :reason)))))
   :doc "runtime failure retry:
 `mevedel-sandbox-prepare' reprobes after a transient launch failure"
-  (let ((mevedel-sandbox-mode 'auto)
+  (let ((mevedel-sandbox-mode 'best-effort)
         (mevedel-sandbox--probe-cache
          '(:available nil :reason "transient launch failure"
            :retry-on-execution t))
@@ -665,10 +740,10 @@ exact read and write mounts follow protected masks without broadening siblings"
       (should (string-match-p "required backend unavailable"
                               (plist-get prepared :error)))))
   :doc "working-directory boundary:
-`mevedel-sandbox-prepare' never converts invalid authority into auto fallback"
+`mevedel-sandbox-prepare' never converts invalid authority into fallback"
   (let* ((root (make-temp-file "mevedel-sandbox-authority-" t))
          (outside (make-temp-file "mevedel-sandbox-outside-" t))
-         (mevedel-sandbox-mode 'auto)
+         (mevedel-sandbox-mode 'best-effort)
          (mevedel-sandbox--probe-cache
           (list :available t
                 :executable (or (executable-find "bwrap") "bwrap")
@@ -683,11 +758,11 @@ exact read and write mounts follow protected masks without broadening siblings"
       (delete-directory root t)
       (delete-directory outside t)))
   :doc "dangling symlink grant:
-`mevedel-sandbox-prepare' refuses an unresolved resource without auto fallback"
+`mevedel-sandbox-prepare' refuses an unresolved resource without fallback"
   (let* ((root (make-temp-file "mevedel-sandbox-dangling-root-" t))
          (resource (make-temp-file "mevedel-sandbox-dangling-resource-" t))
          (link (file-name-concat resource "runner"))
-         (mevedel-sandbox-mode 'auto)
+         (mevedel-sandbox-mode 'best-effort)
          (mevedel-sandbox--probe-cache
           (list :available t
                 :executable (or (executable-find "bwrap") "bwrap")

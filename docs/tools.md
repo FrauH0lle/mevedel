@@ -386,7 +386,7 @@ directory, applies `mevedel-sandbox-mode`, owns timeout/process-group cleanup,
 and removes the scratch directory after the callback. Output streams directly
 into a bounded temporary disk spool rather than an Emacs process buffer; the
 one-shot terminal result contains the captured output and structured exit,
-timeout, output-limit, byte, and wall-time facts. In `auto`, it may retry
+timeout, output-limit, byte, and wall-time facts. In `best-effort`, it may retry
 directly only after a pre-exec Bubblewrap failure; it never replays a helper
 that may have started. `required` fails the tool explicitly and `off` runs
 directly.

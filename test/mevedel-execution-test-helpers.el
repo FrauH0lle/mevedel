@@ -40,7 +40,8 @@
          (save-path (file-name-as-directory
                      (file-name-concat root "session"))))
     (make-directory save-path t)
-    (setf (mevedel-session-save-path session) save-path)
+    (setf (mevedel-session-save-path session) save-path
+          (mevedel-session-sandbox-mode session) 'off)
     session))
 
 (defun test-mevedel-execution--wait (predicate &optional timeout)

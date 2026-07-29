@@ -1,7 +1,7 @@
-# Auto confinement falls back only before execution
+# Best-effort confinement falls back only before execution
 
-Sandbox mode `auto` treats execution confinement as best-effort: a harmless
-capability probe marks an unavailable backend and permits direct execution with
+Sandbox mode `best-effort` uses a harmless capability probe. An unavailable
+backend permits direct execution with
 persistent disclosure, while `required` refuses execution.  Once the requested
 sandbox process has started, Mevedel never replays that command directly,
 because it cannot prove that the child produced no partial effects; the single

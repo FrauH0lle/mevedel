@@ -16,8 +16,12 @@
   (require 'subr-x))
 
 ;; `mevedel-permissions'
+(declare-function mevedel-permission--get-session-scoped
+                  "mevedel-permissions" (sym slot-getter))
 (declare-function mevedel-permission--match-path-pattern
                   "mevedel-permissions" (path pattern))
+(declare-function mevedel-permission--set-session-scoped
+                  "mevedel-permissions" (sym val slot-setter))
 (declare-function mevedel-permission-protected-path-policy
                   "mevedel-permissions" ())
 (defvar mevedel-protected-paths)
@@ -38,22 +42,62 @@
 (declare-function mevedel-sandbox--resolve-filesystem-permissions
                   "mevedel-sandbox-grants" (permissions))
 
+;; `mevedel-structs'
+(declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
+
 
 ;;
 ;;; Configuration and state
 
-(defcustom mevedel-sandbox-mode 'auto
+(defun mevedel-sandbox-mode-normalize (mode)
+  "Return canonical sandbox MODE or signal a user error."
+  (let ((mode (cond
+               ((symbolp mode) mode)
+               ((stringp mode) (intern (string-trim mode)))
+               (t mode))))
+    (if (memq mode '(best-effort required off))
+        mode
+      (user-error "Unknown sandbox mode: %s" mode))))
+
+(defun mevedel-sandbox-mode--set (sym val)
+  "Set session-scoped sandbox SYM to canonical VAL."
+  (require 'mevedel-permissions)
+  (mevedel-permission--set-session-scoped
+   sym (mevedel-sandbox-mode-normalize val)
+   (lambda (session mode)
+     (setf (mevedel-session-sandbox-mode session) mode))))
+
+(defun mevedel-sandbox-mode--get (sym)
+  "Return sandbox SYM from the current session or its global default."
+  (require 'mevedel-permissions)
+  (mevedel-permission--get-session-scoped
+   sym #'mevedel-session-sandbox-mode))
+
+(defcustom mevedel-sandbox-mode 'best-effort
   "Confinement policy for model-triggered child processes.
 
-`auto' uses Bubblewrap when its cached probe succeeds and otherwise executes
-directly with unrestricted-filesystem and unrestricted-network disclosure.
-`required' refuses execution when Bubblewrap is unavailable.  `off' executes
-directly and visibly disables confinement."
+`best-effort' uses Bubblewrap when its cached probe succeeds and otherwise
+executes directly with unrestricted-filesystem and unrestricted-network
+disclosure.  `required' refuses execution when Bubblewrap is unavailable.
+`off' deliberately executes directly.
+
+The global value is copied into new sessions.  Changing it with `setopt'
+inside a session updates only that session."
   :type '(choice
-          (const :tag "Auto -- prefer Bubblewrap, disclose fallback" auto)
+          (const :tag "Best effort -- prefer Bubblewrap, disclose fallback"
+                 best-effort)
           (const :tag "Required -- refuse without Bubblewrap" required)
           (const :tag "Off -- execute directly with disclosure" off))
+  :set #'mevedel-sandbox-mode--set
+  :get #'mevedel-sandbox-mode--get
   :group 'mevedel)
+
+(defun mevedel-sandbox-mode-effective (&optional session)
+  "Return canonical sandbox mode for SESSION or the global default."
+  (mevedel-sandbox-mode-normalize
+   (or (and session (mevedel-session-sandbox-mode session))
+       (default-toplevel-value 'mevedel-sandbox-mode)
+       'best-effort)))
 
 (defcustom mevedel-sandbox-probe-timeout 0.5
   "Maximum seconds to wait for a Bubblewrap capability probe."
@@ -502,44 +546,45 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
         :reason reason))
 
 (defun mevedel-sandbox-pending-facts
-    (&optional additional-permissions sandbox-permissions)
+    (&optional additional-permissions sandbox-permissions mode)
   "Return the selected boundary facts for a pending child request.
 
 ADDITIONAL-PERMISSIONS is the validated additive profile.
 SANDBOX-PERMISSIONS may be `require-escalated'.  This preview may probe the
 configured backend, but it does not prepare a command or mutate launch facts.
-An `auto' launch can still fall back if Bubblewrap later fails before the
-requested process starts."
-  (cond
-   ((eq sandbox-permissions 'require-escalated)
-    (mevedel-sandbox--unrestricted-facts
-     'escalated "Full execution escalation requested"))
-   ((eq mevedel-sandbox-mode 'off)
-    (mevedel-sandbox--unrestricted-facts
-     'off "Confinement disabled by mevedel-sandbox-mode"))
-   ((memq mevedel-sandbox-mode '(auto required))
-    (let ((availability (mevedel-sandbox-probe)))
-      (cond
-       ((plist-get availability :available)
-        (list :sandbox 'bubblewrap
-              :filesystem 'workspace-write
-              :proc (if (plist-get availability :mount-proc)
-                        'fresh
-                      'host)
-              :network
-              (if (eq t (plist-get additional-permissions :network))
-                  'unrestricted
-                'isolated)))
-       ((eq mevedel-sandbox-mode 'required)
-        (list :sandbox 'refused
-              :filesystem 'unavailable
-              :network 'unavailable
-              :reason (plist-get availability :reason)))
-       (t
-        (mevedel-sandbox--unrestricted-facts
-         'unavailable (plist-get availability :reason))))))
-   (t
-    (error "Unknown sandbox mode: %s" mevedel-sandbox-mode))))
+A `best-effort' launch can still fall back if Bubblewrap later fails before
+the requested process starts.  MODE defaults to the global sandbox mode."
+  (let ((mode (mevedel-sandbox-mode-normalize
+               (or mode mevedel-sandbox-mode))))
+    (cond
+     ((or (eq mode 'off)
+          (eq sandbox-permissions 'require-escalated))
+      (mevedel-sandbox--unrestricted-facts
+       (if (eq mode 'off) 'off 'escalated)
+       (if (eq mode 'off)
+           "Confinement disabled by mevedel-sandbox-mode"
+         "Full execution escalation requested")))
+     ((memq mode '(best-effort required))
+      (let ((availability (mevedel-sandbox-probe)))
+        (cond
+         ((plist-get availability :available)
+          (list :sandbox 'bubblewrap
+                :filesystem 'workspace-write
+                :proc (if (plist-get availability :mount-proc)
+                          'fresh
+                        'host)
+                :network
+                (if (eq t (plist-get additional-permissions :network))
+                    'unrestricted
+                  'isolated)))
+         ((eq mode 'required)
+          (list :sandbox 'refused
+                :filesystem 'unavailable
+                :network 'unavailable
+                :reason (plist-get availability :reason)))
+         (t
+          (mevedel-sandbox--unrestricted-facts
+           'unavailable (plist-get availability :reason)))))))))
 
 (defun mevedel-sandbox--direct-preparation (command sandbox reason)
   "Return direct preparation for COMMAND with SANDBOX and REASON facts."
@@ -679,26 +724,30 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
 
 (defun mevedel-sandbox-prepare
     (command workdir writable-roots
-             &optional additional-permissions sandbox-permissions)
+             &optional additional-permissions sandbox-permissions mode)
   "Prepare child COMMAND for WORKDIR and WRITABLE-ROOTS.
 
 Return a plist with :state, :command, and :facts.  Confined preparations also
 carry :marker and :original-command.  A required but unavailable backend
 returns :state `refused' and :error without a command.
 ADDITIONAL-PERMISSIONS is a validated additive execution profile.
-SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
-  (if (eq sandbox-permissions 'require-escalated)
+SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval.
+MODE defaults to the global sandbox mode."
+  (setq mode (mevedel-sandbox-mode-normalize
+              (or mode mevedel-sandbox-mode)))
+  (if (and (eq sandbox-permissions 'require-escalated)
+           (not (eq mode 'off)))
       (progn
         (when additional-permissions
           (signal 'mevedel-sandbox-policy-error
                   '("Full escalation cannot include additive permissions")))
         (mevedel-sandbox--direct-preparation
          command 'escalated "Full execution escalation approved"))
-    (pcase mevedel-sandbox-mode
+    (pcase mode
       ('off
        (mevedel-sandbox--direct-preparation
         command 'off "Confinement disabled by mevedel-sandbox-mode"))
-      ((or 'auto 'required)
+      ((or 'best-effort 'required)
        (when (plist-get mevedel-sandbox--probe-cache :retry-on-execution)
          (setq mevedel-sandbox--probe-cache nil))
        (let ((availability (mevedel-sandbox-probe)))
@@ -711,7 +760,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
                          (plist-get availability :mount-proc)
                          additional-permissions)))
                    (plist-put preparation :fallback-p
-                              (eq mevedel-sandbox-mode 'auto)))
+                              (eq mode 'best-effort)))
                (mevedel-sandbox-policy-error
                 (let* ((reason (error-message-string err))
                        (facts
@@ -721,7 +770,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
                   (list :state 'refused :error reason :facts facts)))
                (error
                 (let ((reason (error-message-string err)))
-                  (if (eq mevedel-sandbox-mode 'required)
+                  (if (eq mode 'required)
                       (let ((facts
                              (mevedel-sandbox--unrestricted-facts
                               'unavailable reason)))
@@ -730,7 +779,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
                     (mevedel-sandbox--direct-preparation
                      command 'unavailable reason)))))
            (let ((reason (plist-get availability :reason)))
-             (if (eq mevedel-sandbox-mode 'required)
+             (if (eq mode 'required)
                  (let ((facts
                         (mevedel-sandbox--unrestricted-facts
                          'unavailable reason)))
@@ -738,7 +787,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
                    (list :state 'refused :error reason :facts facts))
                (mevedel-sandbox--direct-preparation
                 command 'unavailable reason))))))
-      (_ (error "Unknown sandbox mode: %s" mevedel-sandbox-mode)))))
+      (_ (error "Unknown sandbox mode: %s" mode)))))
 
 (defun mevedel-sandbox-launch-failed-p (preparation child-result)
   "Return non-nil when PREPARATION failed before CHILD-RESULT ran the command."

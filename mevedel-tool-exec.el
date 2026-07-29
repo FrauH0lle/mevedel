@@ -141,7 +141,9 @@
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-pending-facts
                   "mevedel-sandbox"
-                  (&optional additional-permissions sandbox-permissions))
+                  (&optional additional-permissions sandbox-permissions mode))
+(declare-function mevedel-sandbox-mode-effective
+                  "mevedel-sandbox" (&optional session))
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
 (defvar mevedel-sandbox-intrinsic-paths)
 
@@ -156,6 +158,7 @@
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -384,48 +387,51 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
 (defun mevedel-tool-exec--check-network-permission-async
     (tool-name detail request command-outcome permission-context metadata-p cont)
   "Check REQUEST's network authority, then call CONT with COMMAND-OUTCOME."
-  (if (not (eq t (plist-get (plist-get request :additional-permissions)
-                            :network)))
-      (funcall cont command-outcome)
-    (if (eq (mevedel-tool-exec--effective-permission-mode permission-context)
-            'full-auto)
-        (progn
-          (when metadata-p
-            (mevedel-tool-exec--log-permission-decision
-             tool-name 'allow 'sandbox-network permission-context
-             :sandbox-permissions 'additive
-             :additional-permissions '(:network t)))
-          (funcall cont command-outcome))
-      (mevedel-tool-exec--request-permission
-       (list
-        :kind 'sandbox
-        :tool-name tool-name
-        :detail detail
-        :sandbox-permissions 'additive
-        :additional-permissions '(:network t)
-        :justification (plist-get request :justification)
-        :origin (mevedel-tool-exec--permission-origin permission-context)
-        :callback
-        (lambda (outcome)
-          (pcase outcome
-            ((or 'allow 'allow-once) (funcall cont command-outcome))
-            (`(deny . ,reason)
-             (funcall
-              cont
-              (mevedel-tool-exec--permission-decision-result
-               metadata-p (cons 'deny reason) 'sandbox-network)))
-            (`(feedback . ,text)
-             (funcall cont (mevedel-tool-exec--additional-denial
-                            metadata-p 'sandbox-network text)))
-            ('aborted
-             (funcall
-              cont
-              (mevedel-tool-exec--permission-decision-result
-               metadata-p 'aborted 'sandbox-network)))
-            (_ (funcall cont (mevedel-tool-exec--additional-denial
-                              metadata-p 'sandbox-network))))))
-       permission-context
-       (plist-get permission-context :session)))))
+  (cond
+   ((not (eq t (plist-get (plist-get request :additional-permissions)
+                          :network)))
+    (funcall cont command-outcome))
+   ((or (eq (mevedel-tool-exec--effective-sandbox-mode permission-context)
+            'off)
+        (eq (mevedel-tool-exec--effective-permission-mode permission-context)
+            'full-auto))
+    (when metadata-p
+      (mevedel-tool-exec--log-permission-decision
+       tool-name 'allow 'sandbox-network permission-context
+       :sandbox-permissions 'additive
+       :additional-permissions '(:network t)))
+    (funcall cont command-outcome))
+   (t
+    (mevedel-tool-exec--request-permission
+     (list
+      :kind 'sandbox
+      :tool-name tool-name
+      :detail detail
+      :sandbox-permissions 'additive
+      :additional-permissions '(:network t)
+      :justification (plist-get request :justification)
+      :origin (mevedel-tool-exec--permission-origin permission-context)
+      :callback
+      (lambda (outcome)
+        (pcase outcome
+          ((or 'allow 'allow-once) (funcall cont command-outcome))
+          (`(deny . ,reason)
+           (funcall
+            cont
+            (mevedel-tool-exec--permission-decision-result
+             metadata-p (cons 'deny reason) 'sandbox-network)))
+          (`(feedback . ,text)
+           (funcall cont (mevedel-tool-exec--additional-denial
+                          metadata-p 'sandbox-network text)))
+          ('aborted
+           (funcall
+            cont
+            (mevedel-tool-exec--permission-decision-result
+             metadata-p 'aborted 'sandbox-network)))
+          (_ (funcall cont (mevedel-tool-exec--additional-denial
+                            metadata-p 'sandbox-network))))))
+     permission-context
+     (plist-get permission-context :session)))))
 
 (defun mevedel-tool-exec--filesystem-resource-granted-p
     (grant permission-context)
@@ -939,6 +945,14 @@ avoids saving a brittle whole-chain string such as
         (and session (mevedel-session-permission-mode session))
         mevedel-permission-mode)))
 
+(defun mevedel-tool-exec--effective-sandbox-mode
+    (&optional permission-context)
+  "Return effective sandbox mode for PERMISSION-CONTEXT."
+  (require 'mevedel-sandbox)
+  (mevedel-sandbox-mode-effective
+   (or (plist-get permission-context :session)
+       (and (boundp 'mevedel--session) mevedel--session))))
+
 (defun mevedel-tool-exec--bash-literal-path-tokens (command &optional analysis)
   "Return literal path resources identified in COMMAND.
 Dynamic expansions remain complex and are not evaluated.  Reuse ANALYSIS when
@@ -1446,7 +1460,9 @@ suspicious Bash."
           :sandbox-permissions sandbox-permissions
           :sandbox-facts
           (mevedel-sandbox-pending-facts
-           additional-permissions sandbox-permissions))))
+           additional-permissions sandbox-permissions
+           (mevedel-tool-exec--effective-sandbox-mode
+            permission-context)))))
 
 (defun mevedel-tool-exec--bash-deny-only-guardian-async
     (command cont &optional metadata-p permission-context)
@@ -1694,10 +1710,14 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
              (mode (mevedel-tool-exec--eval-mode input))
              (request (mevedel-tool-exec--sandbox-request
                        input 'eval mode))
+             (sandbox-mode
+              (mevedel-tool-exec--effective-sandbox-mode
+               (plist-get input :permission-context)))
              (command-input
               (mevedel-tool-exec--command-permission-input
                input request)))
-        (if (eq (plist-get request :level) 'escalated)
+        (if (and (eq (plist-get request :level) 'escalated)
+                 (not (eq sandbox-mode 'off)))
             (mevedel-tool-exec--check-full-escalation-async
              "Eval" (plist-get input :expression) input request cont)
           (mevedel-tool-exec--eval-check-command-permission-async
@@ -1947,8 +1967,12 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
   (condition-case err
       (let* ((input (mevedel-tool-exec--capture-permission-origin input))
              (request (mevedel-tool-exec--sandbox-request input 'bash))
+             (sandbox-mode
+              (mevedel-tool-exec--effective-sandbox-mode
+               (plist-get input :permission-context)))
              (missing-resources
-              (unless (eq (plist-get request :level) 'escalated)
+              (unless (and (eq (plist-get request :level) 'escalated)
+                           (not (eq sandbox-mode 'off)))
                 (mevedel-tool-exec--bash-missing-resource-paths
                  (plist-get input :command)
                  (plist-get input :permission-context)
@@ -1957,7 +1981,8 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
               (mevedel-tool-exec--command-permission-input
                input request)))
         (cond
-         ((eq (plist-get request :level) 'escalated)
+         ((and (eq (plist-get request :level) 'escalated)
+               (not (eq sandbox-mode 'off)))
           (mevedel-tool-exec--check-full-escalation-async
            "Bash" (plist-get input :command) input request cont))
          (t
