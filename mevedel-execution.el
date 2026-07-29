@@ -134,6 +134,7 @@ Values below 0.25 are clamped so the UI receives at most four per second."
   "Opaque per-session execution state."
   next-id
   records
+  sandbox-fallback-warned-p
   scheduler)
 
 (cl-defstruct (mevedel-execution--origin
@@ -266,6 +267,18 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
     (or mevedel-execution--orphan-state
         (setq mevedel-execution--orphan-state
               (mevedel-execution--new-state)))))
+
+(defun mevedel-execution--mark-direct-fallback (session facts)
+  "Mark and warn for SESSION's first direct fallback in FACTS."
+  (let ((state (mevedel-execution--state-for-session session)))
+    (if (mevedel-execution--state-sandbox-fallback-warned-p state)
+        facts
+      (setf (mevedel-execution--state-sandbox-fallback-warned-p state) t)
+      (display-warning
+       'mevedel
+       "Sandbox unavailable; this session is falling back to direct execution"
+       :warning)
+      (plist-put (copy-sequence facts) :first-direct-fallback t))))
 
 (defun mevedel-execution--process-environment ()
   "Return a child environment with stable execution defaults."
@@ -462,6 +475,8 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
             (list :exit-code status
                   :output output
                   :output-bytes bytes
+                  :termination
+                  (mevedel-execution--record-termination record)
                   :timed-out-p
                   (mevedel-execution--record-timed-out-p record)
                   :output-limit-p
@@ -1230,12 +1245,18 @@ it briefly so repeated owner polls return the same result."
   "Return the terminal child-result subset used for sandbox launch checks."
   (list :exit-code (mevedel-execution--record-exit-code record)
         :output (mevedel-execution--read-output record)
+        :termination (mevedel-execution--termination record)
         :timed-out-p (mevedel-execution--record-timed-out-p record)
         :error (mevedel-execution--record-error-data record)))
 
 (defun mevedel-execution--restart-unconfined (record facts)
   "Restart RECORD's original command without confinement using FACTS."
-  (let ((preparation (mevedel-execution--record-sandbox-preparation record)))
+  (let* ((preparation
+          (mevedel-execution--record-sandbox-preparation record))
+         (session
+          (mevedel-execution--origin-session
+           (mevedel-execution--record-origin record)))
+         (facts (mevedel-execution--mark-direct-fallback session facts)))
     (apply #'mevedel-execution--telemetry
            record 'sandbox-fallback
            :launch-failure-stage 'before-command-start
@@ -1297,13 +1318,17 @@ it briefly so repeated owner polls return the same result."
           (mevedel-execution--restart-unconfined
            record (mevedel-sandbox--record-launch-failure child-result))
         (when launch-failed
-          (setf (mevedel-execution--record-sandbox-facts record)
-                (mevedel-sandbox--record-launch-failure child-result)))
+          (let ((facts
+                 (mevedel-sandbox--record-launch-failure child-result)))
+            (unless (plist-get preparation :fallback-p)
+              (setq facts
+                    (plist-put (copy-sequence facts) :refused t)))
+            (setf (mevedel-execution--record-sandbox-facts record) facts)))
         (when preparation
           (mevedel-sandbox-cleanup preparation))
         (setf (mevedel-execution--record-finished-p record) t)
         (let* ((facts (mevedel-execution--record-sandbox-facts record))
-               (refused-p (eq (plist-get facts :sandbox) 'refused))
+               (refused-p (plist-get facts :refused))
                (started-p
                 (and (not refused-p)
                      (not launch-failed)
@@ -1405,6 +1430,15 @@ it briefly so repeated owner polls return the same result."
 
 (defun mevedel-execution--start-admitted (record preparation)
   "Start scheduler-admitted RECORD from PREPARATION."
+  (when (and (eq (plist-get preparation :state) 'unrestricted)
+             (eq (plist-get (plist-get preparation :facts) :sandbox)
+                 'unavailable))
+    (plist-put
+     preparation :facts
+     (mevedel-execution--mark-direct-fallback
+      (mevedel-execution--origin-session
+       (mevedel-execution--record-origin record))
+      (plist-get preparation :facts))))
   (apply #'mevedel-execution--telemetry
          record 'execution-admitted
          :queue-duration-ms
@@ -1989,14 +2023,22 @@ discards the process without invoking CALLBACK."
           (mevedel-sandbox-prepare
            command workdir writable-roots additional-permissions
            sandbox-permissions
-           (and session (mevedel-session-sandbox-mode session)))))
+           (and session (mevedel-session-sandbox-mode session))))
+         (_
+          (when (and (eq (plist-get preparation :state) 'unrestricted)
+                     (eq (plist-get (plist-get preparation :facts) :sandbox)
+                         'unavailable))
+            (plist-put
+             preparation :facts
+             (mevedel-execution--mark-direct-fallback
+              session (plist-get preparation :facts))))))
     (cl-labels
         ((record-attempt ()
            (unless attempt-recorded-p
              (setq attempt-recorded-p t)
              (mevedel-execution--record-sandbox-attempt
               current-facts started-p
-              (eq (plist-get current-facts :sandbox) 'refused)
+              (plist-get current-facts :refused)
               summary-cell pipeline-summary-cell agent-summary-cell)))
          (finish (child-result facts)
            (setq current-facts facts)
@@ -2073,8 +2115,10 @@ discards the process without invoking CALLBACK."
                       preparation child-result)))
                 (if (and (plist-get preparation :fallback-p) launch-failed)
                     (let ((facts
-                           (mevedel-sandbox--record-launch-failure
-                            child-result)))
+                           (mevedel-execution--mark-direct-fallback
+                            session
+                            (mevedel-sandbox--record-launch-failure
+                             child-result))))
                       (setq started-p nil
                             current-facts facts)
                       (when (and session
@@ -2107,8 +2151,11 @@ discards the process without invoking CALLBACK."
                          workdir timeout session owner #'teardown))))
                   (let ((facts
                          (if launch-failed
-                             (mevedel-sandbox--record-launch-failure
-                              child-result)
+                             (plist-put
+                              (copy-sequence
+                               (mevedel-sandbox--record-launch-failure
+                                child-result))
+                              :refused t)
                            (plist-get preparation :facts)))
                         (clean-result
                          (mevedel-sandbox-strip-marker

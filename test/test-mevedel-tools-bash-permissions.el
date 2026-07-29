@@ -2700,7 +2700,52 @@ default Bash keeps bare dot inspection automatic"
     (should (equal "injected" (plist-get envelope :result)))
     (should (eq 'success (plist-get envelope :status)))
     (should (= 0 (plist-get (plist-get envelope :render-data)
-                            :exit-code)))))
+                            :exit-code))))
+  :doc "adds recovery guidance only to failed confined commands"
+  (let* ((guidance
+          "This command ran with network/path confinement. If confinement caused the failure, retry with `with_additional_permissions` and request only the required network or exact path capability. Use `require_escalated` only when additive permissions cannot represent the requirement.")
+         (failed
+          (mevedel-tool-exec--observation-envelope
+           '(:output "network failed"
+             :facts (:state completed :termination exited :exit-code 1
+                     :outcome failure :wall-time-seconds 0.1
+                     :output-bytes 14 :output-lines 1
+                     :omitted-output-bytes 0 :tty nil)
+             :sandbox-facts
+             (:sandbox bubblewrap :filesystem workspace-write
+              :network isolated))))
+         (semantic
+          (mevedel-tool-exec--observation-envelope
+           '(:output ""
+             :facts (:state completed :termination exited :exit-code 1
+                     :outcome no-match :wall-time-seconds 0.1
+                     :output-bytes 0 :output-lines 0
+                     :omitted-output-bytes 0 :tty nil)
+             :sandbox-facts
+             (:sandbox bubblewrap :filesystem workspace-write
+              :network isolated)))))
+    (should (string-search guidance (plist-get failed :result)))
+    (should-not (string-search guidance (plist-get semantic :result))))
+  :doc "directs a required-mode refusal to a new full escalation request"
+  (let ((result
+         (plist-get
+          (mevedel-tool-exec--observation-envelope
+           '(:output ""
+             :error (error "Bubblewrap unavailable")
+             :facts (:state completed :termination spawn-failed :exit-code -1
+                     :outcome failure :wall-time-seconds 0.0
+                     :output-bytes 0 :output-lines 0
+                     :omitted-output-bytes 0 :tty nil)
+             :sandbox-facts
+             (:sandbox unavailable :filesystem unrestricted
+              :network unrestricted :refused t)))
+          :result)))
+    (should
+     (string-search
+      "Only a new invocation with `require_escalated`"
+      result))
+    (should-not
+     (string-search "`with_additional_permissions`" result))))
 
 (mevedel-deftest mevedel-tool-exec--bash-outcome ()
   ,test
@@ -3127,6 +3172,15 @@ default Bash keeps bare dot inspection automatic"
      "ok" '(:sandbox-facts
             (:sandbox bubblewrap :filesystem workspace-write :network isolated)))
     "ok\n\n[sandbox: bubblewrap; filesystem: workspace-write; network: isolated]"))
+  :doc "first fallback disclosure:
+`mevedel-tool-exec--sandbox-disclosure' includes one model-visible note"
+  (should
+   (string-search
+    "Confinement was unavailable, so this invocation ran directly."
+    (mevedel-tool-exec--sandbox-disclosure
+     "ok" '(:sandbox-facts
+            (:sandbox unavailable :filesystem unrestricted
+             :network unrestricted :first-direct-fallback t)))))
   :doc "suppressed unrestricted disclosure:
 `mevedel-tool-exec--sandbox-disclosure' warns without contaminating substitution"
   (let (warning)
@@ -3138,12 +3192,27 @@ default Bash keeps bare dot inspection automatic"
         (mevedel-tool-exec--sandbox-disclosure
          "literal"
          '(:sandbox-facts
-           (:sandbox unavailable :filesystem unrestricted
-            :network unrestricted :reason "probe failed"))
+           (:sandbox off :filesystem unrestricted
+            :network unrestricted :reason "disabled"))
          t)
         "literal"))
       (should (string-match-p "without confinement" warning))
-      (should (string-match-p "network: unrestricted" warning)))))
+      (should (string-match-p "network: unrestricted" warning))))
+  :doc "suppressed fallback disclosure:
+the execution boundary owns the session's single unavailable warning"
+  (let (warning)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (&rest _) (setq warning t))))
+      (should
+       (equal
+        "literal"
+        (mevedel-tool-exec--sandbox-disclosure
+         "literal"
+         '(:sandbox-facts
+           (:sandbox unavailable :filesystem unrestricted
+            :network unrestricted :first-direct-fallback t))
+         t)))
+      (should-not warning))))
 
 ;;
 ;;; Eval check-permission adapter
@@ -3638,6 +3707,27 @@ default Bash keeps bare dot inspection automatic"
     (should (= 1 child-starts))
     (should (string-match-p "Result:\n9" result))
     (should-not (string-match-p "without child-process confinement" result)))
+  :doc "failed confined batch mode includes explicit retry guidance"
+  (let (result)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-read-batch-result)
+               (lambda (_file)
+                 '(:status error :text "Error: batch failure")))
+              ((symbol-function 'mevedel-execution-start-one-shot)
+               (lambda (callback &rest _args)
+                 (funcall
+                  callback
+                  '(:exit-code 1 :output "" :error nil
+                    :sandbox-facts
+                    (:sandbox bubblewrap :filesystem workspace-write
+                     :network isolated))))))
+      (mevedel-tool-exec--eval
+       (lambda (envelope)
+         (setq result (test-bash-permissions--handler-result envelope)))
+       (list :expression "(error \"batch failure\")" :mode "batch")))
+    (should
+     (string-search
+      "retry with `with_additional_permissions`"
+      result)))
   :doc "live mode does not use the child-process seam"
   (let ((child-starts 0)
         result)

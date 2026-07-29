@@ -2297,14 +2297,25 @@ direct non-workspace uses."
              (list (file-name-as-directory
                     (expand-file-name temporary-file-directory)))))))
 
+(defconst mevedel-tool-exec--sandbox-recovery-guidance
+  (concat
+   "This command ran with network/path confinement. If confinement caused "
+   "the failure, retry with `with_additional_permissions` and request only "
+   "the required network or exact path capability. Use `require_escalated` "
+   "only when additive permissions cannot represent the requirement.")
+  "Model guidance appended to failed confined child results.")
+
 (defun mevedel-tool-exec--sandbox-disclosure
-    (text child-result &optional suppress-p)
-  "Append confinement facts from CHILD-RESULT to TEXT unless SUPPRESS-P."
+    (text child-result &optional suppress-p failed-p)
+  "Append CHILD-RESULT confinement facts and recovery guidance to TEXT.
+SUPPRESS-P hides model-facing disclosure.  FAILED-P identifies a failed tool
+operation rather than a successful or semantic non-error result."
   (let ((facts (plist-get child-result :sandbox-facts)))
     (cond
      ((not facts) text)
      (suppress-p
-      (when (eq (plist-get facts :filesystem) 'unrestricted)
+      (when (and (eq (plist-get facts :filesystem) 'unrestricted)
+                 (not (eq (plist-get facts :sandbox) 'unavailable)))
         (require 'mevedel-sandbox)
         (display-warning
          'mevedel
@@ -2314,9 +2325,23 @@ direct non-workspace uses."
       text)
      (t
       (require 'mevedel-sandbox)
-      (concat text
-              (unless (string-empty-p (or text "")) "\n\n")
-              "[" (mevedel-sandbox-status-text facts) "]")))))
+      (string-join
+       (delq
+        nil
+        (list
+         (unless (string-empty-p (or text "")) text)
+         (when (plist-get facts :first-direct-fallback)
+           "Confinement was unavailable, so this invocation ran directly.")
+         (concat "[" (mevedel-sandbox-status-text facts) "]")
+         (cond
+          ((and failed-p (plist-get facts :refused))
+           (concat
+            "Confinement is required but unavailable. Only a new invocation "
+            "with `require_escalated` and a justification can request direct "
+            "execution."))
+          ((and failed-p (eq (plist-get facts :sandbox) 'bubblewrap))
+           mevedel-tool-exec--sandbox-recovery-guidance))))
+       "\n\n")))))
 
 (defun mevedel-tool-exec--execution-facts-xml (facts)
   "Return compact model-visible XML derived from canonical FACTS."
@@ -2391,12 +2416,16 @@ stopped command's outcome."
   (let* ((facts (plist-get observation :facts))
          (output (or (plist-get observation :output) ""))
          (error-data (plist-get observation :error))
+         (failed-p
+          (and (not force-success-p)
+               (eq (plist-get facts :state) 'completed)
+               (eq (plist-get facts :outcome) 'failure)))
          (body (if error-data
                    (format "Failed to start process: %s" error-data)
                  output))
          (with-sandbox
           (mevedel-tool-exec--sandbox-disclosure
-           body observation suppress-sandbox-disclosure-p))
+           body observation suppress-sandbox-disclosure-p failed-p))
          (result
           (if suppress-sandbox-disclosure-p
               with-sandbox
@@ -2737,7 +2766,11 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                          (if (string-empty-p (or diagnostics ""))
                              ""
                            (format ":\n%s" diagnostics)))))
-                      child-result)))
+                      child-result nil
+                      (not
+                       (and (eq (plist-get payload :status) 'ok)
+                            (integerp exit-code)
+                            (zerop exit-code))))))
                  (funcall cleanup))))
            :name "mevedel-eval-batch"
            :command

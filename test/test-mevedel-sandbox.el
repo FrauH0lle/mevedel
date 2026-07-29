@@ -1186,6 +1186,11 @@ a broad read grant keeps an inaccessible descendant masked"
         :output "private-start-marker\ncommand failed")))
     (should-not
      (mevedel-sandbox-launch-failed-p
+      preparation
+      '(:exit-code 15 :termination signaled
+        :timed-out-p nil :output "")))
+    (should-not
+     (mevedel-sandbox-launch-failed-p
       preparation '(:exit-code -1 :timed-out-p t :output "")))))
 
 (mevedel-deftest mevedel-sandbox-strip-marker ()
