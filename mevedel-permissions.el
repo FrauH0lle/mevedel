@@ -1134,7 +1134,7 @@ RESOURCE-GRANTS define the filesystem boundary."
            (deny-bucket
            (mevedel-permission--decision
              'deny 'deny-rule :bucket deny-bucket))
-           ((and native-edit-p
+           ((and (or native-edit-p (equal tool-name "Eval"))
                  (mevedel-permission--plan-mode-p session))
             (mevedel-permission--decision 'deny 'plan-mode)))))
     (list :tool-name tool-name
@@ -1188,7 +1188,7 @@ The decision chain:
   1. Extract specifier values via tool-struct getters when missing
   2. Resolve absolute decisions across all buckets:
        any bucket yields `deny' -> deny;
-       Plan mode + native edit tool -> deny
+       Plan mode + native edit tool or Eval -> deny
   3. Call the tool checker, when present, to decide command authority
   4. Resolve allow/ask rules innermost-first:
        invocation -> request -> session -> persistent -> defcustom.

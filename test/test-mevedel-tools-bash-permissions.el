@@ -1412,21 +1412,22 @@ the decision log identifies complete confinement bypass authority"
     (should (eq 'allow (mevedel-tools--check-bash-permission "pwd && cat file"))))
   :doc "Plan mode allows only recognized read-only Bash"
   (let* ((mevedel-permission-rules nil)
-         (session (mevedel-session--create :name "plan" :plan-mode t))
-         (context (list :mode 'full-auto :session session :buckets nil)))
-    (should (eq 'allow
-                (mevedel-tools--check-bash-permission
-                 "pwd && cat file" :permission-context context)))
-    (should (eq 'deny
-                (mevedel-tools--check-bash-permission
-                 "make test" :permission-context context)))
-    (should (eq 'deny
-                (mevedel-tools--check-bash-permission
-                 "rm file"
-                 :permission-context
-                 (plist-put context :buckets
-                            '((:session ("Bash" :pattern "rm file"
-                                         :action allow))))))))
+         (session (mevedel-session--create :name "plan" :plan-mode t)))
+    (dolist (mode '(ask edits full-auto))
+      (let ((context (list :mode mode :session session :buckets nil)))
+        (should (eq 'allow
+                    (mevedel-tools--check-bash-permission
+                     "pwd && cat file" :permission-context context)))
+        (should (eq 'deny
+                    (mevedel-tools--check-bash-permission
+                     "make test" :permission-context context)))
+        (should (eq 'deny
+                    (mevedel-tools--check-bash-permission
+                     "rm file"
+                     :permission-context
+                     (plist-put context :buckets
+                                '((:session ("Bash" :pattern "rm file"
+                                             :action allow))))))))))
   :doc "Plan mode follows a retained agent's parent session"
   (let* ((session (mevedel-session--create :name "plan" :plan-mode t))
          (mevedel-permission-rules nil))

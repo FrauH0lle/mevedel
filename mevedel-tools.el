@@ -190,8 +190,9 @@
                            (mevedel-session-plan-mode session)
                            (when-let* ((registered
                                        (mevedel-tool-get name)))
-                             (memq 'edit
-                                   (mevedel-tool-groups registered)))))))
+                             (or (equal name "Eval")
+                                 (memq 'edit
+                                       (mevedel-tool-groups registered))))))))
               tools)))
         (unless (= (length filtered) (length tools))
           (plist-put info :tools filtered)

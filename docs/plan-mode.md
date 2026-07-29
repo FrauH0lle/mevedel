@@ -1,9 +1,10 @@
 # Plan mode
 
 Plan mode is a sticky planning workflow independent of the session's stored
-`ask`, `auto`, or `full-auto` permission mode. Enter it with `/plan`,
+`ask`, `edits`, or `full-auto` permission mode. Enter it with `/plan`,
 `/plan PROMPT`, the cockpit, or `C-<tab>` in the composer. `Shift-TAB` in
-the composer continues to cycle only `ask` -> `auto` -> `full-auto` -> `ask`,
+the composer continues to cycle only
+`ask` -> `edits` -> `full-auto` -> `ask`,
 including while Plan is active. The composer displays both dimensions as
 `[Plan · MODE]`. A session with an unfinished Goal cannot enter Plan; a
 completed Goal is historical and does not block it.
@@ -38,8 +39,10 @@ continues to use the `compaction` workload.
 Plan requests omit `Write`, `Edit`, and `MkDir`. The pipeline denies those
 tools tree-wide as a backstop, including for retained agents and already
 realized requests. Bash remains available only when the canonical analysis and
-policy classify the invocation as read-only. Eval and other tools retain the
-ordinary permission policy.
+policy classify the invocation as read-only. Permission modes and explicit
+allow rules cannot widen this workflow boundary. `Eval` is also unavailable:
+arbitrary Emacs Lisp cannot be classified reliably as read-only, including in
+a child process. Other tools retain the ordinary permission policy.
 
 ## Proposal interaction
 
@@ -66,7 +69,7 @@ The approval interaction has these axes:
   request.
 - Execution: Direct or Goal.
 - Budget: a positive Goal token limit, or Unlimited.
-- Mode: Ask, Auto, or Full-auto.
+- Mode: Ask, Edits, or Full-auto.
 - Model: the proposal-local implementation backend/model and reasoning effort.
 - Skills: canonical user-invocable skills attached to implementation.
 - Instructions: free-form multiline implementation-only guidance.
