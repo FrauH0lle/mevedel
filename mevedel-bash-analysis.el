@@ -345,6 +345,7 @@ quotes or escaped with a backslash do not close the substitution."
                      (cadr (mevedel-bash-analysis--scan-segments fragment))))
            (cons source (mevedel-bash-analysis--substitution-bodies source)))))
     (list :class class
+          :complex-p (and complex-p t)
           :background-p (and background-p t)
           :commands commands
           :segments segments

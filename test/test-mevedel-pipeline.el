@@ -2342,6 +2342,62 @@
 		   (mevedel-pipeline-run-tool
 		    tool (lambda (r) (setq result r)) '(:msg "hello"))
 		   (should (equal result "hello")))
+		 :doc "direct native-edit allow reaches the handler as auto-apply authority"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-direct-edit-" t)))
+			(path (file-name-concat root "file.txt"))
+			(workspace
+			 (mevedel-workspace--create
+			  :type 'project :id "direct-edit" :root root
+			  :name "direct-edit" :file-cache nil))
+			(session
+			 (mevedel-session--create
+			  :name "direct-edit" :workspace workspace
+			  :permission-mode 'ask
+			  :permission-rules '(("Edit" :action allow))))
+			(auto-apply-p nil)
+			(tool
+			 (mevedel-tool--create
+			  :name "Edit" :groups '(edit)
+			  :get-path (lambda (args) (plist-get args :file_path))
+			  :handler
+			  (lambda (callback _args)
+			    (setq auto-apply-p
+				  (and
+				   (boundp 'mevedel-pipeline--auto-apply-edit-p)
+				   (symbol-value
+				    'mevedel-pipeline--auto-apply-edit-p)))
+			    (funcall callback '(:result "done")))
+			  :async-p t))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			permission-context
+			handler-context)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (setq-local mevedel--workspace workspace)
+			 (setq-local mevedel--session session)
+			 (setq-local default-directory root)
+			 (cl-letf
+			     (((symbol-function 'mevedel--all-allowed-roots)
+			       (lambda (&optional _buffer) (list root))))
+			   (mevedel-pipeline--step-permission
+			    (list :tool tool
+				  :args (list :file_path path)
+				  :session session
+				  :workspace workspace
+				  :buffer (current-buffer))
+			    (lambda (context)
+			      (setq permission-context context))
+			    #'ert-fail)
+			   (mevedel-pipeline--step-handler
+			    permission-context
+			    (lambda (context) (setq handler-context context))
+			    #'ert-fail))
+			 (should (equal "done"
+					(plist-get handler-context :result)))
+			 (should auto-apply-p))
+		     (delete-directory root t)))
 		 :doc "request cancellation settles an active pipeline exactly once"
 		 (let* ((session (mevedel-session--create
 				  :name "cancel-pipeline"

@@ -8,8 +8,9 @@ combine with `progn` --- go expression by expression.
 
 `mode` controls where the expression runs:
 
-- `live` (default): evaluate in the current Emacs process. This can see
-  live buffers, variables, windows, advice, timers, and package state.
+- `live` (default): evaluate, inherently unconfined, in the current Emacs
+  process. This can see live buffers, variables, windows, advice, timers, and
+  package state. Ordinary results disclose this execution scope.
 - `batch`: evaluate in a child `emacs --batch -Q` process with the
   current `load-path` and the session working directory. On supported systems,
   the child runs with filesystem and process confinement and without network

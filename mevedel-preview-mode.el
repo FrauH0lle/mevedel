@@ -41,6 +41,9 @@
                   (mode &optional prompt display-text hook-context))
 (defvar mevedel-permission-mode)
 
+;; `mevedel-pipeline'
+(defvar mevedel-pipeline--auto-apply-edit-p)
+
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-diagnostics-after-edit
                   "mevedel-reminders" (buffer path continuation))
@@ -278,7 +281,10 @@ chat buffer."
     (error ":callback is required"))
   (unless (buffer-local-value 'mevedel--workspace (current-buffer))
     (error "`mevedel-preview-mode-add-preview' must be called from chat buffer context"))
-  (pcase (mevedel-preview-mode--effective-mode)
+  (pcase (if (and (boundp 'mevedel-pipeline--auto-apply-edit-p)
+                  mevedel-pipeline--auto-apply-edit-p)
+             'edits
+           (mevedel-preview-mode--effective-mode))
     ((or 'edits 'full-auto)
      (mevedel-preview-mode--auto-apply
       temp-file path callback apply-fn tool-name))

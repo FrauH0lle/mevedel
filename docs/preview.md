@@ -6,6 +6,10 @@ on `mevedel-preview-mode--effective-mode`:
 - `ask` → interactive inline overlay
 - `edits` / `full-auto` → `--auto-apply` (runs `apply-fn`
   immediately, still produces a persistent diff summary in the view)
+- direct user `Write` / `Edit` allow → `--auto-apply` after independent path
+  authority succeeds, even while the session remains in `ask`
+
+An exact resource grant alone never selects auto-apply.
 
 Automatic application validates every hunk without prompting. A hunk that
 would require Emacs' heuristic whitespace or word-wrap repair is rejected
@@ -32,9 +36,9 @@ callback-overlay placement, and redraw.
 ```mermaid
 flowchart TD
     A[Edit or Write handler returns patch] --> B[Register preview]
-    B --> C{Permission mode}
-    C -- ask --> D[Show inline overlay]
-    C -- edits or full-auto --> E[Auto-apply patch]
+    B --> C{Mode or direct operation allow}
+    C -- ask without allow --> D[Show inline overlay]
+    C -- edits, full-auto, or direct allow --> E[Auto-apply patch]
     D --> F{User action}
     F -- Approve --> G[Apply patch]
     F -- Reject --> H[Remove overlay]

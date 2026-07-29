@@ -641,7 +641,9 @@ inline in the chat view; larger diffs open in a separate preview buffer
 (controlled by `mevedel-inline-preview-threshold`). Under `edits` and
 `full-auto` permission modes the diff is auto-applied and a summary entry is
 still added to the view. `MkDir` goes through the permission system, but creates
-directories directly rather than showing a diff preview.
+directories directly rather than showing a diff preview. A direct user-authored
+allow rule for `Write` or `Edit` also auto-applies the matching preview after
+its path authority is satisfied; a path grant by itself does not.
 
 Per-overlay keybindings:
 

@@ -936,6 +936,14 @@ avoids saving a brittle whole-chain string such as
    (mapcar #'mevedel-tool-exec--bash-allow-pattern-for-segment
            (plist-get (mevedel-tool-exec--analyze-bash command) :segments))))
 
+(defun mevedel-tool-exec--bash-reusable-operation-p (command)
+  "Return non-nil when COMMAND can be remembered without broadening it."
+  (let ((analysis (mevedel-tool-exec--analyze-bash command)))
+    (and (not (string-empty-p (string-trim command)))
+         (not (plist-get analysis :complex-p))
+         (not (plist-get analysis :background-p))
+         (not (string-match-p "\\(?:\\*\\|\\?\\|\\[\\)" command)))))
+
 (defun mevedel-tool-exec--effective-permission-mode
     (&optional permission-context)
   "Return effective permission mode for PERMISSION-CONTEXT."
@@ -1543,7 +1551,7 @@ PRESERVE-UI describe the requested execution scope."
                    (propertize "Mode: " 'font-lock-face 'font-lock-escape-face)
                    (format "%s" (or mode "live"))
                    (when (equal (or mode "live") "live")
-                     (format " (preserve_ui: %s)"
+                     (format " (inherently unconfined; preserve_ui: %s)"
                              (if preserve-ui "true" "false")))
                    "\n\n"
                    (propertize "Expression:\n" 'font-lock-face 'font-lock-escape-face)
@@ -1565,11 +1573,9 @@ PRESERVE-UI describe the requested execution scope."
     (&key trust-literal-p permission-context)
   "Decide Eval permission for TRUST-LITERAL-P and PERMISSION-CONTEXT.
 
-Normal model-requested Eval asks unless an explicit deny rule applies
-or the effective permission mode is `full-auto'.  When TRUST-LITERAL-P
-is non-nil, as with author-written skill body injections, an active
-allow rule for Eval may bypass the prompt.  Deny rules still win
-absolutely."
+Normal model-requested Eval asks unless a rule settles it or the effective
+permission mode is `full-auto'.  Deny and ask rules remain final in every
+mode.  TRUST-LITERAL-P identifies author-written skill body injections."
   (let* ((buckets (mevedel-tools--bash-buckets permission-context))
          (mode (mevedel-tool-exec--effective-permission-mode
                 permission-context))
@@ -1577,6 +1583,8 @@ absolutely."
                   buckets "Eval" nil nil nil nil)))
     (cond
      ((eq action 'deny) 'deny)
+     ((eq action 'ask) 'ask)
+     ((eq action 'allow) 'allow)
      ((eq mode 'full-auto)
       'allow)
      (trust-literal-p
@@ -1823,7 +1831,7 @@ parity with the sync slot."
                   (or (plist-get guardian-context :allow-patterns)
                       (mevedel-tool-exec--bash-allow-patterns command)))
                  (rule-creating-p
-                  (not (memq command-class '(dangerous complex))))
+                  (mevedel-tool-exec--bash-reusable-operation-p command))
                  (guardian-cell
                   (list nil (and mevedel-permission-guardian 'pending)))
                  (entry
@@ -2435,6 +2443,11 @@ window configuration after evaluation."
         (ignore-errors
           (set-window-configuration window-configuration)))
       (kill-buffer standard-output))
+    (unless (equal result-format "injection")
+      (setq response
+            (concat
+             response
+             "\n\nExecution: Live Eval ran inside Emacs without child-process confinement.")))
     (funcall callback (list :result response))))
 
 (defun mevedel-tool-exec--eval-batch-script
