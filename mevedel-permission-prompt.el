@@ -201,6 +201,32 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
 ;;
 ;;; Prompt rendering
 
+(defun mevedel-permission--format-authority-capabilities (entry)
+  "Format requested invocation authority from ENTRY."
+  (when (plist-get entry :show-operation-authority)
+    (let* ((requested
+            (plist-get entry :requested-additional-permissions))
+           (missing
+            (plist-get entry :missing-additional-permissions))
+           (missing-grants (plist-get missing :file-system)))
+      (concat
+       (propertize "Authority\n" 'font-lock-face '(:inherit bold))
+       (format "[%s] Command\n"
+               (if (plist-get entry :operation-pending-p) " " "x"))
+       (when (plist-get requested :network)
+         (format "[%s] Network\n"
+                 (if (plist-get missing :network) " " "x")))
+       (mapconcat
+        (lambda (grant)
+          (format "[%s] %s %s"
+                  (if (member grant missing-grants) " " "x")
+                  (capitalize (symbol-name (plist-get grant :access)))
+                  (plist-get grant :path)))
+        (plist-get requested :file-system)
+        "\n")
+       (and (plist-get requested :file-system) "\n")
+       "\n"))))
+
 (defun mevedel-permission--prompt-async-attributed
     (tool-name path include-always origin cont &optional count entry)
   "Display an attributed permission prompt and call CONT with its outcome."
@@ -283,7 +309,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
   "Display a Bash permission prompt and call CONT with its outcome."
   (let* ((dangerous (eq command-class 'dangerous))
          (rule-creating-disabled-p
-          (memq command-class '(dangerous complex)))
+          (not (and entry (plist-get entry :reusable-operation-p))))
          (commands (and entry (plist-get entry :commands)))
          (commands-summary
           (and entry
@@ -311,6 +337,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
            (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
            (propertize (format "%s\n" command)
                        'font-lock-face 'font-lock-string-face)
+           (mevedel-permission--format-authority-capabilities entry)
            (mevedel-permission--format-bash-guardian
             guardian guardian-status)
            (when commands-summary
@@ -336,9 +363,10 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
               (propertize
                "Contains a binary on `mevedel-bash-dangerous-commands'.\n"
                'font-lock-face 'font-lock-comment-face)
-              (propertize
-               "Session/permanent allow is disabled for dangerous Bash commands.\n"
-               'font-lock-face 'font-lock-comment-face)))
+              (when rule-creating-disabled-p
+                (propertize
+                 "Session/permanent allow is disabled for dynamic dangerous commands.\n"
+                 'font-lock-face 'font-lock-comment-face))))
            (when unparseable
              (concat
               (propertize
@@ -363,11 +391,11 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
   "Prompt for changed child authority for TOOL-NAME and DETAIL.
 JUSTIFICATION is the model's user-facing reason.  ORIGIN, CONT, COUNT, and
 ENTRY follow the shared permission prompt contract."
-  (let* ((path (plist-get entry :resource-path))
-         (access (plist-get entry :resource-access))
-         (filesystem-p (and path access))
-         (full-p (eq (plist-get entry :sandbox-permissions)
+  (let* ((full-p (eq (plist-get entry :sandbox-permissions)
                      'require-escalated))
+         (missing (plist-get entry :missing-additional-permissions))
+         (missing-network-p (plist-get missing :network))
+         (missing-filesystem-p (plist-get missing :file-system))
          (full-rule-disabled-p
           (and full-p (not (plist-get entry :include-always))))
          (content
@@ -375,30 +403,19 @@ ENTRY follow the shared permission prompt contract."
           (propertize
            (cond
             (full-p "Full Execution Escalation Request\n")
-            (filesystem-p "Additional Filesystem Permission Request\n")
-            (t "Additional Network Permission Request\n"))
+            (t "Invocation Authority Request\n"))
                       'font-lock-face '(:inherit bold :inherit warning))
           (mevedel--prompt-attribution-line origin)
           "\n"
           (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
           (format "%s\n" tool-name)
-          (cond
-           (full-p
+          (when full-p
             (concat
              (propertize "Confinement: "
                          'font-lock-face 'font-lock-escape-face)
              "disabled for this invocation\n"))
-           (filesystem-p
-            (concat
-             (propertize "Path: " 'font-lock-face 'font-lock-escape-face)
-             (propertize (format "%s\n" path)
-                         'font-lock-face 'font-lock-string-face)
-             (propertize "Access: " 'font-lock-face 'font-lock-escape-face)
-             (format "%s\n" access)))
-           (t
-            (concat
-             (propertize "Network: " 'font-lock-face 'font-lock-escape-face)
-             "unrestricted for this invocation\n")))
+          (unless full-p
+            (mevedel-permission--format-authority-capabilities entry))
           (propertize "Justification: "
                       'font-lock-face 'font-lock-escape-face)
           (format "%s\n\n" justification)
@@ -412,15 +429,11 @@ ENTRY follow the shared permission prompt contract."
               "Warning: this command runs directly as your user. Filesystem, "
               "network, and process confinement are all disabled for this "
               "invocation.\n"))
-            (filesystem-p
-             (concat
-              "Only the named resource is reopened at the requested access "
-              "level. Other protected paths, network, and process "
-              "confinement remain unchanged.\n"))
             (t
              (concat
-              "Network access is the only requested change. The selected "
-              "filesystem and process profile remains unchanged.\n")))
+              "Approval grants every unchecked capability to this invocation. "
+              "Checked authority is already available; other resources and "
+              "the selected process confinement remain unchanged.\n")))
            'font-lock-face 'font-lock-comment-face)
           (when full-rule-disabled-p
             (propertize
@@ -430,10 +443,12 @@ ENTRY follow the shared permission prompt contract."
              'font-lock-face 'font-lock-comment-face)))))
     (mevedel-permission--prompt-async-with-content
      content
-     (and (or filesystem-p full-p) (plist-get entry :include-always))
+     (and (or missing-filesystem-p full-p)
+          (not missing-network-p)
+          (plist-get entry :include-always))
      cont count entry
-     (or (not (or filesystem-p full-p)) full-rule-disabled-p)
-     (not (or filesystem-p full-p)))))
+     (or missing-network-p full-rule-disabled-p)
+     (and missing-network-p (not full-p)))))
 
 (provide 'mevedel-permission-prompt)
 

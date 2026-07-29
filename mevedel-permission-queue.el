@@ -127,7 +127,11 @@ SESSION defaults to the current session."
                    :protected-path :resource-path :resource-access
                    :origin :command-class
                    :mode :commands-summary :sandbox-permissions
-                   :additional-permissions :justification))
+                   :additional-permissions
+                   :requested-additional-permissions
+                   :missing-additional-permissions
+                   :granted-additional-permissions
+                   :justification))
       (when (plist-member entry key)
         (setq base (plist-put base key (plist-get entry key)))))
     (when-let* ((id (mevedel-queue--entry-metadata-get
@@ -175,6 +179,9 @@ ENTRY plist keys:
   :expression            -- string (`eval' only)
   :detail                -- command or expression (`sandbox' only)
   :additional-permissions -- additive profile (`sandbox' only)
+  :requested-additional-permissions -- complete additive profile
+  :missing-additional-permissions -- unresolved additive profile
+  :granted-additional-permissions -- previously granted additive profile
   :justification         -- user-facing reason (`sandbox' only)
   :callback              -- function: (lambda (outcome) ...)"
   (let ((origin (plist-get entry :origin)))
@@ -464,29 +471,43 @@ to it as well."
               ((eq level-action 'deny) 'deny)
               ((eq level-action 'allow) 'allow)
               (t 'ask)))
-         (if-let* ((path (plist-get entry :resource-path))
-                   (access (plist-get entry :resource-access)))
-           (let* ((context
-                   (plist-put
-                    (mevedel-permission--invocation-context
-                     :tool-name (plist-get entry :tool-name)
-                     :session session
-                     :workspace workspace
-                     :path path)
-                    :resource-access access))
-                  (grants (plist-get context :resource-grants))
-                  (buckets (plist-get context :buckets))
-                  (tool-name (plist-get entry :tool-name))
-                  (rule-action
-                   (mevedel-permission--bucket-decision
-                    buckets tool-name path nil nil nil)))
-             (cond
-              ((memq rule-action '(deny ask)) rule-action)
-              ((mevedel-permission--resource-granted-p
-                path access grants)
-               'allow)
-              (t 'ask)))
-           'ask)))
+         (let* ((missing
+                 (plist-get entry :missing-additional-permissions))
+                (network (plist-get missing :network))
+                (resources
+                 (or (plist-get missing :file-system)
+                     (when-let* ((path (plist-get entry :resource-path))
+                                 (access (plist-get entry :resource-access)))
+                       (list (list :path path :access access)))))
+                (tool-name (plist-get entry :tool-name))
+                decisions)
+           (dolist (resource resources)
+             (let* ((path (plist-get resource :path))
+                    (access (plist-get resource :access))
+                    (context
+                     (plist-put
+                      (mevedel-permission--invocation-context
+                       :tool-name tool-name
+                       :session session
+                       :workspace workspace
+                       :path path)
+                      :resource-access access))
+                    (rule-action
+                     (mevedel-permission--bucket-decision
+                      (plist-get context :buckets)
+                      tool-name path nil nil nil)))
+               (push
+                (cond
+                 ((memq rule-action '(deny ask)) rule-action)
+                 ((mevedel-permission--resource-granted-p
+                   path access (plist-get context :resource-grants))
+                  'allow)
+                 (t 'ask))
+                decisions)))
+           (cond
+            ((memq 'deny decisions) 'deny)
+            ((or network (memq 'ask decisions) (null decisions)) 'ask)
+            (t 'allow)))))
       ('eval 'ask)
       (_ 'ask))))
 

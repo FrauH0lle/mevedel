@@ -482,6 +482,35 @@
     (should (equal '(allow-once allow-once) outcomes))
     (should-not (mevedel-session-permission-queue session)))
 
+  :doc "combined filesystem siblings wait until every exact grant exists"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         outcomes
+         (missing
+          '(:file-system
+            ((:path "/tmp/input" :access read)
+             (:path "/tmp/output" :access write)))))
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               #'ignore))
+      (dotimes (_ 2)
+        (mevedel-permission--enqueue
+         (list :kind 'sandbox :tool-name "Bash"
+               :resource-path "/tmp/input"
+               :resource-access 'read
+               :missing-additional-permissions missing
+               :origin "/root"
+               :callback (lambda (outcome) (push outcome outcomes)))))
+      (mevedel-permission-add-session-resource-grant
+       session "/tmp/input" 'read)
+      (mevedel-permission-queue--coalesce 'allow-session session)
+      (should-not outcomes)
+      (should (= 2 (length (mevedel-session-permission-queue session))))
+      (mevedel-permission-add-session-resource-grant
+       session "/tmp/output" 'write)
+      (mevedel-permission-queue--coalesce 'allow-session session))
+    (should (equal '(allow-once allow-once) outcomes))
+    (should-not (mevedel-session-permission-queue session)))
+
   :doc "filesystem sandbox siblings coalesce through exact path denies"
   (let* ((session (test-pq--make-session))
          (mevedel--session session)

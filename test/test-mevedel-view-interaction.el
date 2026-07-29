@@ -975,7 +975,7 @@
             (should (memq 'plan kinds))
             (should (memq 'permission kinds)))))))
 
-  :doc "nested permission stays root-owned and preserves the active composer"
+  :doc "nested authority prompt stays root-owned and preserves the active composer"
   (mevedel-view-test--with-buffers
       (let* ((session (mevedel-session--create
                        :name "test"
@@ -1027,10 +1027,15 @@
                          (lambda () 'ask)))
                 (with-current-buffer agent-buf
                   (mevedel-permission--enqueue
-                   (list :kind 'generic
-                         :tool-name "Read"
-                         :specifier-key :path
-                         :specifier-value "/tmp/from-agent.txt"
+                   (list :kind 'sandbox
+                         :tool-name "Bash"
+                         :detail "npx @emacs-eask/cli test"
+                         :sandbox-permissions 'additive
+                         :justification "Run the repository tests?"
+                         :show-operation-authority t
+                         :operation-pending-p nil
+                         :requested-additional-permissions '(:network t)
+                         :missing-additional-permissions '(:network t)
                          :include-always nil
                          :origin (mevedel-current-origin)
                          :callback
@@ -1054,7 +1059,7 @@
                             (overlay-get
                              overlay 'mevedel-view-interaction-origin))))
                   (should (string-match-p
-                           "Permission Request"
+                           "Invocation Authority Request"
                            (buffer-substring-no-properties
                             (point-min) (point-max))))
                   (should (string-match-p
@@ -1068,7 +1073,7 @@
                 (with-current-buffer agent-buf
                   (should-not
                    (string-match-p
-                    "Permission Request"
+                    "Invocation Authority Request"
                     (buffer-substring-no-properties
                      (point-min) (point-max)))))
                 (with-current-buffer data-buf
@@ -1088,7 +1093,7 @@
                                 (mevedel-session-permission-queue
                                  session))))
                   (should (string-match-p
-                           "Permission Request"
+                           "Invocation Authority Request"
                            (buffer-substring-no-properties
                             (point-min) (point-max))))
                   (should (string= draft (mevedel-view--input-text)))
