@@ -49,7 +49,7 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   gptel realizes an owning request rather than stored for late mutation.
 - **`mevedel-tool`**: name, handler, description, summary, prompt,
   args, optional semantic `repair-input` callback, category,
-  read-only/destructive/async flags, sync/async
+  read-only/destructive/async/snapshot flags, sync/async
   permission hooks, specifier extractors (`get-path`, `get-pattern`,
   `get-domain`, `get-name`), groups, max-result-size, display argument,
   render transform, renderer, and its provider-facing gptel tool.

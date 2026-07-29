@@ -46,6 +46,8 @@
 		  "mevedel-pipeline" (render-data))
 (declare-function mevedel-pipeline--strip-render-data-blocks
 		  "mevedel-pipeline" (string))
+(declare-function mevedel-pipeline--tool-segment-bounds
+		  "mevedel-pipeline" (tool-use-id))
 (declare-function mevedel-pipeline-extract-render-data
 		  "mevedel-pipeline"
 		  (result-string &optional session
@@ -174,6 +176,8 @@
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--call-preserving-input-text
+                  "mevedel-view-composer" (thunk))
+(declare-function mevedel-view--call-preserving-user-view-state
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-window-state
                   "mevedel-view-composer" (thunk))
@@ -1933,6 +1937,67 @@ bodies for initially collapsed tools."
                 (mevedel-view--cache-put cache key rendering
                                          'mevedel-view--render-cache-entries)
               rendering))))))
+
+(defun mevedel-view--tool-row-region (data-buffer tool-use-id)
+  "Return the visible source-backed row for TOOL-USE-ID in DATA-BUFFER.
+The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
+  (when-let* ((bounds
+               (with-current-buffer data-buffer
+                 (mevedel-pipeline--tool-segment-bounds tool-use-id))))
+    (let ((pos (point-min))
+          (limit (point-max))
+          found)
+      (while (and (< pos limit) (not found))
+        (let* ((source (get-text-property pos 'mevedel-view-source))
+               (next (or (next-single-property-change
+                          pos 'mevedel-view-tool-use-id nil limit)
+                         limit)))
+          (when (and (consp source)
+                     (eq (get-text-property pos 'mevedel-view-type)
+                         'tool-summary)
+                     (equal
+                      (get-text-property pos 'mevedel-view-tool-use-id)
+                      tool-use-id))
+            (setq found (list pos next bounds)))
+          (setq pos next)))
+      found)))
+
+(defun mevedel-view--refresh-tool-row (data-buffer tool-use-id)
+  "Refresh only TOOL-USE-ID's visible row from DATA-BUFFER."
+  (when-let ((region
+              (mevedel-view--tool-row-region data-buffer tool-use-id)))
+    (let* ((start (nth 0 region))
+           (end (nth 1 region))
+           (source (nth 2 region))
+           (collapsed (get-text-property start 'mevedel-view-collapsed))
+           (turn-id (get-text-property start 'mevedel-view-turn-id)))
+      (when (hash-table-p mevedel-view--tool-rendering-cache)
+        (clrhash mevedel-view--tool-rendering-cache))
+      (when-let ((rendering
+                  (mevedel-view--segment-rendering
+                   data-buffer (car source) (cdr source))))
+        (unless (plist-get rendering :force-expanded-p)
+          (setq rendering
+                (plist-put (copy-sequence rendering)
+                           :initially-collapsed-p collapsed)))
+        (mevedel-view--call-preserving-user-view-state
+         (lambda ()
+           (mevedel-view--call-with-render-boundaries-advancing
+            (lambda ()
+              (let ((inhibit-read-only t)
+                    (inhibit-modification-hooks t))
+                (save-excursion
+                  (goto-char start)
+                  (delete-region start end)
+                  (let ((insert-start (point)))
+                    (mevedel-view--insert-rendered-tool rendering source)
+                    (mevedel-view--add-display-region-properties
+                     insert-start (point))
+                    (when turn-id
+                      (put-text-property
+                       insert-start (point)
+                       'mevedel-view-turn-id turn-id)))))))))
+        t))))
 
 
 ;;

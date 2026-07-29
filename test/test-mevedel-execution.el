@@ -754,8 +754,11 @@
       (mevedel-execution--release-runtime record)
       (ignore-errors (delete-process old)))))
 
-(mevedel-deftest mevedel-execution-start-bash/fallback
-  (:doc "settles once from the replacement process after pre-start fallback")
+(mevedel-deftest mevedel-execution-start-bash
+  (:doc "runs managed commands through fallback and resource capture")
+  ,test
+  (test)
+  :doc "settles once from the replacement process after pre-start fallback"
   (let* ((root (make-temp-file "mevedel-managed-fallback-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-execution--orphan-state nil)
@@ -787,10 +790,9 @@
           (should (= 0 (plist-get (plist-get result :facts) :exit-code)))
           (should (equal "direct" (plist-get result :output))))
       (mevedel-execution-teardown-session session)
-      (delete-directory root t))))
+      (delete-directory root t)))
 
-(mevedel-deftest mevedel-execution-start-bash/resource-capture
-  (:doc "passes raw command text and argv to native resource capture")
+  :doc "passes raw command text and argv to native resource capture"
   (let* ((root (make-temp-file "mevedel-managed-resource-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)

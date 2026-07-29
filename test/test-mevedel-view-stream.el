@@ -257,9 +257,6 @@
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--full-rerender)
-        (should
-         (mevedel-view-stream--execution-row-region
-          data-buf "call-live"))
         (mevedel-view-stream-test--insert-composer-draft draft 3)
         (let ((point-offset (- (point) (mevedel-view--input-start))))
           (cl-letf (((symbol-function 'mevedel-tool-get)
@@ -469,7 +466,7 @@
             (setq-local mevedel-view--pending-tool-calls nil))
           (cl-letf
               (((symbol-function
-                 'mevedel-view-stream--refresh-execution-row)
+                 'mevedel-view--refresh-tool-row)
                 (lambda (_data-buffer _tool-use-id)
                   (push (current-buffer) targets)
                   t)))

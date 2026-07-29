@@ -376,7 +376,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                   (path
                    (directory-files-recursively
                     root
-                    (concat "/" (regexp-quote name) "\\'")
+                    (concat "\\`" (regexp-quote name) "\\'")
                     t
                     (lambda (directory)
                       (cond
