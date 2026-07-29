@@ -204,6 +204,67 @@
       (should (= -1 (plist-get result :exit-code)))
       (should (plist-get result :error))
       (should-not (plist-member result :process))))
+  :doc "retries directly only after a proven pre-start launcher failure"
+  (let* ((root (make-temp-file "mevedel-fallback-proof-" t))
+         (replayed (file-name-concat root "replayed"))
+         (mevedel-execution--orphan-state nil)
+         result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-warning) #'ignore)
+                  ((symbol-function 'mevedel-sandbox-prepare)
+                   (lambda (&rest _)
+                     (list
+                      :state 'confined :fallback-p t :marker "not-emitted"
+                      :command '("sh" "-c" "exit 125")
+                      :original-command
+                      (list "sh" "-c" "printf replayed > \"$1\""
+                            "fallback" replayed)
+                      :facts
+                      '(:sandbox bubblewrap :filesystem workspace-write
+                        :network isolated)))))
+          (setq result
+                (mevedel-execution-run-one-shot
+                 :name "mevedel-test-fallback-proof"
+                 :command '("ignored")
+                 :workdir root :writable-roots (list root)))
+          (should (file-exists-p replayed))
+          (should
+           (plist-get (plist-get result :sandbox-facts)
+                      :first-direct-fallback)))
+      (delete-directory root t)))
+  :doc "never replays a command after a signal, timeout, or emitted marker"
+  (let* ((root (make-temp-file "mevedel-fallback-uncertain-" t))
+         (mevedel-execution--child-kill-delay 0.05))
+    (unwind-protect
+        (dolist
+            (case
+             `(("signal" ("sh" "-c" "kill -TERM $$") nil)
+               ("timeout" ("sh" "-c" "sleep 30") 0.05)
+               ("command" ("sh" "-c" "printf '%s\\n' command-started; exit 7")
+                nil)))
+          (pcase-let* ((`(,name ,launcher ,timeout) case)
+                       (replayed (file-name-concat root name))
+                       (marker (if (equal name "command")
+                                   "command-started"
+                                 "not-emitted")))
+            (cl-letf (((symbol-function 'mevedel-sandbox-prepare)
+                       (lambda (&rest _)
+                         (list
+                          :state 'confined :fallback-p t :marker marker
+                          :command launcher
+                          :original-command
+                          (list "sh" "-c" "printf replayed > \"$1\""
+                                "fallback" replayed)
+                          :facts
+                          '(:sandbox bubblewrap :filesystem workspace-write
+                            :network isolated)))))
+              (mevedel-execution-run-one-shot
+               :name (format "mevedel-test-no-replay-%s" name)
+               :command '("ignored")
+               :workdir root :writable-roots (list root)
+               :timeout timeout))
+            (should-not (file-exists-p replayed))))
+      (delete-directory root t)))
   :doc "applies stable child defaults while allowing command overrides"
   (let ((mevedel-sandbox-mode 'off))
     (let ((defaults
@@ -708,6 +769,28 @@
      nil t cell cell)
     (should (= 1 (plist-get (car cell) :attempt-count)))
     (should (= 1 (plist-get (car cell) :refused-count)))))
+
+(mevedel-deftest mevedel-execution--mark-direct-fallback
+  (:doc "warns and marks only the first direct fallback in a live session")
+  (let ((session (mevedel-session--create :name "main"))
+        warnings first second)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &optional _level _buffer-name)
+                 (push message warnings))))
+      (setq first
+            (mevedel-execution--mark-direct-fallback
+             session
+             '(:sandbox unavailable :filesystem unrestricted
+               :network unrestricted)))
+      (setq second
+            (mevedel-execution--mark-direct-fallback
+             session
+             '(:sandbox unavailable :filesystem unrestricted
+               :network unrestricted))))
+    (should (plist-get first :first-direct-fallback))
+    (should-not (plist-get second :first-direct-fallback))
+    (should (= 1 (length warnings)))
+    (should (string-match-p "direct execution" (car warnings)))))
 
 (mevedel-deftest mevedel-execution-sandbox-summary-class
   (:doc "classifies only material sandbox deviations as warnings")

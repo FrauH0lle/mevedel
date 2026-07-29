@@ -44,6 +44,8 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session--set-sandbox-mode
+                  "mevedel-structs" (session mode))
 
 
 ;;
@@ -64,8 +66,7 @@
   (require 'mevedel-permissions)
   (mevedel-permission--set-session-scoped
    sym (mevedel-sandbox-mode-normalize val)
-   (lambda (session mode)
-     (setf (mevedel-session-sandbox-mode session) mode))))
+   #'mevedel-session--set-sandbox-mode))
 
 (defun mevedel-sandbox-mode--get (sym)
   "Return sandbox SYM from the current session or its global default."
@@ -545,6 +546,15 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
         :network 'unrestricted
         :reason reason))
 
+(defun mevedel-sandbox--refused-preparation (sandbox reason)
+  "Return a refused preparation with SANDBOX facts and REASON."
+  (let ((facts
+         (plist-put
+          (mevedel-sandbox--unrestricted-facts sandbox reason)
+          :refused t)))
+    (setq mevedel-sandbox--last-facts facts)
+    (list :state 'refused :error reason :facts facts)))
+
 (defun mevedel-sandbox-pending-facts
     (&optional additional-permissions sandbox-permissions mode)
   "Return the selected boundary facts for a pending child request.
@@ -762,29 +772,19 @@ MODE defaults to the global sandbox mode."
                    (plist-put preparation :fallback-p
                               (eq mode 'best-effort)))
                (mevedel-sandbox-policy-error
-                (let* ((reason (error-message-string err))
-                       (facts
-                        (mevedel-sandbox--unrestricted-facts
-                         'refused reason)))
-                  (setq mevedel-sandbox--last-facts facts)
-                  (list :state 'refused :error reason :facts facts)))
+                (mevedel-sandbox--refused-preparation
+                 'refused (error-message-string err)))
                (error
                 (let ((reason (error-message-string err)))
                   (if (eq mode 'required)
-                      (let ((facts
-                             (mevedel-sandbox--unrestricted-facts
-                              'unavailable reason)))
-                        (setq mevedel-sandbox--last-facts facts)
-                        (list :state 'refused :error reason :facts facts))
+                      (mevedel-sandbox--refused-preparation
+                       'unavailable reason)
                     (mevedel-sandbox--direct-preparation
                      command 'unavailable reason)))))
            (let ((reason (plist-get availability :reason)))
              (if (eq mode 'required)
-                 (let ((facts
-                        (mevedel-sandbox--unrestricted-facts
-                         'unavailable reason)))
-                   (setq mevedel-sandbox--last-facts facts)
-                   (list :state 'refused :error reason :facts facts))
+                 (mevedel-sandbox--refused-preparation
+                  'unavailable reason)
                (mevedel-sandbox--direct-preparation
                 command 'unavailable reason))))))
       (_ (error "Unknown sandbox mode: %s" mode)))))
@@ -793,6 +793,7 @@ MODE defaults to the global sandbox mode."
   "Return non-nil when PREPARATION failed before CHILD-RESULT ran the command."
   (and (eq (plist-get preparation :state) 'confined)
        (not (plist-get child-result :timed-out-p))
+       (not (eq (plist-get child-result :termination) 'signaled))
        (not (member (plist-get preparation :marker)
                     (split-string (or (plist-get child-result :output) "")
                                   "\n" nil)))

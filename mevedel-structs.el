@@ -498,6 +498,10 @@ Return the copied entry with a stable session-local identity and category."
   "Store opaque execution-module STATE on SESSION."
   (setf (mevedel-session-execution-state session) state))
 
+(defun mevedel-session--set-sandbox-mode (session mode)
+  "Store child confinement MODE on SESSION."
+  (setf (mevedel-session-sandbox-mode session) mode))
+
 (defun mevedel-session--set-dropped-file-grants (session paths)
   "Replace SESSION's pending dropped-file grants with PATHS."
   (setf (mevedel-session-dropped-file-grants session) paths))
