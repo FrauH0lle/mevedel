@@ -1205,14 +1205,14 @@
 
 
 ;;
-;;; Per-agent sweep
+;;; Per-request sweep
 
-(mevedel-deftest mevedel-permission-queue-sweep-origin
-  (:doc "sweep fires 'aborted on entries owned by ORIGIN; others stay")
+(mevedel-deftest mevedel-permission-queue-sweep-request
+  (:doc "sweep fires 'aborted on entries owned by REQUEST-ID; others stay")
   ,test
   (test)
 
-  :doc "entries with matching :origin fire 'aborted; non-matching stay"
+  :doc "same-origin entries from other requests remain queued"
   (let* ((session (test-pq--make-session))
          (mevedel--session session)
          (outcomes nil))
@@ -1221,25 +1221,25 @@
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :origin "/root/explorer"
+             :request-id "request-1"
              :callback (lambda (o) (push (cons "explorer" o) outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
-             :origin "/root"
+             :origin "/root/explorer"
+             :request-id "request-2"
              :callback (lambda (o) (push (cons "main" o) outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :origin "/root/explorer"
+             :request-id "request-1"
              :callback (lambda (o) (push (cons "explore2" o) outcomes))))
-      (mevedel-permission-queue-sweep-origin
-       "/root/explorer" session))
-    ;; explorer-owned entries fired 'aborted.
+      (mevedel-permission-queue-sweep-request "request-1" session))
     (should (eq 'aborted (cdr (assoc "explorer" outcomes))))
     (should (eq 'aborted (cdr (assoc "explore2" outcomes))))
-    ;; main-owned entry did NOT fire — still queued.
     (should-not (assoc "main" outcomes))
     (let ((q (mevedel-session-permission-queue session)))
       (should (= 1 (length q)))
-      (should (equal "/root" (plist-get (car q) :origin)))))
+      (should (equal "request-2" (plist-get (car q) :request-id)))))
 
   :doc "sweeping the visible head removes its interaction overlay"
   (let ((data-buf (generate-new-buffer " *test-pq-sweep-data*"))
@@ -1262,6 +1262,7 @@
                      :specifier-value "/tmp/agent.txt"
                      :include-always nil
                      :origin "/root/explorer"
+                     :request-id "request-1"
                      :callback (lambda (o) (push (cons "agent" o) outcomes))))
               (setq swept-id
                     (mevedel-queue--entry-metadata-get
@@ -1272,13 +1273,13 @@
                      :tool-name "Read"
                      :specifier-value "/tmp/main.txt"
                      :include-always nil
-                     :origin "/root"
+                     :origin "/root/explorer"
+                     :request-id "request-2"
                      :callback (lambda (o) (push (cons "main" o) outcomes))))
               (should swept-id)
               (with-current-buffer view-buf
                 (should (gethash swept-id mevedel-view--interaction-overlays)))
-              (mevedel-permission-queue-sweep-origin
-               "/root/explorer" session)))
+              (mevedel-permission-queue-sweep-request "request-1" session)))
           (should (eq 'aborted (cdr (assoc "agent" outcomes))))
           (should-not (assoc "main" outcomes))
           (with-current-buffer view-buf
@@ -1287,7 +1288,8 @@
                           mevedel-view--interaction-overlays))))
           (let ((q (mevedel-session-permission-queue session)))
             (should (= 1 (length q)))
-            (should (equal "/root" (plist-get (car q) :origin)))))
+            (should (equal "request-2"
+                           (plist-get (car q) :request-id)))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 

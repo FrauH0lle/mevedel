@@ -214,9 +214,9 @@ that joined the queue while the head is already visible."
     (dolist (entry queue)
       (mevedel-queue--safe-settle spec entry reason "abort"))))
 
-(defun mevedel-queue--sweep-origin
-    (spec origin outcome &optional session no-render)
-  "Settle SPEC entries whose origin equals ORIGIN with OUTCOME in SESSION.
+(defun mevedel-queue--sweep
+    (spec predicate outcome &optional session no-render)
+  "Settle SPEC entries matching PREDICATE with OUTCOME in SESSION.
 When NO-RENDER is non-nil, leave the next head unrendered."
   (let* ((session (or session (mevedel-queue--current-session)))
          (queue (and session (mevedel-queue--get spec session)))
@@ -224,7 +224,7 @@ When NO-RENDER is non-nil, leave the next head unrendered."
          (kept nil)
          (swept nil))
     (dolist (entry queue)
-      (if (equal (funcall (mevedel-queue-spec-entry-origin spec) entry) origin)
+      (if (funcall predicate entry)
           (push entry swept)
         (push entry kept)))
     (when session

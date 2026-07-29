@@ -5822,7 +5822,10 @@ The result is a plist whose :tempdir owns every created file."
                  :role 'instruction
                  :origin 'user
                  :turn 3))
-               (_ (setf (mevedel-session-preset-name session) 'test-preset
+               (_ (setf (mevedel-session-permission-mode session) 'full-auto
+                        (mevedel-session-permission-rules session)
+                        '(("Bash" :pattern "npx test*" :action allow))
+                        (mevedel-session-preset-name session) 'test-preset
                         (mevedel-session-sandbox-mode session) 'required
                         (mevedel-session-preset-settings session)
                         '((mevedel-test-setting base))
@@ -5883,7 +5886,16 @@ The result is a plist whose :tempdir owns every created file."
           (should (equal "test-backend:test-model"
                          (mevedel-session-model-provider child)))
           (should (eq 'high (mevedel-session-reasoning-effort child)))
+          (should (eq 'full-auto
+                      (mevedel-session-permission-mode child)))
           (should (eq 'required (mevedel-session-sandbox-mode child)))
+          (should (equal
+                   '(("Bash" :pattern "npx test*" :action allow))
+                   (mevedel-session-permission-rules child)))
+          (should-not (eq (mevedel-session-permission-rules session)
+                          (mevedel-session-permission-rules child)))
+          (should-not (eq (mevedel-session-resource-grants session)
+                          (mevedel-session-resource-grants child)))
           (should-not (assoc 3 (mevedel-session-prompt-index child)))
           (should-not (assoc 3 (mevedel-session-file-snapshots child)))
           (should-not (assoc "future--2"
@@ -5927,8 +5939,16 @@ The result is a plist whose :tempdir owns every created file."
                          (mevedel-session-preset-settings child)))
           (mevedel-permission-add-session-resource-grant
            child "/tmp/child-only" 'read)
-          (setf (mevedel-session-sandbox-mode child) 'off)
+          (setf (mevedel-session-permission-mode child) 'ask
+                (mevedel-session-sandbox-mode child) 'off
+                (mevedel-session-permission-rules child)
+                '(("Bash" :pattern "child-only" :action allow)))
+          (should (eq 'full-auto
+                      (mevedel-session-permission-mode session)))
           (should (eq 'required (mevedel-session-sandbox-mode session)))
+          (should (equal
+                   '(("Bash" :pattern "npx test*" :action allow))
+                   (mevedel-session-permission-rules session)))
           (should-not
            (member '(:path "/tmp/child-only" :access read)
                    (mevedel-session-resource-grants session)))
@@ -6127,6 +6147,14 @@ The result is a plist whose :tempdir owns every created file."
           (write-region "current checkout\n" nil source-file nil 'silent)
           (setf (mevedel-session-model-provider session)
                 "test-backend:test-model"
+                (mevedel-session-permission-mode session)
+                'full-auto
+                (mevedel-session-sandbox-mode session)
+                'required
+                (mevedel-session-permission-rules session)
+                '(("Bash" :pattern "npx test*" :action allow))
+                (mevedel-session-resource-grants session)
+                '((:path "/tmp/external-input" :access read))
                 (mevedel-session-hook-rules session)
                 '((:event UserPromptSubmit :command "true")))
           (setq source-state
@@ -6160,6 +6188,20 @@ The result is a plist whose :tempdir owns every created file."
                         (mevedel-session-fork-type child)))
             (should (equal "test-backend:test-model"
                            (mevedel-session-model-provider child)))
+            (should (eq 'full-auto
+                        (mevedel-session-permission-mode child)))
+            (should (eq 'required
+                        (mevedel-session-sandbox-mode child)))
+            (should (equal
+                     '(("Bash" :pattern "npx test*" :action allow))
+                     (mevedel-session-permission-rules child)))
+            (should (equal
+                     '((:path "/tmp/external-input" :access read))
+                     (mevedel-session-resource-grants child)))
+            (should-not (eq (mevedel-session-permission-rules session)
+                            (mevedel-session-permission-rules child)))
+            (should-not (eq (mevedel-session-resource-grants session)
+                            (mevedel-session-resource-grants child)))
             (should-not (eq (mevedel-session-hook-rules session)
                             (mevedel-session-hook-rules child)))
             (should (equal (mevedel-session-hook-rules session)
@@ -6517,8 +6559,12 @@ The result is a plist whose :tempdir owns every created file."
                       . (:backup-name ,backup-name :version 1)))))
              (mevedel-session-resource-grants session)
              `((:path ,source-file :access write))
-             (mevedel-session-permission-rules session)
+            (mevedel-session-permission-rules session)
              `(("Write" :path ,source-file :action allow))
+             (mevedel-session-permission-mode session)
+             'full-auto
+             (mevedel-session-sandbox-mode session)
+             'required
              (mevedel-session-model-provider session)
              "test-backend:test-model")
             (with-current-buffer (plist-get fixture :buffer)
@@ -6569,6 +6615,10 @@ The result is a plist whose :tempdir owns every created file."
                             (mevedel-session-fork-type child)))
                 (should (equal source-root
                                (mevedel-session-worktree-source-root child)))
+                (should (eq 'full-auto
+                            (mevedel-session-permission-mode child)))
+                (should (eq 'required
+                            (mevedel-session-sandbox-mode child)))
                 (should (equal worktree
                                (mevedel-session-working-directory child)))
                 (should (equal "worktree/main-fork-1"

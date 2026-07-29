@@ -99,9 +99,9 @@
                   "mevedel-mentions" (text session))
 
 ;; `mevedel-permission-queue'
-(declare-function mevedel-permission-queue-sweep-origin
+(declare-function mevedel-permission-queue-sweep-request
                   "mevedel-permission-queue"
-                  (origin &optional session no-render))
+                  (request-id &optional session no-render))
 
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-commit
@@ -886,18 +886,20 @@ model-visible communication in conversation history."
               (plist-put info :mevedel-agent-child-paths paths))))))
 
 (defun mevedel-tools--handle-agent-turn-terminal (fsm)
-  "Sweep pending human interactions owned by FSM's settling agent turn."
-  (let ((ctx (mevedel-tools--deferred-context-for fsm)))
+  "Sweep pending human interactions owned by FSM's settling request."
+  (let* ((info (gptel-fsm-info fsm))
+         (request-id (plist-get info :mevedel-request-id))
+         (ctx (mevedel-tools--deferred-context-for fsm)))
     (when (and ctx
+               request-id
                (fboundp 'mevedel-agent-invocation-p)
                (mevedel-agent-invocation-p ctx)
-               (fboundp 'mevedel-permission-queue-sweep-origin))
-      (let ((agent-path (mevedel-agent-invocation-path ctx))
-            (parent-session
+               (fboundp 'mevedel-permission-queue-sweep-request))
+      (let ((parent-session
              (mevedel-agent-invocation-parent-session ctx)))
-        (when (and agent-path parent-session)
-          (mevedel-permission-queue-sweep-origin
-           agent-path parent-session))))))
+        (when parent-session
+          (mevedel-permission-queue-sweep-request
+           request-id parent-session))))))
 
 
 (provide 'mevedel-tools)

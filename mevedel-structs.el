@@ -17,9 +17,9 @@
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-permission-queue'
-(declare-function mevedel-permission-queue-sweep-origin
+(declare-function mevedel-permission-queue-sweep-request
                   "mevedel-permission-queue"
-                  (origin &optional session no-render))
+                  (request-id &optional session no-render))
 
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-approval-abort
@@ -273,8 +273,8 @@ workspace."
   ;; `mevedel-skills--invoke-depth' for recursion bookkeeping.
   invoked-skills
   ;; heterogeneous FIFO permission queue.  Entries are
-  ;; plists with :kind (`generic' / `bash' / `eval'), :origin (the
-  ;; canonical requesting agent path), :callback (continuation
+  ;; plists with :kind (`generic' / `bash' / `eval'), :request-id,
+  ;; :origin (the canonical requesting agent path), :callback (continuation
   ;; receiving the queue's outcome vocabulary), and kind-specific
   ;; fields.  Transient runtime state -- never persisted to the
   ;; sidecar; empty at every completed-turn boundary because
@@ -410,6 +410,10 @@ workspace root and is kept stable for the lifetime of the session."
                             (mevedel-workspace-root workspace))))
    :touched-files (make-hash-table :test #'equal)
    :mentions-shown (make-hash-table :test #'equal)
+   :permission-mode
+   (if (boundp 'mevedel-permission-mode)
+       (default-toplevel-value 'mevedel-permission-mode)
+     'ask)
    :sandbox-mode
    (if (boundp 'mevedel-sandbox-mode)
        (default-toplevel-value 'mevedel-sandbox-mode)
@@ -727,15 +731,16 @@ the new request struct."
 
 (defun mevedel-request-cancel (request &optional abort-plan-approval)
   "Cancel REQUEST and its owned pending interactions.
-Queued permission prompts are swept only for REQUEST's owner.  Plan
+Queued permission prompts are swept only for REQUEST's identity.  Plan
 approvals normally outlive the request that presented them; when
 ABORT-PLAN-APPROVAL is non-nil, abort it too."
   (when request
     (let ((session (mevedel-request-session request))
-          (origin (or (mevedel-request-origin request) "/root")))
+          (request-id (mevedel-request-id request)))
       (mevedel-request-drain-cancellers request)
-      (when (fboundp 'mevedel-permission-queue-sweep-origin)
-        (mevedel-permission-queue-sweep-origin origin session))
+      (when (and request-id
+                 (fboundp 'mevedel-permission-queue-sweep-request))
+        (mevedel-permission-queue-sweep-request request-id session))
       (when (and abort-plan-approval
                  (fboundp 'mevedel-plan-approval-abort))
         (mevedel-plan-approval-abort session)))))

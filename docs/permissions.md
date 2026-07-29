@@ -36,7 +36,9 @@ Single decision function `mevedel-check-permission`. Decision chain:
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
    `get-name` slots
 2. Deny rules (across all buckets — see bucket precedence below)
-3. Active Goal planning or review with a tool in the native `edit` group → deny
+3. Active Plan with a tool in the native `edit` group or `Eval`, or active
+   Goal planning/review with a native edit tool -> deny regardless of allow
+   rules or permission mode
 4. Tool's own `check-permission` slot decides command authority
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
 6. Permission-mode hard deny, if any
@@ -92,7 +94,7 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
   decision wins.
 - Goals use the same tool permission policy as ordinary root conversation
   turns. Goal lifecycle state never raises the session permission mode.
-- Standalone Plan approval applies the selected Ask, Auto, or Full Auto mode to
+- Standalone Plan approval applies the selected Ask, Edits, or Full Auto mode to
   the session that performs Direct implementation. Here changes the source
   session; Worktree leaves the source mode unchanged and applies the selection
   only after the target session and accepted artifact are prepared. Summary
@@ -128,19 +130,18 @@ that execution level. Qualified and ordinary explicit denies remain final.
 `inaccessible`. The default `.git` glob is read-only; the default SSH and GnuPG
 credential globs are inaccessible. String-only entries are invalid by design.
 
-The three canonical modes are `ask`, `auto`, and `full-auto`:
+The three canonical modes are `ask`, `edits`, and `full-auto`:
 
 - `ask` allows recognized inspection and prompts for edits and uncertain
   Bash or Eval execution.
-- `auto` additionally applies native edits inside allowed roots, but grants no
+- `edits` additionally applies native edits inside allowed roots, but grants no
   blanket Bash or Eval authority.
 - `full-auto` bypasses heuristic Bash and Eval prompts, including live Eval,
   while explicit denies and protected resources without exact authority still
   win.
 
-Configuration and persisted sessions accept only these canonical values. The
-interactive `/mode` command additionally accepts `edit` as a user-facing alias
-for `auto`; the alias is normalized before it reaches session state.
+Configuration, interactive commands, and persisted sessions accept only these
+canonical values.
 
 The prompt offers allow/deny choices for the invocation, session, or persistent
 workspace scope. `.mevedel/permissions.el` stores a plist containing both
@@ -149,13 +150,19 @@ workspace scope. `.mevedel/permissions.el` stores a plist containing both
 Default allowed roots are the workspace root, the system temporary directory,
 configured memory roots, and manually configured additional roots. A native
 filesystem operation outside those roots prompts for exact `read` or `write`
-authority. A session grant is stored on the session; an always grant is stored
-only in the workspace permission file. Write authority covers reading the
-same exact path, but read authority does not cover writes. These grants do not
-cover siblings or descendants, add workspace roots, or authorize Bash/Eval
-code. Revoking the grant restores the underlying workspace/protected-path
-restriction. Invocation-only authority is consumed by the approved call and is
-not stored.
+authority. A session grant is stored in the durable session sidecar and
+survives save/resume of that same session; an always grant is stored only in
+the workspace permission file. Neither enters an unrelated session. Write
+authority covers reading the same exact path, but read authority does not cover
+writes. These grants do not cover siblings or descendants, add workspace
+roots, or authorize Bash/Eval code. Revoking the grant restores the underlying
+workspace/protected-path restriction. Invocation-only authority is consumed by
+the approved call and is not stored.
+
+A conversation or worktree session fork copies the source session's permission
+mode, sandbox mode, session permission rules, and resource grants at the fork
+point. Subsequent authority changes are local to the source or fork unless they
+modify the shared workspace permission store.
 
 Files dropped into the view buffer can add exact, session-scoped `Read`
 grants when the next sent prompt still mentions the same path. These
@@ -173,8 +180,13 @@ chain.
 
 ## Prompt queues
 
-Permission prompts from the complete agent tree are queued on the root
-session, not displayed as independent blocking overlays.
+The root session owns one authority boundary for its complete agent tree.
+Every child uses the root session's permission mode, sandbox mode,
+user-authoritative permission rules, and resource grants. A child may exercise
+that existing authority but cannot broaden it independently. Permission
+prompts from the complete tree are therefore queued on the root session, not
+displayed as independent blocking overlays, and carry the requesting agent's
+canonical path for attribution.
 `mevedel-permission-queue.el` owns a
 heterogeneous FIFO with four entry kinds:
 
@@ -240,12 +252,16 @@ path tokens have been checked. Outside `full-auto`, unknown commands
 default to ask. Direct user-authored session, persistent, and defcustom
 patterns may authorize dangerous or complex forms. Invocation- and
 request-scoped delegated patterns may not. Explicit denies always win.
+When a prompted dangerous command is literal and contains no dynamic shell or
+glob ambiguity, session/workspace remembering stores the complete command
+exactly. Ambiguous commands remain invocation-only; users may still author
+broader rules directly.
 
 ### Child confinement
 
 Bash, batch Eval, and native external tool helpers share the guarded child
 launcher and, independently of the permission mode, consult
-`mevedel-sandbox-mode`. On Linux, `auto` resolves
+the session's `mevedel-sandbox-mode`. On Linux, `best-effort` resolves
 `bwrap` with `executable-find` and caches a real probe of the core mount, user,
 process, and network namespaces. Each probe attempt defaults to a 500 ms bound
 and retains at most 64 KiB of combined diagnostics. If the full probe fails,
@@ -258,7 +274,7 @@ roots, and session working directory writable, installs a fresh `/proc`, and
 changes to the canonical working directory. Its private `/dev` supplies
 `/dev/null` without host authority; redundant additive grants for that device
 are ignored rather than remounted. The default profile also isolates the
-network. A justified additive network request prompts in `ask` and `auto`,
+network. A justified additive network request prompts in `ask` and `edits`,
 proceeds automatically in `full-auto` after command authorization, and changes
 only network isolation for that invocation. The namespace and mount boundary
 is inherited by descendants.
@@ -318,7 +334,7 @@ Dangerous/complex Bash and arbitrary Eval remain once-only at the prompt;
 experts may still author an exact, scoped, or deliberately broad qualified rule
 directly. Reusable deny remains available because it can only reduce authority.
 
-`auto` executes directly when the initial probe is unavailable. For the narrow
+`best-effort` executes directly when the initial probe is unavailable. For the narrow
 race where a later Bubblewrap launch fails, a marker emitted immediately before
 `exec` proves whether the requested process started: only a missing marker
 permits one direct fallback. A command failure, signal, or timeout after the
@@ -331,21 +347,13 @@ execution reprobes the backend; one transient launch failure therefore does not
 disable confinement permanently. Bash and batch-Eval results append their active
 sandbox facts for the model and audit trail. Native helper facts remain
 internal and in tests rather than being added to successful tool content.
-Trusted skill substitutions keep those facts out of the substituted literal;
-an unrestricted substitution instead emits a user-visible warning while the
-active facts remain recorded.
-
-The main view's status zone continuously displays the active child boundary as
-`sandbox`, `filesystem`, and `network` facts, plus `proc: host` when the fresh
-proc mount is unavailable. With no child running it shows the selected default,
-including deliberate `off` mode, required-mode refusal, and `auto` fallback on
-unsupported or unavailable backends. While a Bash, batch Eval, or external
-tool helper child runs, the row switches to that invocation's actual facts and
-returns to the default after settlement. Completed Bash and batch-Eval results
-retain the same invocation facts for the transcript and audit trail. Additive
-filesystem facts include read and write grant counts. Concurrent children are
-summarized conservatively so a less-confined active dimension is not hidden by
-a later, more-confined invocation.
+Trusted skill substitutions keep those facts out of the substituted literal.
+The first direct fallback in each live session emits one user-visible warning
+and adds one model-visible note to the affected tool result. Later fallbacks do
+not repeat the warning, but completed Bash and batch-Eval results retain their
+actual invocation facts for the transcript and audit trail. Additive filesystem
+facts include read and write grant counts. Mevedel does not add a persistent
+sandbox status-line item.
 
 Protected restrictions are layered after writable roots. Existing glob matches
 and canonical targets become concrete mounts; `.git` pointer files also protect
@@ -475,11 +483,14 @@ the result explicitly reports unrestricted filesystem and network access.
 Skill body elisp injections (`!el` inline and ` ```!el ` fenced blocks)
 are the exception: they pass a trusted-literal flag because the
 expression is author-written SKILL.md content, not model-generated Eval
-input. A trusted elisp injection may bypass the prompt only when an
-active unqualified `Eval` allow rule covers it, typically from the
-skill's `allowed-tools: [Eval]`. Eval deny rules still win absolutely,
-and Goal planning/review route Eval through this same normal policy rather
-than suppressing it as a native edit tool. Markers introduced by argument
+input. A matching Eval allow authorizes model-generated or trusted Eval, while
+a matching ask prompts even in `full-auto`; deny rules still win absolutely.
+Trusted skill expansion cannot create an interactive prompt and therefore
+requires existing authority, typically from the skill's `allowed-tools:
+[Eval]`.
+Plan mode withholds Eval regardless of this authority; Goal planning/review
+route Eval through the ordinary policy rather than suppressing it as a native
+edit tool. Markers introduced by argument
 substitution are not trusted literals and are left as text.
 Literal markers may still contain substituted text in their expression
 body; only the marker syntax and delimiters carry the trusted-literal
