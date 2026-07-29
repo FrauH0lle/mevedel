@@ -2817,7 +2817,11 @@ spanning lines")))
                        (mevedel-pipeline--strip-render-data-blocks
                         (buffer-string))))
         (should (string-search "<!-- mevedel-render-data -->"
-                               (buffer-string))))))
+                               (buffer-string)))
+        (let ((data (cdr (mevedel-pipeline-extract-render-data
+                          (buffer-string)))))
+          (should (equal "Hello world!"
+                         (plist-get data :expanded-prompt)))))))
 
   :doc "user-invocable: false leading skill falls through to inline planning"
   (let* ((session (mevedel-skills-test--make-session))

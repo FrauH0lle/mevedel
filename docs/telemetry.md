@@ -66,8 +66,8 @@ The event stream covers:
 Start from the materialized root data or view buffer immediately before
 creating the Goal:
 
-1. Run `M-x mevedel-telemetry-profiler-start`. CPU profiling is the default.
-   With a prefix argument, choose `mem` or `cpu+mem`.
+1. Run `M-x mevedel-telemetry-profiler-start`. Combined CPU and memory
+   profiling is the default. With a prefix argument, choose a single mode.
 2. Create the Goal with the same preset, objective, and interaction sequence.
    Queue the same deliberate mid-implementation message and avoid unrelated
    commands.

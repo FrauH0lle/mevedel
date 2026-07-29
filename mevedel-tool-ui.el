@@ -225,11 +225,13 @@
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-ui--render-agent-interaction
-    (_name _args result render-data)
+    (name _args result render-data)
   "Render an agent interaction RESULT from RENDER-DATA."
   (when (and (stringp result)
              (stringp (plist-get render-data :path)))
-    (list :header (format "Interacted with %s"
+    (list :header (format (if (equal name "SendMessage")
+                             "Message sent to %s"
+                           "Interacted with %s")
                           (plist-get render-data :path))
           :expandable-p nil)))
 
@@ -312,8 +314,8 @@
   "Render completed WaitAgent RESULT from RENDER-DATA."
   (when (and (stringp result)
              (eq (plist-get render-data :event) 'finished-waiting))
-    (list :header "Finished waiting"
-          :expandable-p nil)))
+    (list :header "WaitAgent"
+          :hidden-p t)))
 
 
 ;;
@@ -395,7 +397,7 @@
     :renderer #'mevedel-tool-ui--render-tool-search)
   (mevedel-define-tool
     :name "SendMessage"
-    :description "Queue a message for any retained agent without starting a turn."
+    :description "Queue a non-duplicative message for any retained agent without starting a turn."
     :prompt-file "tools/sendmessage.md"
     :handler #'mevedel-tool-ui--send-message
     :args ((target string :required
@@ -411,7 +413,7 @@
     :prompt-file "tools/waitagent.md"
     :handler #'mevedel-tool-ui--wait-agent
     :args ((timeout_ms integer :optional
-                       "Timeout in milliseconds; defaults to 30000."))
+                       "Timeout in milliseconds; positive values below 10000 are clamped, maximum 3600000."))
     :async-p t
     :read-only-p t
     :groups (util)

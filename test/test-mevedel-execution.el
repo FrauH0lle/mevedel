@@ -657,6 +657,34 @@
           (should (plist-get (plist-get stopped :facts) :tty)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-execution-stop-all-user ()
+  ,test
+  (test)
+  :doc "stops root, sub-agent, and already-stopping executions session-wide"
+  (let* ((root (make-temp-file "mevedel-managed-stop-all-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-sandbox-mode 'off)
+         (mevedel-execution--child-kill-delay 0.2)
+         main main-id)
+    (unwind-protect
+        (progn
+          (setq main
+                (test-mevedel-execution--start-managed
+                 session root '("sh" "-c" "sleep 30")
+                 :owner "main")
+                main-id
+                (plist-get (plist-get main :facts) :execution-id))
+          (test-mevedel-execution--start-managed
+           session root '("sh" "-c" "sleep 30")
+           :owner "agent--one")
+          (mevedel-execution-stop-user session main-id)
+          (should (= 2 (mevedel-execution-stop-all-user session)))
+          (test-mevedel-execution--wait
+           (lambda () (zerop (mevedel-execution-count-user session))))
+          (should (= 0 (mevedel-execution-stop-all-user session))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-execution--eask-command-p
   (:doc "recognizes direct and npx Eask commands without broad false positives")
   (progn

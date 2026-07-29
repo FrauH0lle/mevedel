@@ -6,4 +6,5 @@ turn. The recipient receives the message before its next model sample, in FIFO
 order with any other unread mail.
 
 Success returns an empty result. Use FollowupAgent instead when the target must
-start or steer work.
+start or steer work. Do not resend an agent's completed response when its
+canonical RESULT delivery already carries that response.

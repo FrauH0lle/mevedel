@@ -337,7 +337,7 @@
 (mevedel-deftest mevedel-agent-control-list-agents ()
   ,test
   (test)
-  :doc "lists path-sorted minimal roster entries with subtree filtering"
+  :doc "lists path-sorted roster entries with exact activity and subtree filtering"
   (let ((session (mevedel-agent-control-test--session)))
     (setf (mevedel-session-agent-registry session)
           (list
@@ -353,10 +353,11 @@
            (cons "/root/alpha"
                  (mevedel-agent-record--create
                   :id "private-a" :path "/root/alpha"
-                  :role "default" :activity 'running))))
+                  :role "default" :activity 'permission-blocked))))
     (should
      (equal '((:path "/root" :role "default" :activity "idle")
-              (:path "/root/alpha" :role "default" :activity "running")
+              (:path "/root/alpha" :role "default"
+               :activity "permission-blocked")
               (:path "/root/alpha/child" :role "explorer" :activity "starting")
               (:path "/root/zeta" :role "worker" :activity "idle"))
             (mevedel-agent-control-list-agents session)))
@@ -366,7 +367,8 @@
                     (car (mevedel-agent-control-list-agents session))
                     :activity)))
     (should
-     (equal '((:path "/root/alpha" :role "default" :activity "running")
+     (equal '((:path "/root/alpha" :role "default"
+               :activity "permission-blocked")
               (:path "/root/alpha/child" :role "explorer" :activity "starting"))
             (mevedel-agent-control-list-agents session "/root/alpha")))
     (should-not
@@ -1339,7 +1341,7 @@
       (apply (car scheduled) (cdr scheduled))
       (should (equal '(mailbox) reasons))))
 
-  :doc "times out successfully and validates the inclusive millisecond bounds"
+  :doc "times out, clamps positive short waits, and validates the upper bound"
   (let ((session (mevedel-agent-control-test--session))
         reasons scheduled delay)
     (cl-letf (((symbol-function 'run-at-time)
@@ -1352,7 +1354,14 @@
       (should (= 30 delay))
       (apply (car scheduled) (cdr scheduled))
       (should (equal '(timeout) reasons)))
-    (dolist (timeout '(9999 3600001 10000.0 "10000"))
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (seen-delay &rest _)
+                 (setq delay seen-delay)
+                 'fake-timer)))
+      (mevedel-agent-control-wait session #'ignore 1)
+      (should (= 10 delay))
+      (mevedel-agent-control-cancel-wait session "/root"))
+    (dolist (timeout '(0 -1 3600001 10000.0 "10000"))
       (should-error
        (mevedel-agent-control-wait session #'ignore timeout)))
     (cl-letf (((symbol-function 'run-at-time)

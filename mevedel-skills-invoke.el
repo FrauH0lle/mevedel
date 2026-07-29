@@ -1096,10 +1096,12 @@ that boundary defensive."
       (format "$%s %s" name arguments)
     (format "$%s" name)))
 
-(defun mevedel-skills-format-inline-render-data (skill arguments)
+(defun mevedel-skills-format-inline-render-data
+    (skill arguments expanded-prompt)
   "Return hidden render-data for an expanded inline user SKILL.
 
-ARGUMENTS is the raw user argument string.
+ARGUMENTS is the raw user argument string.  EXPANDED-PROMPT is the exact
+prepared prompt replacing the invocation.
 
 The block is ignored by gptel and consumed by `mevedel-view' so the
 data buffer keeps the expanded prompt while the view can show the
@@ -1110,7 +1112,8 @@ original `$skill' invocation compactly."
                      :arguments arguments
                      :display-text
                      (mevedel-skills-inline-display-text
-                      name arguments)))
+                      name arguments)
+                     :expanded-prompt expanded-prompt))
          (block (propertize
                  (progn
                    (require 'mevedel-pipeline)
@@ -1119,9 +1122,10 @@ original `$skill' invocation compactly."
     block))
 
 (defun mevedel-skills--insert-inline-user-skill-render-data
-    (skill arguments)
-  "Insert hidden render-data for SKILL with raw user ARGUMENTS."
-  (insert (mevedel-skills-format-inline-render-data skill arguments)))
+    (skill arguments expanded-prompt)
+  "Insert hidden render data for SKILL, ARGUMENTS, and EXPANDED-PROMPT."
+  (insert (mevedel-skills-format-inline-render-data
+           skill arguments expanded-prompt)))
 
 (defun mevedel-skills-format-inline-attachment-render-data (attachments)
   "Return hidden render-data for inline skill ATTACHMENTS."
@@ -2427,7 +2431,7 @@ insert their result when the retained agent finishes."
                                 (mevedel-skill-name skill)))))
           (insert body)
           (mevedel-skills--insert-inline-user-skill-render-data
-           skill (plist-get outcome :arguments)))
+           skill (plist-get outcome :arguments) body))
         (when continue-fn
           (funcall continue-fn))
         'skill)

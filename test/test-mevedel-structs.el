@@ -522,6 +522,33 @@
     (setq-local mevedel--current-request t)
     (should (equal "running" (mevedel-request-state-label)))))
 
+(mevedel-deftest mevedel-request-set-approval-waiting ()
+  ,test
+  (test)
+  :doc "starts idempotently and accumulates completed approval time"
+  (let* ((start (seconds-to-time 100))
+         (request (mevedel-request--create :started-at start)))
+    (mevedel-request-set-approval-waiting request t (seconds-to-time 110))
+    (mevedel-request-set-approval-waiting request t (seconds-to-time 115))
+    (should (equal (seconds-to-time 110)
+                   (mevedel-request-approval-wait-started-at request)))
+    (mevedel-request-set-approval-waiting request nil (seconds-to-time 125))
+    (should-not (mevedel-request-approval-wait-started-at request))
+    (should (= 15 (mevedel-request-approval-wait-duration request)))))
+
+(mevedel-deftest mevedel-request-active-elapsed-seconds ()
+  ,test
+  (test)
+  :doc "excludes completed and current approval waits from active work"
+  (let ((request
+         (mevedel-request--create
+          :started-at (seconds-to-time 100)
+          :approval-wait-started-at (seconds-to-time 125)
+          :approval-wait-duration 5)))
+    (should (= 20
+               (mevedel-request-active-elapsed-seconds
+                request (seconds-to-time 130))))))
+
 (mevedel-deftest mevedel-request-begin
   (:before-each (mevedel-workspace-clear-registry)
    :after-each

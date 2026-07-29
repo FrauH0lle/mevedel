@@ -463,16 +463,17 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
 ;;;###autoload
 (defun mevedel-telemetry-profiler-start (&optional mode)
   "Start Emacs profiling for the current session in MODE.
-MODE defaults to `cpu'.  Interactively with a prefix argument, prompt for
+MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
 `cpu', `mem', or `cpu+mem'."
   (interactive
    (list (if current-prefix-arg
              (intern
               (completing-read "Profiler mode: "
                                '("cpu" "mem" "cpu+mem") nil t nil nil
-                               "cpu"))
-           'cpu)))
-  (let ((session (mevedel-telemetry-current-session)))
+                               "cpu+mem"))
+           'cpu+mem)))
+  (let ((session (mevedel-telemetry-current-session))
+        (mode (or mode 'cpu+mem)))
     (unless session
       (user-error "No mevedel session in the current buffer"))
     (unless (mevedel-session-save-path session)
@@ -487,13 +488,13 @@ MODE defaults to `cpu'.  Interactively with a prefix argument, prompt for
                    (secure-hash 'sha1
                                 (format "%s:%s" (emacs-pid) (float-time)))
                    0 8)))
-    (profiler-start (or mode 'cpu))
+    (profiler-start mode)
     (setq mevedel-telemetry--profiler-session session)
     (mevedel-telemetry--install-prompt-guard)
     (mevedel-telemetry--record-environment session 'start)
     (mevedel-telemetry-record
      session 'profiler-started
-     :mode (or mode 'cpu)
+     :mode mode
      :emacs-version emacs-version
      :system-configuration system-configuration)
     (message "mevedel: profiler started for session %s"

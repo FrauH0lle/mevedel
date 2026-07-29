@@ -99,6 +99,10 @@
 		  "mevedel-permissions" (mode))
 (defvar mevedel-permission-mode)
 
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--render-data-blocks
+		  "mevedel-pipeline" (string))
+
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-reserved-goal-id
 		  "mevedel-plan-handoff" (&optional session))
@@ -181,7 +185,7 @@
 (declare-function mevedel-skills-plan-prepare "mevedel-skills-plan"
 		  (plan callback &optional cancelled-p))
 (declare-function mevedel-skills-plan-render-data
-		  "mevedel-skills-plan" (plan))
+		  "mevedel-skills-plan" (plan expanded-prompt))
 (declare-function mevedel-skills-plan-user-input "mevedel-skills-plan"
 		  (text session))
 
@@ -1780,11 +1784,13 @@ HOOK-AUDITS are the accepted `UserPromptSubmit' result."
          (hook-input (if rewrite-preserves-plan-p
                          hook-input
                        prepared-input))
-         (hook-audits (and rewrite-preserves-plan-p hook-audits)))
-    (list :model-input
+         (hook-audits (and rewrite-preserves-plan-p hook-audits))
+         (model-input
           (if hook-context
               (concat hook-input "\n\n" hook-context)
-            hook-input)
+            hook-input)))
+    (list :model-input
+          model-input
           :transcript-input
           (if hook-context
               (concat input "\n\n" hook-context)
@@ -1794,7 +1800,7 @@ HOOK-AUDITS are the accepted `UserPromptSubmit' result."
           :hook-audits
           (append (plist-get prepared :hook-audits) hook-audits)
           :request-context (plist-get prepared :request-context)
-          :render-data (mevedel-skills-plan-render-data plan)
+          :render-data (mevedel-skills-plan-render-data plan hook-input)
           :fork-outcome
           (and (mevedel-skill-invocation-plan-fork-p plan)
                (mevedel-view--prepared-fork-outcome prepared)))))
@@ -2492,9 +2498,13 @@ replaces INPUT only in the temporary request prompt."
                 (insert prefix))))
           (setq body-start (point))
           (insert input "\n")
-          (setq prompt-summary-source
-                (and prompt-summary-body
-                     (cons body-start (point))))
+          (when-let* ((prompt-summary-body)
+                      (block
+                       (car (last
+                             (mevedel-pipeline--render-data-blocks input)))))
+            (setq prompt-summary-source
+                  (cons (+ body-start (car block))
+                        (+ body-start (cadr block)))))
           (mevedel--clear-user-turn-gptel-properties
            user-turn-start (point)))
         (dolist (audit hook-audits)

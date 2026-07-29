@@ -279,7 +279,11 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
             (plist-get entry :missing-additional-permissions))
            (missing-grants (plist-get missing :file-system)))
       (concat
-       (propertize "Authority\n" 'font-lock-face '(:inherit bold))
+       (propertize "Authority for this execution\n"
+                   'font-lock-face '(:inherit bold))
+       (propertize
+        "[x] already granted · [ ] granted by this approval\n"
+        'font-lock-face 'font-lock-comment-face)
        (format "[%s] Command\n"
                (if (plist-get entry :operation-pending-p) " " "x"))
        (when (plist-get requested :network)
@@ -306,7 +310,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
            (network-p (and operation-p (plist-get missing :network))))
       (when (or operation-p network-p resources)
         (concat
-         (propertize "Remember if approved with s/A\n"
+         (propertize "Remember from this approval with s/A\n"
                      'font-lock-face '(:inherit bold))
          (when operation-p
            (format "[%s] Command  (c toggles)\n"

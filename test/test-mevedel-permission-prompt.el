@@ -306,6 +306,11 @@
     (let ((content (nth 0 captured)))
       (should (string-match-p "Invocation Authority Request" content))
       (should (string-match-p "Download the page?" content))
+      (should (string-match-p "Authority for this execution" content))
+      (should (string-match-p
+               "\\[x\\] already granted.*\\[ \\] granted by this approval"
+               content))
+      (should (string-match-p "Remember from this approval" content))
       (should (string-match-p "\\[x\\] Command" content))
       (should (string-match-p "\\[x\\] Network" content))
       (should (string-match-p

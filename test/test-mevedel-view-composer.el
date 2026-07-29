@@ -210,13 +210,16 @@
                   (should (equal "> diagnosis\nPlease use $alpha"
                                  (car (mevedel-view-history--entries))))
                   (with-current-buffer data-buf
-                    (should (string-match-p
-                             (regexp-quote "Please use $alpha")
-                             (buffer-string)))
-                    (should-not (string-match-p
-                                 (regexp-quote
-                                  "[skill:alpha -- unavailable]")
-                                 (buffer-string))))))))
+                    (let ((text
+                           (mevedel-pipeline--strip-render-data-blocks
+                            (buffer-string))))
+                      (should (string-match-p
+                               (regexp-quote "Please use $alpha")
+                               text))
+                      (should-not (string-match-p
+                                   (regexp-quote
+                                    "[skill:alpha -- unavailable]")
+                                   text))))))))
       (delete-directory root t)
       (delete-directory user-skills t)))))
 
@@ -1631,7 +1634,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (string-match-p "expansion context"
                                 (plist-get outcome :transcript-input)))
         (should (plist-get outcome :request-context))
-        (should (plist-get outcome :render-data))
+        (let* ((block (plist-get outcome :render-data))
+               (data (cdr (mevedel-pipeline-extract-render-data block))))
+          (should (equal (plist-get prepared :model-input)
+                         (plist-get data :expanded-prompt)))
+          (should-not (string-match-p
+                       "hook context"
+                       (plist-get data :expanded-prompt))))
         (should (equal '((:type prompt-rewrite))
                        (plist-get outcome :hook-audits)))
         (should-not (plist-get outcome :fork-outcome))))))
@@ -1788,14 +1797,16 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                            (point-min) mevedel-view--input-marker)))
             (should (string-match-p (regexp-quote "$myskill hello")
                                     expanded))
-            (should-not (string-match-p "Expanded hello" expanded))
+            (should (string-match-p "Expanded hello" expanded))
             (should-not (string-match-p "mevedel-render-data" expanded)))
           (mevedel-view-toggle-section))
         (should send-called)
         (with-current-buffer data-buf
-          (let ((text (buffer-string)))
+          (let* ((text (buffer-string))
+                 (visible
+                  (mevedel-pipeline--strip-render-data-blocks text)))
             (should (string-match-p (regexp-quote "$myskill hello") text))
-            (should-not (string-match-p "Expanded hello" text))
+            (should-not (string-match-p "Expanded hello" visible))
             (should (string-search "<!-- mevedel-render-data -->" text))
             (goto-char (point-min))
             (search-forward "<!-- mevedel-render-data -->")
@@ -1813,13 +1824,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 	            (should (string-match-p "Prompt" text))
 	            (should-not (string-match-p "Expanded hello" text)))
 	          (goto-char (point-min))
-	          (search-forward "Prompt")
+	          (search-forward "◆ Prompt")
 	          (mevedel-view-toggle-section)
 	          (let ((expanded (buffer-substring-no-properties
 	                           (point-min) mevedel-view--input-marker)))
 	            (should (string-match-p (regexp-quote "$myskill hello")
                                       expanded))
-	            (should-not (string-match-p "Expanded hello" expanded)))))))
+	            (should (string-match-p "Expanded hello" expanded)))))))
 
   :doc "inline skill expansion rewrites render hook audit and context"
   (mevedel-view-test--with-fork-skill
@@ -1863,18 +1874,21 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 	          (search-forward "hook changed prompt")
 	          (mevedel-view-toggle-section)
 	          (goto-char (point-min))
-	          (search-forward "Prompt")
+	          (search-forward "◆ Prompt")
           (mevedel-view-toggle-section)
           (let ((expanded (buffer-substring-no-properties
                            (point-min) mevedel-view--input-marker)))
             (should (string-match-p "rewritten prompt" expanded))
+            (should-not (string-match-p "Expanded hello" expanded))
             (should-not (string-match-p "hook policy context" expanded)))))
       (with-current-buffer data-buf
-        (let ((text (buffer-string)))
-          (should (string-match-p (regexp-quote "$myskill hello") text))
-          (should-not (string-match-p "rewritten prompt" text))
-          (should (string-match-p "hook policy context" text))
-          (should (string-match-p "<!-- mevedel-hook-audit -->" text))))
+        (let* ((text (buffer-string))
+               (visible
+                (mevedel-pipeline--strip-render-data-blocks text)))
+          (should (string-match-p (regexp-quote "$myskill hello") visible))
+          (should-not (string-match-p "rewritten prompt" visible))
+          (should (string-match-p "hook policy context" visible))
+          (should (string-match-p "<!-- mevedel-hook-audit -->" visible))))
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
@@ -2234,9 +2248,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (seq-some (lambda (text) (string-search fragment text))
                           messages)))
       (with-current-buffer data-buf
-        (should (string-search prompt (buffer-string)))
-        (should-not (string-search "[skill:alpha -- unavailable]"
-                                   (buffer-string))))
+        (let ((text (mevedel-pipeline--strip-render-data-blocks
+                     (buffer-string))))
+          (should (string-search prompt text))
+          (should-not (string-search "[skill:alpha -- unavailable]"
+                                     text))))
       (should (equal prompt (car (with-current-buffer view-buf
                                    (mevedel-view-history--entries)))))))
 
@@ -2525,7 +2541,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (regexp-quote "[skill:alpha -- attached]") fork-prompt))
         (should-not sent))
       (with-current-buffer data-buf
-        (let ((text (buffer-string)))
+        (let ((text (mevedel-pipeline--strip-render-data-blocks
+                     (buffer-string))))
           (should (string-match-p (regexp-quote "$forker inspect with $alpha")
                                   text))
           (should-not (string-match-p "FORK<" text)))
@@ -2566,7 +2583,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
     (should-not (mevedel-session-hook-context-pending session))
     (with-current-buffer data-buf
       (should (= 1 (mevedel-view-test--count-matches
-                    "fork startup context" (buffer-string))))))
+                    "fork startup context"
+                    (mevedel-pipeline--strip-render-data-blocks
+                     (buffer-string)))))))
 
   :doc "preparation failure preserves the bound draft for retry"
   (mevedel-view-test--with-source-skills
@@ -4508,8 +4527,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 	        (should-not (string-search "<!-- mevedel-render-data -->"
 	                                   mevedel-view-test--seen-prompt))
 	        (with-current-buffer data-buf
-	          (let ((text (mevedel--strip-hook-audit-blocks
-                         (buffer-string))))
+	          (let ((text
+                   (mevedel-pipeline--strip-render-data-blocks
+                    (mevedel--strip-hook-audit-blocks
+                     (buffer-string)))))
 	            (should-not (string-match-p "rewritten prompt" text))
             (should (string-match-p (regexp-quote "$myskill hello") text))
             (should-not (string-match-p "Expanded hello" text)))))))
@@ -4608,9 +4629,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (let ((expanded (buffer-substring-no-properties
                            (point-min) mevedel-view--input-marker)))
             (should-not (string-match-p "rewritten prompt" expanded))
+            (should (string-match-p "Expanded hello" expanded))
             (should-not (string-match-p "hook policy context" expanded)))))
       (with-current-buffer data-buf
-        (let ((text (buffer-string)))
+        (let ((text (mevedel-pipeline--strip-render-data-blocks
+                     (buffer-string))))
           (should-not (string-match-p "rewritten prompt" text))
           (should (string-match-p (regexp-quote "$myskill hello") text))
           (should-not (string-match-p "Expanded hello" text))

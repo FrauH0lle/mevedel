@@ -85,8 +85,8 @@
                   "mevedel-session-persistence" (session live-buffer))
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-started-at "mevedel-structs" (cl-x)
-		  t)
+(declare-function mevedel-request-active-elapsed-seconds
+                  "mevedel-structs" (request &optional now))
 (declare-function mevedel-session-agent-registry "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-current-segment "mevedel-structs"
@@ -856,10 +856,6 @@ through font-lock refontification cycles.  Returns S."
         (and (> (length text) 32)
              (substring text (- (length text) 16)))))
 
-(defun mevedel-view--tool-content-fingerprint (text)
-  "Return a compact full-content fingerprint for tool segment TEXT."
-  (list (length text) (secure-hash 'sha1 text)))
-
 (defun mevedel-view--cache-put (table key value counter-symbol)
   "Put VALUE in TABLE under KEY and bump COUNTER-SYMBOL.
 Clear TABLE before adding beyond `mevedel-view-render-cache-max-entries'."
@@ -1208,6 +1204,7 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
 ;;    :body-mode SYMBOL         ; major-mode symbol for fontification (or nil)
 ;;    :status SYMBOL            ; optional visual status, e.g. success/error
 ;;    :expandable-p BOOL        ; nil means render as a compact event line
+;;    :hidden-p BOOL            ; non-nil means insert nothing
 ;;    :initially-collapsed-p BOOL)
 ;;
 ;; The interpreter below parses the tool segment in the data buffer, invokes the
@@ -1295,6 +1292,7 @@ Requires:
   `:body-mode' (if present) -- must be a symbol.
   `:status' (if present) -- must be a symbol.
   `:expandable-p' (if present) -- must be a boolean.
+  `:hidden-p' (if present) -- must be a boolean.
 Malformed plists are rejected here so the interpreter never tries to
 insert a non-string or `funcall' a non-symbol."
   (and (listp p)
@@ -1302,12 +1300,15 @@ insert a non-string or `funcall' a non-symbol."
        (let ((body (plist-get p :body))
              (mode (plist-get p :body-mode))
              (status (plist-get p :status))
-             (expandable (plist-get p :expandable-p)))
+             (expandable (plist-get p :expandable-p))
+             (hidden (plist-get p :hidden-p)))
          (and (or (null body) (stringp body))
               (or (null mode) (symbolp mode))
               (or (not (plist-member p :status)) (symbolp status))
               (or (not (plist-member p :expandable-p))
-                  (memq expandable '(nil t)))))))
+                  (memq expandable '(nil t)))
+              (or (not (plist-member p :hidden-p))
+                  (memq hidden '(nil t)))))))
 
 (defun mevedel-view--tool-render-status (result &optional render-data)
   "Return the renderer dispatch status for RESULT and RENDER-DATA."
@@ -1756,32 +1757,34 @@ otherwise only the header is shown.
 
 When RENDERING carries `:expandable-p' nil, insert a compact event line
 with no source coordinates so expand/collapse commands cannot reveal
-the raw tool segment."
-  (let ((hook-audits (plist-get rendering :hook-audits)))
-    (setq rendering (mevedel-view--rendering-with-collapse-state rendering source))
-    (if (and (plist-member rendering :expandable-p)
-             (not (plist-get rendering :expandable-p)))
-        (let ((ins-start (point)))
-          (mevedel-view--insert-summary-region
-           (mevedel-view--rendering-header-block
-            (plist-put (copy-sequence rendering) :vtype 'tool-event))
-           '(mevedel-view-type tool-event
-             mevedel-view-rendered t))
+the raw tool segment.  When `:hidden-p' is non-nil, insert nothing."
+  (unless (plist-get rendering :hidden-p)
+    (let ((hook-audits (plist-get rendering :hook-audits)))
+      (setq rendering
+            (mevedel-view--rendering-with-collapse-state rendering source))
+      (if (and (plist-member rendering :expandable-p)
+               (not (plist-get rendering :expandable-p)))
+          (let ((ins-start (point)))
+            (mevedel-view--insert-summary-region
+             (mevedel-view--rendering-header-block
+              (plist-put (copy-sequence rendering) :vtype 'tool-event))
+             '(mevedel-view-type tool-event
+               mevedel-view-rendered t))
+            (mevedel-view--add-display-region-properties
+             ins-start (point) 'tool-event)
+            (mevedel-view--decorate-markdown-in-range ins-start (point)))
+        (if (plist-member rendering :initially-collapsed-p)
+            (if (plist-get rendering :initially-collapsed-p)
+                (mevedel-view--render-collapsed-header rendering source)
+              (mevedel-view--render-expanded-body rendering source))
+          ;; Default: collapsed.
+          (mevedel-view--render-collapsed-header rendering source)))
+      (when hook-audits
+        (let ((audit-start (point)))
+          (dolist (audit hook-audits)
+            (mevedel-view--insert-hook-audit-block audit source))
           (mevedel-view--add-display-region-properties
-           ins-start (point) 'tool-event)
-          (mevedel-view--decorate-markdown-in-range ins-start (point)))
-      (if (plist-member rendering :initially-collapsed-p)
-          (if (plist-get rendering :initially-collapsed-p)
-              (mevedel-view--render-collapsed-header rendering source)
-            (mevedel-view--render-expanded-body rendering source))
-        ;; Default: collapsed.
-        (mevedel-view--render-collapsed-header rendering source)))
-    (when hook-audits
-      (let ((audit-start (point)))
-        (dolist (audit hook-audits)
-          (mevedel-view--insert-hook-audit-block audit source))
-        (mevedel-view--add-display-region-properties
-         audit-start (point) 'hook-audit)))))
+           audit-start (point) 'hook-audit))))))
 
 (defun mevedel-view--tool-cache-key
     (data-buf seg-start seg-end collapsed-only raw)
@@ -1791,7 +1794,7 @@ COLLAPSED-ONLY records whether only collapsed rendering is needed.
 Unrelated appends to DATA-BUF should not invalidate completed tool segment
 renderings, but changes to the segment text itself should."
   (with-current-buffer data-buf
-    (list data-buf seg-start seg-end (mevedel-view--tool-content-fingerprint raw)
+    (list data-buf seg-start seg-end (mevedel-view--render-cache-key raw)
           (and (boundp 'mevedel--session)
                (mevedel-view--session-render-state-fingerprint mevedel--session))
           (and collapsed-only t))))
@@ -2253,9 +2256,9 @@ turn shows one bogus thinking summary per tool boundary."
 (defun mevedel-view--request-summary-elapsed-seconds (data-buf)
   "Return elapsed seconds for DATA-BUF's current request, or nil."
   (when-let* (((buffer-live-p data-buf))
-              (request (buffer-local-value 'mevedel--current-request data-buf))
-              (started-at (mevedel-request-started-at request)))
-    (float-time (time-subtract (current-time) started-at))))
+              (request
+               (buffer-local-value 'mevedel--current-request data-buf)))
+    (mevedel-request-active-elapsed-seconds request)))
 
 (defun mevedel-view--append-request-summary
     (data-buf search-start &optional extra)
@@ -3283,18 +3286,10 @@ Empty string when the turn contains only whitespace or markers."
 
 (defun mevedel-view--inline-skill-prompt-summary-body (text)
   "Return collapsed prompt body for inline-skill TEXT, or nil."
-  (when (mevedel-view--inline-skill-render-data-from-text text)
-    (let ((body (mevedel-view--strip-render-data-display-text text)))
-      (setq body (mevedel--strip-hook-audit-blocks body))
-      (setq body (mevedel-view--strip-review-action-blocks body))
-      (setq body (mevedel-view--strip-model-context-blocks body))
-      (when (string-match
-             "\\`[ \t\n]*:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?"
-             body)
-        (setq body (replace-match "" t t body)))
-      (setq body (string-trim body))
-      (unless (string-empty-p body)
-        body))))
+  (when-let* ((data (mevedel-view--inline-skill-render-data-from-text text))
+              (body (plist-get data :expanded-prompt))
+              ((not (string-empty-p body))))
+    body))
 
 (defun mevedel-view--hook-context-unescape (text)
   "Unescape XML entities in hook context TEXT."
@@ -3528,8 +3523,12 @@ EXPANDED means insert the disclosure body expanded."
           (let ((text (buffer-substring-no-properties
                        (cadr seg) (caddr seg))))
             (unless info
-              (setq info
-                    (mevedel-view--inline-skill-render-data-from-text text)))
+              (when-let* ((data
+                           (mevedel-view--inline-skill-render-data-from-text
+                            text)))
+                (setq info
+                      (plist-put data :source
+                                 (cons (cadr seg) (caddr seg))))))
             (setq hook-audits
                   (append hook-audits
                           (mevedel-view--hook-audit-records-from-text text))))))
@@ -3663,7 +3662,7 @@ hint.  Searches that region."
                   (insert (propertize
                            (cond
                             (bash-summary "✓ Bash completed · ")
-                            ((eq kind 'agent-result) "✓ finished ")
+                            ((eq kind 'agent-result) "✓ Finished ")
                             (t "✉ message "))
                            'font-lock-face 'mevedel-view-attribution
                            'mevedel-view-mailbox t))
@@ -3882,12 +3881,11 @@ buffer for gptel, but the view must not render them as `You' turns."
       (when (and inline-skill inline-source-seg)
         (mevedel-view--insert-rendered-tool
          (list :header "Prompt"
-               :body raw-text
+               :body (plist-get inline-skill :expanded-prompt)
                :body-mode 'markdown-mode
                :vtype 'prompt-summary
                :initially-collapsed-p t)
-         (cons (cadr inline-source-seg)
-               (caddr inline-source-seg)))))))
+         (plist-get inline-skill :source))))))
   (insert "\n"))
 
 (defun mevedel-view--directive-turn-display-text (text)
@@ -4709,18 +4707,25 @@ Fallback disclosures retain their header; response summaries do not."
                       (setq text (mevedel-view--fontify-response
                                   (string-trim text))))
                     (when (eq vtype 'prompt-summary)
-                      (let ((drawer-body
-                             (string-trim
-                              (mevedel-view--prompt-drawer-body
-                               data-buf data-start data-end))))
+                      (let* ((source-text
+                              (mevedel-view--data-substring
+                               data-buf data-start data-end))
+                             (inline-body
+                              (mevedel-view--inline-skill-prompt-summary-body
+                               source-text))
+                             (drawer-body
+                              (string-trim
+                               (mevedel-view--prompt-drawer-body
+                                data-buf data-start data-end))))
                         (setq text
                               (mevedel-view--fontify-as
-                               (if (string-empty-p drawer-body)
+                               (or inline-body
+                                   (unless (string-empty-p drawer-body)
+                                     drawer-body)
                                    (string-trim
                                     (mevedel-view--user-turn-text
                                      (list (list 'user data-start data-end))
-                                     data-buf))
-                                 drawer-body)
+                                     data-buf)))
                                'markdown-mode))))
                     (when (eq vtype 'hook-context)
                       (setq text
