@@ -95,7 +95,9 @@ While profiling is active, the first full Eask ERT suite is transparently run
 under `/usr/bin/time -v` when GNU time is installed. Focused test files and
 subsequent full-suite attempts are not wrapped. The corresponding execution
 events identify the report and include scheduler dwell, overlap count, cache
-identity, timeout state, and report size.
+identity, timeout state, and report size. Classification uses the original Bash
+text, while execution prepends GNU time directly to the already-tokenized argv;
+it does not add another shell layer.
 
 At profiler start and stop, telemetry records Git HEAD, dirty-file count,
 status hash, an exact dirty-content hash (tracked diff plus untracked

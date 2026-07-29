@@ -709,17 +709,110 @@
                    (lambda (program)
                      (and (equal program "time") "/usr/bin/time")))
                   ((symbol-function 'file-truename) #'identity))
-          (let* ((command "npx @emacs-eask/cli test ert test/test-*")
+          (let* ((command-text "npx @emacs-eask/cli test ert test/test-*")
+                 (command (list "bash" "-lc" command-text))
                  (capture
-                  (mevedel-execution--resource-capture session command)))
+                  (mevedel-execution--resource-capture
+                   session command-text command)))
             (should capture)
             (should
-             (string-match-p "/usr/bin/time" (plist-get capture :command)))
+             (equal
+              (list "/usr/bin/time" "-v" "-o"
+                    (plist-get capture :report) "--"
+                    "bash" "-lc" command-text)
+              (plist-get capture :command)))
             (should (string-suffix-p
                      "diagnostics/run-test/full-suite-time.txt"
                      (plist-get capture :report)))
             (should-not
-             (mevedel-execution--resource-capture session command))))
+             (mevedel-execution--resource-capture
+              session command-text command))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-execution--process-ended
+  (:doc "ignores a terminal sentinel from a replaced process")
+  (let* ((old
+          (make-process
+           :name "mevedel-test-old-process"
+           :command '("sh" "-c" "exit 7")
+           :buffer nil :sentinel #'ignore :noquery t))
+         (current
+          (make-process
+           :name "mevedel-test-current-process"
+           :command '("sh" "-c" "sleep 30")
+           :buffer nil :sentinel #'ignore :noquery t))
+         (record
+          (mevedel-execution--record-create
+           :execution-id "exec-test" :process current)))
+    (unwind-protect
+        (progn
+          (test-mevedel-execution--wait
+           (lambda () (memq (process-status old) '(exit signal))))
+          (mevedel-execution--process-ended record old)
+          (should-not (mevedel-execution--record-exit-code record))
+          (should-not (mevedel-execution--record-settle-timer record)))
+      (mevedel-execution--release-runtime record)
+      (ignore-errors (delete-process old)))))
+
+(mevedel-deftest mevedel-execution-start-bash/fallback
+  (:doc "settles once from the replacement process after pre-start fallback")
+  (let* ((root (make-temp-file "mevedel-managed-fallback-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-execution--orphan-state nil)
+         (callbacks 0)
+         result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-warning) #'ignore)
+                  ((symbol-function 'mevedel-sandbox-prepare)
+                   (lambda (&rest _)
+                     (list
+                      :state 'confined :fallback-p t :marker "not-emitted"
+                      :command '("sh" "-c" "exit 125")
+                      :original-command '("sh" "-c" "printf direct")
+                      :facts
+                      '(:sandbox bubblewrap :filesystem workspace-write
+                        :network isolated)))))
+          (mevedel-execution-start-bash
+           (lambda (value)
+             (setq callbacks (1+ callbacks)
+                   result value))
+           :session session :owner "main" :owner-context session
+           :command '("ignored")
+           :tool-args '(:command "ignored")
+           :workdir root :writable-roots (list root)
+           :artifact-directory root :yield-time-ms nil)
+          (test-mevedel-execution--wait (lambda () result))
+          (accept-process-output nil 0.1)
+          (should (= 1 callbacks))
+          (should (= 0 (plist-get (plist-get result :facts) :exit-code)))
+          (should (equal "direct" (plist-get result :output))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-execution-start-bash/resource-capture
+  (:doc "passes raw command text and argv to native resource capture")
+  (let* ((root (make-temp-file "mevedel-managed-resource-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-sandbox-mode 'off)
+         captured result)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-execution--resource-capture)
+              (lambda (given-session command-text command)
+                (setq captured (list given-session command-text command))
+                nil)))
+          (mevedel-execution-start-bash
+           (lambda (value) (setq result value))
+           :session session :owner "main" :owner-context session
+           :command '("sh" "-c" "printf ok")
+           :tool-args '(:command "printf ok")
+           :workdir root :writable-roots (list root)
+           :artifact-directory root :yield-time-ms nil)
+          (test-mevedel-execution--wait (lambda () result))
+          (should
+           (equal (list session "printf ok" '("sh" "-c" "printf ok"))
+                  captured)))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution--telemetry-facts

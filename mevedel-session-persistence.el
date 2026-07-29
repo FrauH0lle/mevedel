@@ -880,6 +880,7 @@ the system temp directory."
           (with-temp-file tmp
             (let ((print-length nil)
                   (print-level nil)
+                  (print-circle t)
                   (print-quoted t))
               (prin1 plist (current-buffer))))
           (rename-file tmp path t))

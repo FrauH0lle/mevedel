@@ -562,7 +562,8 @@
 		 :doc "write tool includes snapshot step"
 		 (let* ((tool (mevedel-tool--create
 			       :name "WriteTool"
-			       :read-only-p nil))
+			       :read-only-p nil
+			       :snapshot-p t))
 			(steps (mevedel-pipeline--build-steps tool)))
 		   (should (= (length steps) 12))
 		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
@@ -577,6 +578,14 @@
 		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-goal-budget-warning))
 		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-attach-render-data))
 		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-attach-media-data)))
+		 :doc "mutating tool without snapshot declaration skips snapshot step"
+		 (let* ((tool (mevedel-tool--create
+			       :name "MkDir"
+			       :read-only-p nil))
+			(steps (mevedel-pipeline--build-steps tool)))
+		   (should (= (length steps) 11))
+		   (should-not
+		    (memq #'mevedel-pipeline--step-snapshot steps)))
 		 :doc "includes persist step when max-result-size is set"
 		 (let* ((tool (mevedel-tool--create
 			       :name "WithPersist"
@@ -2773,6 +2782,7 @@
 				 (setq render-value (plist-get args :file_path))
 				 '(:status updated))
 			       :read-only-p nil
+			       :snapshot-p t
 			       :async-p nil))
 			result)
 		   (mevedel-tool-register tool)

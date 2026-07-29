@@ -345,7 +345,9 @@ and point while suppressing modification hooks for view-owned changes.
 bursty updates. Prefer narrower refresh paths when a stable source exists:
 agent activity updates refresh source-backed handles and aggregate status
 rows, then fall back to a full rerender only when the visible handle is
-missing or stale.
+missing or stale. Managed Bash progress and terminal events identify their
+row by durable tool-use ID and replace only that row. If the row is not visible
+yet, the stream scheduler coalesces one incremental recovery render.
 
 Full rerenders rebuild the zone markers from the header, skip leading
 compaction summaries, and re-anchor the in-flight assistant turn. Without
@@ -531,7 +533,8 @@ History persists at the workspace level as
 `<workspace-root>/.mevedel/input-history.el`, so new and resumed
 sessions in the same project share prompt recall. When persistence is not
 writable, the active ring remains available in memory. Rewind keeps the current
-workspace ring and composer draft.
+workspace ring and composer draft. The Lisp sidecar is printed with circle
+syntax enabled so shared text-property objects remain readable.
 
 The input zone installs slash command completion, `$` skill completion,
 and display-only skill argument hints. Root slash completion offers local

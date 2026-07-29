@@ -17,7 +17,7 @@ flowchart TD
     Q -- Deny --> E
     Q -- Allow --> G
     F --> C
-    D -- Yes --> G[Snapshot files]
+    D -- Yes --> G[Snapshot file when declared]
     G --> H[Handler]
     H --> I[Append repair reminder]
     I --> J[Render transform]
@@ -53,13 +53,17 @@ use id. Replay never rereads the original filesystem path.
 
 Important tool metadata:
 
-- Behavior: `:read-only-p`, `:destructive-p`, `:async-p`
+- Behavior: `:read-only-p`, `:snapshot-p`, `:destructive-p`, `:async-p`
 - Permissions: `:check-permission`, `:check-permission-async`,
   `:get-path`, `:get-pattern`, `:get-domain`, `:get-name`
 - Loading/grouping: `:category`, `:groups`, `:wrap`, `:prompt-file`
 - Input contracts: `:args`, `:repair-input`
 - Display/output: `:summary`, `:max-result-size`, `:render-transform`,
   `:renderer`
+
+`:snapshot-p` is an explicit declaration for file-mutating tools whose
+before-state participates in the final patch. `Write` and `Edit` declare it;
+other mutating tools such as `MkDir` do not snapshot their path.
 
 ### Tool input validation and repair
 
@@ -469,7 +473,10 @@ times per second. The existing Bash row shows the last five output lines, elapse
 time, line and byte counts, and the execution ID once the command has yielded.
 These progress updates live only in bounded view state and never create
 transcript turns. Events carry the originating data buffer and durable tool-use
-ID, so the matching main or agent view is selected directly.
+ID, so the matching main or agent view is selected directly. A progress or
+terminal event replaces only that source-backed Bash row; a missing row
+schedules one coalesced incremental recovery render rather than rebuilding the
+whole transcript.
 Terminal settlement replaces the original row's hidden render-data side channel
 in the authoritative transcript with the bounded whole-artifact head-and-tail
 preview plus exit, outcome, duration, omitted-output facts, and any noteworthy

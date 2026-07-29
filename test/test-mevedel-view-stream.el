@@ -231,9 +231,10 @@
     (let* ((session (mevedel-session--create :name "execution-view"))
            (draft "> quoted\nsecond line")
            (bash-tool
-            (mevedel-tool--create
+           (mevedel-tool--create
              :name "Bash" :renderer #'mevedel-tool-exec--render-bash))
            (mevedel-view-render-cache-max-entries 1)
+           (rerenders 0)
            data-before)
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
@@ -256,6 +257,9 @@
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--full-rerender)
+        (should
+         (mevedel-view-stream--execution-row-region
+          data-buf "call-live"))
         (mevedel-view-stream-test--insert-composer-draft draft 3)
         (let ((point-offset (- (point) (mevedel-view--input-start))))
           (cl-letf (((symbol-function 'mevedel-tool-get)
@@ -263,6 +267,7 @@
                        (and (equal name "Bash") bash-tool)))
                     ((symbol-function 'mevedel-view-rerender)
                      (lambda (&optional _buffer)
+                       (cl-incf rerenders)
                        (mevedel-view--full-rerender)
                        'rerender-timer)))
             (should-not
@@ -275,6 +280,7 @@
                     :facts '(:execution-id "exec-000001" :state running
                              :wall-time-seconds 2.5 :output-bytes 9
                              :output-lines 1 :omitted-output-bytes 0))))
+            (should (zerop rerenders))
             (let* ((bounds
                     (with-current-buffer data-buf
                       (mevedel-pipeline--tool-segment-bounds "call-live")))
@@ -323,6 +329,7 @@
                              :termination exited :exit-code 0 :outcome success
                              :wall-time-seconds 3.0 :output-bytes 21
                              :output-lines 2 :omitted-output-bytes 0))))
+            (should (zerop rerenders))
             (should-not (gethash "call-live" mevedel-view--execution-events))
             (let ((parsed
                    (with-current-buffer data-buf
@@ -460,15 +467,21 @@
             (setq-local mevedel--data-buffer agent-data)
             (setq-local mevedel-view--agent-transcript-p t)
             (setq-local mevedel-view--pending-tool-calls nil))
-          (cl-letf (((symbol-function 'mevedel-view-rerender)
-                     (lambda (&optional buffer) (push buffer targets))))
+          (cl-letf
+              (((symbol-function
+                 'mevedel-view-stream--refresh-execution-row)
+                (lambda (_data-buffer _tool-use-id)
+                  (push (current-buffer) targets)
+                  t)))
             (mevedel-view-stream-handle-execution-event
              (list :type 'progress :session session :data-buffer agent-data
                    :owner "explorer--owned"
+                   :tool-use-id "call-agent"
                    :facts nil :tool-args nil))
             (mevedel-view-stream-handle-execution-event
              (list :type 'progress :session session :data-buffer main-data
                    :owner "main"
+                   :tool-use-id "call-main"
                    :facts nil :tool-args nil)))
           (should (equal (list main-view agent-view) targets)))
       (dolist (buffer (list main-data main-view agent-data agent-view))

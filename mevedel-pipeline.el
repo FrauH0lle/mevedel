@@ -130,6 +130,7 @@
 (declare-function mevedel-tool-max-result-size "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-snapshot-p "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-render-transform
                   "mevedel-tool-registry" (cl-x) t)
 
@@ -1173,7 +1174,7 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
   "Snapshot files before modification.
 
 Extracts the path from tool args via the tool's get-path function and
-snapshots it.  Only included for non-read-only tools.  CONTEXT must
+snapshots it.  Only included for tools declaring snapshots.  CONTEXT must
 contain `:tool' and `:args'.  NEXT is called on success.  FAIL is
 unused -- a snapshot failure is best-effort and should never fail the
 pipeline."
@@ -2117,7 +2118,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
   1. validate            -- always included
   2. pre-tool-hooks      -- always included
   3. permission          -- always included
-  4. snapshot            -- skipped if read-only-p
+  4. snapshot            -- included when snapshot-p
   5. handler             -- always included
   6. repair-reminder     -- appends feedback for committed input repairs
   7. render-transform    -- always included; no-op when tool has none
@@ -2144,7 +2145,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
     (push #'mevedel-pipeline--step-render-transform steps)
     (push #'mevedel-pipeline--step-repair-reminder steps)
     (push #'mevedel-pipeline--step-handler steps)
-    (unless (mevedel-tool-read-only-p tool)
+    (when (mevedel-tool-snapshot-p tool)
       (push #'mevedel-pipeline--step-snapshot steps))
     (push #'mevedel-pipeline--step-permission steps)
     (push #'mevedel-pipeline--step-pre-tool-hooks steps)

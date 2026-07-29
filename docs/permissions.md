@@ -346,7 +346,9 @@ deliberately. Direct execution always reports `filesystem: unrestricted` and
 `network: unrestricted`. A pre-marker failure retains its launcher error,
 Bubblewrap diagnostics, or exit code and remains visible until the next child
 execution reprobes the backend; one transient launch failure therefore does not
-disable confinement permanently. Bash and batch-Eval results append their active
+disable confinement permanently. The failed launcher is detached before the
+replacement starts, so a late launcher sentinel cannot settle the direct
+attempt. Bash and batch-Eval results append their active
 sandbox facts for the model and audit trail. Native helper facts remain
 internal and in tests rather than being added to successful tool content.
 Trusted skill substitutions keep those facts out of the substituted literal.

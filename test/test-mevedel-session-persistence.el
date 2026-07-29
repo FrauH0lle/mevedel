@@ -1042,6 +1042,18 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (file-exists-p tmp))
           (let ((readback (mevedel-session-persistence-read tmp)))
             (should (equal "main" (plist-get readback :session-name)))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+  :doc "atomic write preserves shared objects as readable circle syntax"
+  (let* ((tmp (make-temp-file "mevedel-session-meta-test-" nil ".el"))
+         (shared (propertize "prompt" 'mevedel-mention-binding
+                             (list :token "prompt")))
+         (plist (list :history (list shared shared))))
+    (unwind-protect
+        (progn
+          (mevedel-session-persistence-write tmp plist)
+          (let* ((readback (mevedel-session-persistence-read tmp))
+                 (history (plist-get readback :history)))
+            (should (eq (car history) (cadr history)))))
       (when (file-exists-p tmp) (delete-file tmp)))))
 
 (mevedel-deftest mevedel-session-persistence--write-current-buffer-atomically ()
@@ -7567,6 +7579,7 @@ The result is a plist whose :tempdir owns every created file."
                               (content string :required "Content"))
                       :get-path (lambda (args) (plist-get args :path))
                       :read-only-p nil
+                      :snapshot-p t
                       :async-p nil))
                result)
           ;; Plant the session buffer-locally so

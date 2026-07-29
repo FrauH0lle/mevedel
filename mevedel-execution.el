@@ -412,21 +412,30 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
 
 (defun mevedel-execution--release-runtime (record)
   "Release RECORD's process, timers, and group file."
-  (dolist (timer (list (mevedel-execution--record-timeout-timer record)
-                       (mevedel-execution--record-force-timer record)
-                       (mevedel-execution--record-observer-timer record)
-                       (mevedel-execution--record-progress-timer record)
-                       (mevedel-execution--record-retire-timer record)
-                       (mevedel-execution--record-settle-timer record)
-                       (mevedel-execution--record-watch-timer record)
-                       (mevedel-execution--record-yield-timer record)))
-    (when (timerp timer)
-      (cancel-timer timer)))
-  (when-let* ((process (mevedel-execution--record-process record)))
-    (set-process-query-on-exit-flag process nil)
-    (ignore-errors (delete-process process)))
-  (setf (mevedel-execution--record-process record) nil
-        (mevedel-execution--record-group-id record) nil))
+  (let ((process (mevedel-execution--record-process record)))
+    (dolist (timer (list (mevedel-execution--record-timeout-timer record)
+                         (mevedel-execution--record-force-timer record)
+                         (mevedel-execution--record-observer-timer record)
+                         (mevedel-execution--record-progress-timer record)
+                         (mevedel-execution--record-retire-timer record)
+                         (mevedel-execution--record-settle-timer record)
+                         (mevedel-execution--record-watch-timer record)
+                         (mevedel-execution--record-yield-timer record)))
+      (when (timerp timer)
+        (cancel-timer timer)))
+    (setf (mevedel-execution--record-process record) nil
+          (mevedel-execution--record-group-id record) nil
+          (mevedel-execution--record-timeout-timer record) nil
+          (mevedel-execution--record-force-timer record) nil
+          (mevedel-execution--record-observer-timer record) nil
+          (mevedel-execution--record-progress-timer record) nil
+          (mevedel-execution--record-retire-timer record) nil
+          (mevedel-execution--record-settle-timer record) nil
+          (mevedel-execution--record-watch-timer record) nil
+          (mevedel-execution--record-yield-timer record) nil)
+    (when process
+      (set-process-query-on-exit-flag process nil)
+      (ignore-errors (delete-process process)))))
 
 (defun mevedel-execution--cleanup-record (record &optional preserve-spool)
   "Release runtime and registry state for RECORD.
@@ -535,14 +544,24 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
 
 (defun mevedel-execution--process-ended (record process)
   "Settle RECORD when PROCESS reaches a terminal state."
-  (let ((status (process-status process)))
-    (when (memq status '(exit signal))
-      (let ((exit-code (process-exit-status process)))
-        (setf (mevedel-execution--record-exit-code record) exit-code)
-        (when (and (not (mevedel-execution--record-termination record))
-                   (eq status 'signal))
-          (setf (mevedel-execution--record-termination record) 'signaled)))
-      (if (mevedel-execution--record-execution-id record)
+  (when (eq process (mevedel-execution--record-process record))
+    (let ((status (process-status process)))
+      (when (memq status '(exit signal))
+        (let ((exit-code (process-exit-status process)))
+          (setf (mevedel-execution--record-exit-code record) exit-code)
+          (when (and (not (mevedel-execution--record-termination record))
+                     (eq status 'signal))
+            (setf (mevedel-execution--record-termination record) 'signaled)))
+        (if (mevedel-execution--record-execution-id record)
+            (unless (or (and (mevedel-execution--record-stop-p record)
+                             (timerp
+                              (mevedel-execution--record-force-timer record)))
+                        (timerp
+                         (mevedel-execution--record-settle-timer record)))
+              (setf (mevedel-execution--record-settle-timer record)
+                    (run-at-time
+                     0.02 nil
+                     #'mevedel-execution--settle-managed-main-exit record)))
           (unless (or (and (mevedel-execution--record-stop-p record)
                            (timerp
                             (mevedel-execution--record-force-timer record)))
@@ -550,17 +569,8 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
                        (mevedel-execution--record-settle-timer record)))
             (setf (mevedel-execution--record-settle-timer record)
                   (run-at-time
-                   0.02 nil
-                   #'mevedel-execution--settle-managed-main-exit record)))
-        (unless (or (and (mevedel-execution--record-stop-p record)
-                         (timerp
-                          (mevedel-execution--record-force-timer record)))
-                    (timerp
-                     (mevedel-execution--record-settle-timer record)))
-          (setf (mevedel-execution--record-settle-timer record)
-                (run-at-time
-                 0.02 nil #'mevedel-execution--finish-record record
-                 (mevedel-execution--record-exit-code record))))))))
+                   0.02 nil #'mevedel-execution--finish-record record
+                   (mevedel-execution--record-exit-code record)))))))))
 
 (defun mevedel-execution--launch-record
     (record name command workdir coding filter)
@@ -786,15 +796,15 @@ command remains represented solely by its hash."
        (string-match-p "\\btest[ ]+ert\\b" command)
        (null (mevedel-execution--eask-targets command))))
 
-(defun mevedel-execution--resource-capture (session command)
-  "Return native resource-capture preparation for SESSION and COMMAND.
+(defun mevedel-execution--resource-capture (session command-text command)
+  "Return native resource capture for SESSION, COMMAND-TEXT, and COMMAND argv.
 The result is a plist containing a wrapped command and report path.  Capture
 is enabled only for one full Eask suite during an active telemetry profiler
 run."
   (when-let* ((directory
                (and (fboundp 'mevedel-telemetry-profiler-directory)
                     (mevedel-telemetry-profiler-directory session)))
-              ((mevedel-execution--full-eask-command-p command))
+              ((mevedel-execution--full-eask-command-p command-text))
               (time-program (executable-find "time"))
               ((equal (file-truename time-program) "/usr/bin/time"))
               (report (file-name-concat directory "full-suite-time.txt"))
@@ -804,14 +814,7 @@ run."
     (make-directory directory t)
     (puthash report t mevedel-execution--resource-capture-claims)
     (list :command
-          (mapconcat
-           #'identity
-           (list (shell-quote-argument time-program) "-v" "-o"
-                 (shell-quote-argument report) "--"
-                 (shell-quote-argument (or shell-file-name "/bin/sh"))
-                 (shell-quote-argument shell-command-switch)
-                 (shell-quote-argument command))
-           " ")
+          (append (list time-program "-v" "-o" report "--") command)
           :report report)))
 
 (defun mevedel-execution--telemetry (record event &rest props)
@@ -1278,20 +1281,26 @@ it briefly so repeated owner polls return the same result."
           (mevedel-execution--record-error-data record) nil
           (mevedel-execution--record-marker record) nil
           (mevedel-execution--record-marker-buffer record) :done
+          (mevedel-execution--record-marker-seen-p record) nil
           (mevedel-execution--record-last-byte-newline-p record) nil
           (mevedel-execution--record-newline-count record) 0
           (mevedel-execution--record-output-chars record) 0
           (mevedel-execution--record-output-head record) ""
+          (mevedel-execution--record-output-limit-p record) nil
           (mevedel-execution--record-output-tail record) ""
           (mevedel-execution--record-read-offset record) 0
           (mevedel-execution--record-sandbox-facts record) facts
           (mevedel-execution--record-sandbox-preparation record) nil
+          (mevedel-execution--record-stop-p record) nil
+          (mevedel-execution--record-termination record) nil
+          (mevedel-execution--record-timed-out-p record) nil
           (mevedel-execution--record-unread-chars record) 0
           (mevedel-execution--record-unread-head record) ""
           (mevedel-execution--record-unread-tail record) "")
     (mevedel-execution--launch-managed
      record (plist-get preparation :original-command))
-    (mevedel-execution--arm-managed-timers record)))
+    (unless (mevedel-execution--record-finished-p record)
+      (mevedel-execution--arm-managed-timers record))))
 
 (defun mevedel-execution--release-scheduler (record)
   "Release RECORD's scheduler lease exactly once."
@@ -1543,9 +1552,13 @@ terminal settlement."
               mevedel-execution-live-limit)
       (signal 'mevedel-execution-limit
               (list "A session may have at most 64 live Bash processes")))
-    (let* ((resource-capture
-            (and (stringp command)
-                 (mevedel-execution--resource-capture session command)))
+    (let* ((raw-command (plist-get tool-args :command))
+           (command-text (and (stringp raw-command) raw-command))
+           (resource-capture
+            (and command-text
+                 (listp command)
+                 (mevedel-execution--resource-capture
+                  session command-text command)))
            (command (or (plist-get resource-capture :command) command))
            (id (mevedel-execution--next-id state))
            (artifact-directory
@@ -1576,36 +1589,34 @@ terminal settlement."
              :tty-p (and tty t) :workdir workdir
              :yield-time-ms yield-time-ms)))
       (puthash id record (mevedel-execution--state-records state))
-      (let* ((raw-command (plist-get tool-args :command))
-             (command-text (and (stringp raw-command) raw-command)))
-        (mevedel-execution--telemetry
-         record 'execution-enqueued
-         :lane (if read-only-p 'read 'exclusive)
-         :queue-depth (mevedel-execution--managed-count state)
-         :overlap-count (max 0 (1- (mevedel-execution--managed-count state)))
-         :workload (and (mevedel-execution--eask-command-p command-text)
-                        'eask)
-         :test-targets (and (mevedel-execution--eask-command-p command-text)
-                            (mevedel-execution--eask-targets command-text))
-         :test-scope (and (mevedel-execution--eask-command-p command-text)
-                          (if (mevedel-execution--eask-targets command-text)
-                              'focused
-                            'full))
-         :cache-identity (and (mevedel-execution--eask-command-p command-text)
-                              (mevedel-execution--cache-identity))
-         :native-resource-capture (and resource-capture t)
-         :resource-report-relative-path
-         (and resource-capture
-              (file-name-concat "diagnostics"
-                                (file-name-nondirectory
-                                 (directory-file-name
-                                  (file-name-directory
-                                   (plist-get resource-capture :report))))
-                                "full-suite-time.txt"))
-         :command-hash (and command-text
-                            (secure-hash 'sha256 command-text))
-         :tty (and tty t)
-         :yield-time-ms yield-time-ms))
+      (mevedel-execution--telemetry
+       record 'execution-enqueued
+       :lane (if read-only-p 'read 'exclusive)
+       :queue-depth (mevedel-execution--managed-count state)
+       :overlap-count (max 0 (1- (mevedel-execution--managed-count state)))
+       :workload (and (mevedel-execution--eask-command-p command-text)
+                      'eask)
+       :test-targets (and (mevedel-execution--eask-command-p command-text)
+                          (mevedel-execution--eask-targets command-text))
+       :test-scope (and (mevedel-execution--eask-command-p command-text)
+                        (if (mevedel-execution--eask-targets command-text)
+                            'focused
+                          'full))
+       :cache-identity (and (mevedel-execution--eask-command-p command-text)
+                            (mevedel-execution--cache-identity))
+       :native-resource-capture (and resource-capture t)
+       :resource-report-relative-path
+       (and resource-capture
+            (file-name-concat "diagnostics"
+                              (file-name-nondirectory
+                               (directory-file-name
+                                (file-name-directory
+                                 (plist-get resource-capture :report))))
+                              "full-suite-time.txt"))
+       :command-hash (and command-text
+                          (secure-hash 'sha256 command-text))
+       :tty (and tty t)
+       :yield-time-ms yield-time-ms)
       (mevedel-execution--notify-state-change record)
       (let ((lease
              (mevedel-execution-scheduler-submit
