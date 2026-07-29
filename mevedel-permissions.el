@@ -85,7 +85,8 @@
   "Permission rules for tools.
 
 Each entry is a list:
-  (TOOL-NAME &key SPECIFIER VALUE :sandbox-permissions LEVEL
+  (TOOL-NAME &key SPECIFIER VALUE :network BOOLEAN
+                   :sandbox-permissions LEVEL
                    :action ACTION)
 
 TOOL-NAME is a string matching a tool name (e.g., \"Read\", \"Edit\"),
@@ -107,6 +108,11 @@ rule matches against.  At most one specifier is allowed per rule:
 
 Rules without a specifier match the tool regardless of context.
 
+The optional `:network t' qualifier records reusable network authority for
+the matching Bash command or Eval expression.  It also authorizes the
+operation; an otherwise identical rule without `:network' leaves network
+isolated.
+
 The optional :sandbox-permissions qualifier currently accepts
 `require-escalated'.  Such rules participate only in full execution
 escalation decisions; they do not grant ordinary tool permission.  A
@@ -125,6 +131,7 @@ Example:
    (\"Write\" :path \"~/.ssh/**\" :action deny)
    (\"Bash\" :pattern \"ls *\" :action allow)
    (\"Bash\" :pattern \"git log:*\" :action allow)
+   (\"Bash\" :pattern \"npx test*\" :network t :action allow)
    (\"Bash\" :pattern \"rm *\" :action deny)
    (\"Bash\" :pattern \"curl https://example.com/*\"
            :sandbox-permissions require-escalated :action allow)
@@ -832,6 +839,38 @@ defcustom buckets may otherwise authorize or explicitly ask for LEVEL."
                                 rules tool-name :pattern pattern)))
                     (cl-return action))))))
 
+(defun mevedel-permission--network-rule-decision
+    (buckets tool-name pattern)
+  "Resolve direct reusable network authority for TOOL-NAME and PATTERN."
+  (let ((qualified
+         (mapcar
+          (lambda (entry)
+            (cons
+             (car entry)
+             (cl-loop
+              for rule in (cdr entry)
+              when (eq t (plist-get (cdr rule) :network))
+              collect
+              (cons
+               (car rule)
+               (cl-loop for (key value) on (cdr rule) by #'cddr
+                        unless (eq key :network)
+                        append (list key value))))))
+          buckets)))
+    (if (cl-some
+         (lambda (entry)
+           (eq 'deny
+               (mevedel-permission--rules-action
+                (cdr entry) tool-name :pattern pattern)))
+         qualified)
+        'deny
+      (cl-loop for (bucket . rules) in qualified
+               when (memq bucket '(:session :persistent :defcustom))
+               do (when-let* ((action
+                               (mevedel-permission--rules-action
+                                rules tool-name :pattern pattern)))
+                    (cl-return action))))))
+
 (defun mevedel-permission--normalize-outcome (outcome)
   "Return the log-safe decision symbol for permission OUTCOME."
   (pcase outcome
@@ -1351,13 +1390,28 @@ mode, and native-resource tail."
     (error "Invalid resource access: %s" access))
   (list :path (expand-file-name path) :access access))
 
+(defun mevedel-permission--merge-resource-grant (grants path access)
+  "Return GRANTS with exact PATH promoted to ACCESS."
+  (let ((grant (mevedel-permission--resource-grant path access)))
+    (if (mevedel-permission--resource-granted-p path access grants)
+        grants
+      (append
+       (if (eq access 'write)
+           (cl-remove
+            (expand-file-name path) grants
+            :key (lambda (item)
+                   (and (stringp (plist-get item :path))
+                        (expand-file-name (plist-get item :path))))
+            :test #'string=)
+         grants)
+       (list grant)))))
+
 (defun mevedel-permission-add-session-resource-grant (session path access)
   "Grant SESSION exact PATH access at READ or WRITE level."
-  (let* ((grant (mevedel-permission--resource-grant path access))
-         (grants (mevedel-session-resource-grants session)))
-    (unless (member grant grants)
-      (setf (mevedel-session-resource-grants session)
-            (append grants (list grant))))
+  (let ((grant (mevedel-permission--resource-grant path access)))
+    (setf (mevedel-session-resource-grants session)
+          (mevedel-permission--merge-resource-grant
+           (mevedel-session-resource-grants session) path access))
     grant))
 
 (defun mevedel-permission-remove-session-resource-grant
@@ -1368,25 +1422,33 @@ mode, and native-resource tail."
           (cl-remove grant (mevedel-session-resource-grants session)
                      :test #'equal))))
 
+(defun mevedel-permission-remove-session-rule (session rule)
+  "Revoke exact permission RULE from SESSION."
+  (setf (mevedel-session-permission-rules session)
+        (cl-remove rule (mevedel-session-permission-rules session)
+                   :test #'equal)))
+
 (cl-defun mevedel-permission--build-rule
-    (tool-name action spec-key spec-value &key sandbox-permissions)
+    (tool-name action spec-key spec-value &key network sandbox-permissions)
   "Build a permission rule list from the given components.
 
 TOOL-NAME is the tool name string or \"*\".  ACTION is `allow', `deny',
 or `ask'.  SPEC-KEY is one of `:path', `:pattern', `:domain', `:name',
 or nil for an unqualified rule.  SPEC-VALUE is the glob associated with
-SPEC-KEY (ignored when SPEC-KEY is nil).  SANDBOX-PERMISSIONS optionally
-qualifies the already requested child-execution level."
+SPEC-KEY (ignored when SPEC-KEY is nil).  NETWORK records matching additive
+network authority.  SANDBOX-PERMISSIONS optionally qualifies the already
+requested child-execution level."
   (append
    (list tool-name)
    (and spec-key spec-value (list spec-key spec-value))
+   (and network (list :network t))
    (and sandbox-permissions
         (list :sandbox-permissions sandbox-permissions))
    (list :action action)))
 
 (cl-defun mevedel-permission--add-session-rule
     (session tool-name action &optional path
-             &key spec-key spec-value sandbox-permissions)
+             &key spec-key spec-value network sandbox-permissions)
   "Add a permission rule to SESSION's rule list.
 
 TOOL-NAME is the tool name string.  ACTION is `allow' or `deny'.
@@ -1394,8 +1456,9 @@ TOOL-NAME is the tool name string.  ACTION is `allow' or `deny'.
 Positional PATH is retained for existing call sites; when supplied it is
 equivalent to SPEC-KEY `:path' with that value.  Callers specifying
 another specifier should pass SPEC-KEY (e.g. `:pattern') and SPEC-VALUE
-instead, leaving PATH nil.  SANDBOX-PERMISSIONS qualifies an already requested
-execution level.
+instead, leaving PATH nil.  NETWORK records matching additive network
+authority.  SANDBOX-PERMISSIONS qualifies an already requested execution
+level.
 
 Mutates SESSION's `permission-rules' slot via `setf' -- this is a
 **by-reference** write.  Sub-agents share the parent session by
@@ -1408,6 +1471,7 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
          (value (or spec-value path))
          (rule (mevedel-permission--build-rule
                 tool-name action key value
+                :network network
                 :sandbox-permissions sandbox-permissions))
          (rules (mevedel-session-permission-rules session)))
     (unless (member rule rules)
@@ -1470,16 +1534,23 @@ Returns a merged list in `mevedel-permission-rules' format."
                (mevedel-permission--persistent-file workspace))
               :resource-grants)))
 
+(defun mevedel-permission-persistent-authority (workspace)
+  "Return WORKSPACE's remembered rules and exact resource grants."
+  (or (mevedel-permission--read-store-file
+       (mevedel-permission--persistent-file workspace))
+      '(:rules nil :resource-grants nil)))
+
 (cl-defun mevedel-permission--save-persistent-rule
     (workspace tool-name action &optional path
-               &key spec-key spec-value sandbox-permissions)
+               &key spec-key spec-value network sandbox-permissions)
   "Append a permission rule to WORKSPACE's persistent rules file.
 
 TOOL-NAME and ACTION define the rule.  Positional PATH is equivalent
 to SPEC-KEY `:path'.  SPEC-KEY/SPEC-VALUE let callers store rules
 qualified by any specifier (`:path', `:pattern', `:domain', `:name').
-SANDBOX-PERMISSIONS qualifies an already requested execution level.  The file
-is created if it does not exist."
+NETWORK records matching additive network authority.  SANDBOX-PERMISSIONS
+qualifies an already requested execution level.  The file is created if it
+does not exist."
   (let* ((file (mevedel-permission--persistent-file workspace))
          (store (or (mevedel-permission--read-store-file file)
                     (list :rules nil :resource-grants nil)))
@@ -1488,6 +1559,7 @@ is created if it does not exist."
          (value (or spec-value path))
          (rule (mevedel-permission--build-rule
                 tool-name action key value
+                :network network
                 :sandbox-permissions sandbox-permissions))
          (updated (if (member rule existing)
                       existing
@@ -1502,9 +1574,9 @@ is created if it does not exist."
          (store (or (mevedel-permission--read-store-file file)
                     (list :rules nil :resource-grants nil)))
          (grant (mevedel-permission--resource-grant path access))
-         (grants (plist-get store :resource-grants)))
-    (unless (member grant grants)
-      (setq grants (append grants (list grant))))
+         (grants
+          (mevedel-permission--merge-resource-grant
+           (plist-get store :resource-grants) path access)))
     (mevedel-permission--write-store-file
      file (plist-put store :resource-grants grants))
     grant))
@@ -1522,13 +1594,25 @@ is created if it does not exist."
                   (cl-remove grant (plist-get store :resource-grants)
                              :test #'equal))))))
 
+(defun mevedel-permission-remove-persistent-rule (workspace rule)
+  "Revoke exact permission RULE from WORKSPACE."
+  (let* ((file (mevedel-permission--persistent-file workspace))
+         (store (mevedel-permission--read-store-file file)))
+    (when store
+      (mevedel-permission--write-store-file
+       file
+       (plist-put store :rules
+                  (cl-remove rule (plist-get store :rules)
+                             :test #'equal))))))
+
 
 ;;
 ;;; Prompt result dispatch
 
 (cl-defun mevedel-permission--apply-prompt-result
     (result tool-name &optional session workspace path
-            &key spec-key spec-value resource-access sandbox-permissions)
+            &key spec-key spec-value resource-access network
+            sandbox-permissions)
   "Dispatch a permission prompt RESULT to the correct storage.
 
 RESULT is one of:
@@ -1543,12 +1627,14 @@ for storage.  Positional PATH scopes the authority to a file path (kept
 for call sites that already pass it).  SPEC-KEY/SPEC-VALUE allow rule
 scoping by any other specifier (`:pattern', `:domain', `:name').
 RESOURCE-ACCESS stores exact path authority separately from rules.
+NETWORK stores a capability-qualified operation rule.
 SANDBOX-PERMISSIONS qualifies an already requested execution level."
   (cl-flet ((session-rule (action)
               (when session
                 (mevedel-permission--add-session-rule
                  session tool-name action path
                  :spec-key spec-key :spec-value spec-value
+                 :network network
                  :sandbox-permissions sandbox-permissions)))
             (session-resource-grant ()
               (when (and session path resource-access)
@@ -1564,6 +1650,7 @@ SANDBOX-PERMISSIONS qualifies an already requested execution level."
                 (mevedel-permission--save-persistent-rule
                  workspace tool-name action path
                  :spec-key spec-key :spec-value spec-value
+                 :network network
                  :sandbox-permissions sandbox-permissions))
                (t
                 ;; User clicked always-allow but no workspace is

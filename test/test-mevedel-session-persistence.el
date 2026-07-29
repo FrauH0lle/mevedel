@@ -4172,7 +4172,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
              (and restored (buffer-local-value 'mevedel--session restored)))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
-  :doc "preserves permission rules across resume"
+  :doc "preserves operation, network, and resource authority across resume"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
@@ -4182,7 +4182,11 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (unwind-protect
               (progn
                 (setf (mevedel-session-permission-rules session)
-                      '(("Read" :path "/tmp/foo/**" :action allow)))
+                      '(("Read" :path "/tmp/foo/**" :action allow)
+                        ("Bash" :pattern "npx test*"
+                         :network t :action allow)))
+                (setf (mevedel-session-resource-grants session)
+                      '((:path "/tmp/external-input" :access read)))
                 (with-current-buffer buf
                   (org-mode)
                   (insert "Hi\n")
@@ -4194,9 +4198,18 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 (setq restored (mevedel-session-persistence-restore
                                 session-dir))
                 (with-current-buffer restored
-                  (should (equal '(("Read" :path "/tmp/foo/**" :action allow))
-                                 (mevedel-session-permission-rules
-                                  mevedel--session)))))
+                  (should
+                   (equal
+                    '(("Read" :path "/tmp/foo/**" :action allow)
+                      ("Bash" :pattern "npx test*"
+                       :network t :action allow))
+                    (mevedel-session-permission-rules
+                     mevedel--session)))
+                  (should
+                   (equal
+                    '((:path "/tmp/external-input" :access read))
+                    (mevedel-session-resource-grants
+                     mevedel--session)))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)
             (test-mevedel-session-persistence--release-and-kill

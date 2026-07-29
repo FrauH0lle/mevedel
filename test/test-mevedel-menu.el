@@ -6,6 +6,7 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'seq)
 (require 'gptel)
 (require 'gptel-openai)
 (require 'helpers
@@ -23,6 +24,7 @@
 (require 'mevedel-goal)
 (require 'mevedel-models)
 (require 'mevedel-mentions)
+(require 'mevedel-permissions)
 (require 'mevedel-plugins)
 (require 'mevedel-presets)
 (require 'mevedel-session-persistence)
@@ -127,7 +129,7 @@
           (mevedel-menu-open 'top)))
       (should (eq called-prefix 'mevedel-menu--top))))
 
-  :doc "opens requested mode, model, Goal, and Preset cockpit surfaces"
+  :doc "opens requested mode, permissions, model, Goal, and Preset surfaces"
   (mevedel-menu-test--with-buffers
     (let (called-prefix)
       (cl-letf (((symbol-function 'transient-setup)
@@ -135,6 +137,7 @@
                    (setq called-prefix prefix))))
         (with-current-buffer view-buf
           (dolist (area '((mode . mevedel-menu--mode)
+                          (permissions . mevedel-menu--permissions)
                           (model . mevedel-menu--model-selection)
                           (goal . mevedel-menu--goal)
                           (preset . mevedel-menu--preset)))
@@ -1070,6 +1073,72 @@
       (setq-local mevedel--current-request t))
     (with-current-buffer view-buf
       (should-not (mevedel-menu--abort-inapt-p)))))
+
+(mevedel-deftest mevedel-menu--permissions ()
+  ,test
+  (test)
+  :doc "lists distinct session operation, network, and resource authority"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-permission-rules session)
+          '(("Bash" :pattern "npx test*" :action allow)
+            ("Bash" :pattern "npx test*" :network t :action allow)))
+    (setf (mevedel-session-resource-grants session)
+          '((:path "/tmp/external" :access read)))
+    (with-current-buffer view-buf
+      (let ((description (mevedel-menu--permissions-description)))
+        (should (string-match-p "Session operation" description))
+        (should (string-match-p "Session network" description))
+        (should (string-match-p "Session resource" description)))))
+  :doc "revokes a session network rule without changing operation or resource authority"
+  (mevedel-menu-test--with-buffers
+    (let ((operation '("Bash" :pattern "npx test*" :action allow))
+          (network
+           '("Bash" :pattern "npx test*" :network t :action allow))
+          (resource '(:path "/tmp/external" :access read)))
+      (setf (mevedel-session-permission-rules session)
+            (list operation network))
+      (setf (mevedel-session-resource-grants session)
+            (list resource))
+      (with-current-buffer view-buf
+        (let* ((candidate
+                (seq-find
+                 (lambda (item)
+                   (string-match-p "Session network" (car item)))
+                 (mevedel-menu--permission-candidates)))
+               (label (car candidate)))
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (&rest _) label)))
+            (mevedel-menu--permissions-revoke))))
+      (should
+       (equal (list operation)
+              (mevedel-session-permission-rules session)))
+      (should
+       (equal (list resource)
+              (mevedel-session-resource-grants session)))))
+  :doc "revokes one workspace resource without changing workspace network authority"
+  (mevedel-menu-test--with-buffers
+    (let ((path "/tmp/workspace-external")
+          (network
+           '("Bash" :pattern "npx test*" :network t :action allow)))
+      (mevedel-permission--save-persistent-rule
+       workspace "Bash" 'allow nil
+       :spec-key :pattern :spec-value "npx test*" :network t)
+      (mevedel-permission--save-persistent-resource-grant
+       workspace path 'read)
+      (with-current-buffer view-buf
+        (let* ((candidate
+                (seq-find
+                 (lambda (item)
+                   (string-match-p "Workspace resource" (car item)))
+                 (mevedel-menu--permission-candidates)))
+               (label (car candidate)))
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (&rest _) label)))
+            (mevedel-menu--permissions-revoke))))
+      (let ((authority
+             (mevedel-permission-persistent-authority workspace)))
+        (should (equal (list network) (plist-get authority :rules)))
+        (should-not (plist-get authority :resource-grants))))))
 
 (provide 'test-mevedel-menu)
 

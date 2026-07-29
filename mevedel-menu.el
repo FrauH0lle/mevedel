@@ -88,6 +88,16 @@
 (declare-function mevedel-permission-mode-transition
                   "mevedel-permissions"
                   (mode &optional prompt display-text hook-context))
+(declare-function mevedel-permission-persistent-authority
+                  "mevedel-permissions" (workspace))
+(declare-function mevedel-permission-remove-persistent-resource-grant
+                  "mevedel-permissions" (workspace path access))
+(declare-function mevedel-permission-remove-persistent-rule
+                  "mevedel-permissions" (workspace rule))
+(declare-function mevedel-permission-remove-session-resource-grant
+                  "mevedel-permissions" (session path access))
+(declare-function mevedel-permission-remove-session-rule
+                  "mevedel-permissions" (session rule))
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-plan-mode'
@@ -132,8 +142,12 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-plan-approval
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-rules
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-resource-grants
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tools'
@@ -501,6 +515,99 @@
 
 
 ;;
+;;; Permissions surface
+
+(defun mevedel-menu--permission-rule-label (scope rule)
+  "Return a cockpit label for SCOPE permission RULE."
+  (let ((plist (cdr rule)))
+    (format "%s %s: %s %S"
+            scope
+            (if (plist-get plist :network) "network" "operation")
+            (car rule)
+            (or (plist-get plist :pattern)
+                (plist-get plist :path)
+                (plist-get plist :domain)
+                (plist-get plist :name)
+                "*"))))
+
+(defun mevedel-menu--permission-resource-label (scope grant)
+  "Return a cockpit label for SCOPE exact resource GRANT."
+  (let ((path (plist-get grant :path)))
+    (format "%s resource: %s %s"
+            scope
+            (plist-get grant :access)
+            (if (stringp path)
+                (abbreviate-file-name path)
+              (format "%S" path)))))
+
+(defun mevedel-menu--permission-candidates ()
+  "Return remembered permission authority in the current cockpit."
+  (require 'mevedel-permissions)
+  (let* ((context (mevedel-menu--context))
+         (session (mevedel-cockpit-context-session context))
+         (workspace (mevedel-cockpit-context-workspace context))
+         (persistent
+          (and workspace
+               (mevedel-permission-persistent-authority workspace)))
+         candidates)
+    (dolist (rule (mevedel-session-permission-rules session))
+      (push
+       (cons (mevedel-menu--permission-rule-label "Session" rule)
+             (list :scope 'session :kind 'rule :value rule))
+       candidates))
+    (dolist (grant (mevedel-session-resource-grants session))
+      (push
+       (cons (mevedel-menu--permission-resource-label "Session" grant)
+             (list :scope 'session :kind 'resource :value grant))
+       candidates))
+    (dolist (rule (plist-get persistent :rules))
+      (push
+       (cons (mevedel-menu--permission-rule-label "Workspace" rule)
+             (list :scope 'workspace :kind 'rule :value rule))
+       candidates))
+    (dolist (grant (plist-get persistent :resource-grants))
+      (push
+       (cons (mevedel-menu--permission-resource-label "Workspace" grant)
+             (list :scope 'workspace :kind 'resource :value grant))
+       candidates))
+    (nreverse candidates)))
+
+(defun mevedel-menu--permissions-description ()
+  "Return remembered authority for the permissions cockpit."
+  (let ((labels (mapcar #'car (mevedel-menu--permission-candidates))))
+    (if labels
+        (string-join (cons "Remembered authority:" labels) "\n")
+      "No remembered permission authority.")))
+
+(defun mevedel-menu--permissions-revoke ()
+  "Select and revoke one remembered permission authority."
+  (interactive)
+  (let ((candidates (mevedel-menu--permission-candidates)))
+    (unless candidates
+      (user-error "No remembered permission authority"))
+    (let* ((label (completing-read "Revoke authority: "
+                                   candidates nil t))
+           (target (cdr (assoc label candidates)))
+           (context (mevedel-menu--context))
+           (session (mevedel-cockpit-context-session context))
+           (workspace (mevedel-cockpit-context-workspace context))
+           (value (plist-get target :value)))
+      (pcase (cons (plist-get target :scope)
+                   (plist-get target :kind))
+        (`(session . rule)
+         (mevedel-permission-remove-session-rule session value))
+        (`(session . resource)
+         (mevedel-permission-remove-session-resource-grant
+          session (plist-get value :path) (plist-get value :access)))
+        (`(workspace . rule)
+         (mevedel-permission-remove-persistent-rule workspace value))
+        (`(workspace . resource)
+         (mevedel-permission-remove-persistent-resource-grant
+          workspace (plist-get value :path) (plist-get value :access))))
+      (message "mevedel: revoked %s" label))))
+
+
+;;
 ;;; Mode surface
 
 (defun mevedel-menu--set-mode (mode)
@@ -625,6 +732,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
        (transient-setup 'mevedel-menu--top))
       ('mode
        (transient-setup 'mevedel-menu--mode))
+      ('permissions
+       (transient-setup 'mevedel-menu--permissions))
       ('model
        (mevedel-menu--open-model))
       ('goal
@@ -730,6 +839,11 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   "Open the mode cockpit surface."
   (interactive)
   (mevedel-menu-open 'mode))
+
+(defun mevedel-menu--open-permissions ()
+  "Open the permissions cockpit surface."
+  (interactive)
+  (mevedel-menu-open 'permissions))
 
 (defun mevedel-menu--open-model ()
   "Open the model cockpit surface."
@@ -950,6 +1064,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     :pad-keys t
     ("m" mevedel-menu--open-mode
      :description mevedel-menu--mode-description)
+    ("u" "Permissions" mevedel-menu--open-permissions)
     ("M" mevedel-menu--open-model
      :description mevedel-menu--model-description)
     ("P" mevedel-menu--open-preset
@@ -1003,6 +1118,20 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive)
   (mevedel-menu--context)
   (transient-setup 'mevedel-menu--mode))
+
+(transient-define-prefix mevedel-menu--permissions ()
+  "Remembered permission authority cockpit surface."
+  [:description mevedel-menu--permissions-description
+   ["Authority"
+    :pad-keys t
+    ("r" "Revoke" mevedel-menu--permissions-revoke
+     :transient t)]
+   ["Navigation"
+    :pad-keys t
+    ("b" "Back" mevedel-menu)]]
+  (interactive)
+  (mevedel-menu--context)
+  (transient-setup 'mevedel-menu--permissions))
 
 (transient-define-prefix mevedel-menu--model-selection ()
   "Shared caller-owned model-selection surface."

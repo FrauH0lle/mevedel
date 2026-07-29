@@ -956,6 +956,18 @@
     (should (equal (list first second)
                    (mevedel-session-resource-grants other)))))
 
+(mevedel-deftest mevedel-permission-add-session-resource-grant ()
+  ,test
+  (test)
+  :doc "write authority promotes an exact read grant"
+  (let* ((path (expand-file-name "outside" temporary-file-directory))
+         (session (mevedel-session--create :name "test")))
+    (mevedel-permission-add-session-resource-grant session path 'read)
+    (mevedel-permission-add-session-resource-grant session path 'write)
+    (should
+     (equal `((:path ,path :access write))
+            (mevedel-session-resource-grants session)))))
+
 (mevedel-deftest mevedel-permission-remove-persistent-resource-grant ()
   ,test
   (test)
@@ -1022,6 +1034,26 @@
                           ws))))
       (delete-directory tmp-dir t))))
 
+(mevedel-deftest mevedel-permission--save-persistent-resource-grant ()
+  ,test
+  (test)
+  :doc "write authority promotes a persisted exact read grant"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (path (file-name-concat tmp-dir "outside.el"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil)))
+    (unwind-protect
+        (progn
+          (mevedel-permission--save-persistent-resource-grant
+           ws path 'read)
+          (mevedel-permission--save-persistent-resource-grant
+           ws path 'write)
+          (should
+           (equal `((:path ,path :access write))
+                  (mevedel-permission--load-persistent-resource-grants ws))))
+      (delete-directory tmp-dir t))))
+
 
 ;;
 ;;; Prompt result dispatch
@@ -1054,6 +1086,19 @@
       '(("Bash" :pattern "emacs --batch *"
                 :sandbox-permissions require-escalated
                 :action allow))
+      (mevedel-session-permission-rules session))))
+  :doc "allow-session stores network authority independently"
+  (let ((session (mevedel-session--create :name "test")))
+    (mevedel-permission--apply-prompt-result
+     'allow-session "Bash" session nil nil
+     :spec-key :pattern :spec-value "npx test")
+    (mevedel-permission--apply-prompt-result
+     'allow-session "Bash" session nil nil
+     :spec-key :pattern :spec-value "npx test" :network t)
+    (should
+     (equal
+      '(("Bash" :pattern "npx test" :action allow)
+        ("Bash" :pattern "npx test" :network t :action allow))
       (mevedel-session-permission-rules session))))
   :doc "allow-session stores exact resource authority separately from rules"
   (let* ((session (mevedel-session--create :name "test"))
