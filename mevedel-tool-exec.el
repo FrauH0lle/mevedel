@@ -78,13 +78,13 @@
                   (workload &optional explicit-selector explicit-effort))
 
 ;; `mevedel-permission-prompt'
-(declare-function mevedel-permission--prompt-async-eval
-                  "mevedel-permission-prompt"
-                  (content cont &optional count entry))
 (declare-function mevedel-permission--format-authority-capabilities
                   "mevedel-permission-prompt" (entry))
 (declare-function mevedel-permission--format-remember-authority
                   "mevedel-permission-prompt" (entry))
+(declare-function mevedel-permission--prompt-async-eval
+                  "mevedel-permission-prompt"
+                  (content cont &optional count entry))
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission--enqueue "mevedel-permission-queue"
@@ -104,8 +104,6 @@
                   "mevedel-permissions"
                   (invocation-rules request-rules
                                     session-rules persistent-rules))
-(declare-function mevedel-permission--execution-level-buckets
-                  "mevedel-permissions" (buckets level))
 (declare-function mevedel-permission--execution-level-decision
                   "mevedel-permissions"
                   (buckets tool-name level pattern))
@@ -117,16 +115,18 @@
                   (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission--load-persistent-rules "mevedel-permissions"
                   (workspace))
+(declare-function mevedel-permission--network-rule-decision
+                  "mevedel-permissions" (buckets tool-name pattern))
 (declare-function mevedel-permission--normalize-outcome
                   "mevedel-permissions" (outcome))
 (declare-function mevedel-permission--path-in-allowed-roots-p
                   "mevedel-permissions" (path roots))
 (declare-function mevedel-permission--path-protected-p
                   "mevedel-permissions" (path))
+(declare-function mevedel-permission--qualified-buckets
+                  "mevedel-permissions" (buckets qualifier value))
 (declare-function mevedel-permission--resource-granted-p
                   "mevedel-permissions" (path access grants))
-(declare-function mevedel-permission--network-rule-decision
-                  "mevedel-permissions" (buckets tool-name pattern))
 (declare-function mevedel-permission--rules-action "mevedel-permissions"
                   (rules tool-name &rest keys))
 (declare-function mevedel-permission-protected-path-policy
@@ -712,7 +712,8 @@ BUCKETS supplies ordinary and execution-level rules for LEVEL."
            tool-name detail buckets)
           (and (equal tool-name "Bash")
                (mevedel-tool-exec--bash-explicit-deny-p
-                (mevedel-permission--execution-level-buckets buckets level)
+                (mevedel-permission--qualified-buckets
+                 buckets :sandbox-permissions level)
                 detail)))
       'deny
     (mevedel-permission--execution-level-decision
@@ -721,10 +722,11 @@ BUCKETS supplies ordinary and execution-level rules for LEVEL."
 (defun mevedel-tool-exec--full-escalation-reusable-rule-p
     (tool-name detail)
   "Return non-nil when a prompt may offer reusable authority for DETAIL."
-  (and (equal tool-name "Bash")
-       (not (memq (plist-get (mevedel-tool-exec--analyze-bash detail) :class)
-                  '(dangerous complex)))
-       (not (string-match-p "\\(?:\\*\\|\\?\\|\\[\\)" detail))))
+  (and (stringp detail)
+       (not (string-empty-p (string-trim detail)))
+       (if (equal tool-name "Bash")
+           (mevedel-tool-exec--bash-reusable-operation-p detail)
+         (equal tool-name "Eval"))))
 
 (defun mevedel-tool-exec--full-escalation-denial
     (metadata-p &optional feedback)
@@ -1564,8 +1566,8 @@ suspicious Bash."
           (if sandbox-permissions
               (append
                buckets
-               (mevedel-permission--execution-level-buckets
-                buckets sandbox-permissions))
+               (mevedel-permission--qualified-buckets
+                buckets :sandbox-permissions sandbox-permissions))
             buckets))
          (matching-allow-patterns
           (mevedel-tool-exec--dedupe-strings

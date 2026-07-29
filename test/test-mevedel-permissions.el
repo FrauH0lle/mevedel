@@ -1827,6 +1827,31 @@ must restore the prior value to avoid cross-test pollution."
          (mevedel-permission--execution-level-decision
           buckets "Bash" 'require-escalated "pwd")))))
 
+(mevedel-deftest mevedel-permission--qualified-buckets ()
+  ,test
+  (test)
+  :doc "retains direct qualified authority and delegated qualified denies"
+  (should
+   (equal
+    '((:invocation
+       ("Bash" :pattern "rm *" :action deny))
+      (:request)
+      (:session
+       ("Bash" :pattern "pwd" :action allow)))
+    (mevedel-permission--qualified-buckets
+     '((:invocation
+        ("Bash" :pattern "pwd"
+                :sandbox-permissions require-escalated :action allow)
+        ("Bash" :pattern "rm *"
+                :sandbox-permissions require-escalated :action deny))
+       (:request
+        ("Bash" :pattern "pwd"
+                :sandbox-permissions use-default :action deny))
+       (:session
+        ("Bash" :pattern "pwd"
+                :sandbox-permissions require-escalated :action allow)))
+     :sandbox-permissions 'require-escalated))))
+
 (mevedel-deftest mevedel-check-permission/bucket-precedence ()
   ,test
   (test)

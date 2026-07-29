@@ -799,23 +799,26 @@ PATH, PATTERN, DOMAIN, and NAME are the specifier values."
     (mevedel-permission--first-non-nil-action
      buckets tool-name path pattern domain name)))
 
-(defun mevedel-permission--execution-level-rules (rules level)
-  "Return RULES qualified for execution LEVEL without the qualifier field."
-  (cl-loop
-   for rule in rules
-   when (eq (plist-get (cdr rule) :sandbox-permissions) level)
-   collect
-   (cons (car rule)
-         (cl-loop for (key value) on (cdr rule) by #'cddr
-                  unless (eq key :sandbox-permissions)
-                  append (list key value)))))
-
-(defun mevedel-permission--execution-level-buckets (buckets level)
-  "Return BUCKETS containing only rules qualified for execution LEVEL."
+(defun mevedel-permission--qualified-buckets (buckets qualifier value)
+  "Return direct authority in BUCKETS qualified by QUALIFIER and VALUE.
+Delegated buckets retain qualified denies but cannot grant qualified
+authority.  QUALIFIER is removed from the returned rules."
   (mapcar
    (lambda (entry)
-     (cons (car entry)
-           (mevedel-permission--execution-level-rules (cdr entry) level)))
+     (let ((bucket (car entry)))
+       (cons
+        bucket
+        (cl-loop
+         for rule in (cdr entry)
+         when (and (eq (plist-get (cdr rule) qualifier) value)
+                   (or (memq bucket '(:session :persistent :defcustom))
+                       (eq 'deny (plist-get (cdr rule) :action))))
+         collect
+         (cons
+          (car rule)
+          (cl-loop for (key item) on (cdr rule) by #'cddr
+                   unless (eq key qualifier)
+                   append (list key item)))))))
    buckets))
 
 (defun mevedel-permission--execution-level-decision
@@ -823,53 +826,17 @@ PATH, PATTERN, DOMAIN, and NAME are the specifier values."
   "Resolve direct user authority for TOOL-NAME, LEVEL, and PATTERN.
 Qualified denies in any bucket remain final.  Only session, persistent, and
 defcustom buckets may otherwise authorize or explicitly ask for LEVEL."
-  (let ((qualified
-         (mevedel-permission--execution-level-buckets buckets level)))
-    (if (cl-some
-         (lambda (entry)
-           (eq 'deny
-               (mevedel-permission--rules-action
-                (cdr entry) tool-name :pattern pattern)))
-         qualified)
-        'deny
-      (cl-loop for (bucket . rules) in qualified
-               when (memq bucket '(:session :persistent :defcustom))
-               do (when-let* ((action
-                               (mevedel-permission--rules-action
-                                rules tool-name :pattern pattern)))
-                    (cl-return action))))))
+  (mevedel-permission--bucket-decision
+   (mevedel-permission--qualified-buckets
+    buckets :sandbox-permissions level)
+   tool-name nil pattern nil nil))
 
 (defun mevedel-permission--network-rule-decision
     (buckets tool-name pattern)
   "Resolve direct reusable network authority for TOOL-NAME and PATTERN."
-  (let ((qualified
-         (mapcar
-          (lambda (entry)
-            (cons
-             (car entry)
-             (cl-loop
-              for rule in (cdr entry)
-              when (eq t (plist-get (cdr rule) :network))
-              collect
-              (cons
-               (car rule)
-               (cl-loop for (key value) on (cdr rule) by #'cddr
-                        unless (eq key :network)
-                        append (list key value))))))
-          buckets)))
-    (if (cl-some
-         (lambda (entry)
-           (eq 'deny
-               (mevedel-permission--rules-action
-                (cdr entry) tool-name :pattern pattern)))
-         qualified)
-        'deny
-      (cl-loop for (bucket . rules) in qualified
-               when (memq bucket '(:session :persistent :defcustom))
-               do (when-let* ((action
-                               (mevedel-permission--rules-action
-                                rules tool-name :pattern pattern)))
-                    (cl-return action))))))
+  (mevedel-permission--bucket-decision
+   (mevedel-permission--qualified-buckets buckets :network t)
+   tool-name nil pattern nil nil))
 
 (defun mevedel-permission--normalize-outcome (outcome)
   "Return the log-safe decision symbol for permission OUTCOME."

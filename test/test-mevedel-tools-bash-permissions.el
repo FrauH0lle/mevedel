@@ -1305,9 +1305,9 @@ trust-literal execution cannot use even a matching direct escalation rule"
     (should-not enqueued)
     (should (eq 'deny (car outcome))))
   :doc "reusable escalation rules:
-prompts never propose rules for dangerous, complex, Eval, or glob-bearing input"
+prompts propose only literal stable Bash and Eval rules"
   (should (mevedel-tool-exec--full-escalation-reusable-rule-p "Bash" "pwd"))
-  (should-not
+  (should
    (mevedel-tool-exec--full-escalation-reusable-rule-p
     "Bash" "rm -rf /"))
   (should-not
@@ -1316,11 +1316,11 @@ prompts never propose rules for dangerous, complex, Eval, or glob-bearing input"
   (should-not
    (mevedel-tool-exec--full-escalation-reusable-rule-p
     "Bash" "printf '%s' '*.tmp'"))
-  (should-not
+  (should
    (mevedel-tool-exec--full-escalation-reusable-rule-p
     "Eval" "(+ 1 2)"))
   :doc "dangerous escalation prompt:
-full escalation offers only once approval and reusable denial"
+literal dangerous Bash offers reusable full-escalation authority"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
         entry outcome)
@@ -1334,10 +1334,10 @@ full escalation offers only once approval and reusable denial"
          :sandbox_permissions "require_escalated"
          :justification "Run without confinement?")
        (lambda (result) (setq outcome result))))
-    (should-not (plist-get entry :include-always))
+    (should (plist-get entry :include-always))
     (should (eq 'deny outcome)))
   :doc "Eval escalation prompt:
-arbitrary Eval does not offer reusable full-escalation authority"
+literal batch Eval offers reusable full-escalation authority"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
         entry outcome)
@@ -1352,7 +1352,7 @@ arbitrary Eval does not offer reusable full-escalation authority"
          :sandbox_permissions "require_escalated"
          :justification "Run batch Eval without confinement?")
        (lambda (result) (setq outcome result))))
-    (should-not (plist-get entry :include-always))
+    (should (plist-get entry :include-always))
     (should (eq 'deny outcome)))
   :doc "batch Eval direct allow:
 a broad qualified Eval rule authorizes unconfined batch execution"
@@ -1435,8 +1435,16 @@ the decision log identifies complete confinement bypass authority"
       (setq-local mevedel--agent-invocation
                   (mevedel-agent-invocation--create
                    :parent-session session))
-      (should (eq 'deny
-                  (mevedel-tools--check-bash-permission "make test")))))
+      (dolist (mode '(ask edits full-auto))
+        (let ((context
+               (list :mode mode
+                     :buckets
+                     '((:session
+                        ("Bash" :pattern "make test" :action allow))))))
+          (should
+           (eq 'deny
+               (mevedel-tools--check-bash-permission
+                "make test" :permission-context context)))))))
   :doc "argument-aware read-only policies:
 \`mevedel-tools--check-bash-permission' allows safe inspection variants"
   (let ((mevedel-permission-rules nil))

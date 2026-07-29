@@ -43,9 +43,9 @@
                   "mevedel-sandbox-grants" (permissions))
 
 ;; `mevedel-structs'
-(declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session--set-sandbox-mode
                   "mevedel-structs" (session mode))
+(declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
 
 
 ;;
