@@ -553,8 +553,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
         (let ((session
                (test-mevedel-session-persistence--make-session root)))
           (setf (mevedel-session-permission-mode session) nil)
-          (set-default-toplevel-value 'mevedel-permission-mode 'auto)
-          (should (eq 'auto
+          (set-default-toplevel-value 'mevedel-permission-mode 'edits)
+          (should (eq 'edits
                       (plist-get
                        (mevedel-session-persistence-serialize session)
                        :permission-mode))))
@@ -594,7 +594,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
      :type 'error))
   :doc "accepts only canonical persisted permission modes"
   (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
-    (dolist (mode '(ask auto full-auto))
+    (dolist (mode '(ask edits full-auto))
       (should (eq plist
                   (mevedel-session-persistence--validate-current-sidecar
                    (plist-put plist :permission-mode mode)))))
@@ -806,7 +806,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   (let* ((retry
           '(:step submit
             :selection (:location here :context summary
-                        :execution direct :mode auto)
+                        :execution direct :mode edits)
             :accepted (:path "plans/accepted.md"
                        :absolute-path "/tmp/session/plans/accepted.md"
                        :hash "abc")
@@ -7444,7 +7444,7 @@ The result is a plist whose :tempdir owns every created file."
   :doc "a modifying tool routed through the pipeline lands a backup in file-history"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
-    (setf (mevedel-session-permission-mode session) 'auto)
+    (setf (mevedel-session-permission-mode session) 'edits)
     (unwind-protect
         (let* ((data-buf (get-buffer "*test-data-buf*"))
                (tracked  (file-name-concat tempdir "tracked.el"))

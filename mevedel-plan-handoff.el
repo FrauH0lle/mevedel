@@ -133,7 +133,7 @@
    "the completion contract and use the safest effective implementation.")
   "Deterministic objective for a Goal created from an accepted Plan.")
 
-(defconst mevedel-plan-handoff-implementation-modes '(ask auto full-auto)
+(defconst mevedel-plan-handoff-implementation-modes '(ask edits full-auto)
   "Permission modes supported by accepted Plan handoffs.")
 
 

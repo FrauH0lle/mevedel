@@ -571,9 +571,9 @@
       (should (string= "ask     current prompt for edits and uncertain execution"
                        (substring-no-properties
                         (mevedel-menu--mode-ask-description))))
-      (should (string= "auto            auto-apply edit previews"
+      (should (string= "edits           auto-apply edit previews"
                        (substring-no-properties
-                        (mevedel-menu--mode-auto-description))))))
+                        (mevedel-menu--mode-edits-description))))))
 
   :doc "updates the current marker when the session mode changes"
   (mevedel-menu-test--with-buffers
@@ -663,11 +663,11 @@
   :doc "mode setter updates the paired data buffer session"
   (mevedel-menu-test--with-buffers
     (with-current-buffer view-buf
-      (mevedel-menu--set-mode 'auto))
+      (mevedel-menu--set-mode 'edits))
     (with-current-buffer data-buf
-      (should (eq 'auto
+      (should (eq 'edits
                   (mevedel-session-permission-mode mevedel--session)))
-      (should (eq 'auto mevedel-permission-mode))))
+      (should (eq 'edits mevedel-permission-mode))))
 
   :doc "an explicit permission choice exits Plan mode"
   (mevedel-menu-test--with-buffers

@@ -263,10 +263,10 @@
     (should (eq 'mevedel-view-input-prompt
                 (get-text-property 0 'font-lock-face prompt))))
 
-  :doc "auto mode renders its canonical name"
-  (let ((prompt (mevedel-view--input-prompt-string 'auto)))
-    (should (string= "\n[auto] > " prompt))
-    (should (eq 'mevedel-view-permission-mode-auto
+  :doc "edits mode renders its canonical name"
+  (let ((prompt (mevedel-view--input-prompt-string 'edits)))
+    (should (string= "\n[edits] > " prompt))
+    (should (eq 'mevedel-view-permission-mode-edits
                 (get-text-property 2 'font-lock-face prompt))))
 
   :doc "full-auto mode renders its canonical name"
@@ -286,28 +286,28 @@
   ,test
   (test)
 
-  :doc "ask mode moves to auto"
-  (should (eq 'auto
+  :doc "ask mode moves to edits"
+  (should (eq 'edits
               (mevedel-view--next-permission-mode 'ask)))
 
-  :doc "auto mode moves to full-auto"
+  :doc "edits mode moves to full-auto"
   (should (eq 'full-auto
-              (mevedel-view--next-permission-mode 'auto)))
+              (mevedel-view--next-permission-mode 'edits)))
 
   :doc "full-auto mode wraps to ask"
   (should (eq 'ask
               (mevedel-view--next-permission-mode 'full-auto)))
 
-  :doc "unknown workflow states start at auto"
-  (should (eq 'auto
+  :doc "unknown workflow states start at edits"
+  (should (eq 'edits
               (mevedel-view--next-permission-mode 'plan)))
 
-  :doc "nil mode starts at auto"
-  (should (eq 'auto
+  :doc "nil mode starts at edits"
+  (should (eq 'edits
               (mevedel-view--next-permission-mode nil)))
 
-  :doc "unknown mode starts at auto"
-  (should (eq 'auto
+  :doc "unknown mode starts at edits"
+  (should (eq 'edits
               (mevedel-view--next-permission-mode 'bogus))))
 
 (mevedel-deftest mevedel-view--plan-mode-p
@@ -341,17 +341,17 @@
               (setq-local mevedel-permission-mode 'ask)
               (goto-char (mevedel-view--input-start))
               (insert "> first\nsecond")
-              (should (eq 'auto
+              (should (eq 'edits
                           (mevedel-view-cycle-permission-mode)))
-              (should (eq 'auto
+              (should (eq 'edits
                           (mevedel-session-permission-mode session)))
-              (should (eq 'auto
+              (should (eq 'edits
                           (buffer-local-value
                            'mevedel-permission-mode data-buf)))
-              (should (eq 'auto mevedel-permission-mode))
+              (should (eq 'edits mevedel-permission-mode))
               (should (eq saved
                           (default-toplevel-value 'mevedel-permission-mode)))
-              (should (string= "\n[auto] > "
+              (should (string= "\n[edits] > "
                                (buffer-substring-no-properties
                                 mevedel-view--input-marker
                                 (mevedel-view--input-start))))
@@ -4257,7 +4257,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                        :type 'test :id "plan-follow-up" :root "/tmp"
                        :name "plan-follow-up"))
            (selection '(:location here :context current
-                        :execution direct :mode auto))
+                        :execution direct :mode edits))
            (session
             (mevedel-session--create
              :name "main" :workspace workspace :plan-mode t

@@ -2172,8 +2172,8 @@
                  "Edit" nil "ok" data)))
     (should (eq t (plist-get plist :initially-collapsed-p))))
 
-  :doc "auto: summary starts collapsed"
-  (let* ((mevedel-permission-mode 'auto)
+  :doc "edits: summary starts collapsed"
+  (let* ((mevedel-permission-mode 'edits)
          (data '(:kind diff :patch "@@ @@\n+a\n"
                  :path "/tmp/x" :rel-path "x"))
          (plist (mevedel-tool-fs--render-diff-summary

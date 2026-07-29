@@ -265,7 +265,7 @@ the current contents of PATH; callers do not pre-compute it.  This is
 the single public entry point for tool handlers that need user
 confirmation of a file change.
 
-Behavior depends on the effective permission mode: under `auto'
+Behavior depends on the effective permission mode: under `edits'
 or `full-auto' the change is applied immediately without an interactive
 overlay (see `mevedel-preview-mode--auto-apply').  Otherwise an inline
 preview is shown and `mevedel-preview-mode' is activated in the current
@@ -279,7 +279,7 @@ chat buffer."
   (unless (buffer-local-value 'mevedel--workspace (current-buffer))
     (error "`mevedel-preview-mode-add-preview' must be called from chat buffer context"))
   (pcase (mevedel-preview-mode--effective-mode)
-    ((or 'auto 'full-auto)
+    ((or 'edits 'full-auto)
      (mevedel-preview-mode--auto-apply
       temp-file path callback apply-fn tool-name))
     (_
@@ -556,7 +556,7 @@ Returns the created overlay."
     "C-g"      #'mevedel-preview-mode-reject
     "e"        #'mevedel-preview-mode-edit
     "f"        #'mevedel-preview-mode-feedback
-    "S"        #'mevedel-preview-mode-approve-and-trust))
+    "S"        #'mevedel-preview-mode-approve-and-enable-edits))
 
 (defun mevedel-preview-mode--help-echo ()
   "Return the help echo string shared by preview overlays."
@@ -769,8 +769,8 @@ invoke `mevedel-abort'."
   (when-let* ((ov (mevedel-preview-mode--overlay-at-point)))
     (mevedel-preview-mode--approve-overlay ov)))
 
-(defun mevedel-preview-mode-approve-and-trust ()
-  "Approve every pending preview in this buffer and flip mode to `auto'.
+(defun mevedel-preview-mode-approve-and-enable-edits ()
+  "Approve every pending preview in this buffer and switch to `edits'.
 Drains the pending list by running `--approve-overlay' on each overlay
 \(which applies its change, fires its callback, and cleans up), then sets
 the buffer-local `mevedel-permission-mode' on the associated data buffer
@@ -791,9 +791,9 @@ prompt -- the intent is scoped to edits, not blanket trust."
         (if mevedel--session
             (progn
               (require 'mevedel-permissions)
-              (mevedel-permission-mode-transition 'auto))
-          (setq-local mevedel-permission-mode 'auto))))
-    (message "auto on. Applied %d pending edit%s. Shell commands still prompt."
+              (mevedel-permission-mode-transition 'edits))
+          (setq-local mevedel-permission-mode 'edits))))
+    (message "edits on. Applied %d pending edit%s. Shell commands still prompt."
              count (if (= count 1) "" "s"))))
 
 (defun mevedel-preview-mode-reject ()

@@ -1440,8 +1440,8 @@
 		   (funcall (plist-get entry :callback) 'allow-once)
 		   (should next-called)
 		   (should-not fail-reason))
-		 :doc "guardian failure preserves interactive Bash prompts in ask and auto"
-		 (dolist (mode '(ask auto))
+		 :doc "guardian failure preserves interactive Bash prompts in ask and edits"
+		 (dolist (mode '(ask edits))
 		   (let* ((session (mevedel-session--create
 				    :name "guardian" :permission-mode mode))
 			  (tool (mevedel-tool-ensure "Bash"))
@@ -1476,7 +1476,7 @@
 		     (funcall (plist-get entry :callback) 'allow-once)
 		     (should next-called)))
 		 :doc "model guardian errors preserve prompts and full-auto execution"
-		 (dolist (mode '(ask auto full-auto))
+		 (dolist (mode '(ask edits full-auto))
 		   (let* ((session (mevedel-session--create
 				    :name "guardian" :permission-mode mode))
 			  (tool (mevedel-tool-ensure "Bash"))
@@ -1688,7 +1688,7 @@
 			     :name "root" :file-cache nil))
 			(session (mevedel-session--create
 				  :name "test" :workspace ws
-				  :permission-mode 'auto))
+				  :permission-mode 'edits))
 			(tool (mevedel-tool--create
 			       :name "Write"
 			       :groups '(edit)
@@ -1741,7 +1741,7 @@
 			 (should-not called)
 			 (should enqueued))
 		     (delete-directory root t)))
-		 :doc "auto advances native edit tools inside allowed roots"
+		 :doc "edits advances native edit tools inside allowed roots"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-pipeline-auto-edit-" t)))
 			(ws (mevedel-workspace--create
@@ -1749,7 +1749,7 @@
 			     :name "auto-edit" :file-cache nil))
 			(session (mevedel-session--create
 				  :name "test" :workspace ws
-				  :permission-mode 'auto))
+				  :permission-mode 'edits))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil))
 		   (unwind-protect
@@ -1775,10 +1775,10 @@
 			     (should called)
 			     (should-not enqueued))))
 		     (delete-directory root t)))
-		 :doc "auto keeps Bash and Eval behind their permission checks"
+		 :doc "edits keeps Bash and Eval behind their permission checks"
 		 (dolist (name '("Bash" "Eval"))
 		   (let* ((session (mevedel-session--create
-				    :name "test" :permission-mode 'auto))
+				    :name "test" :permission-mode 'edits))
 			  (tool (mevedel-tool--create
 				 :name name :groups '(eval)))
 			  (ctx (list :tool tool :args nil :session session))

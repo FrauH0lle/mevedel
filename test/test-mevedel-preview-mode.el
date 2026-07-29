@@ -680,9 +680,9 @@ cleanup."
   :doc "session slot wins over buffer-local variable"
   (with-temp-buffer
     (setq-local mevedel--session
-                (mevedel-session--create :permission-mode 'auto))
+                (mevedel-session--create :permission-mode 'edits))
     (setq-local mevedel-permission-mode 'ask)
-    (should (eq 'auto (mevedel-preview-mode--effective-mode))))
+    (should (eq 'edits (mevedel-preview-mode--effective-mode))))
   :doc "buffer-local variable used when session has no mode"
   (with-temp-buffer
     (setq-local mevedel--session nil)
@@ -852,9 +852,9 @@ cleanup."
 
 
 ;;
-;;; Approve-and-trust (S key)
+;;; Approve-and-enable-edits (S key)
 
-(mevedel-deftest mevedel-preview-mode-approve-and-trust ()
+(mevedel-deftest mevedel-preview-mode-approve-and-enable-edits ()
   ,test
   (test)
   :doc "approves every pending overlay and flips the session mode"
@@ -885,13 +885,13 @@ cleanup."
               (setq-local mevedel-permission-mode 'ask))
             (mevedel-preview-mode--register a)
             (mevedel-preview-mode--register b)
-            (mevedel-preview-mode-approve-and-trust))
+            (mevedel-preview-mode-approve-and-enable-edits))
           (should (= 2 (length results)))
-          (should (eq 'auto
+          (should (eq 'edits
                       (mevedel-session-permission-mode session)))
-          (should (eq 'auto
+          (should (eq 'edits
                       (buffer-local-value 'mevedel-permission-mode chat)))
-          (should (eq 'auto
+          (should (eq 'edits
                       (buffer-local-value 'mevedel-permission-mode view)))
           (should-not (buffer-local-value 'mevedel-preview-mode--pending chat)))
       (when (buffer-live-p chat) (kill-buffer chat))
@@ -902,7 +902,7 @@ cleanup."
     (setq-local mevedel--session
                 (mevedel-session--create :permission-mode 'ask))
     (setq-local mevedel-permission-mode 'ask)
-    (mevedel-preview-mode-approve-and-trust)
+    (mevedel-preview-mode-approve-and-enable-edits)
     ;; Mode stays unchanged because data-buffer is not derivable.
     (should (eq 'ask
                 (mevedel-session-permission-mode mevedel--session)))

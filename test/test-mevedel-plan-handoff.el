@@ -285,7 +285,7 @@
          (target-buffer (generate-new-buffer " *mevedel-plan-worktree-target*"))
          (record
           '(:selection (:location worktree :context summary
-                        :execution direct :mode auto :branch "plan/test")))
+                        :execution direct :mode edits :branch "plan/test")))
          clean)
     (unwind-protect
         (progn
@@ -515,7 +515,7 @@
   (test)
   (dolist (selection
            '((:location here :context current :execution direct :mode ask)
-             (:location here :context fresh :execution direct :mode auto)
+             (:location here :context fresh :execution direct :mode edits)
              (:location worktree :context summary :execution direct
                         :mode full-auto
                         :skills ((:name "alpha"
@@ -561,7 +561,7 @@
          (data-buffer (generate-new-buffer " *plan-submit-data*"))
          (view-buffer (generate-new-buffer " *plan-submit-view*"))
          (selection
-          '(:location here :context current :execution direct :mode auto
+          '(:location here :context current :execution direct :mode edits
             :model-provider "OpenAI:gpt-5" :reasoning-effort high
             :instructions "Use $alpha"))
          (record

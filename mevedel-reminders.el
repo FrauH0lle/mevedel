@@ -585,7 +585,7 @@ Falls back to the global `mevedel-permission-mode' default."
       'ask))
 
 (defvar mevedel-reminders--mode-constraint-messages
-  '((auto . "Permission mode: `auto'. File edits are auto-approved; shell commands still require confirmation. Keep changes minimal, targeted, and correct.")
+  '((edits . "Permission mode: `edits'. File edits are auto-approved; shell commands still require confirmation. Keep changes minimal, targeted, and correct.")
     (full-auto . "Permission mode: `full-auto'. Most confirmation prompts are skipped. Double-check destructive operations before calling tools; protected paths still prompt."))
   "Alist mapping permission mode symbols to reminder body strings.")
 

@@ -120,7 +120,7 @@
   (let* ((record
           '(:step prepare-context
             :selection (:location here :context fresh
-                        :execution direct :mode auto
+                        :execution direct :mode edits
                         :model-provider "Test:test-model")
             :accepted (:path "plans/accepted.md"
                        :absolute-path "/tmp/accepted.md"
@@ -227,7 +227,7 @@
          (record
           (list :step 'submit :goal-id "reserved"
                 :selection '(:location here :context current
-                              :execution goal :mode auto
+                              :execution goal :mode edits
                               :model-provider "Test:test-model")
                 :accepted
                 (list :path "plans/accepted.md"
@@ -287,7 +287,7 @@
          (record
           (list :step 'submit :goal-id "reserved"
                 :selection '(:location here :context current
-                              :execution goal :mode auto
+                              :execution goal :mode edits
                               :model-provider "Test:test-model")
                 :accepted
                 (list :path "plans/accepted.md"
@@ -343,7 +343,7 @@
          (record
           (list :step 'submit :goal-id "reserved"
                 :selection '(:location here :context current
-                              :execution goal :mode auto
+                              :execution goal :mode edits
                               :model-provider "Test:test-model")
                 :accepted
                 (list :path "plans/accepted.md"
@@ -421,7 +421,7 @@
          (accepted-path (file-name-concat save-dir "plans" "accepted.md"))
          (body "# Accepted plan\n\nImplement the endpoint.")
          (selection '(:location here :context summary
-                      :execution direct :mode auto
+                      :execution direct :mode edits
                       :model-provider "Test:test-model"))
          (record
           (list :step 'prepare-summary :selection selection
@@ -704,7 +704,7 @@
          (source-path (file-name-concat source-save "plans" "accepted.md"))
          (body "# Worktree summary plan\n\nImplement it.")
          (selection '(:location worktree :context summary
-                      :execution direct :mode auto :branch "plan/summary"
+                      :execution direct :mode edits :branch "plan/summary"
                       :model-provider "Test:test-model"))
          (record
           (list :step 'prepare-summary :selection selection

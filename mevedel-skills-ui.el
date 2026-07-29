@@ -96,6 +96,10 @@
                   "mevedel-models" (spec &optional noerror))
 
 ;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-normalize
+                  "mevedel-permissions" (mode))
+(declare-function mevedel-permission-mode-transition
+                  "mevedel-permissions" (mode))
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-plan-mode'
@@ -160,9 +164,8 @@
 
 (defconst mevedel-skills--mode-command-candidates
   '(("ask" . " prompt for edits and uncertain execution")
-    ("auto" . " auto-apply edit previews")
-    ("full-auto" . " auto-allow tools")
-    ("edit" . " alias for auto"))
+    ("edits" . " auto-apply edit previews")
+    ("full-auto" . " auto-allow tools"))
   "Completion candidates and annotations for `/mode'.")
 
 (defconst mevedel-skills--validation-target-command-candidates
@@ -209,12 +212,12 @@
     ("compact" . " [command] optional summary guidance")
     ("goal" . " [command] objective | auto OBJECTIVE | approval [POLICY] | edit | pause | resume | clear")
     ("plan" . " [command] optional prompt; enter Plan mode")
-    ("mode" . " [command] ask | auto | full-auto")
+    ("mode" . " [command] ask | edits | full-auto")
     ("skills" . " [command] list | help NAME | enable NAME | disable NAME")
     ("tools" . " [command] list")
     ("ps" . " [command] no args; list live executions")
     ("stop" . " [command] optional execution ID")
-    ("auto" . " [command] no args; toggle auto mode")
+    ("edits" . " [command] no args; toggle edits mode")
     ("clear" . " [command] no args; start a fresh segment")
     ("help" . " [command] no args; list commands and skills")
     ("init" . " [command] optional repository bootstrap focus")
@@ -283,11 +286,11 @@ current buffer belongs to a live session pair."
 (defun mevedel-cmd--mode (args)
   "Show or set `mevedel-permission-mode' for the current chat buffer.
 ARGS is the raw slash-command argument string.
-Recognized modes: ask, auto, full-auto, and the UI alias edit.
+Recognized modes: ask, edits, and full-auto.
 
 Routes through the lifecycle-aware permission transition path."
   (if (and args (not (string-blank-p args)))
-      (let ((mode (mevedel-permission-mode-parse-user-input args)))
+      (let ((mode (mevedel-permission-mode-normalize args)))
         (mevedel-permission-mode-transition mode)
         (message "Permission mode set to %s" mode))
     (mevedel-skills--open-menu-or-message
@@ -321,19 +324,19 @@ Routes through the lifecycle-aware permission transition path."
        (mevedel-goal-start args)
        'mevedel-view-sent))))
 
-(defun mevedel-cmd--auto (_args)
-  "Toggle auto permission mode for the current session."
+(defun mevedel-cmd--edits (_args)
+  "Toggle edits permission mode for the current session."
   (unless (bound-and-true-p mevedel--session)
     (user-error "No mevedel session in this buffer"))
   (let* ((current (or (mevedel-session-permission-mode mevedel--session)
                       mevedel-permission-mode
                       'ask))
-         (auto-on-p (eq current 'auto)))
+         (edits-on-p (eq current 'edits)))
     (mevedel-permission-mode-transition
-     (if auto-on-p 'ask 'auto))
-    (if auto-on-p
-        (message "mevedel: auto mode off")
-      (message "mevedel: auto mode on"))))
+     (if edits-on-p 'ask 'edits))
+    (if edits-on-p
+        (message "mevedel: edits mode off")
+      (message "mevedel: edits mode on"))))
 
 (defun mevedel-cmd--clear-trim-bare-prefix (prefix)
   "Delete PREFIX when it is the only text on the pending prompt line."
@@ -709,7 +712,7 @@ Routes through the lifecycle-aware permission transition path."
     ("tools"   . mevedel-cmd--tools)
     ("ps"      . mevedel-cmd--ps)
     ("stop"    . mevedel-cmd--stop)
-    ("auto"    . mevedel-cmd--auto)
+    ("edits"   . mevedel-cmd--edits)
     ("clear"   . mevedel-cmd--clear)
     ("help"    . mevedel-cmd--help)
     ("plugin"  . mevedel-plugins-slash-command))

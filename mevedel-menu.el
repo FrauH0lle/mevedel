@@ -463,10 +463,10 @@
   (mevedel-menu--mode-choice-description
    'ask "prompt for edits and uncertain execution"))
 
-(defun mevedel-menu--mode-auto-description ()
-  "Return the auto mode row description."
+(defun mevedel-menu--mode-edits-description ()
+  "Return the edits mode row description."
   (mevedel-menu--mode-choice-description
-   'auto "auto-apply edit previews"))
+   'edits "auto-apply edit previews"))
 
 (defun mevedel-menu--mode-full-auto-description ()
   "Return the full-auto mode row description."
@@ -855,11 +855,11 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      "/mode MODE, /model MODEL"
      "/worktree create [NAME] [--for \"purpose\"] [--clean]"
      "/goal OBJECTIVE, /goal approval [supervised|automatic]"
-     "/compact, /review, /verify, /auto, /clear, /init ..., /tokens"
+     "/compact, /review, /verify, /edits, /clear, /init ..., /tokens"
      ""
      "Modes"
      "ask       Prompt for edits and uncertain execution."
-     "auto      Auto-apply native edits; check Bash and Eval."
+     "edits     Auto-apply native edits; check Bash and Eval."
      "full-auto Skip heuristic Bash and Eval prompts."
      ""
      "View and data buffers"
@@ -991,8 +991,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     :pad-keys t
     ("k" (lambda () (interactive) (mevedel-menu--set-mode 'ask))
      :description mevedel-menu--mode-ask-description)
-    ("a" (lambda () (interactive) (mevedel-menu--set-mode 'auto))
-     :description mevedel-menu--mode-auto-description)
+    ("e" (lambda () (interactive) (mevedel-menu--set-mode 'edits))
+     :description mevedel-menu--mode-edits-description)
     ("f" (lambda () (interactive) (mevedel-menu--set-mode 'full-auto))
      :description mevedel-menu--mode-full-auto-description)
     ("p" mevedel-menu--enter-plan

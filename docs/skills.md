@@ -122,13 +122,13 @@ buffer is dirty.
 
 Local slash commands are separate from `$skill` lookup. Built-ins include
 `/tokens`, `/model`, `/compact`, `/init`, `/review`, `/verify`,
-`/worktree`, `/mode`, `/skills`, `/tools`, `/auto`, `/clear`, `/plugin`,
+`/worktree`, `/mode`, `/skills`, `/tools`, `/edits`, `/clear`, `/plugin`,
 and `/help`. `/init` sends the repository bootstrap prompt that helps create
 or improve `AGENTS.md`, `AGENTS.local.md`, `.agents` skills and memory,
-and mevedel hooks. `/auto` toggles the current session between `ask` and
-`auto`; it never grants `full-auto` execution. `/mode` accepts the canonical
-`ask`, `auto`, and `full-auto` values, plus `edit` as an interactive alias for
-`auto`. Entering and leaving `full-auto` installs the corresponding boundary
+and mevedel hooks. `/edits` toggles the current session between `ask` and
+`edits`; it never grants `full-auto` execution. `/mode` accepts only the
+canonical `ask`, `edits`, and `full-auto` values. Entering and leaving
+`full-auto` installs the corresponding boundary
 reminders.
 
 No-argument or list-style commands open the same session cockpit surfaces
@@ -237,8 +237,7 @@ root name inserts a real argument separator so display-only skill hints
 cannot make `$skill [arg]` look typed when the buffer only contains
 `$skill`.
 Commands can also expose argument candidates based on the current
-argument position; `/mode` completes `ask`, `auto`, `full-auto`, and the
-interactive alias `edit`, while
+argument position; `/mode` completes `ask`, `edits`, and `full-auto`, while
 `/model` completes model names from the current gptel backend. `/plugin`
 completes subcommands, then installed plugin names for `enable`,
 `disable`, `update`, `remove`, `uninstall`, and supported `hooks` forms;

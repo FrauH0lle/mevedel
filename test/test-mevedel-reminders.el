@@ -683,7 +683,7 @@
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-mode-constraints)))
-    (setf (mevedel-session-permission-mode session) 'auto)
+    (setf (mevedel-session-permission-mode session) 'edits)
     (should (mevedel-reminders--should-fire-p r 0 session))
     (should (string-match-p "auto"
                             (funcall (mevedel-reminder-content r) session))))
@@ -692,7 +692,7 @@
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-mode-constraints)))
-    (setf (mevedel-session-permission-mode session) 'auto)
+    (setf (mevedel-session-permission-mode session) 'edits)
     (should (string-match-p "auto"
                             (funcall (mevedel-reminder-content r) session)))
     (setf (mevedel-session-permission-mode session) 'weird-mode)

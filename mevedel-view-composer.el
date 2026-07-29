@@ -453,7 +453,7 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
   (list
    (mevedel-permission-mode-label mode)
    (pcase mode
-     ('auto 'mevedel-view-permission-mode-auto)
+     ('edits 'mevedel-view-permission-mode-edits)
      ('full-auto 'mevedel-view-permission-mode-full-auto)
      (_ 'mevedel-view-permission-mode-ask))))
 
@@ -464,7 +464,7 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
        (mevedel-session-plan-mode mevedel--session)))
 
 (defconst mevedel-view--permission-mode-cycle
-  '(ask auto full-auto)
+  '(ask edits full-auto)
   "Permission states cycled by `mevedel-view-cycle-permission-mode'.")
 
 (defun mevedel-view--next-permission-mode (&optional mode)

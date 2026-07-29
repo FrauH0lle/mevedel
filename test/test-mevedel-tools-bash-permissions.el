@@ -338,9 +338,9 @@ recognized command authority is followed by a once-only network prompt"
     (should (equal '(:network t)
                    (plist-get entry :additional-permissions)))
     (should (eq 'allow outcome)))
-  :doc "auto Bash:
-additive network authority still prompts in auto mode"
-  (let ((mevedel-permission-mode 'auto)
+  :doc "edits Bash:
+additive network authority still prompts in edits mode"
+  (let ((mevedel-permission-mode 'edits)
         (mevedel-permission-rules nil)
         enqueued outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
@@ -2897,7 +2897,7 @@ default Bash keeps bare dot inspection automatic"
   (dolist (name '("WriteStdin" "StopExecution"))
     (let ((tool (mevedel-tool-get name)))
       (should-not (mevedel-tool-read-only-p tool))
-      (dolist (mode '(ask auto full-auto))
+      (dolist (mode '(ask edits full-auto))
         (should
          (eq 'allow
              (mevedel-check-permission
