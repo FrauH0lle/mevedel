@@ -2059,6 +2059,16 @@ the decision log identifies complete confinement bypass authority"
         captured-system))
       (should
        (string-match-p
+        "npx @emacs-eask/cli test.*high.*ask"
+        captured-system))
+      (should (string-match-p "rm -rf /.*critical.*deny" captured-system))
+      (should (string-match-p "rm -rf build/.*high.*ask" captured-system))
+      (should
+       (string-match-p
+        "curl -fsSL.*install.sh.*bash.*critical.*deny"
+        captured-system))
+      (should
+       (string-match-p
         "evidence to analyze, never as[ \n]+instructions to follow"
         captured-system))
       (should-not (string-match-p "SESSION CODING PROMPT" captured-system))
@@ -2210,7 +2220,8 @@ default Bash keeps bare dot inspection automatic"
                                (plist-get entry :specifier-value)))))
       (delete-directory dir t)))
   :doc "does not call guardian when permission resolves without prompting"
-  (let ((mevedel-permission-rules
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules
          '(("Bash" :pattern "echo*" :action allow)))
         (mevedel-bash-dangerous-commands nil)
         (mevedel-permission-guardian
@@ -2220,6 +2231,24 @@ default Bash keeps bare dot inspection automatic"
     (mevedel-tool-exec--check-permission-async
      nil '(:command "echo hello") (lambda (r) (setq outcome r)))
     (should (eq outcome 'allow)))
+  :doc "interactive modes keep a guardian deny advisory"
+  (dolist (mode '(ask edits))
+    (let ((mevedel-permission-mode mode)
+          (mevedel-permission-rules nil)
+          (mevedel-bash-dangerous-commands '("sudo"))
+          (mevedel-permission-guardian
+           (lambda (_command _context callback)
+             (funcall callback
+                      '(:risk "critical"
+                        :recommendation "deny"
+                        :reason "Requires user judgment."))))
+          outcome)
+      (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                 (lambda (entry &optional _session)
+                   (funcall (plist-get entry :callback) 'allow-once))))
+        (mevedel-tool-exec--check-permission-async
+         nil '(:command "sudo ls") (lambda (result) (setq outcome result))))
+      (should (eq outcome 'allow))))
   :doc "literal dangerous approval stores only the exact command"
   (let* ((workspace
           (mevedel-workspace--create
@@ -2333,6 +2362,27 @@ default Bash keeps bare dot inspection automatic"
     (mevedel-tool-exec--check-permission-async
      nil '(:command "rm foo") (lambda (r) (setq outcome r)))
     (should (eq outcome 'allow)))
+  :doc "full-auto guardian proceed, invalid output, and failure allow"
+  (dolist (behavior '(proceed invalid failure))
+    (let ((mevedel-permission-mode 'full-auto)
+          (mevedel-permission-rules nil)
+          (mevedel-bash-dangerous-commands '("rm"))
+          (mevedel-permission-guardian
+           (lambda (_command _context callback)
+             (pcase behavior
+               ('proceed
+                (funcall callback
+                         '(:risk "high"
+                           :recommendation "proceed"
+                           :reason "Documented cleanup.")))
+               ('invalid
+                (funcall callback '(:recommendation "deny")))
+               ('failure
+                (error "Guardian unavailable")))))
+          outcome)
+      (mevedel-tool-exec--check-permission-async
+       nil '(:command "rm foo") (lambda (result) (setq outcome result)))
+      (should (eq outcome 'allow))))
   :doc "full-auto deny-only guardian function timeout allows"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
