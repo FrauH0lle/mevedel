@@ -730,7 +730,7 @@ host rejects only a fresh `/proc` mount, Mevedel retains filesystem, process,
 and network confinement while using the host `/proc` view and discloses that
 fact as `proc: host`. The confined profile exposes the host read-only, reopens
 allowed roots writable, uses the session working directory, and gives
-descendants fresh process and network namespaces. `auto` falls back to direct
+descendants fresh process and network namespaces. `best-effort` falls back to direct
 execution only when the requested process has not started and reports
 unrestricted filesystem and network access; `required` refuses instead; `off`
 runs directly with the same unrestricted disclosure. Every child result
@@ -948,7 +948,7 @@ Useful commands:
 | `mevedel-deferred-tool-ttl`                | Turns a ToolSearch-loaded deferred tool stays active after last use.     |
 | `mevedel-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
 | `mevedel-permission-mode`                  | Default permission mode (`ask` / `edits` / `full-auto`).                  |
-| `mevedel-sandbox-mode`                     | Child confinement (`auto` / `required` / `off`).                          |
+| `mevedel-sandbox-mode`                     | Child confinement (`best-effort` / `required` / `off`).                   |
 | `mevedel-protected-paths`                  | Protected path globs mapped to `read-only` or `inaccessible`.             |
 | `mevedel-bash-dangerous-commands`          | Command names classified as dangerous by Bash analysis.                  |
 | `mevedel-permission-guardian`              | Add advisory Bash risk guidance to permission prompts.                   |

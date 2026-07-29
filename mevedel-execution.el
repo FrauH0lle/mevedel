@@ -42,7 +42,7 @@
 (declare-function mevedel-sandbox-prepare
                   "mevedel-sandbox"
                   (command workdir writable-roots &optional
-                           additional-permissions sandbox-permissions))
+                           additional-permissions sandbox-permissions mode))
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
 
@@ -52,6 +52,7 @@
 (declare-function mevedel-session--set-execution-state
                   "mevedel-structs" (session state))
 (declare-function mevedel-session-execution-state "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
@@ -1584,7 +1585,8 @@ terminal settlement."
                      record
                      (mevedel-sandbox-prepare
                       command workdir writable-roots additional-permissions
-                      sandbox-permissions))
+                      sandbox-permissions
+                      (mevedel-session-sandbox-mode session)))
                   (error
                    (setf (mevedel-execution--record-error-data record) err
                          (mevedel-execution--record-exit-code record) -1
@@ -1986,7 +1988,8 @@ discards the process without invoking CALLBACK."
          (preparation
           (mevedel-sandbox-prepare
            command workdir writable-roots additional-permissions
-           sandbox-permissions)))
+           sandbox-permissions
+           (and session (mevedel-session-sandbox-mode session)))))
     (cl-labels
         ((record-attempt ()
            (unless attempt-recorded-p

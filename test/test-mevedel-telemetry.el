@@ -277,7 +277,8 @@
          (session (test-mevedel-telemetry--session root)))
     (unwind-protect
         (progn
-          (setf (mevedel-session-save-path session) root)
+          (setf (mevedel-session-save-path session) root
+                (mevedel-session-sandbox-mode session) 'required)
           (cl-letf (((symbol-function 'mevedel-telemetry--git-snapshot)
                      (lambda (_) '(:git-head "repo")))
                     ((symbol-function 'mevedel-telemetry--library-snapshot)
@@ -292,6 +293,7 @@
             (should (eq 'reproduction-environment (plist-get entry :event)))
             (should (equal "gptel-agent-head"
                            (plist-get entry :gptel-agent-commit)))
+            (should (eq 'required (plist-get entry :sandbox-mode)))
             (should (equal "repo" (plist-get entry :git-head)))))
       (delete-directory root t))))
 

@@ -619,6 +619,7 @@
       (let* ((root (make-temp-file "mevedel-managed-confined-interrupt-" t))
              (session (test-mevedel-execution--session root))
              (mevedel-sandbox-mode 'required)
+             (_ (setf (mevedel-session-sandbox-mode session) 'required))
              (initial
               (test-mevedel-execution--start-managed
                session root

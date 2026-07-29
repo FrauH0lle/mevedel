@@ -9,6 +9,7 @@
 (require 'mevedel-goal)
 (require 'mevedel-agents)
 (require 'mevedel-reminders)
+(require 'mevedel-sandbox)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -362,7 +363,8 @@
     (should (null (mevedel-session-tasks session)))
     (should (null (mevedel-session-reminders session)))
     (should (null (mevedel-session-deferred-pending session)))
-    (should (null (mevedel-session-deferred-injected session))))
+    (should (null (mevedel-session-deferred-injected session)))
+    (should (eq 'best-effort (mevedel-session-sandbox-mode session))))
 
   :doc "two sessions share same workspace by reference"
   (let* ((ws (mevedel-workspace-get-or-create
@@ -370,7 +372,26 @@
          (s1 (mevedel-session-create "main" ws))
          (s2 (mevedel-session-create "refactor" ws)))
     (should (eq (mevedel-session-workspace s1)
-                (mevedel-session-workspace s2)))))
+                (mevedel-session-workspace s2))))
+
+  :doc "snapshots the global sandbox default independently per session"
+  (let ((saved-mode (default-toplevel-value 'mevedel-sandbox-mode))
+        (ws (mevedel-workspace-get-or-create
+             'project "/tmp/p1/" "/tmp/p1/" "p1")))
+    (unwind-protect
+        (progn
+          (set-default-toplevel-value 'mevedel-sandbox-mode 'required)
+          (let ((required (mevedel-session-create "required" ws)))
+            (set-default-toplevel-value 'mevedel-sandbox-mode 'best-effort)
+            (let ((best-effort (mevedel-session-create "best-effort" ws)))
+              (should (eq 'required
+                          (mevedel-session-sandbox-mode required)))
+              (should (eq 'best-effort
+                          (mevedel-session-sandbox-mode best-effort)))
+              (setf (mevedel-session-sandbox-mode required) 'off)
+              (should (eq 'best-effort
+                          (mevedel-session-sandbox-mode best-effort))))))
+      (set-default-toplevel-value 'mevedel-sandbox-mode saved-mode))))
 
 (mevedel-deftest mevedel-session--set-agent-registry ()
   ,test

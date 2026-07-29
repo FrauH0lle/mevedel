@@ -23,7 +23,6 @@
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-probe "mevedel-sandbox" ())
-(defvar mevedel-sandbox-mode)
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x))
@@ -33,6 +32,7 @@
 (declare-function mevedel-goal-turns-run "mevedel-structs" (cl-x))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x))
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x))
+(declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x))
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x))
 (declare-function mevedel-session-telemetry-pending
@@ -455,8 +455,7 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
            :gptel-commit (plist-get gptel :git-head)
            :gptel-agent-file-hash (plist-get gptel-agent :file-hash)
            :gptel-agent-commit (plist-get gptel-agent :git-head)
-           :sandbox-mode (and (boundp 'mevedel-sandbox-mode)
-                              mevedel-sandbox-mode)
+           :sandbox-mode (mevedel-session-sandbox-mode session)
            :bubblewrap-available (and sandbox
                                        (plist-get sandbox :available))
            git)))

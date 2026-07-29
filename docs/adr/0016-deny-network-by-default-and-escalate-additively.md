@@ -7,8 +7,8 @@ network access is still required.  Approval grants network only for that
 invocation while retaining filesystem and process confinement; it does not
 imply full unsandboxed execution.  This avoids speculative network-intent
 classification and automatic replay while limiting exfiltration by default.
-When optional confinement is unavailable and sandbox mode `auto` falls back to
+When optional confinement is unavailable and sandbox mode `best-effort` falls back to
 direct execution, Mevedel cannot enforce this boundary and must disclose that
-network is unrestricted.  Network-only escalation asks in `ask` and `auto`
+network is unrestricted.  Network-only escalation asks in `ask` and `edits`
 unless pre-authorized, and is automatic in `full-auto`; protected-path access
 continues to require confirmation in every mode.
