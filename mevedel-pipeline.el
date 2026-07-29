@@ -130,9 +130,9 @@
 (declare-function mevedel-tool-max-result-size "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-snapshot-p "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-render-transform
                   "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-snapshot-p "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-tool-repair-diagnostics'
 (declare-function mevedel-tool-repair-audit-record

@@ -3608,6 +3608,65 @@ state of its inner sections"
       (should (eq 'mevedel (caar warnings)))
       (should (string-match-p "failed" (cadar warnings))))))
 
+(mevedel-deftest mevedel-view--tool-row-region
+  (:doc "finds the source-backed row for one tool use")
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "#+begin_tool (Custom :value \"x\")\n")
+      (let ((start (point)))
+        (insert "(:name \"Custom\" :args (:value \"x\"))\n\ninitial")
+        (put-text-property start (point) 'gptel '(tool . "call-custom")))
+      (insert "\n#+end_tool\n"))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let* ((region (mevedel-view--tool-row-region
+                      data-buf "call-custom"))
+             (source (nth 2 region)))
+        (should region)
+        (should
+         (equal source
+                (with-current-buffer data-buf
+                  (mevedel-pipeline--tool-segment-bounds "call-custom"))))
+        (should
+         (equal "call-custom"
+                (get-text-property
+                 (car region) 'mevedel-view-tool-use-id)))))))
+
+(mevedel-deftest mevedel-view--refresh-tool-row
+  (:doc "replaces one row while preserving collapse and composer state")
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "#+begin_tool (Custom :value \"x\")\n")
+      (let ((start (point)))
+        (insert "(:name \"Custom\" :args (:value \"x\"))\n\ninitial")
+        (put-text-property start (point) 'gptel '(tool . "call-custom")))
+      (insert "\n#+end_tool\n"))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 4)
+      (let* ((region (mevedel-view--tool-row-region
+                      data-buf "call-custom"))
+             (collapsed
+              (get-text-property (car region) 'mevedel-view-collapsed)))
+        (with-current-buffer data-buf
+          (goto-char (point-min))
+          (search-forward "(:name")
+          (search-forward ":value \"x\"")
+          (replace-match ":value \"y\"" nil t))
+        (should (mevedel-view--refresh-tool-row data-buf "call-custom"))
+        (setq region
+              (mevedel-view--tool-row-region data-buf "call-custom"))
+        (should
+         (eq collapsed
+             (get-text-property (car region) 'mevedel-view-collapsed)))
+        (should (equal "> quoted\nsecond line"
+                       (mevedel-view--input-text)))
+        (should
+         (string-match-p
+          "Custom: y"
+          (buffer-substring-no-properties
+           (point-min) (mevedel-view--input-start))))))))
+
 (mevedel-deftest mevedel-view--segment-rendering/generic-fallback
   (:before-each (mevedel-tool-clear-registry)
    :after-each (mevedel-tool-clear-registry))

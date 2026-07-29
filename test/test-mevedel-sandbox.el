@@ -363,10 +363,12 @@
 `mevedel-sandbox--protected-restrictions' protects worktree metadata targets"
   (let* ((root (make-temp-file "mevedel-sandbox-pointer-root-" t))
          (metadata (make-temp-file "mevedel-sandbox-pointer-meta-" t))
-         (pointer (file-name-concat root ".git"))
+         (checkout (file-name-concat root "nested" "checkout"))
+         (pointer (file-name-concat checkout ".git"))
          (mevedel-protected-paths '(("**/.git/**" . read-only))))
     (unwind-protect
         (progn
+          (make-directory checkout t)
           (with-temp-file pointer
             (insert (format "gitdir: %s\n" metadata)))
           (let* ((restrictions
@@ -374,6 +376,22 @@
                  (arguments (plist-get restrictions :arguments)))
             (should (member pointer arguments))
             (should (member metadata arguments))))
+      (delete-directory root t)
+      (delete-directory metadata t)))
+  :doc "nested Git symlink:
+`mevedel-sandbox--protected-restrictions' rejects a mutable .git symlink"
+  (let* ((root (make-temp-file "mevedel-sandbox-git-link-root-" t))
+         (metadata (make-temp-file "mevedel-sandbox-git-link-meta-" t))
+         (checkout (file-name-concat root "nested" "checkout"))
+         (link (file-name-concat checkout ".git"))
+         (mevedel-protected-paths '(("**/.git/**" . read-only))))
+    (unwind-protect
+        (progn
+          (make-directory checkout t)
+          (make-symbolic-link metadata link)
+          (should-error
+           (mevedel-sandbox--protected-restrictions root (list root))
+           :type 'mevedel-sandbox-policy-error))
       (delete-directory root t)
       (delete-directory metadata t)))
   :doc "writable symlink ambiguity:
