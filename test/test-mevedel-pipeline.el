@@ -15,6 +15,7 @@
 (require 'mevedel-tools)
 (require 'mevedel-session-persistence)
 (require 'mevedel-permission-log)
+(require 'mevedel-permission-prompt)
 (require 'mevedel-permission-queue)
 ;; gptel-request needed for mevedel-define-tool tests
 (require 'gptel-request nil t)
@@ -1273,6 +1274,41 @@
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
 		   (should called))
+		 :doc "Bash and network asks render as one combined authority card"
+		 (let* ((tool (mevedel-tool-ensure "Bash"))
+			(session (mevedel-session--create
+				  :name "combined"
+				  :permission-mode 'ask))
+			(ctx
+			 (list
+			  :tool tool
+			  :args
+			  '(:command "unknown-combined-command"
+			    :sandbox_permissions "with_additional_permissions"
+			    :additional_permissions (:network t)
+			    :justification "Reach the package registry?")
+			  :session session))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			(mevedel-permission-guardian nil)
+			content)
+		   (cl-letf
+		       (((symbol-function 'mevedel-permission-queue--render-entry)
+			 #'ignore))
+		     (mevedel-pipeline--step-permission ctx #'ignore #'ignore))
+		   (should (= 1 (length
+				 (mevedel-session-permission-queue session))))
+		   (cl-letf
+		       (((symbol-function
+			  'mevedel-permission--prompt-async-with-content)
+			 (lambda (text &rest _args)
+			   (setq content
+				 (substring-no-properties text)))))
+		     (mevedel-permission-queue--render-bash
+		      (car (mevedel-session-permission-queue session))))
+		   (should (string-match-p "Authority" content))
+		   (should (string-match-p "\\[ \\] Command" content))
+		   (should (string-match-p "\\[ \\] Network" content)))
 		 :doc "fails with Permission denied when rules deny"
 		 (let* ((tool (mevedel-tool--create
 			       :name "Edit"

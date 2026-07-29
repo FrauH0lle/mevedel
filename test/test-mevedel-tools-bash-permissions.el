@@ -77,7 +77,30 @@
                  (setq seen (list entry session)))))
       (mevedel-tool-exec--request-permission
        '(:kind bash) nil 'session))
-    (should (equal '((:kind bash) session) seen))))
+    (should (equal '((:kind bash) session) seen)))
+  :doc "combines pending operation and additive authority"
+  (let ((cell (list nil))
+        queued
+        settled)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (setq queued entry))))
+      (mevedel-tool-exec--request-permission
+       (list :kind 'bash :callback
+             (lambda (outcome) (setq settled outcome)))
+       `(:sandbox-request
+         (:justification "Run the integration test?"
+          :approval-cell ,cell
+          :authority-state
+          (:requested (:network t)
+           :missing (:network t)
+           :granted nil)))))
+    (should (plist-get queued :operation-pending-p))
+    (should (equal '(:network t)
+                   (plist-get queued :missing-additional-permissions)))
+    (funcall (plist-get queued :callback) 'allow-once)
+    (should (car cell))
+    (should (eq 'allow-once settled))))
 
 
 (mevedel-deftest mevedel-tool-exec--bash-commands-summary ()
@@ -331,6 +354,114 @@ additive child permissions are available only to batch Eval"
       :justification "Fetch package metadata?")
     'eval 'live)))
 
+(mevedel-deftest mevedel-tool-exec--additional-profile ()
+  ,test
+  (test)
+  :doc "omits absent capabilities"
+  (should-not (mevedel-tool-exec--additional-profile nil nil))
+  :doc "combines network and exact filesystem capabilities"
+  (should
+   (equal
+    '(:network t
+      :file-system ((:path "/tmp/input" :access read)))
+    (mevedel-tool-exec--additional-profile
+     t '((:path "/tmp/input" :access read))))))
+
+(mevedel-deftest mevedel-tool-exec--additional-authority-state ()
+  ,test
+  (test)
+  :doc "existing read plus requested write leaves only write unresolved"
+  (let* ((read '(:path "/tmp/external" :access read))
+         (write '(:path "/tmp/external" :access write))
+         (state
+          (mevedel-tool-exec--additional-authority-state
+           "Bash"
+           `(:additional-permissions (:file-system (,write)))
+           `(:mode ask
+             :buckets ((:session))
+             :resource-grants (,read)))))
+    (should
+     (equal `(:file-system (,write)) (plist-get state :missing)))
+    (should-not (plist-get state :granted)))
+  :doc "granted resources remain context while only missing upgrades prompt"
+  (let* ((read '(:path "/tmp/input" :access read))
+         (write '(:path "/tmp/output" :access write))
+         (state
+          (mevedel-tool-exec--additional-authority-state
+           "Bash"
+           `(:additional-permissions
+             (:network t :file-system (,read ,write)))
+           `(:mode ask
+             :buckets ((:session))
+             :resource-grants (,read)))))
+    (should
+     (equal `(:network t :file-system (,write))
+            (plist-get state :missing)))
+    (should
+     (equal `(:file-system (,read))
+            (plist-get state :granted))))
+  :doc "full-auto treats an explicit network request as granted"
+  (let ((state
+         (mevedel-tool-exec--additional-authority-state
+          "Bash"
+          '(:additional-permissions (:network t))
+          '(:mode full-auto :buckets ((:session))))))
+    (should-not (plist-get state :missing))
+    (should (equal '(:network t) (plist-get state :granted))))
+  :doc "explicit resource deny settles before prompting"
+  (let* ((write '(:path "/tmp/output" :access write))
+         (state
+          (mevedel-tool-exec--additional-authority-state
+           "Bash"
+           `(:additional-permissions (:file-system (,write)))
+           '(:mode full-auto
+             :buckets
+             ((:session
+               ("Bash" :path "/tmp/output" :action deny)))))))
+    (should (eq 'sandbox-filesystem (plist-get state :deny-via)))))
+
+(mevedel-deftest mevedel-tool-exec--prepare-additional-authority-request ()
+  ,test
+  (test)
+  :doc "keeps default requests unchanged"
+  (let ((request '(:level use-default :additional-permissions nil)))
+    (should
+     (eq request
+         (mevedel-tool-exec--prepare-additional-authority-request
+          "Bash" request nil))))
+  :doc "attaches one shared approval cell to additive requests"
+  (let ((request
+         (mevedel-tool-exec--prepare-additional-authority-request
+          "Bash"
+          '(:level additive :additional-permissions (:network t))
+          '(:mode ask :buckets ((:session))))))
+    (should (equal '(:network t)
+                   (plist-get (plist-get request :authority-state)
+                              :missing)))
+    (should (equal '(nil) (plist-get request :approval-cell)))))
+
+(mevedel-deftest mevedel-tool-exec--log-additional-authority ()
+  ,test
+  (test)
+  :doc "logs each capability that the invocation receives"
+  (let (calls)
+    (cl-letf (((symbol-function
+                'mevedel-tool-exec--log-permission-decision)
+               (lambda (&rest args) (push args calls))))
+      (mevedel-tool-exec--log-additional-authority
+       "Bash"
+       '(:requested
+         (:network t
+          :file-system ((:path "/tmp/input" :access read))))
+       nil t))
+    (should (= 2 (length calls)))
+    (should (seq-some
+             (lambda (call) (memq 'sandbox-network call))
+             calls))
+    (should (seq-some
+             (lambda (call) (memq 'sandbox-filesystem call))
+             calls))))
+
 (mevedel-deftest mevedel-tool-exec--check-additional-permission-async ()
   ,test
   (test)
@@ -563,13 +694,13 @@ command denial prevents network authority even in full-auto"
     (should-not enqueued)
     (should (eq 'deny outcome)))
   :doc "ask batch Eval:
-Eval approval is followed by the additive network prompt"
+one prompt approves both Eval and additive network authority"
   (let ((mevedel-permission-mode 'ask)
         (mevedel-permission-rules nil)
-        kinds outcome)
+        entries outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
                (lambda (entry &optional _session)
-                 (push (plist-get entry :kind) kinds)
+                 (push entry entries)
                  (funcall (plist-get entry :callback) 'allow-once))))
       (mevedel-tool-exec--eval-check-permission-async
        nil
@@ -579,9 +710,14 @@ Eval approval is followed by the additive network prompt"
          :additional_permissions (:network t)
          :justification "Fetch package metadata?")
        (lambda (result) (setq outcome result))))
-    (should (equal '(sandbox eval) kinds))
+    (should (= 1 (length entries)))
+    (should (eq 'eval (plist-get (car entries) :kind)))
+    (should
+     (equal '(:network t)
+            (plist-get (car entries)
+                       :missing-additional-permissions)))
     (should (eq 'allow outcome)))
-  :doc "Bash filesystem prompts retain one scoped request owner"
+  :doc "Bash combines multiple filesystem capabilities under one owner"
   (let* ((origin "/root/worker")
          (request (mevedel-request--create :origin origin))
          (mevedel-permission-mode 'ask)
@@ -604,7 +740,7 @@ Eval approval is followed by the additive network prompt"
             (:read ["/tmp/mevedel-first" "/tmp/mevedel-second"]))
            :justification "Inspect two requested files?")
          (lambda (result) (setq outcome result)))))
-    (should (equal (list origin origin) (nreverse origins)))
+    (should (equal (list origin) (nreverse origins)))
     (should (eq 'allow outcome)))
   :doc "filesystem callback logging retains its scoped session and owner"
   (let* ((dir (file-name-as-directory
@@ -647,7 +783,7 @@ Eval approval is followed by the additive network prompt"
             (should (equal origin (plist-get entry :origin)))
             (should (eq 'sandbox-filesystem (plist-get entry :via)))))
       (delete-directory dir t)))
-  :doc "Eval and network prompts retain one scoped request owner"
+  :doc "combined Eval authority retains one scoped request owner"
   (let* ((origin "/root/worker")
          (request (mevedel-request--create :origin origin))
          (mevedel-permission-mode 'ask)
@@ -671,8 +807,7 @@ Eval approval is followed by the additive network prompt"
            :additional_permissions (:network t)
            :justification "Fetch package metadata?")
          (lambda (result) (setq outcome result)))))
-    (should (equal (list (cons 'eval origin)
-                         (cons 'sandbox origin))
+    (should (equal (list (cons 'eval origin))
                    (nreverse entries)))
     (should (eq 'allow outcome)))
   :doc "full-auto batch Eval:

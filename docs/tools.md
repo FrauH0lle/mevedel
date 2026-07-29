@@ -159,6 +159,13 @@ use the shared tier/provider parser; and effort support is delegated to the
 resolved gptel model. Invalid controls leave no retained path reservation.
 The same shared resource-grant interface authorizes native filesystem tools and
 additive Bash/batch-Eval mounts; command authorization remains independent.
+When one Bash or batch-Eval invocation is missing both operation authority and
+additive network or exact-path authority, the pipeline presents one combined
+card. Checked capabilities are already granted; unchecked capabilities are the
+complete upgrade. Approval grants that complete request to the current
+invocation, while denial rejects it without replay or reduced execution. Full
+execution escalation uses a separate card because it disables confinement
+rather than adding a named capability.
 
 All direct user interactions share the settlement and cancellation primitive in
 `mevedel-interaction-prompt.el`. Domain owners supply their own text, keymaps,

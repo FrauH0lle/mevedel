@@ -10,6 +10,7 @@
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-permission-prompt)
 (require 'mevedel-view)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
 (require 'helpers
          (file-name-concat
@@ -74,6 +75,28 @@
 
 ;;
 ;;; Rendering
+
+(mevedel-deftest mevedel-permission--format-authority-capabilities
+  ()
+  ,test
+  (test)
+  :doc "distinguishes pending, granted, and missing authority"
+  (let ((text
+         (mevedel-permission--format-authority-capabilities
+          '(:show-operation-authority t
+            :operation-pending-p t
+            :requested-additional-permissions
+            (:network t
+             :file-system
+             ((:path "/input" :access read)
+              (:path "/output" :access write)))
+            :missing-additional-permissions
+            (:network t
+             :file-system ((:path "/output" :access write)))))))
+    (should (string-match-p "\\[ \\] Command" text))
+    (should (string-match-p "\\[ \\] Network" text))
+    (should (string-match-p "\\[x\\] Read /input" text))
+    (should (string-match-p "\\[ \\] Write /output" text))))
 
 (mevedel-deftest mevedel-permission--prompt-body
   ()
@@ -157,7 +180,7 @@
       (should-not (lookup-key captured-keymap "D")))))
 
 (mevedel-deftest mevedel-permission--prompt-async-sandbox
-  (:doc "renders a once-only additive network request")
+  (:doc "renders one combined invocation authority request")
   ,test
   (test)
   (let (captured)
@@ -166,18 +189,34 @@
                (lambda (&rest args) (setq captured args))))
       (mevedel-permission--prompt-async-sandbox
        "Bash" "curl https://example.test" "Download the page?"
-       "main" #'ignore 2 '(:kind sandbox)))
+       "main" #'ignore 2
+       '(:kind sandbox
+         :show-operation-authority t
+         :operation-pending-p nil
+         :requested-additional-permissions
+         (:network t
+          :file-system
+          ((:path "/external/input" :access read)
+           (:path "/external/output" :access write)))
+         :missing-additional-permissions
+         (:file-system ((:path "/external/output" :access write)))
+         :granted-additional-permissions
+         (:network t
+          :file-system ((:path "/external/input" :access read))))))
     (let ((content (nth 0 captured)))
-      (should (string-match-p "Additional Network Permission Request"
-                              content))
+      (should (string-match-p "Invocation Authority Request" content))
       (should (string-match-p "Download the page?" content))
-      (should (string-match-p "only requested change" content))
-      (should (string-match-p "profile remains unchanged" content)))
+      (should (string-match-p "\\[x\\] Command" content))
+      (should (string-match-p "\\[x\\] Network" content))
+      (should (string-match-p
+               "\\[x\\] Read /external/input" content))
+      (should (string-match-p
+               "\\[ \\] Write /external/output" content)))
     (should-not (nth 1 captured))
     (should (= 2 (nth 3 captured)))
-    (should (equal '(:kind sandbox) (nth 4 captured)))
-    (should (eq t (nth 5 captured)))
-    (should (eq t (nth 6 captured))))
+    (should (eq 'sandbox (plist-get (nth 4 captured) :kind)))
+    (should-not (nth 5 captured))
+    (should-not (nth 6 captured)))
 
   :doc "renders exact filesystem access with rule-creating choices"
   (let (captured)
@@ -188,15 +227,17 @@
        "Bash" "cat /tmp/secret" "Read the requested file?"
        "main" #'ignore 1
        '(:kind sandbox
-         :resource-path "/tmp/secret"
-         :resource-access read
+         :show-operation-authority t
+         :operation-pending-p nil
+         :requested-additional-permissions
+         (:file-system ((:path "/tmp/secret" :access read)))
+         :missing-additional-permissions
+         (:file-system ((:path "/tmp/secret" :access read)))
          :include-always t)))
     (let ((content (nth 0 captured)))
-      (should (string-match-p "Additional Filesystem Permission Request"
-                              content))
-      (should (string-match-p "/tmp/secret" content))
-      (should (string-match-p "Access: .*read" content))
-      (should (string-match-p "Only the named resource" content)))
+      (should (string-match-p "Invocation Authority Request" content))
+      (should (string-match-p "\\[ \\] Read /tmp/secret" content))
+      (should (string-match-p "every unchecked capability" content)))
     (should (eq t (nth 1 captured)))
     (should-not (nth 5 captured))
     (should-not (nth 6 captured)))
@@ -270,7 +311,7 @@
   ()
   ,test
   (test)
-  :doc "dangerous prompts suppress session and persistent allow"
+  :doc "literal dangerous prompts offer exact reusable authority"
   (let (captured-include captured-suppress captured-content)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
                (lambda (content include-always _cont &optional _count _entry
@@ -280,13 +321,14 @@
                  (setq captured-suppress suppress-allow-session))))
       (mevedel-permission--prompt-async-bash
        "sudo pwd" 'dangerous t nil #'ignore nil
-       (list :allow-patterns '("sudo pwd"))))
-    (should-not captured-include)
-    (should captured-suppress)
-    (should (string-match-p
-             "Session/permanent allow is disabled" captured-content))
+       (list :reusable-operation-p t
+             :allow-patterns '("sudo pwd"))))
+    (should captured-include)
+    (should-not captured-suppress)
     (should-not (string-match-p
-                 "Session/always allow will add" captured-content)))
+                 "Session/permanent allow is disabled" captured-content))
+    (should (string-match-p
+             "Session/always allow will add: `sudo pwd'" captured-content)))
 
   :doc "complex prompts suppress session and persistent allow"
   (let (captured-include captured-suppress captured-content)
@@ -298,7 +340,8 @@
                  (setq captured-suppress suppress-allow-session))))
       (mevedel-permission--prompt-async-bash
        "FOO=bar make test" 'complex t nil #'ignore nil
-       (list :unparseable t :allow-patterns '("FOO=bar make test"))))
+       (list :reusable-operation-p nil
+             :unparseable t :allow-patterns '("FOO=bar make test"))))
     (should-not captured-include)
     (should captured-suppress)
     (should (string-match-p
