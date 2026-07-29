@@ -9,6 +9,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'mevedel-agents)
+(require 'mevedel-bash-analysis)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-exec)
@@ -144,6 +145,21 @@
     (should (equal '("curl get https://example.com")
                    (mevedel-tool-exec--bash-allow-patterns
                     "curl get https://example.com")))))
+
+(mevedel-deftest mevedel-tool-exec--bash-reusable-operation-p ()
+  ,test
+  (test)
+  :doc "literal dangerous commands are reusable"
+  (let ((mevedel-bash-dangerous-commands '("rm")))
+    (should
+     (mevedel-tool-exec--bash-reusable-operation-p "rm -rf /tmp/build")))
+  :doc "dynamic dangerous commands are not reusable"
+  (let ((mevedel-bash-dangerous-commands '("rm")))
+    (should-not
+     (mevedel-tool-exec--bash-reusable-operation-p "rm -rf \"$TARGET\"")))
+  :doc "glob-bearing commands are not reusable"
+  (should-not
+   (mevedel-tool-exec--bash-reusable-operation-p "printf '%s' '*.tmp'")))
 
 ;;
 ;;; Permission Checking Integration Tests
@@ -1799,6 +1815,35 @@ default Bash keeps bare dot inspection automatic"
     (mevedel-tool-exec--check-permission-async
      nil '(:command "echo hello") (lambda (r) (setq outcome r)))
     (should (eq outcome 'allow)))
+  :doc "literal dangerous approval stores only the exact command"
+  (let* ((workspace
+          (mevedel-workspace--create
+           :type 'project :id "dangerous-rule" :root temporary-file-directory
+           :name "dangerous-rule" :file-cache nil))
+         (session
+          (mevedel-session--create
+           :name "dangerous-rule" :workspace workspace
+           :permission-mode 'ask))
+         (mevedel-permission-rules nil)
+         (mevedel-permission-guardian nil)
+         entry outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (queued &optional _session)
+                 (setq entry queued)
+                 (funcall (plist-get queued :callback) 'allow-session))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       `(:command "rm -rf /tmp/mevedel-exact-target"
+         :permission-context
+         (:session ,session :workspace ,workspace
+          :mode ask :allowed-roots (,temporary-file-directory)))
+       (lambda (result) (setq outcome result))))
+    (should (plist-get entry :include-always))
+    (should (eq outcome 'allow))
+    (should
+     (equal
+      '(("Bash" :pattern "rm -rf /tmp/mevedel-exact-target" :action allow))
+      (mevedel-session-permission-rules session))))
   :doc "full-auto allows dangerous Bash without enqueueing"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
@@ -2870,7 +2915,7 @@ default Bash keeps bare dot inspection automatic"
        (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny)))
 
-  :doc "non-trusted Eval still enqueues the normal prompt"
+  :doc "direct Eval allow authorizes model-generated Eval without prompting"
   (let ((mevedel-permission-rules '(("Eval" :action allow)))
         outcome enqueued)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
@@ -2880,8 +2925,20 @@ default Bash keeps bare dot inspection automatic"
       (mevedel-tool-exec--eval-check-permission-async
        nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow))
-    (should enqueued))
+    (should-not enqueued))
 
+  :doc "explicit Eval ask prompts even in full-auto"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules '(("Eval" :action ask)))
+        outcome enqueued)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry)
+                 (setq enqueued t)
+                 (funcall (plist-get entry :callback) 'deny-once))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
+    (should (eq outcome 'deny))
+    (should enqueued))
 )
 
 
@@ -3013,7 +3070,10 @@ default Bash keeps bare dot inspection automatic"
                  (setq content body))))
       (mevedel--prompt-user-for-eval
        "(delete-other-windows)" #'ignore nil nil nil "live" nil))
-    (should (string-match-p "Mode: live (preserve_ui: false)" content)))
+    (should
+     (string-match-p
+      "Mode: live (inherently unconfined; preserve_ui: false)"
+      content)))
   :doc "renders requested batch mode"
   (let (content)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-eval)
@@ -3066,7 +3126,10 @@ default Bash keeps bare dot inspection automatic"
      (lambda (r)
        (setq result (test-bash-permissions--handler-result r)))
      (list :expression "(+ 1 2 3)"))
-    (should (string-match-p "Result:\n6" result)))
+    (should (string-match-p "Result:\n6" result))
+    (should (string-match-p
+             "Live Eval ran inside Emacs without child-process confinement"
+             result)))
   :doc "captures printed output"
   (let (result)
     (mevedel-tool-exec--eval
@@ -3168,7 +3231,8 @@ default Bash keeps bare dot inspection automatic"
       (while (null result)
         (accept-process-output nil 0.1)))
     (should (= 1 child-starts))
-    (should (string-match-p "Result:\n9" result)))
+    (should (string-match-p "Result:\n9" result))
+    (should-not (string-match-p "without child-process confinement" result)))
   :doc "live mode does not use the child-process seam"
   (let ((child-starts 0)
         result)

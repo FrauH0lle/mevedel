@@ -30,6 +30,7 @@
 (declare-function mevedel-tool-handler "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-async-p "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
@@ -69,6 +70,9 @@
 
 (defvar mevedel-pipeline--active-tool-use-id nil
   "Tool-use id dynamically visible while a handler starts its work.")
+
+(defvar mevedel-pipeline--auto-apply-edit-p nil
+  "Non-nil while direct user authority auto-applies a native edit.")
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-sandbox-summary-class
@@ -1017,6 +1021,14 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
                   (plist-put (copy-sequence decision)
                              :raw-outcome hooked-outcome)
                   'pre-tool-hook))))
+         (when (and (memq 'edit (mevedel-tool-groups tool))
+                    (eq 'allow
+                        (mevedel-permission-decision-raw-outcome
+                         logged-decision))
+                    (eq 'rule (plist-get logged-decision :via))
+                    (memq (plist-get logged-decision :bucket)
+                          '(:session :persistent :defcustom)))
+           (setq context (plist-put context :auto-apply-edit-p t)))
          (mevedel-pipeline--dispatch-permission-outcome
           hooked-outcome context next fail
           :tool-name tool-name :path path :session session
@@ -1264,6 +1276,8 @@ buffer."
           (lambda ()
             (let ((mevedel-pipeline--active-tool-use-id
                    (plist-get context :tool-use-id))
+                  (mevedel-pipeline--auto-apply-edit-p
+                   (plist-get context :auto-apply-edit-p))
                   (mevedel-execution--sandbox-summary-cell
                    (plist-get context :sandbox-summary-cell)))
               (mevedel-tool-repair-mark-executed repair-entry)

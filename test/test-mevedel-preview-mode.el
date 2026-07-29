@@ -156,7 +156,31 @@ cleanup."
                            (buffer-substring-no-properties
                             (mevedel-view--input-start) (point-max))))
           (should-not called)
-          (mevedel-preview-mode-dismiss-all))))))
+          (mevedel-preview-mode-dismiss-all)))))
+  :doc "direct operation authority auto-applies in ask mode"
+  (mevedel-preview-test--with-view-buffers
+    (let* ((target (file-name-concat root "target.txt"))
+           (temp (make-temp-file "mevedel-preview-proposed-" nil nil "new\n"))
+           (mevedel-pipeline--auto-apply-edit-p t)
+           result)
+      (with-temp-file target
+        (insert "old\n"))
+      (with-current-buffer data-buf
+        (mevedel-preview-mode-add-preview
+         :temp-file temp
+         :path target
+         :callback (lambda (value) (setq result value))
+         :tool-name "Edit"
+         :apply-fn (let ((temp temp)
+                         (target target))
+                     (lambda () (copy-file temp target t)))))
+      (should (listp result))
+      (should (equal "new\n"
+                     (with-temp-buffer
+                       (insert-file-contents target)
+                       (buffer-string))))
+      (with-current-buffer view-buf
+        (should-not mevedel-preview-mode--pending)))))
 
 (mevedel-deftest mevedel-preview-mode--view-interaction-multiple-previews ()
   ,test
