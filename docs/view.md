@@ -618,9 +618,10 @@ rows and badges, and status/handle refresh. Transcript turn rendering remains
 in `mevedel-view-render.el`.
 
 Agent activity rows are projections of canonical tool and lifecycle events:
-`Started PATH`, `Interacted with PATH`, `Interrupted PATH`, `Waiting for
-agents`, and `Finished waiting`. The view does not infer a second activity
-state from internal storage identities or runtime tables.
+`Started PATH`, `Interacted with PATH`, `Message sent to PATH`, `Interrupted
+PATH`, and `Waiting for agents`. Settled `WaitAgent` calls add no redundant
+completion row. The view does not infer a second activity state from internal
+storage identities or runtime tables.
 
 Agent handles use `TAB` to expand or collapse their details.  `RET` on the
 visible agent path, or a mouse click, opens the transcript.  Agent handles

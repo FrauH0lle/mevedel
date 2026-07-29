@@ -58,6 +58,8 @@
 (declare-function mevedel-compact "mevedel-compact" (&optional aggressive instructions))
 
 ;; `mevedel-execution'
+(declare-function mevedel-execution-stop-all-user
+                  "mevedel-execution" (session))
 (declare-function mevedel-execution-stop-user
                   "mevedel-execution" (session execution-id))
 
@@ -691,13 +693,15 @@ Routes through the lifecycle-aware permission transition path."
     (message "Usage: /ps")))
 
 (defun mevedel-cmd--stop (args)
-  "Stop the execution named by ARGS, or open the execution cockpit."
+  "Stop the execution named by ARGS, or every live execution when blank."
   (let ((execution-id (string-trim (or args ""))))
+    (unless (bound-and-true-p mevedel--session)
+      (user-error "No mevedel session in this buffer"))
+    (require 'mevedel-execution)
     (if (string-empty-p execution-id)
-        (mevedel-cmd--ps nil)
-      (unless (bound-and-true-p mevedel--session)
-        (user-error "No mevedel session in this buffer"))
-      (require 'mevedel-execution)
+        (let ((count (mevedel-execution-stop-all-user mevedel--session)))
+          (message "mevedel: %d execution%s stopping"
+                   count (if (= count 1) "" "s")))
       (mevedel-execution-stop-user mevedel--session execution-id)
       (message "mevedel: execution %s stopping" execution-id))))
 

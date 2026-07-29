@@ -21,7 +21,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-execution-test-helpers"))
 
-(mevedel-deftest mevedel-execution-start-bash ()
+(mevedel-deftest mevedel-execution-event-lifecycle ()
   ,test
   (test)
   :doc "requires a session owner before spawning managed Bash"

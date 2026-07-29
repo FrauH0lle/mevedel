@@ -179,7 +179,44 @@
         (mevedel-view--interaction-register
          '(:kind permission :id permission :origin "/root/worker"
            :body "permission"))
-        (should (= 1 (length (mevedel-agent-record-blockers record))))))))
+        (should (= 1 (length (mevedel-agent-record-blockers record)))))))
+
+  :doc "permission registration pauses active time and updates progress without changing the draft"
+  (let ((mevedel-view-spinner-animate nil))
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-session--create :name "approval-wait"))
+             (request
+              (mevedel-request--create
+               :session session
+               :started-at (time-subtract
+                            (current-time) (seconds-to-time 20))))
+             (draft "> quoted\nsecond line"))
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel--current-request request))
+        (with-current-buffer view-buf
+          (setq-local mevedel--session session)
+          (mevedel-view-test--insert-composer-draft draft 4)
+          (mevedel-view--start-spinner "Working...")
+          (mevedel-view--interaction-register
+           '(:kind permission :id permission :origin "/root"
+             :body "permission"))
+          (should (mevedel-request-approval-wait-started-at request))
+          (should (string-match-p
+                   "Waiting for approval"
+                   (buffer-substring-no-properties
+                    (overlay-start (mevedel-view-zone-region 'progress))
+                    (overlay-end (mevedel-view-zone-region 'progress)))))
+          (should (equal draft (mevedel-view--input-text)))
+          (mevedel-view--interaction-unregister 'permission)
+          (should-not (mevedel-request-approval-wait-started-at request))
+          (should (string-match-p
+                   "Working\\.\\.\\."
+                   (buffer-substring-no-properties
+                    (overlay-start (mevedel-view-zone-region 'progress))
+                    (overlay-end (mevedel-view-zone-region 'progress)))))
+          (should (equal draft (mevedel-view--input-text)))
+          (mevedel-view--stop-spinner))))))
 
 (mevedel-deftest mevedel-view--interaction-unregister ()
   ,test

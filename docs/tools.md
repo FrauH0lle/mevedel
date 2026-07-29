@@ -286,10 +286,12 @@ rendering plist's visual `:status`; without explicit status, the rendering
 plist controls only the visual marker and does not participate in dispatch.
 
 Rendering plist: `(:header STRING :body STRING :body-mode SYMBOL
-:status SYMBOL :expandable-p BOOL :initially-collapsed-p BOOL)`.
-`:status` and `:expandable-p` are optional. When `:expandable-p` is nil,
-the view inserts a compact non-toggleable event line and ignores `:body`
-and `:initially-collapsed-p`. Validated by
+:status SYMBOL :expandable-p BOOL :hidden-p BOOL
+:initially-collapsed-p BOOL)`.
+`:status`, `:expandable-p`, and `:hidden-p` are optional. When
+`:expandable-p` is nil, the view inserts a compact non-toggleable event line
+and ignores `:body` and `:initially-collapsed-p`. When `:hidden-p` is
+non-nil, the view inserts nothing. Validated by
 `mevedel-view--rendering-plist-p`.
 
 Well-formed tool segments always render through a registered renderer
@@ -360,8 +362,9 @@ Agent tool calls and direct asynchronous workflows use `:kind
 collaboration-event` render-data. A `started` event renders the retained
 transcript handle; the registry-backed aggregate status uses distinct
 `Running`, `Waiting`, and `Blocked` rows. Canonical tool and lifecycle events
-are the only sources for `Started PATH`, `Interacted with PATH`, `Interrupted
-PATH`, `Waiting for agents`, and `Finished waiting`.
+are the only sources for `Started PATH`, `Interacted with PATH`, `Message sent
+to PATH`, `Interrupted PATH`, and `Waiting for agents`. Settled `WaitAgent`
+calls add no redundant completion row.
 Render-data lookup/patching scans literal open/close delimiters rather
 than matching the whole hidden block with one regexp; live agent metadata
 and multiline payloads can be large enough to overflow Emacs regexp
@@ -515,10 +518,11 @@ path), command, PTY mode, elapsed
 time, output bytes, and sandbox state. Details include the bounded live tail
 and current spool path. The user may send a PTY line, signal Ctrl-C, stop the
 process group, or open the spool. `/stop EXECUTION_ID` stops directly; bare
-`/stop` opens the same cockpit. These user controls do not widen model tool
-authority: `WriteStdin`, `ListExecutions`, and `StopExecution` remain scoped to
-the calling owner and yielded handles. Progress and completion refresh the
-table in place, and terminal rows disappear instead of becoming tombstones.
+`/stop` stops every live execution in the session. These user controls do not
+widen model tool authority: `WriteStdin`, `ListExecutions`, and
+`StopExecution` remain scoped to the calling owner and yielded handles.
+Progress and completion refresh the table in place, and terminal rows
+disappear instead of becoming tombstones.
 
 Terminal facts preserve the raw exit code and derive a separate `outcome`.
 Zero is `success`. Exit one is `no-match` for one proven simple `grep` or `rg`

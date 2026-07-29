@@ -1977,24 +1977,38 @@ Return the number of live or retained records updated."
       (mevedel-execution--begin-stop record 'stopped))
     nil))
 
+(defun mevedel-execution--stop-user-record (record)
+  "Stop live RECORD with user delivery authority."
+  (mevedel-execution--flush-observer record)
+  (if (and (mevedel-execution--record-scheduler-lease record)
+           (mevedel-execution-scheduler-cancel
+            (mevedel-execution--record-scheduler-lease record)))
+      (progn
+        (setf (mevedel-execution--record-exit-code record) -1
+              (mevedel-execution--record-stop-p record) t
+              (mevedel-execution--record-termination record) 'stopped)
+        (mevedel-execution--finish-managed record))
+    (mevedel-execution--begin-stop record 'stopped))
+  t)
+
 (defun mevedel-execution-stop-user (session execution-id)
   "Stop live EXECUTION-ID in SESSION with user delivery authority.
 
 Unlike the owner-scoped model tool, user control may target every owner and
 foreground state.  Yielded terminal output still goes to its owner mailbox."
-  (let ((record
-         (mevedel-execution--user-live-record session execution-id)))
-    (mevedel-execution--flush-observer record)
-    (if (and (mevedel-execution--record-scheduler-lease record)
-             (mevedel-execution-scheduler-cancel
-              (mevedel-execution--record-scheduler-lease record)))
-        (progn
-          (setf (mevedel-execution--record-exit-code record) -1
-                (mevedel-execution--record-stop-p record) t
-                (mevedel-execution--record-termination record) 'stopped)
-          (mevedel-execution--finish-managed record))
-      (mevedel-execution--begin-stop record 'stopped))
-    t))
+  (mevedel-execution--stop-user-record
+   (mevedel-execution--user-live-record session execution-id)))
+
+(defun mevedel-execution-stop-all-user (session)
+  "Stop every live execution in SESSION and return the number selected."
+  (let* ((state (and session (mevedel-session-execution-state session)))
+         (records
+          (cl-delete-if
+           #'mevedel-execution--record-finished-p
+           (mevedel-execution--state-record-list state))))
+    (dolist (record records)
+      (mevedel-execution--stop-user-record record))
+    (length records)))
 
 
 ;;

@@ -1305,6 +1305,30 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
         (should (string-match-p "System reminder (1 line)" text))
         (should (string-match-p "Thinking... (1 lines)" text))
         (should-not (string-match-p "<system-reminder>" text)))))
+  :doc "discloses the persisted expanded skill prompt after a full rerender"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Use $implement\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-pipeline--format-render-data-block
+      '(:kind inline-skill
+        :display-text "Use $implement"
+        :expanded-prompt
+        "Prepared implementation instructions.\n\nHook-generated context."))
+     'ignore)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "You\nUse \\$implement" text))
+        (should-not (string-match-p "Prepared implementation" text)))
+      (goto-char (point-min))
+      (search-forward "Prompt")
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Prepared implementation instructions" text))
+        (should (string-match-p "Hook-generated context" text)))))
   :doc "keeps fork reminder and elapsed footers with their assistant turns"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "First prompt.\n\n" nil)
@@ -3442,6 +3466,9 @@ state of its inner sections"
   :doc "accepts status and non-expandable marker"
   (should (mevedel-view--rendering-plist-p
            '(:header "h" :status error :expandable-p nil)))
+  :doc "accepts a hidden rendering"
+  (should (mevedel-view--rendering-plist-p
+           '(:header "h" :hidden-p t)))
   :doc "rejects missing :header"
   (should-not (mevedel-view--rendering-plist-p '(:body "b")))
   :doc "rejects non-string :header"
@@ -3456,7 +3483,10 @@ state of its inner sections"
                '(:header "h" :status "error")))
   :doc "rejects non-boolean :expandable-p"
   (should-not (mevedel-view--rendering-plist-p
-               '(:header "h" :expandable-p maybe))))
+               '(:header "h" :expandable-p maybe)))
+  :doc "rejects non-boolean :hidden-p"
+  (should-not (mevedel-view--rendering-plist-p
+               '(:header "h" :hidden-p maybe))))
 
 
 ;;
@@ -4855,13 +4885,13 @@ state of its inner sections"
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "^  ✓ finished /root/worker" text))
+        (should (string-match-p "^  ✓ Finished /root/worker" text))
         (should (string-match-p "│ result" text))
         (should (string-match-p "result" text))
         (should (string-match-p "Assistant\n" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))
       (goto-char (point-min))
-      (search-forward "  ✓ finished")
+      (search-forward "  ✓ Finished")
       (let ((header-start (match-beginning 0)))
         (should-not (get-text-property header-start 'font-lock-face))
         (should (eq (get-text-property (+ header-start 2) 'font-lock-face)
@@ -4896,7 +4926,7 @@ state of its inner sections"
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✓ finished /root/verifier" text))
+          (should (string-match-p "✓ Finished /root/verifier" text))
           (should (string-match-p "Before nested example" text))
           (should (string-match-p "After nested example" text))
           (should (string-match-p "partial result" text))
@@ -4924,11 +4954,11 @@ state of its inner sections"
                       (point-min) mevedel-view--input-marker))
                (finished-count
                 (cl-count-if (lambda (line)
-                               (string-prefix-p "  ✓ finished" line))
+                               (string-prefix-p "  ✓ Finished" line))
                              (split-string text "\n"))))
           (should (= 2 finished-count))
-          (should (string-match-p "✓ finished /root/reviewer" text))
-          (should (string-match-p "✓ finished /root/verifier" text))
+          (should (string-match-p "✓ Finished /root/reviewer" text))
+          (should (string-match-p "✓ Finished /root/verifier" text))
           (should (string-match-p "Assistant prose between mailbox cards" text))
           (should-not (string-match-p "<agent-result" text))))))
 
@@ -4943,7 +4973,7 @@ state of its inner sections"
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✓ finished /root/worker" text))
+          (should (string-match-p "✓ Finished /root/worker" text))
           (should (string-match-p "result" text))
           (should-not (string-match-p "</agent-result>" text))))))
 
@@ -4958,7 +4988,7 @@ state of its inner sections"
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p
-                 "✓ finished /root/worker\n\n    │ first"
+                 "✓ Finished /root/worker\n\n    │ first"
                  text))
         (should (string-match-p "│ first\n    │ \n    │ second" text)))))
 
@@ -4989,19 +5019,19 @@ state of its inner sections"
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✓ finished /root/worker" text))
+          (should (string-match-p "✓ Finished /root/worker" text))
           (should (string-match-p
-                   "✓ finished /root/worker \\[[0-9]+ lines collapsed\\]"
+                   "✓ Finished /root/worker \\[[0-9]+ lines collapsed\\]"
                    text))
           (should-not (string-match-p
-                       "✓ finished /root/worker\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
+                       "✓ Finished /root/worker\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
                        text))
           (goto-char (point-min))
           (search-forward "line two")
           (should (eq (get-text-property (match-beginning 0) 'invisible)
                       'mevedel-view-mailbox-collapsed)))
         (goto-char (point-min))
-        (search-forward "✓ finished /root/worker")
+        (search-forward "✓ Finished /root/worker")
         (goto-char (match-beginning 0))
         (search-forward "/root/worker")
         (goto-char (match-beginning 0))
@@ -5012,7 +5042,7 @@ state of its inner sections"
             (mevedel-view-open-agent-transcript-at-point))
           (should (equal "/root/worker" opened)))
         (goto-char (point-min))
-        (search-forward "✓ finished /root/worker")
+        (search-forward "✓ Finished /root/worker")
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (goto-char (point-min))
@@ -5022,10 +5052,10 @@ state of its inner sections"
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p
-                   "✓ finished /root/worker \\[[0-9]+ lines collapsed\\]"
+                   "✓ Finished /root/worker \\[[0-9]+ lines collapsed\\]"
                    text))
           (should-not (string-match-p
-                       "✓ finished /root/worker\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
+                       "✓ Finished /root/worker\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
                        text))))))
 
   :doc "collapsed agent-result counts non-empty payload lines"
@@ -5040,7 +5070,7 @@ state of its inner sections"
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p
-                   "✓ finished /root/worker \\[1 line collapsed\\]"
+                   "✓ Finished /root/worker \\[1 line collapsed\\]"
                    text))
           (should-not (string-match-p "2 lines collapsed" text))))))
 
@@ -5084,7 +5114,7 @@ state of its inner sections"
                 (mevedel-view--decorate-agent-result-blocks start (point)))
             (set-marker-insertion-type mevedel-view--input-marker nil)))
         (goto-char start)
-        (search-forward "✓ finished /root/explorer")
+        (search-forward "✓ Finished /root/explorer")
         (search-backward "/root/explorer")
         (should (eq (get-text-property (point) 'mevedel-view-type)
                     'mailbox-delivery))
@@ -5142,10 +5172,10 @@ state of its inner sections"
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Reviewer returned clean" text))
-          (should (string-match-p "✓ finished /root/verifier" text))
+          (should (string-match-p "✓ Finished /root/verifier" text))
           (should (string-match-p "VERDICT: FAIL" text))
           (should-not (string-match-p
-                       "You\n✓ finished /root/verifier"
+                       "You\n✓ Finished /root/verifier"
                        text))))))
 
   :doc "mailbox toggle does not expand a preceding Agent source"
@@ -5166,7 +5196,7 @@ state of its inner sections"
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (goto-char (point-min))
-        (search-forward "✓ finished /root/explorer")
+        (search-forward "✓ Finished /root/explorer")
         (goto-char (match-beginning 0))
         (should (eq (get-text-property (point) 'mevedel-view-type)
                     'mailbox-delivery))
@@ -5176,7 +5206,7 @@ state of its inner sections"
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "✉ message from /root/explorer" text))
           (should (string-match-p "Hello from your Explorer Agent :)" text))
-          (should (string-match-p "✓ finished /root/explorer" text))
+          (should (string-match-p "✓ Finished /root/explorer" text))
           (should (string-match-p "final line two" text))
           (should-not (string-match-p "Skim mevedel-queue.el (370 lines)"
                                       text)))))))

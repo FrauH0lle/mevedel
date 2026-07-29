@@ -2825,7 +2825,7 @@
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Review update" text))
-        (should (string-match-p "✓ finished /root/reviewer" text))
+        (should (string-match-p "✓ Finished /root/reviewer" text))
         (should (string-match-p "{\"findings\":\\[\\]}" text))
         (should (string-match-p "Final answer" text))
         (should-not (string-match-p "<agent-result" text)))
@@ -2839,7 +2839,7 @@
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "✓ finished /root/reviewer" text))
+        (should (string-match-p "✓ Finished /root/reviewer" text))
         (should (string-match-p "{\"findings\":\\[\\]}" text))
         (should-not (string-match-p "<agent-result" text)))))
 
@@ -3565,7 +3565,9 @@
                   :name "emacs-context-snapshot"
                   :arguments "Say hi!"
                   :display-text
-                  "$emacs-context-snapshot\nSay hi!")))
+                  "$emacs-context-snapshot\nSay hi!"
+                  :expanded-prompt
+                  "*** You are helping with this user request:\n\nSay hi!\n")))
         (put-text-property start (point) 'gptel 'ignore)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -3595,7 +3597,9 @@
        '(:kind inline-skill
                :name "green-loop"
                :arguments "current changes"
-               :display-text "$green-loop current changes")))
+               :display-text "$green-loop current changes"
+               :expanded-prompt
+               "*** # Green Loop\n\nRun the loop.\n\nARGUMENTS: current changes")))
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -3660,7 +3664,9 @@
                   :name "green-loop"
                   :arguments "commits a b"
                   :display-text
-                  "$green-loop\ncommits a b")))
+                  "$green-loop\ncommits a b"
+                  :expanded-prompt
+                  "*** Skill prompt body\n\nVisible model prompt.\n")))
         (put-text-property start (point) 'gptel 'ignore)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)

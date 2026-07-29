@@ -388,11 +388,12 @@ CALLBACK receives one of `mailbox', `steering', `user', or `timeout'.
 Return the caller path when suspended, and nil after an immediate release."
   (let ((timeout (or timeout-ms mevedel-agent-control--wait-default-ms)))
     (unless (and (integerp timeout)
-                 (<= mevedel-agent-control--wait-min-ms timeout)
+                 (< 0 timeout)
                  (<= timeout mevedel-agent-control--wait-max-ms))
       (user-error "WaitAgent timeout_ms must be an integer from %d through %d"
                   mevedel-agent-control--wait-min-ms
                   mevedel-agent-control--wait-max-ms))
+    (setq timeout (max timeout mevedel-agent-control--wait-min-ms))
     (let ((path (mevedel-agent-control-current-path session)))
       (cond
        ((mevedel-agent-control--mailbox-queue session path)
@@ -507,19 +508,13 @@ Return the resolved recipient path.  Sending never activates a turn."
                      :role (mevedel-agent-record-role record)
                      :activity
                      (symbol-name
-                      (pcase (mevedel-agent-record-activity record)
-                        ('starting 'starting)
-                        ('idle 'idle)
-                        (_ 'running))))))
+                      (mevedel-agent-record-activity record)))))
            (mevedel-session-agent-registry session)))
          (roster
           (cons (list :path "/root" :role "default"
                       :activity
                       (symbol-name
-                       (pcase (mevedel-session-agent-root-activity session)
-                         ('starting 'starting)
-                         ('idle 'idle)
-                         (_ 'running))))
+                       (mevedel-session-agent-root-activity session)))
                 records))
          (filtered
           (if path-prefix

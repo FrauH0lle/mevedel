@@ -768,12 +768,22 @@ spanning lines")))
 (mevedel-deftest mevedel-cmd--stop ()
   ,test
   (test)
-  :doc "bare /stop opens the execution cockpit"
-  (let (opened)
-    (cl-letf (((symbol-function 'mevedel-executions-list-open)
-               (lambda (&optional _context) (setq opened t))))
-      (mevedel-cmd--stop nil))
-    (should opened))
+  :doc "bare /stop stops every live session execution and reports the count"
+  (let ((session (mevedel-skills-test--make-session))
+        stopped message-text)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-execution-stop-all-user)
+                 (lambda (seen-session)
+                   (setq stopped seen-session)
+                   3))
+                ((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq message-text
+                         (apply #'format format-string args)))))
+        (mevedel-cmd--stop nil)))
+    (should (eq session stopped))
+    (should (equal "mevedel: 3 executions stopping" message-text)))
   :doc "/stop ID uses session-wide user authority"
   (let ((session (mevedel-skills-test--make-session)) stopped)
     (with-temp-buffer

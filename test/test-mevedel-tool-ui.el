@@ -943,7 +943,18 @@
           (unwind-protect
               (mevedel-view--insert-rendered-tool rendering (cons 1 1))
             (set-marker-insertion-type mevedel-view--input-marker nil)))
-        (should (string= draft (mevedel-view--input-text)))))))
+        (should (string= draft (mevedel-view--input-text))))))
+
+  :doc "labels SendMessage as an explicit delivery"
+  (should
+   (equal "Message sent to /root/spec_review"
+          (plist-get
+           (mevedel-tool-ui--render-agent-interaction
+            "SendMessage" '(:target "/root/spec_review") ""
+            '(:kind collaboration-event
+              :event interacted
+              :path "/root/spec_review"))
+           :header))))
 
 (mevedel-deftest mevedel-tool-ui--render-list-agents
   (:doc "Renders the retained-agent roster")
@@ -1085,7 +1096,7 @@
       (apply (car scheduled) (cdr scheduled))
       (should-not delivered)))
 
-  :doc "renders pending and completed wait text while preserving a leading-> draft"
+  :doc "renders pending wait text and hides the settled row without changing a leading-> draft"
   (mevedel-view-test--with-buffers
     (let* ((draft "> quoted\nsecond line")
            (rendering
@@ -1094,15 +1105,17 @@
              '(:kind collaboration-event :event finished-waiting))))
       (should (equal "Waiting for agents"
                      (mevedel-view--tool-status-string "WaitAgent" nil)))
-      (should (equal "Finished waiting" (plist-get rendering :header)))
+      (should (plist-get rendering :hidden-p))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
-          (unwind-protect
-              (mevedel-view--insert-rendered-tool rendering (cons 1 1))
-            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (let ((before (buffer-string)))
+          (let ((inhibit-read-only t))
+            (goto-char mevedel-view--input-marker)
+            (set-marker-insertion-type mevedel-view--input-marker t)
+            (unwind-protect
+                (mevedel-view--insert-rendered-tool rendering (cons 1 1))
+              (set-marker-insertion-type mevedel-view--input-marker nil)))
+          (should (equal before (buffer-string))))
         (should (string= draft (mevedel-view--input-text)))))))
 
 (provide 'test-mevedel-tool-ui)

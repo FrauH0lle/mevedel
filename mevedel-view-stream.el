@@ -49,7 +49,10 @@
                   "mevedel-transcript-audit" (text &optional type))
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-started-at "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-active-elapsed-seconds
+                  "mevedel-structs" (request &optional now))
+(declare-function mevedel-request-approval-wait-started-at
+                  "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -572,21 +575,25 @@ chunk and replay it once the request entry exists."
      (t
       (format "%dh %02dm" (/ total 3600) (% (/ total 60) 60))))))
 
-(defun mevedel-view--spinner-started-at ()
-  "Return the wall-clock start time for the current visible spinner."
-  (or (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
-                                 mevedel--data-buffer))
-                  ((buffer-live-p data-buf))
-                  (request (buffer-local-value 'mevedel--current-request
-                                               data-buf)))
-        (mevedel-request-started-at request))
-      mevedel-view--spinner-start-time))
+(defun mevedel-view--spinner-request ()
+  "Return the request that owns the current visible spinner, or nil."
+  (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                             mevedel--data-buffer))
+              ((buffer-live-p data-buf)))
+    (buffer-local-value 'mevedel--current-request data-buf)))
 
 (defun mevedel-view--spinner-elapsed-label ()
   "Return the elapsed-time label for the current spinner, or nil."
-  (when-let* ((started-at (mevedel-view--spinner-started-at)))
+  (when-let* ((seconds
+               (if-let* ((request (mevedel-view--spinner-request)))
+                   (mevedel-request-active-elapsed-seconds request)
+                 (and mevedel-view--spinner-start-time
+                      (float-time
+                       (time-subtract
+                        (current-time)
+                        mevedel-view--spinner-start-time))))))
     (mevedel-view--duration-label
-     (float-time (time-subtract (current-time) started-at)))))
+     seconds)))
 
 (defun mevedel-view--request-progress-active-p (&optional data-buf)
   "Return non-nil when the current view should show request progress.
@@ -722,7 +729,11 @@ falls back to \"Working...\"."
 
 (defun mevedel-view--spinner-display-status (status)
   "Return STATUS decorated with elapsed time and active-agent counts."
-  (let* ((base (mevedel-view--spinner-base-status status))
+  (let* ((base
+          (if-let* ((request (mevedel-view--spinner-request))
+                    ((mevedel-request-approval-wait-started-at request)))
+              "Waiting for approval"
+            (mevedel-view--spinner-base-status status)))
          (elapsed (mevedel-view--spinner-elapsed-label))
          (agents (mevedel-view--spinner-agent-count-label)))
     (string-join (delq nil (list base elapsed agents)) " · ")))

@@ -494,14 +494,15 @@ transaction fails or is cancelled, later callbacks have no effect."
                                      (= command-count 1))))))))
       (prepare-next))))
 
-(defun mevedel-skills-plan-render-data (plan)
-  "Return hidden inline-skill render data preserving PLAN's original text."
+(defun mevedel-skills-plan-render-data (plan expanded-prompt)
+  "Return hidden render data for PLAN and exact EXPANDED-PROMPT."
   (unless (fboundp 'mevedel-pipeline--format-render-data-block)
     (require 'mevedel-pipeline))
   (propertize
    (mevedel-pipeline--format-render-data-block
     (list :kind 'inline-skill
-          :display-text (mevedel-skill-invocation-plan-text plan)))
+          :display-text (mevedel-skill-invocation-plan-text plan)
+          :expanded-prompt expanded-prompt))
    'gptel 'ignore))
 
 (provide 'mevedel-skills-plan)

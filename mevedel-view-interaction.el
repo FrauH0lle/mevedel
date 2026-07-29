@@ -35,6 +35,9 @@
 		  (&optional session))
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-p "mevedel-structs" (cl-x))
+(declare-function mevedel-request-set-approval-waiting
+                  "mevedel-structs" (request waiting &optional now))
 (declare-function mevedel-session-pending-plan-approval
 		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs"
@@ -47,6 +50,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
                   "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
@@ -78,6 +82,8 @@
 (defvar mevedel-view--prompt-hook-pending)
 
 ;; `mevedel-view-stream'
+(declare-function mevedel-view--render-request-progress
+                  "mevedel-view-stream" nil)
 (declare-function mevedel-view--request-progress-region-start
 		  "mevedel-view-stream" nil)
 
@@ -219,6 +225,26 @@ silently placing controls in a data buffer."
 
 ;;
 ;;; Rendering and lifecycle
+
+(defun mevedel-view--interaction-sync-approval-wait ()
+  "Synchronize request timing with visible permission interactions."
+  (when-let* (((buffer-live-p mevedel--data-buffer))
+              (request
+               (buffer-local-value 'mevedel--current-request
+                                   mevedel--data-buffer))
+              ((mevedel-request-p request)))
+    (let ((waiting
+           (and (hash-table-p mevedel-view--interaction-descriptors)
+                (catch 'waiting
+                  (maphash
+                   (lambda (_id descriptor)
+                     (when (eq (plist-get descriptor :kind) 'permission)
+                       (throw 'waiting t)))
+                   mevedel-view--interaction-descriptors)
+                  nil))))
+      (mevedel-request-set-approval-waiting request waiting)
+      (when (fboundp 'mevedel-view--render-request-progress)
+        (mevedel-view--render-request-progress)))))
 
 (defun mevedel-view--interaction-plural (n singular plural)
   "Return N followed by SINGULAR or PLURAL."
@@ -607,6 +633,7 @@ This deletes only interaction UI overlays and never settles callbacks."
     (puthash id descriptor mevedel-view--interaction-descriptors)
     (puthash id overlay mevedel-view--interaction-overlays)
     (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
+    (mevedel-view--interaction-sync-approval-wait)
     (mevedel-view--interaction-render)
     overlay))
 
@@ -615,6 +642,7 @@ This deletes only interaction UI overlays and never settles callbacks."
   (mevedel-view--interaction-telemetry-close id)
   (when (hash-table-p mevedel-view--interaction-descriptors)
     (remhash id mevedel-view--interaction-descriptors))
+  (mevedel-view--interaction-sync-approval-wait)
   (when (hash-table-p mevedel-view--interaction-overlays)
     (when-let* ((overlay (gethash id mevedel-view--interaction-overlays)))
       (mevedel-view--interaction-delete-overlay overlay)
@@ -642,6 +670,7 @@ This deletes only interaction UI overlays and never settles callbacks."
         (remhash id mevedel-view--interaction-overlays))
       (when (hash-table-p mevedel-view--interaction-descriptors)
         (remhash id mevedel-view--interaction-descriptors))))
+  (mevedel-view--interaction-sync-approval-wait)
   (when (and (boundp 'mevedel--prompt-overlays)
              (listp mevedel--prompt-overlays))
     (let (live)
@@ -668,6 +697,7 @@ This deletes only interaction UI overlays and never settles callbacks."
   "Delete all interaction-zone overlays without firing callbacks."
   (when (hash-table-p mevedel-view--interaction-descriptors)
     (clrhash mevedel-view--interaction-descriptors))
+  (mevedel-view--interaction-sync-approval-wait)
   (mevedel-view--interaction-render)
   (when (hash-table-p mevedel-view--interaction-overlays)
     (maphash (lambda (_id overlay)
