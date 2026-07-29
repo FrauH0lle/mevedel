@@ -1038,6 +1038,8 @@
                          :missing-additional-permissions '(:network t)
                          :include-always nil
                          :origin (mevedel-current-origin)
+                         :request-id
+                         (mevedel-request-id mevedel--current-request)
                          :callback
                          (lambda (outcome)
                            (push outcome outcomes)))
