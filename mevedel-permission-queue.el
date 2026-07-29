@@ -522,22 +522,25 @@ Called from `mevedel-abort' / request-cancel-fn."
     (mevedel-queue--abort-all mevedel-permission-queue--spec
                               'aborted session)))
 
-(defun mevedel-permission-queue-sweep-origin
-    (origin &optional session no-render)
-  "Abort queued entries for ORIGIN in SESSION.
+(defun mevedel-permission-queue-sweep-request
+    (request-id &optional session no-render)
+  "Abort queued entries for REQUEST-ID in SESSION.
 
 When NO-RENDER is non-nil, do not render the next head entry after
 sweeping."
-  (let* ((session (or session (mevedel-permission-queue--current-session)))
-         (queue (and session (mevedel-permission-queue--get session))))
-    (dolist (entry queue)
-      (when (equal (plist-get entry :origin) origin)
-        (mevedel-permission-queue--log
-         'permission-swept entry session
-         :outcome 'aborted :sweep-origin origin)))
-    (mevedel-queue--sweep-origin
-     mevedel-permission-queue--spec
-     origin 'aborted session no-render)))
+  (when request-id
+    (let* ((session (or session (mevedel-permission-queue--current-session)))
+           (queue (and session (mevedel-permission-queue--get session))))
+      (dolist (entry queue)
+        (when (equal (plist-get entry :request-id) request-id)
+          (mevedel-permission-queue--log
+           'permission-swept entry session
+           :outcome 'aborted :sweep-request-id request-id)))
+      (mevedel-queue--sweep
+       mevedel-permission-queue--spec
+       (lambda (entry)
+         (equal (plist-get entry :request-id) request-id))
+       'aborted session no-render))))
 
 (provide 'mevedel-permission-queue)
 

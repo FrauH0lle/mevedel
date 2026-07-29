@@ -81,7 +81,9 @@ containing retained paths, frozen configurations, activity, mailboxes, and
 conversation locations. It also records `:preset-name` and the resolved
 buffer-local mevedel variables in `:preset-settings`, plus the session's exact
 `:model-provider` and explicit `:reasoning-effort`; resume restores those
-settings, and a Session Fork deep-copies them so parent and child can diverge.
+settings. A Session Fork also copies the source session's permission mode,
+sandbox mode, session permission rules, and exact resource grants at the fork
+point. Parent and child then diverge independently.
 gptel's other buffer-local settings continue to use its Org persistence.
 
 Pending input is live-session state, not sidecar state. Same-turn steering,

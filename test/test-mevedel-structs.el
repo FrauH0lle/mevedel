@@ -6,6 +6,7 @@
 
 (require 'mevedel-structs)
 (require 'mevedel-permission-queue)
+(require 'mevedel-plan-mode)
 (require 'mevedel-goal)
 (require 'mevedel-agents)
 (require 'mevedel-reminders)
@@ -364,6 +365,7 @@
     (should (null (mevedel-session-reminders session)))
     (should (null (mevedel-session-deferred-pending session)))
     (should (null (mevedel-session-deferred-injected session)))
+    (should (eq 'ask (mevedel-session-permission-mode session)))
     (should (eq 'best-effort (mevedel-session-sandbox-mode session))))
 
   :doc "two sessions share same workspace by reference"
@@ -372,7 +374,13 @@
          (s1 (mevedel-session-create "main" ws))
          (s2 (mevedel-session-create "refactor" ws)))
     (should (eq (mevedel-session-workspace s1)
-                (mevedel-session-workspace s2))))
+                (mevedel-session-workspace s2)))
+    (setf (mevedel-session-permission-rules s1)
+          '(("Bash" :pattern "npx test*" :action allow))
+          (mevedel-session-resource-grants s1)
+          '((:path "/tmp/input" :access read)))
+    (should-not (mevedel-session-permission-rules s2))
+    (should-not (mevedel-session-resource-grants s2)))
 
   :doc "snapshots the global sandbox default independently per session"
   (let ((saved-mode (default-toplevel-value 'mevedel-sandbox-mode))
@@ -391,7 +399,26 @@
               (setf (mevedel-session-sandbox-mode required) 'off)
               (should (eq 'best-effort
                           (mevedel-session-sandbox-mode best-effort))))))
-      (set-default-toplevel-value 'mevedel-sandbox-mode saved-mode))))
+      (set-default-toplevel-value 'mevedel-sandbox-mode saved-mode)))
+
+  :doc "snapshots the global permission default independently per session"
+  (let ((saved-mode (default-toplevel-value 'mevedel-permission-mode))
+        (ws (mevedel-workspace-get-or-create
+             'project "/tmp/p1/" "/tmp/p1/" "p1")))
+    (unwind-protect
+        (progn
+          (set-default-toplevel-value 'mevedel-permission-mode 'edits)
+          (let ((edits (mevedel-session-create "edits" ws)))
+            (set-default-toplevel-value 'mevedel-permission-mode 'ask)
+            (let ((ask (mevedel-session-create "ask" ws)))
+              (should (eq 'edits
+                          (mevedel-session-permission-mode edits)))
+              (should (eq 'ask
+                          (mevedel-session-permission-mode ask)))
+              (setf (mevedel-session-permission-mode edits) 'full-auto)
+              (should (eq 'ask
+                          (mevedel-session-permission-mode ask))))))
+      (set-default-toplevel-value 'mevedel-permission-mode saved-mode))))
 
 (mevedel-deftest mevedel-session--set-agent-registry ()
   ,test
@@ -555,12 +582,13 @@
     (let* ((ws (mevedel-workspace-get-or-create
                 'project "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
-           (outcomes nil))
-      (mevedel-request-begin session)
+           (outcomes nil)
+           (request (mevedel-request-begin session)))
       (setf (mevedel-session-permission-queue session)
             (list (list :kind 'generic
                         :tool-name "Read"
                         :origin "/root"
+                        :request-id (mevedel-request-id request)
                         :session session
                         :callback
                         (lambda (outcome)
@@ -652,20 +680,21 @@
 (mevedel-deftest mevedel-request-cancel ()
   ,test
   (test)
-  :doc "cancels only an explicit request's scoped permission owner"
+  :doc "cancels only an explicit request's scoped permission entries"
   (let* ((session (mevedel-session--create))
          (request
           (mevedel-request--create
+           :id "request-1"
            :session session
            :origin "/root/worker"))
          swept)
-    (cl-letf (((symbol-function 'mevedel-permission-queue-sweep-origin)
-               (lambda (origin actual-session &optional _no-render)
-                 (setq swept (list origin actual-session)))))
+    (cl-letf (((symbol-function 'mevedel-permission-queue-sweep-request)
+               (lambda (request-id actual-session &optional _no-render)
+                 (setq swept (list request-id actual-session)))))
       (mevedel-request-cancel request))
     (should
      (equal
-      "/root/worker"
+      "request-1"
       (car swept)))
     (should (eq session (cadr swept))))
   :doc "drains registered cancellers without changing the ambient request"
@@ -675,7 +704,7 @@
     (let ((mevedel--current-request ambient))
       (mevedel-request-push-canceller
        request (lambda () (setq fired t)))
-      (cl-letf (((symbol-function 'mevedel-permission-queue-sweep-origin)
+      (cl-letf (((symbol-function 'mevedel-permission-queue-sweep-request)
                  #'ignore))
         (mevedel-request-cancel request))
       (should fired)
@@ -721,18 +750,19 @@
   ,test
   (test)
 
-  :doc "request end sweeps only main-owned permissions and keeps plan approvals"
+  :doc "request end sweeps only request-owned permissions and keeps plan approvals"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
                 'project "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
-           (outcomes nil))
-      (mevedel-request-begin session)
+           (outcomes nil)
+           (request (mevedel-request-begin session)))
       (setf (mevedel-session-permission-queue session)
             (list (list :kind 'generic
                         :tool-name "Read"
                         :session session
                         :origin "/root"
+                        :request-id (mevedel-request-id request)
                         :callback
                         (lambda (outcome)
                           (push (cons 'main-permission outcome)
@@ -740,7 +770,8 @@
                   (list :kind 'generic
                         :tool-name "Read"
                         :session session
-                        :origin "/root/verifier"
+                        :origin "/root"
+                        :request-id "other-request"
                         :callback
                         (lambda (outcome)
                           (push (cons 'agent-permission outcome)
@@ -756,9 +787,9 @@
                  #'ignore))
         (mevedel-request-end))
       (should (= 1 (length (mevedel-session-permission-queue session))))
-      (should (equal "/root/verifier"
+      (should (equal "other-request"
                      (plist-get (car (mevedel-session-permission-queue session))
-                                :origin)))
+                                :request-id)))
       (should (mevedel-session-pending-plan-approval session))
       (should (equal '((main-permission . aborted))
                      outcomes))
@@ -772,13 +803,14 @@
                 'project "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
            (outcomes nil)
-           (rendered nil))
-      (mevedel-request-begin session)
+           (rendered nil)
+           (request (mevedel-request-begin session)))
       (setf (mevedel-session-permission-queue session)
             (list (list :kind 'generic
                         :tool-name "Read"
                         :session session
                         :origin "/root"
+                        :request-id (mevedel-request-id request)
                         :callback
                         (lambda (outcome)
                           (push (cons 'main-permission outcome)
@@ -787,6 +819,7 @@
                         :tool-name "Read"
                         :session session
                         :origin "/root/verifier"
+                        :request-id "other-request"
                         :callback
                         (lambda (outcome)
                           (push (cons 'agent-permission outcome)
@@ -806,16 +839,18 @@
            (session (mevedel-session-create "main" ws))
            (agent (mevedel-agent--create :name "verifier"))
            (inv (mevedel-agent-invocation-create agent))
-           (outcomes nil))
+           (outcomes nil)
+           request)
       (setf (mevedel-agent-invocation-agent-id inv) "verifier--abc")
       (setf (mevedel-agent-invocation-path inv) "/root/verifier")
       (setq-local mevedel--agent-invocation inv)
-      (mevedel-request-begin session)
+      (setq request (mevedel-request-begin session))
       (setf (mevedel-session-permission-queue session)
             (list (list :kind 'generic
                         :tool-name "Read"
                         :session session
                         :origin "/root"
+                        :request-id "root-request"
                         :callback
                         (lambda (outcome)
                           (push (cons 'main-permission outcome)
@@ -824,6 +859,7 @@
                         :tool-name "Read"
                         :session session
                         :origin "/root/verifier"
+                        :request-id (mevedel-request-id request)
                         :callback
                         (lambda (outcome)
                           (push (cons 'agent-permission outcome)

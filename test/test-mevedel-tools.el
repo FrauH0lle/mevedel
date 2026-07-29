@@ -1148,6 +1148,31 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         :data (list :tools nil)))))
       (cons buf (gptel-make-fsm :info info)))))
 
+(mevedel-deftest mevedel-tools--handle-agent-turn-terminal ()
+  ,test
+  (test)
+  :doc "sweeps only the settling retained-agent request"
+  (let* ((session (mevedel-tools-test--make-session))
+         (invocation (mevedel-agent-invocation--create
+                      :parent-session session
+                      :path "/root/worker"))
+         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx invocation))
+         (buf (car buf+fsm))
+         (fsm (cdr buf+fsm))
+         swept)
+    (unwind-protect
+        (progn
+          (plist-put (gptel-fsm-info fsm)
+                     :mevedel-request-id "request-worker-1")
+          (cl-letf
+              (((symbol-function 'mevedel-permission-queue-sweep-request)
+                (lambda (request-id actual-session &optional _no-render)
+                  (setq swept (list request-id actual-session)))))
+            (mevedel-tools--handle-agent-turn-terminal fsm))
+          (should (equal "request-worker-1" (car swept)))
+          (should (eq session (cadr swept))))
+      (kill-buffer buf))))
+
 (mevedel-deftest mevedel-tools--handle-plan-tool-filter
   (:before-each (progn (mevedel-tool-clear-registry)
                        (mevedel-tool-fs--register)

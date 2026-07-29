@@ -109,12 +109,12 @@ signal after recording."
     (should (null (mevedel-session-permission-queue session)))
     (should (= 2 (length (car outcomes))))))
 
-(mevedel-deftest mevedel-queue--sweep-origin
-  (:doc "shared queue origin sweep contract")
+(mevedel-deftest mevedel-queue--sweep
+  (:doc "shared queue predicate sweep contract")
   ,test
   (test)
 
-  :doc "sweep settles matching origins and preserves non-matching entries"
+  :doc "sweep settles matching entries and preserves non-matches"
   (let* ((session (test-mevedel-queue--session))
          (mevedel--session session)
          (rendered (cons nil nil))
@@ -123,7 +123,10 @@ signal after recording."
     (mevedel-queue--enqueue spec (list :id 'a :origin "agent"))
     (mevedel-queue--enqueue spec (list :id 'b :origin "main"))
     (mevedel-queue--enqueue spec (list :id 'c :origin "agent"))
-    (mevedel-queue--sweep-origin spec "agent" 'aborted session)
+    (mevedel-queue--sweep
+     spec
+     (lambda (entry) (equal "agent" (plist-get entry :origin)))
+     'aborted session)
     (should (equal '((c . aborted) (a . aborted)) (car outcomes)))
     (should (= 1 (length (mevedel-session-permission-queue session))))
     (should (eq 'b (plist-get (car (mevedel-session-permission-queue session))

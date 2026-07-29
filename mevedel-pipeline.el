@@ -935,6 +935,10 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                (mevedel-pipeline--log-permission-decision
                 updated ask-decision))
              (let ((queued (copy-sequence entry)))
+               (when-let* ((request (plist-get context :request)))
+                 (setq queued
+                       (plist-put queued :request-id
+                                  (mevedel-request-id request))))
                (setq queued
                      (plist-put
                       queued :callback

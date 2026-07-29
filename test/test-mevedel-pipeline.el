@@ -2102,6 +2102,10 @@
 				(session (mevedel-session--create
 					  :name "permission-hook"
 					  :permission-mode 'ask))
+				(request (mevedel-request--create
+					  :id "request-permission-hook"
+					  :session session
+					  :origin "/root/worker"))
 				(mevedel--session session)
 				(mevedel-permission-rules nil)
 				(mevedel-protected-paths nil)
@@ -2116,12 +2120,16 @@
 				 'mevedel-permission-queue--render-entry)
 				#'ignore))
 		       (mevedel-pipeline--step-permission
-			(list :tool tool :args args :session session)
+			(list :tool tool :args args :session session
+			      :request request)
 			#'ignore #'ignore)
 		       (let ((entry (car (mevedel-session-permission-queue
 					 session))))
 			 (should entry)
 			 (should (eq kind (plist-get entry :kind)))
+			 (should
+			  (equal "request-permission-hook"
+				 (plist-get entry :request-id)))
 			 (should (= 1 hook-count))
 			 (mevedel-permission-queue--render-head session)
 			 (mevedel-permission-queue--reevaluate entry)
