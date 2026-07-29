@@ -29,6 +29,8 @@
                   "mevedel-execution" (summary))
 
 ;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--tool-segment-bounds
+                  "mevedel-pipeline" (tool-use-id))
 (declare-function mevedel-pipeline-tool-render-data
                   "mevedel-pipeline" (buffer tool-use-id))
 (declare-function mevedel-pipeline-update-tool-render-data
@@ -86,8 +88,12 @@
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-user-view-state
                   "mevedel-view-composer" (thunk))
+(declare-function mevedel-view--call-with-render-boundaries-advancing
+                  "mevedel-view-composer" (thunk))
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view--add-display-region-properties
+                  "mevedel-view-render" (start end &optional type))
 (declare-function mevedel-view--append-request-summary
                   "mevedel-view-render" (data-buf start))
 (declare-function mevedel-view--cache-put
@@ -104,10 +110,15 @@
                   "mevedel-view-render" (entries))
 (declare-function mevedel-view--pending-tool-insertion-target
                   "mevedel-view-render" ())
+(declare-function mevedel-view--insert-rendered-tool
+                  "mevedel-view-render" (rendering source))
 (declare-function mevedel-view--render-incremental
                   "mevedel-view-render" (data-buf &optional start end))
 (declare-function mevedel-view--request-progress-anchor
                   "mevedel-view-render" ())
+(declare-function mevedel-view--segment-rendering
+                  "mevedel-view-render"
+                  (data-buf seg-start seg-end &optional collapsed-only))
 (defvar mevedel-view--tool-rendering-cache)
 
 ;; `mevedel-view-zone'
@@ -1342,6 +1353,77 @@ RENDER-DATA is retained in the hidden transcript audit record."
                     (concat "\n" tail))))
       (mevedel-view--refresh-pending-tool-lines))))
 
+(defun mevedel-view-stream--execution-row-region
+    (data-buffer tool-use-id)
+  "Return the visible source-backed row for TOOL-USE-ID in DATA-BUFFER.
+The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
+  (when-let* ((bounds
+               (with-current-buffer data-buffer
+                 (mevedel-pipeline--tool-segment-bounds tool-use-id))))
+    (let ((pos (point-min))
+          (limit (point-max))
+          found)
+      (while (and (< pos limit) (not found))
+        (let* ((source (get-text-property pos 'mevedel-view-source))
+               (next (or (next-single-property-change
+                          pos 'mevedel-view-tool-use-id nil limit)
+                         limit)))
+          (when (and (consp source)
+                     (eq (get-text-property pos 'mevedel-view-type)
+                         'tool-summary)
+                     (equal
+                      (get-text-property pos 'mevedel-view-tool-use-id)
+                      tool-use-id))
+            (setq found (list pos next bounds)))
+          (setq pos next)))
+      found)))
+
+(defun mevedel-view-stream--refresh-execution-row
+    (data-buffer tool-use-id)
+  "Refresh only TOOL-USE-ID's visible Bash row from DATA-BUFFER."
+  (when-let ((region
+              (mevedel-view-stream--execution-row-region
+               data-buffer tool-use-id)))
+    (let* ((start (nth 0 region))
+           (end (nth 1 region))
+           (source (nth 2 region))
+           (collapsed (get-text-property start 'mevedel-view-collapsed))
+           (turn-id (get-text-property start 'mevedel-view-turn-id)))
+      (when (hash-table-p mevedel-view--tool-rendering-cache)
+        (clrhash mevedel-view--tool-rendering-cache))
+      (when-let ((rendering
+                  (mevedel-view--segment-rendering
+                   data-buffer (car source) (cdr source))))
+        (unless (plist-get rendering :force-expanded-p)
+          (setq rendering
+                (plist-put (copy-sequence rendering)
+                           :initially-collapsed-p collapsed)))
+        (mevedel-view--call-preserving-user-view-state
+         (lambda ()
+           (mevedel-view--call-with-render-boundaries-advancing
+            (lambda ()
+              (let ((inhibit-read-only t)
+                    (inhibit-modification-hooks t))
+                (save-excursion
+                  (goto-char start)
+                  (delete-region start end)
+                  (let ((insert-start (point)))
+                    (mevedel-view--insert-rendered-tool rendering source)
+                    (mevedel-view--add-display-region-properties
+                     insert-start (point))
+                    (when turn-id
+                      (put-text-property
+                       insert-start (point)
+                       'mevedel-view-turn-id turn-id)))))))))
+        t))))
+
+(defun mevedel-view-stream--schedule-execution-row-recovery (data-buffer)
+  "Schedule one incremental render to recover a missing execution row."
+  (when (and (mevedel-view--in-flight-turn-start-position)
+             (markerp mevedel-view--data-turn-start))
+    (mevedel-view--schedule-render
+     'incremental data-buffer mevedel-view-stream-render-delay)))
+
 (defun mevedel-view-stream-handle-execution-event (event)
   "Apply Bash EVENT to its authoritative row and visible view.
 Always return nil; only the mailbox sink may acknowledge durable delivery."
@@ -1392,9 +1474,11 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
            (mevedel-view-stream--update-execution-pending-row event))
           ('terminal
            (mevedel-view-stream--remove-execution-progress tool-use-id)))
-        (when (hash-table-p mevedel-view--tool-rendering-cache)
-          (clrhash mevedel-view--tool-rendering-cache))
-        (mevedel-view-rerender view-buffer))))
+        (unless (and tool-use-id
+                     (mevedel-view-stream--refresh-execution-row
+                      data-buffer tool-use-id))
+          (mevedel-view-stream--schedule-execution-row-recovery
+           data-buffer)))))
   nil)
 
 (defun mevedel-view--render-stream-update (data-buf)

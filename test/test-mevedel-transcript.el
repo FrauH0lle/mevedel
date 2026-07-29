@@ -102,6 +102,32 @@
                  (buffer-substring-no-properties
                   (cadr (caddr segs)) (caddr (caddr segs))))))))
 
+  :doc "fork prompt recovery stops at authoritative assistant boundaries"
+  (mevedel-transcript-test--with-buffer
+    (mevedel-transcript-test--insert data-buf "First answer.\n" 'response)
+    (mevedel-transcript-test--insert
+     data-buf
+     (substring-no-properties
+      (mevedel--format-hook-audit-record
+       '(:type fork-point :fork-point-id "fork-1")))
+     'ignore)
+    (mevedel-transcript-test--insert data-buf "\nSecond prompt.\n\n" 'ignore)
+    (mevedel-transcript-test--insert data-buf "Planning response.\n" 'response)
+    (mevedel-transcript-test--insert
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nresult\n"
+     '(tool . "call_1"))
+    (mevedel-transcript-test--insert data-buf "After tool.\n" 'response)
+    (mevedel-transcript-test--insert
+     data-buf "#+begin_reasoning\nLater thought.\n#+end_reasoning\n" 'ignore)
+    (mevedel-transcript-test--insert data-buf "Final answer.\n" 'response)
+    (with-current-buffer data-buf
+      (let ((segs (mevedel-transcript-segments (point-min) (point-max))))
+        (should
+         (equal '(response ignored user response tool response
+                           reasoning response)
+                (mapcar #'car segs))))))
+
   :doc "response + tool + response segments"
   (mevedel-transcript-test--with-buffer
     (mevedel-transcript-test--insert data-buf "Some response\n" 'response)

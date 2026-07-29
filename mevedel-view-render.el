@@ -1704,6 +1704,7 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
        mevedel-view-source ,source
        mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
                                  source vtype)
+       mevedel-view-tool-use-id ,(plist-get rendering :tool-use-id)
        mevedel-view-rendered t))
     (when (eq vtype 'agent-handle)
       (mevedel-view--stamp-agent-handle ins-start (point) rendering))
@@ -1731,6 +1732,8 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
                            mevedel-view-source ,source
                            mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
                                                      source vtype)
+                           mevedel-view-tool-use-id
+                           ,(plist-get rendering :tool-use-id)
                            mevedel-view-force-expanded
                            ,(and (plist-get rendering :force-expanded-p) t)
                            mevedel-view-rendered t))
@@ -1863,6 +1866,9 @@ RAW is an optional precomputed expanded tool segment text."
       (when-let* ((summary (plist-get render-data :sandbox-summary)))
         (setq rendering
               (plist-put rendering :sandbox-summary (copy-tree summary))))
+      (when tool-use-id
+        (setq rendering
+              (plist-put rendering :tool-use-id tool-use-id)))
       (when-let* ((audits (append (plist-get rendering :hook-audits)
                                   (plist-get call :hook-audits))))
         (setq rendering (plist-put rendering :hook-audits audits)))

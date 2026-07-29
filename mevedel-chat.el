@@ -778,7 +778,7 @@ with current file contents in WORKSPACE."
       (let* ((original (gethash filepath
                                 (mevedel-request-file-snapshots
                                  mevedel--current-request)))
-             (current (when (file-exists-p filepath)
+             (current (when (file-regular-p filepath)
                         (with-temp-buffer
                           (insert-file-contents filepath)
                           (buffer-string))))

@@ -527,11 +527,13 @@ runs and incomplete control text remains ordinary transcript text."
               'fork-point))
       (let ((prompt-start (+ scan-start (plist-get span :end)))
             prompt-end)
-        (dolist (range ranges)
-          (when (and (>= (cadr range) prompt-start)
-                     (memq (car range) '(reasoning hook-context))
-                     (or (null prompt-end) (< (cadr range) prompt-end)))
-            (setq prompt-end (cadr range))))
+        (dolist (segment segments)
+          (when (and (>= (cadr segment) prompt-start)
+                     (memq (car segment)
+                           '(response tool reasoning mailbox reminder
+                             hook-context render-data prompt))
+                     (or (null prompt-end) (< (cadr segment) prompt-end)))
+            (setq prompt-end (cadr segment))))
         (when (and prompt-end
                    (string-match-p
                     "[^ \t\r\n]"

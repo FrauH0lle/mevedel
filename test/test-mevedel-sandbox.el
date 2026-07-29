@@ -260,6 +260,7 @@
          (unreadable (file-name-concat secondary "unreadable"))
          (credentials (file-name-concat root "credentials"))
          (missing (file-name-concat root "missing"))
+         scanned-patterns
          (mevedel-protected-paths
           `(("**/.git/**" . read-only)
             (,(concat credentials "/**") . inaccessible)
@@ -271,9 +272,17 @@
           (make-directory unreadable)
           (set-file-modes unreadable #o000)
           (make-directory credentials)
-          (let ((candidates
-                 (mevedel-sandbox--protected-candidates
-                  root (list root secondary))))
+          (let* ((original
+                  (symbol-function 'directory-files-recursively))
+                 (candidates
+                  (cl-letf
+                      (((symbol-function 'directory-files-recursively)
+                        (lambda (directory regexp &rest arguments)
+                          (push regexp scanned-patterns)
+                          (apply original directory regexp arguments))))
+                    (mevedel-sandbox--protected-candidates
+                     root (list root secondary)))))
+            (should-not (member "." scanned-patterns))
             (should (cl-find dot-git candidates
                              :key (lambda (item) (plist-get item :path))
                              :test #'string-equal))

@@ -1173,6 +1173,7 @@
          (workspace (mevedel-workspace--create
                      :type 'project :id root :root root :name "patch"))
          (a-file (file-name-concat root "a.txt"))
+         (directory (file-name-concat root "created-directory"))
          (z-file (file-name-concat root "z.txt"))
          (snapshots (make-hash-table :test #'equal))
          (mevedel--current-request
@@ -1181,6 +1182,8 @@
         (progn
           (puthash z-file nil snapshots)
           (puthash a-file "old\n" snapshots)
+          (puthash directory nil snapshots)
+          (make-directory directory)
           (with-temp-file a-file (insert "new\n"))
           (with-temp-file z-file (insert "created\n"))
           (let* ((patch (mevedel--generate-final-patch workspace))

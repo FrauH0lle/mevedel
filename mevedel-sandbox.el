@@ -362,7 +362,36 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                          nil))
                      nil)))
                 (when (mevedel-permission--match-path-pattern path pattern)
-                  (add-candidate path mode directory-p)))))))
+                  (add-candidate path mode directory-p))))))
+         (search-literal-directory
+          (root name mode)
+          (when (file-directory-p root)
+            (if (not (file-readable-p root))
+                (add-candidate root 'inaccessible t)
+              (when (string-equal
+                     (file-name-nondirectory (directory-file-name root))
+                     name)
+                (add-candidate root mode t))
+              (dolist
+                  (path
+                   (directory-files-recursively
+                    root
+                    (concat "/" (regexp-quote name) "\\'")
+                    t
+                    (lambda (directory)
+                      (cond
+                       ((not (file-readable-p directory))
+                        (add-candidate directory 'inaccessible t)
+                        nil)
+                       ((string-equal
+                         (file-name-nondirectory
+                          (directory-file-name directory))
+                         name)
+                        (add-candidate directory mode t)
+                        nil)
+                       (t t)))
+                    nil))
+                (add-candidate path mode t))))))
       (dolist (entry (mevedel-permission-protected-path-policy))
         (let* ((pattern (car entry))
                (mode (cdr entry))
@@ -371,12 +400,26 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                (absolute-pattern
                 (and (or (string-prefix-p "~" root-pattern)
                          (file-name-absolute-p root-pattern))
-                     (expand-file-name root-pattern))))
+                     (expand-file-name root-pattern)))
+               (literal-directory
+                (and directory-p
+                     (not absolute-pattern)
+                     (string-prefix-p "**/" root-pattern)
+                     (let ((suffix (substring root-pattern 3)))
+                       (and (not (string-empty-p suffix))
+                            (not (string-match-p "/" suffix))
+                            (not (glob-p suffix))
+                            suffix)))))
           (cond
            ((not (glob-p root-pattern))
             (add-candidate (or absolute-pattern
                                (expand-file-name root-pattern workdir))
                            mode directory-p))
+           (literal-directory
+            (dolist (root (delete-dups (copy-sequence writable-roots)))
+              (search-literal-directory root literal-directory mode)
+              (add-candidate
+               (file-name-concat root literal-directory) mode t)))
            (t
             (let ((search-roots (copy-sequence writable-roots)))
               (when absolute-pattern

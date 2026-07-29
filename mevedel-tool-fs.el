@@ -1939,6 +1939,7 @@ ARGS is a plist with :path."
                    "The content to write to the file."))
     :async-p t
     :groups (edit)
+    :snapshot-p t
     :get-path (lambda (args) (plist-get args :file_path))
     :renderer #'mevedel-tool-fs--render-diff-summary)
 
@@ -1957,6 +1958,7 @@ ARGS is a plist with :path."
                         "Replace all occurrences of old_string (default false)."))
     :async-p t
     :groups (edit)
+    :snapshot-p t
     :get-path (lambda (args) (plist-get args :file_path))
     :renderer #'mevedel-tool-fs--render-diff-summary)
 

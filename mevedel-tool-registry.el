@@ -70,6 +70,7 @@ created as a side effect of registration and handles serialization."
   category          ; string: "mevedel" (default)
   ;; Behavioral declarations
   read-only-p       ; t if tool never modifies state
+  snapshot-p        ; t if the touched file participates in the final patch
   destructive-p     ; t or function: needs extra confirmation
   async-p           ; t if handler takes a callback
   ;; Permission integration
@@ -622,6 +623,7 @@ Optional (both forms):
   :category         STRING       Tool category (default \"mevedel\")
   :groups           LIST         Group symbols: (read edit util ...)
   :read-only-p      BOOL         Tool never modifies state
+  :snapshot-p       BOOL         Snapshot the touched file for final patching
   :destructive-p    BOOL-OR-FN   Needs extra confirmation
   :async-p          BOOL         Handler takes a callback as first arg
                                  (native only)
@@ -687,6 +689,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (category (or (plist-get props :category) "mevedel"))
          (groups (plist-get props :groups))
          (read-only-p (plist-get props :read-only-p))
+         (snapshot-p (plist-get props :snapshot-p))
          (destructive-p (plist-get props :destructive-p))
          (async-p (plist-get props :async-p))
          (check-permission (plist-get props :check-permission))
@@ -722,6 +725,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :repair-input ,repair-input
               :category ,category
               :read-only-p ,read-only-p
+              :snapshot-p ,snapshot-p
               :destructive-p ,destructive-p
               :async-p ,async-p
               :check-permission ,check-permission
@@ -765,6 +769,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (groups (plist-get props :groups))
          (repair-input (plist-get props :repair-input))
          (read-only-p (plist-get props :read-only-p))
+         (snapshot-p (plist-get props :snapshot-p))
          (destructive-p (plist-get props :destructive-p))
          (check-permission (plist-get props :check-permission))
          (check-permission-async (plist-get props :check-permission-async))
@@ -798,6 +803,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       :groups ',groups
       :repair-input ,repair-input
       :read-only-p ,read-only-p
+      :snapshot-p ,snapshot-p
       :destructive-p ,destructive-p
       :check-permission ,check-permission
       :check-permission-async ,check-permission-async
@@ -812,7 +818,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
 
 (cl-defun mevedel-tool--register-wrap
     (&key source category-override description-override summary
-          prompt-override groups repair-input read-only-p destructive-p
+          prompt-override groups repair-input read-only-p snapshot-p destructive-p
           check-permission check-permission-async
           get-path get-pattern get-domain get-name
           max-result-size display-arg render-transform renderer)
@@ -820,7 +826,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
 
 SOURCE must be a `gptel-tool' struct.  CATEGORY-OVERRIDE,
 DESCRIPTION-OVERRIDE, SUMMARY, PROMPT-OVERRIDE, GROUPS, REPAIR-INPUT,
-READ-ONLY-P, DESTRUCTIVE-P, CHECK-PERMISSION, CHECK-PERMISSION-ASYNC, GET-PATH,
+READ-ONLY-P, SNAPSHOT-P, DESTRUCTIVE-P, CHECK-PERMISSION,
+CHECK-PERMISSION-ASYNC, GET-PATH,
 GET-PATTERN, GET-DOMAIN, GET-NAME, MAX-RESULT-SIZE, DISPLAY-ARG,
 RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
   (unless (gptel-tool-p source)
@@ -849,6 +856,7 @@ RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
              :repair-input repair-input
              :category target-category
              :read-only-p read-only-p
+             :snapshot-p snapshot-p
              :destructive-p destructive-p
              :async-p t
              :check-permission check-permission
