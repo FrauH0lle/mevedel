@@ -281,22 +281,56 @@
 (mevedel-deftest mevedel-menu--preset-description ()
   ,test
   (test)
-  :doc "shows resolved workload routing without Goal-only workloads"
+  :doc "shows resolved tier and workload policies in configured order"
   (mevedel-menu-test--with-model-backends
     (mevedel-menu-test--with-buffers
       (with-current-buffer data-buf
         (setq-local gptel-backend (gptel-get-backend "Fast")
                     gptel-model 'fast-model
+                    gptel-reasoning-effort nil
                     mevedel-model-tiers
-                    '((strong :provider "Balanced:balanced-model"))
+                    '((fast)
+                      (strong :provider "Balanced:balanced-model" :effort high)
+                      (strong :provider "Fast:fast-model"))
                     mevedel-model-workloads
-                    '((planning :tier strong)))
+                    '((planning :provider "Balanced:balanced-model")))
         (setf (mevedel-session-preset-name session) 'my-team))
       (with-current-buffer view-buf
-        (let ((text (mevedel-menu--preset-description)))
-          (dolist (needle '("Preset: my-team" "planning"
-                            "Balanced:balanced-model"))
-            (should (string-match-p (regexp-quote needle) text))))))))
+        (should
+         (equal
+          (mevedel-menu--preset-description)
+          (string-join
+           '("Preset: my-team"
+             "Tiers:"
+             "  fast               Fast:fast-model · effort default"
+             "  strong             Balanced:balanced-model · effort high"
+             "Workloads:"
+             "  planning           Balanced:balanced-model · effort default")
+           "\n"))))))
+
+  :doc "keeps rendering after an invalid tier policy"
+  (mevedel-menu-test--with-model-backends
+    (mevedel-menu-test--with-buffers
+      (with-current-buffer data-buf
+        (setq-local gptel-backend (gptel-get-backend "Fast")
+                    gptel-model 'fast-model
+                    gptel-reasoning-effort nil
+                    mevedel-model-tiers
+                    '((broken :provider "Missing:no-model")
+                      (fast))
+                    mevedel-model-workloads nil)
+        (setf (mevedel-session-preset-name session) 'broken))
+      (with-current-buffer view-buf
+        (should
+         (equal
+          (mevedel-menu--preset-description)
+          (string-join
+           '("Preset: broken"
+             "Tiers:"
+             "  broken             ERROR: Backend Missing is not known to be defined — fix this preset before dispatch"
+             "  fast               Fast:fast-model · effort default"
+             "Workloads:")
+           "\n")))))))
 
 (mevedel-deftest mevedel-menu--goal-resumable-p ()
   ,test

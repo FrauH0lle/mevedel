@@ -70,13 +70,15 @@
                   (&optional buffer))
 (declare-function mevedel-model-resolve-provider "mevedel-models"
                   (spec &optional noerror))
+(declare-function mevedel-model-resolve-tier "mevedel-models"
+                  (tier &optional noerror))
+(declare-function mevedel-model-resolve-workload "mevedel-models"
+                  (workload &optional explicit-selector explicit-effort))
 (declare-function mevedel-model-set-session-effort "mevedel-models"
                   (session effort &optional buffer))
 (declare-function mevedel-model-set-session-provider "mevedel-models"
                   (session provider &optional buffer))
 (declare-function mevedel-model-supported-efforts "mevedel-models" (model))
-(declare-function mevedel-model-resolve-workload "mevedel-models"
-                  (workload &optional explicit-selector explicit-effort))
 (defvar mevedel-model-tiers)
 (defvar mevedel-model-workloads)
 
@@ -431,28 +433,37 @@
   (let* ((context (mevedel-menu--context))
          (session (mevedel-cockpit-context-session context)))
     (with-current-buffer (mevedel-cockpit-context-data-buffer context)
-      (let* ((workloads (delete-dups
-                         (mapcar #'car mevedel-model-workloads))))
+      (let* ((tiers (delete-dups (mapcar #'car mevedel-model-tiers)))
+             (workloads (delete-dups
+                         (mapcar #'car mevedel-model-workloads)))
+             (format-policy
+              (lambda (name resolver)
+                (format "  %-18s %s"
+                        name
+                        (condition-case err
+                            (let ((policy (funcall resolver name)))
+                              (format "%s:%s · effort %s"
+                                      (gptel-backend-name
+                                       (plist-get policy :backend))
+                                      (gptel--model-name
+                                       (plist-get policy :model))
+                                      (or (plist-get policy :effort) "default")))
+                          (error
+                           (format
+                            "ERROR: %s — fix this preset before dispatch"
+                            (error-message-string err))))))))
         (string-join
          (append
           (list (format "Preset: %s"
                         (or (mevedel-session-preset-name session) "none"))
-                (format "Tiers: %S" mevedel-model-tiers)
-                "Workloads:")
+                "Tiers:")
+          (mapcar (lambda (tier)
+                    (funcall format-policy tier #'mevedel-model-resolve-tier))
+                  tiers)
+          (list "Workloads:")
           (mapcar
            (lambda (workload)
-             (format "  %-18s %s%s"
-                     workload
-                     (condition-case err
-                         (let ((policy (mevedel-model-resolve-workload workload)))
-                           (format "%s:%s · effort %s"
-                                   (gptel-backend-name
-                                    (plist-get policy :backend))
-                                   (gptel--model-name (plist-get policy :model))
-                                   (or (plist-get policy :effort) "default")))
-                       (error (format "ERROR: %s — fix this preset before dispatch"
-                                      (error-message-string err))))
-                     ""))
+             (funcall format-policy workload #'mevedel-model-resolve-workload))
            workloads))
          "\n")))))
 
