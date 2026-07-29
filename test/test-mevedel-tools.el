@@ -1151,6 +1151,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 (mevedel-deftest mevedel-tools--handle-plan-tool-filter
   (:before-each (progn (mevedel-tool-clear-registry)
                        (mevedel-tool-fs--register)
+                       (mevedel-tool-exec--register)
                        (mevedel-tool-goal--register))
    :after-each (mevedel-tool-clear-registry))
   ,test
@@ -1163,13 +1164,13 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
          (tools (mapcar (lambda (name)
                           (mevedel-tool-gptel-tool
                            (mevedel-tool-get name "mevedel")))
-                        '("Read" "Edit" "Write" "MkDir"))))
+                        '("Read" "Edit" "Write" "MkDir" "Eval" "Bash"))))
     (unwind-protect
         (progn
           (setf (mevedel-session-plan-mode session) t)
           (plist-put (gptel-fsm-info fsm) :tools tools)
           (mevedel-tools--handle-plan-tool-filter fsm)
-          (should (equal '("Read")
+          (should (equal '("Read" "Bash")
                          (mapcar #'gptel-tool-name
                                  (plist-get (gptel-fsm-info fsm) :tools))))
           (let* ((payload (append
@@ -1177,7 +1178,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                             (plist-get (gptel-fsm-info fsm) :data)
                             :tools)
                            nil)))
-            (should (= 1 (length payload)))
+            (should (= 2 (length payload)))
             (should (equal "Read" (plist-get (car payload) :name)))))
       (kill-buffer buf)))
 
@@ -1229,16 +1230,20 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
          (buf+fsm (mevedel-tools-test--make-fsm-with-ctx invocation))
          (buf (car buf+fsm))
          (fsm (cdr buf+fsm))
-         (edit (mevedel-tool-gptel-tool
-                (mevedel-tool-get "Edit" "mevedel"))))
+         (tools (mapcar (lambda (name)
+                          (mevedel-tool-gptel-tool
+                           (mevedel-tool-get name "mevedel")))
+                        '("Read" "Edit" "Write" "MkDir" "Eval" "Bash"))))
     (unwind-protect
         (progn
           (setf (mevedel-session-plan-mode session) t
                 (mevedel-agent-invocation-parent-session invocation) session)
-          (plist-put (gptel-fsm-info fsm) :tools (list edit))
+          (plist-put (gptel-fsm-info fsm) :tools tools)
           (mevedel-tools--handle-plan-tool-filter fsm)
-          (should-not (plist-get (gptel-fsm-info fsm) :tools))
-          (should (= 0 (length
+          (should (equal '("Read" "Bash")
+                         (mapcar #'gptel-tool-name
+                                 (plist-get (gptel-fsm-info fsm) :tools))))
+          (should (= 2 (length
                         (plist-get
                          (plist-get (gptel-fsm-info fsm) :data)
                          :tools)))))

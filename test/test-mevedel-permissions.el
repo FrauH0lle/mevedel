@@ -458,17 +458,45 @@
                   :tool-struct mock-tool
                   :mode 'ask)
                 'ask)))
-  :doc "Plan mode denies native edits even under full-auto"
+  :doc "Plan mode denies edits and Eval across modes and explicit allows"
+  (let* ((mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (session (mevedel-session--create :name "plan" :plan-mode t)))
+    (dolist (mode '(ask edits full-auto))
+      (dolist (name '("Write" "Edit" "MkDir" "Eval"))
+        (let ((tool (mevedel-tool--create
+                     :name name :read-only-p nil
+                     :groups (if (equal name "Eval") '(eval) '(edit)))))
+          (should
+           (eq
+            (mevedel-check-permission
+             name
+             :tool-struct tool
+             :session session
+             :session-rules `((,name :action allow))
+             :mode mode)
+            'deny))))))
+  :doc "Plan boundary follows retained agents across modes and explicit allows"
   (let* ((mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
          (session (mevedel-session--create :name "plan" :plan-mode t))
-         (mock-tool (mevedel-tool--create
-                     :name "Edit" :read-only-p nil :groups '(edit))))
-    (should (eq (mevedel-check-permission "Edit"
-                  :tool-struct mock-tool
-                  :session session
-                  :mode 'full-auto)
-                'deny)))
+         (invocation (mevedel-agent-invocation--create
+                      :parent-session session)))
+    (with-temp-buffer
+      (setq-local mevedel--agent-invocation invocation)
+      (dolist (mode '(ask edits full-auto))
+        (dolist (name '("Write" "Edit" "MkDir" "Eval"))
+          (let ((tool (mevedel-tool--create
+                       :name name :read-only-p nil
+                       :groups (if (equal name "Eval") '(eval) '(edit)))))
+            (should
+             (eq
+              (mevedel-check-permission
+               name
+               :tool-struct tool
+               :session-rules `((,name :action allow))
+               :mode mode)
+              'deny)))))))
   :doc "read-only tool allowed in ask mode"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)
