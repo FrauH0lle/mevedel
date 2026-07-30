@@ -205,19 +205,124 @@
       (kill-buffer view-buffer)
       (kill-buffer chat-buffer))))
 
-(mevedel-deftest mevedel-plan-handoff--implementation-started
-  (:doc "clears retry state after successful request startup")
+(mevedel-deftest mevedel-plan-handoff--implementation-request-started
+  (:doc "attaches recovery to the request without clearing retry state")
   ,test
   (test)
-  (let ((session
-         (mevedel-session--create
-          :name "main" :plan-metadata
-          '(:status accepted :implementation-retry (:step submit)))))
-    (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore))
-      (mevedel-plan-handoff--implementation-started session (current-buffer)))
-    (should-not
-     (plist-member (mevedel-session-plan-metadata session)
-                   :implementation-retry))))
+  (let* ((retry '(:step submit))
+         (session
+          (mevedel-session--create
+           :name "main" :plan-metadata
+           (list :status 'accepted :implementation-retry retry)))
+         (chat-buffer (generate-new-buffer " *mevedel-plan-request-source*"))
+         (fsm (gptel-make-fsm :info nil)))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buffer
+            (setq-local mevedel--session session))
+          (should
+           (eq fsm
+               (mevedel-plan-handoff--implementation-request-started
+                fsm chat-buffer)))
+          (should
+           (eq chat-buffer
+               (plist-get
+                (gptel-fsm-info fsm)
+                :mevedel-plan-handoff-source-buffer)))
+          (should
+           (eq retry
+               (plist-get (mevedel-session-plan-metadata session)
+                          :implementation-retry))))
+      (kill-buffer chat-buffer))))
+
+(mevedel-deftest mevedel-plan-handoff-settle-request
+  (:doc "terminal success clears the attached direct implementation retry")
+  ,test
+  (test)
+  (let* ((retry '(:step submit))
+         (session
+          (mevedel-session--create
+           :name "main" :plan-metadata
+           (list :status 'accepted :implementation-retry retry)))
+         (chat-buffer (generate-new-buffer " *mevedel-plan-success-source*"))
+         (fsm (gptel-make-fsm :info nil))
+         persisted)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buffer
+            (setq-local mevedel--session session))
+          (mevedel-plan-handoff--implementation-request-started
+           fsm chat-buffer)
+          (cl-letf (((symbol-function 'mevedel-plan-handoff--persist)
+                     (lambda (saved-session saved-buffer)
+                       (setq persisted (list saved-session saved-buffer)))))
+            (mevedel-plan-handoff-settle-request fsm 'success))
+          (should (equal (list session chat-buffer) persisted))
+          (should-not
+           (plist-member (mevedel-session-plan-metadata session)
+                         :implementation-retry))
+          (should-not
+           (plist-member (gptel-fsm-info fsm)
+                         :mevedel-plan-handoff-source-buffer)))
+      (kill-buffer chat-buffer))))
+
+  :doc "provider failure and abort retain the exact prepared handoff"
+  (dolist (case '((error "Provider overloaded")
+                  (aborted "Request aborted")))
+    (let* ((status (car case))
+           (reason (cadr case))
+           (retry '(:step submit :selection (:location here)))
+           (session
+            (mevedel-session--create
+             :name "main" :plan-metadata
+             (list :status 'accepted :implementation-retry retry)))
+           (chat-buffer
+            (generate-new-buffer " *mevedel-plan-failure-source*"))
+           (fsm (gptel-make-fsm :info nil)))
+      (unwind-protect
+          (progn
+            (with-current-buffer chat-buffer
+              (setq-local mevedel--session session))
+            (mevedel-plan-handoff--implementation-request-started
+             fsm chat-buffer)
+            (cl-letf (((symbol-function
+                        'mevedel-view--interaction-target-buffer)
+                       (lambda (_) nil))
+                      ((symbol-function 'mevedel-plan-handoff--persist)
+                       #'ignore))
+              (mevedel-plan-handoff-settle-request fsm status reason))
+            (let ((saved
+                   (plist-get (mevedel-session-plan-metadata session)
+                              :implementation-retry)))
+              (should (equal reason (plist-get saved :failure)))
+              (should (equal (plist-get retry :selection)
+                             (plist-get saved :selection))))
+            (should-not
+             (plist-member (gptel-fsm-info fsm)
+                           :mevedel-plan-handoff-source-buffer)))
+        (kill-buffer chat-buffer))))
+
+  :doc "a dead source buffer leaves the durable retry untouched"
+  (let* ((retry '(:step submit))
+         (session
+          (mevedel-session--create
+           :name "main" :plan-metadata
+           (list :implementation-retry retry)))
+         (chat-buffer (generate-new-buffer " *mevedel-plan-dead-source*"))
+         (fsm (gptel-make-fsm :info nil)))
+    (with-current-buffer chat-buffer
+      (setq-local mevedel--session session))
+    (mevedel-plan-handoff--implementation-request-started fsm chat-buffer)
+    (kill-buffer chat-buffer)
+    (let (warnings)
+      (cl-letf (((symbol-function 'display-warning)
+                 (lambda (&rest warning) (push warning warnings))))
+        (mevedel-plan-handoff-settle-request fsm 'success))
+      (should warnings))
+    (should
+     (eq retry
+         (plist-get (mevedel-session-plan-metadata session)
+                    :implementation-retry))))
 
 (mevedel-deftest mevedel-plan-handoff--goal-handoff-complete
   (:doc "restores retry state when its durable cleanup fails")

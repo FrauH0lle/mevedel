@@ -22,6 +22,7 @@
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
 (require 'mevedel-view-render)
+(require 'mevedel-view-stream)
 (require 'mevedel-view-zone)
 (require 'profiler)
 
@@ -392,23 +393,18 @@ returns additional counters from one unprofiled workload run."
                  (lambda ()
                    (let ((original
                           (symbol-function
-                           'mevedel-view--history-tail-position))
-                         (scans 0)
-                         (characters 0))
+                           'mevedel-view--transcript-history-position-p))
+                         (checks 0))
                      (cl-letf
                          (((symbol-function
-                            'mevedel-view--history-tail-position)
-                           (lambda ()
-                             (cl-incf scans)
-                             (cl-incf characters
-                                      (- (point-max)
-                                         (mevedel-view--after-header-position)))
-                             (funcall original))))
+                            'mevedel-view--transcript-history-position-p)
+                           (lambda (position)
+                             (cl-incf checks)
+                             (funcall original position))))
                        (dotimes (_ status-iterations)
                          (mevedel-view--render-status)))
                      (list :status-redraw-calls status-iterations
-                           :history-scan-calls scans
-                           :history-scan-characters characters)))))
+                           :history-position-checks checks)))))
                (history
                 (mevedel-benchmark--measure
                  'history-fallback
@@ -419,9 +415,19 @@ returns additional counters from one unprofiled workload run."
                      (mevedel-view--history-tail-position)))
                  (file-name-concat directory "history")
                  (lambda ()
-                   (list :history-scan-calls history-iterations
-                         :history-scan-characters
-                         (* transcript-bytes history-iterations))))))
+                   (let ((original
+                          (symbol-function
+                           'mevedel-view--transcript-history-position-p))
+                         (checks 0))
+                     (cl-letf
+                         (((symbol-function
+                            'mevedel-view--transcript-history-position-p)
+                           (lambda (position)
+                             (cl-incf checks)
+                             (funcall original position))))
+                       (dotimes (_ history-iterations)
+                         (mevedel-view--history-tail-position)))
+                     (list :history-position-checks checks))))))
            (unless (and (= (point) (+ (mevedel-view--input-start) 4))
                         (= (window-point (selected-window)) (point))
                         (equal (mevedel-view--input-text)
@@ -431,11 +437,70 @@ returns additional counters from one unprofiled workload run."
             directory (list :status status :history history))
            (list :status status :history history)))))))
 
+(defun mevedel-benchmark--spinner-ticks (directory)
+  "Measure pending-tool spinner ticks over a large view below DIRECTORY."
+  (let ((transcript-bytes (* 1024 1024))
+        (iterations 100))
+    (mevedel-benchmark--with-view
+     (lambda (_data-buf view-buf)
+       (with-current-buffer view-buf
+         (let ((inhibit-read-only t))
+           (mevedel-view--call-with-render-boundaries-advancing
+            (lambda ()
+              (goto-char (mevedel-view--history-insertion-marker))
+              (let ((start (point)))
+                (insert (make-string transcript-bytes ?x))
+                (put-text-property start (point)
+                                   'mevedel-view-type 'response)))))
+         (setq mevedel-view--pending-tool-calls
+               '(("benchmark-call" . "Calling Read: benchmark.el")))
+         (mevedel-view--insert-pending-tool-lines
+          mevedel-view--pending-tool-calls)
+         (goto-char (mevedel-view--input-start))
+         (insert "> benchmark draft\nsecond line")
+         (goto-char (+ (mevedel-view--input-start) 4))
+         (set-window-point (selected-window) (point))
+         (let* ((workload
+                 (lambda ()
+                   (dotimes (_ iterations)
+                     (mevedel-view--spinner-tick))))
+                (metrics
+                 (mevedel-benchmark--measure
+                  'spinner-ticks
+                  (list :transcript-bytes transcript-bytes
+                        :iterations iterations)
+                  workload directory
+                  (lambda ()
+                    (let ((original
+                           (symbol-function
+                            'mevedel-view--refresh-spinner-frame-spans))
+                          (calls 0)
+                          (characters 0))
+                      (cl-letf
+                          (((symbol-function
+                             'mevedel-view--refresh-spinner-frame-spans)
+                            (lambda (property start end face)
+                              (when (eq property
+                                        'mevedel-view-inline-spinner-frame)
+                                (cl-incf calls)
+                                (cl-incf characters (- end start)))
+                              (funcall original property start end face))))
+                        (funcall workload))
+                      (list :inline-refresh-calls calls
+                            :inline-refresh-characters characters))))))
+           (unless (and (= (point) (+ (mevedel-view--input-start) 4))
+                        (= (window-point (selected-window)) (point))
+                        (equal (mevedel-view--input-text)
+                               "> benchmark draft\nsecond line"))
+             (error "Spinner benchmark moved the composer"))
+           metrics))))))
+
 (defun mevedel-benchmark-run (scenario directory)
   "Run named SCENARIO and write its artifacts below DIRECTORY."
   (pcase scenario
     ("retry-gap" (mevedel-benchmark--retry-gap directory))
     ("prompt-redraw" (mevedel-benchmark--prompt-redraw directory))
+    ("spinner-ticks" (mevedel-benchmark--spinner-ticks directory))
     ("status-history" (mevedel-benchmark--status-history directory))
     ("telemetry-perturbation"
      (mevedel-benchmark--telemetry-perturbation directory))

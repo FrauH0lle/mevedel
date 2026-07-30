@@ -397,7 +397,7 @@
     :renderer #'mevedel-tool-ui--render-tool-search)
   (mevedel-define-tool
     :name "SendMessage"
-    :description "Queue a non-duplicative message for any retained agent without starting a turn."
+    :description "Queue an interim, non-duplicative message for any retained agent without starting a turn."
     :prompt-file "tools/sendmessage.md"
     :handler #'mevedel-tool-ui--send-message
     :args ((target string :required
@@ -409,7 +409,7 @@
     :renderer #'mevedel-tool-ui--render-agent-interaction)
   (mevedel-define-tool
     :name "WaitAgent"
-    :description "Wait for mailbox activity, user steering, or timeout."
+    :description "Wait for mailbox activity, user steering, or timeout. Only RESULT delivery is terminal."
     :prompt-file "tools/waitagent.md"
     :handler #'mevedel-tool-ui--wait-agent
     :args ((timeout_ms integer :optional

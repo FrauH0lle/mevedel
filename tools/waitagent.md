@@ -1,5 +1,6 @@
 Suspend this active turn until the caller receives mailbox activity, new user
-steering, or the bounded timeout expires.
+steering, or the bounded timeout expires. A MAIL wake-up does not mean its
+sender finished; only RESULT delivery is terminal.
 
 `timeout_ms` is optional and defaults to 30000. Positive values below 10000
 are clamped to 10000; values above 3600000 are rejected. Timeout is a

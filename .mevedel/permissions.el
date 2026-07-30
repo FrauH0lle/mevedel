@@ -1,4 +1,10 @@
-;; Mevedel persistent permission rules
+;; Mevedel persistent permissions
 ;; Auto-generated, safe to edit
 
-(("Bash" :pattern "npx @emacs-eask/cli *" :action allow))
+(:rules
+ (("Bash" :pattern "npx @emacs-eask/cli *"
+   :network t
+   :file-system ((:path "~/.npm" :access write))
+   :action allow))
+ :resource-grants
+ ((:path "~/.npm" :access write)))

@@ -116,6 +116,8 @@
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-mode-set-raw
 		  "mevedel-permissions" (mode))
+(declare-function mevedel-permission-validate-persistent-stores
+                  "mevedel-permissions" (workspace))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
@@ -452,6 +454,8 @@ session struct. SOURCE is \"startup\", \"resume\", or \"fork\"."
     (setq-local default-directory
                 (or (mevedel-session-working-directory mevedel--session)
                     (mevedel-workspace-root workspace)))
+    (require 'mevedel-permissions)
+    (mevedel-permission-validate-persistent-stores workspace)
     ;; Make workspace-additional-roots buffer-local for session-specific
     ;; access grants.  Restore path may have already set this from the
     ;; sidecar's `:additional-roots'; don't clobber.

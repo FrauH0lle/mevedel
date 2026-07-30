@@ -939,6 +939,26 @@
                               :action deny)
                              ("Bash" :pattern "git status:*"
                               :action allow))))))
+      (delete-directory tmp-dir t)))
+  :doc "refuses to overwrite an invalid persistent store"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil))
+         (file (mevedel-permission--persistent-file ws)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (insert "(:rules malformed :resource-grants nil)"))
+          (should-error
+           (mevedel-permission--save-persistent-rule ws "Read" 'allow)
+           :type 'user-error)
+          (should (equal "(:rules malformed :resource-grants nil)"
+                         (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string)))))
       (delete-directory tmp-dir t))))
 
 (mevedel-deftest mevedel-permission-remove-session-resource-grant ()
@@ -1040,7 +1060,7 @@
 (mevedel-deftest mevedel-permission--load-persistent-resource-grants ()
   ,test
   (test)
-  :doc "drops malformed and relative grants from an editable store"
+  :doc "an invalid grant makes the editable store fail closed"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (ws (mevedel-workspace--create
               :type 'project :id "test" :root tmp-dir
@@ -1057,9 +1077,75 @@
                    (:path "/tmp/execute" :access execute)
                    malformed))
                 (current-buffer)))
-          (should (equal '((:path "/tmp/read" :access read))
-                         (mevedel-permission--load-persistent-resource-grants
-                          ws))))
+          (should-not
+           (mevedel-permission--load-persistent-resource-grants ws)))
+      (delete-directory tmp-dir t)))
+  :doc "expands home-relative exact grants in rules and authority"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (user-home (file-name-concat tmp-dir "home"))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil))
+         (file (mevedel-permission--persistent-file ws)))
+    (unwind-protect
+        (let ((process-environment
+               (cons (concat "HOME=" user-home) process-environment)))
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (pp '(:rules
+                  (("Bash" :pattern "npx @emacs-eask/cli *"
+                    :network t
+                    :file-system ((:path "~/.npm" :access write))
+                    :action allow))
+                  :resource-grants ((:path "~/.npm" :access write)))
+                (current-buffer)))
+          (let ((path (expand-file-name "~/.npm")))
+            (should
+             (equal
+              `(("Bash" :pattern "npx @emacs-eask/cli *"
+                 :network t
+                 :file-system ((:path ,path :access write))
+                 :action allow))
+              (mevedel-permission--load-persistent-rules ws)))
+            (should
+             (equal `((:path ,path :access write))
+                    (mevedel-permission--load-persistent-resource-grants
+                     ws)))))
+      (delete-directory tmp-dir t))))
+
+(mevedel-deftest mevedel-permission-validate-persistent-stores ()
+  ,test
+  (test)
+  :doc "warns once per invalid file version and stays quiet for missing stores"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil))
+         (file (mevedel-permission--persistent-file ws))
+         (mevedel-permission--warned-store-versions
+          (make-hash-table :test #'equal))
+         warnings)
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (&rest args) (push args warnings))))
+          (mevedel-permission-validate-persistent-stores ws)
+          (should-not warnings)
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (insert "(:rules malformed :resource-grants nil)"))
+          (mevedel-permission-validate-persistent-stores ws)
+          (mevedel-permission-validate-persistent-stores ws)
+          (should (= 1 (length warnings)))
+          (with-temp-file file
+            (insert "(:rules nil :resource-grants malformed)"))
+          (set-file-times file (time-add (current-time) 1))
+          (mevedel-permission-validate-persistent-stores ws)
+          (should (= 2 (length warnings)))
+          (should (string-match-p
+                   "(:rules (\\.\\.\\.) :resource-grants (\\.\\.\\.))"
+                   (cadar warnings))))
       (delete-directory tmp-dir t))))
 
 (mevedel-deftest mevedel-permission--save-persistent-resource-grant ()

@@ -898,7 +898,7 @@
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-mode--approval-callback
-  (:doc "accepts immutably and starts one canonical Direct turn")
+  (:doc "accepts immutably and retains Direct recovery until success")
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-direct-" t))
@@ -907,7 +907,7 @@
                    :permission-mode 'edits :plan-mode t))
          (data-buffer (generate-new-buffer " *plan-direct-data*"))
          (view-buffer (generate-new-buffer " *plan-direct-view*"))
-         hook-input implementation)
+         hook-input implementation request-fsm)
     (unwind-protect
         (progn
           (with-current-buffer data-buffer
@@ -929,7 +929,9 @@
                      #'ignore)
                     ((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
                     ((symbol-function 'mevedel--implement-plan)
-                     (lambda (action) (setq implementation action))))
+                     (lambda (action)
+                       (setq implementation action
+                             request-fsm (gptel-make-fsm :info nil)))))
             (mevedel-plan-mode--approval-callback
              "# Accepted\n\nDo it." data-buffer session
              '(:accept t
@@ -946,8 +948,14 @@
             (should (file-exists-p accepted))
             (should (string-match-p (regexp-quote accepted) hook-input))
             (should (string-match-p "# Accepted" hook-input))
-            (should-not (plist-member metadata :implementation-retry))
-            (should-not (mevedel-session-goal session))))
+            (should (plist-member metadata :implementation-retry))
+            (should-not (mevedel-session-goal session))
+            (cl-letf (((symbol-function 'mevedel-plan-handoff--persist)
+                       #'ignore))
+              (mevedel-plan-handoff-settle-request request-fsm 'success))
+            (should-not
+             (plist-member (mevedel-session-plan-metadata session)
+                           :implementation-retry))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (delete-directory save-dir t)))

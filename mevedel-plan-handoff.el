@@ -15,6 +15,9 @@
 ;; `gptel'
 (defvar gptel-prompt-prefix-alist)
 
+;; `gptel-request'
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+
 ;; `mevedel-chat'
 (declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
@@ -521,23 +524,62 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
         (format "Could not persist plan implementation retry: %s"
                 (error-message-string err))))))
   (message
-   "mevedel: Implementation did not start: %s; retry with M-x mevedel-retry-plan-implementation"
+   "mevedel: Implementation failed: %s; retry with M-x mevedel-retry-plan-implementation"
    reason)
   nil)
 
-(defun mevedel-plan-handoff--implementation-started (session chat-buffer)
-  "Clear SESSION's retry state after request startup from CHAT-BUFFER."
-  (let ((metadata (copy-sequence
-                   (or (mevedel-session-plan-metadata session) nil))))
+(defun mevedel-plan-handoff--implementation-request-started
+    (fsm chat-buffer)
+  "Attach CHAT-BUFFER's Direct handoff recovery to FSM."
+  (let ((info (copy-sequence (or (gptel-fsm-info fsm) nil))))
+    (setf (gptel-fsm-info fsm)
+          (plist-put info :mevedel-plan-handoff-source-buffer chat-buffer)))
+  fsm)
+
+(defun mevedel-plan-handoff--implementation-completed
+    (session chat-buffer)
+  "Durably clear SESSION's Direct retry after terminal success."
+  (let* ((old-metadata (mevedel-session-plan-metadata session))
+         (metadata (copy-sequence (or old-metadata nil))))
     (cl-remf metadata :implementation-retry)
     (setf (mevedel-session-plan-metadata session) metadata)
     (condition-case err
         (mevedel-plan-handoff--persist session chat-buffer)
       (error
+       (setf (mevedel-session-plan-metadata session) old-metadata)
        (display-warning
         'mevedel
-        (format "Could not persist started plan implementation: %s"
+        (format "Could not persist completed plan implementation: %s"
                 (error-message-string err)))))))
+
+(defun mevedel-plan-handoff-settle-request (fsm status &optional reason)
+  "Settle FSM's attached Direct Plan handoff with terminal STATUS.
+
+STATUS is `success', `error', or `aborted'.  Optional REASON supplies the
+provider or abort detail retained for a retryable failure."
+  (let* ((info (copy-sequence (or (gptel-fsm-info fsm) nil)))
+         (chat-buffer
+          (plist-get info :mevedel-plan-handoff-source-buffer)))
+    (when (plist-member info :mevedel-plan-handoff-source-buffer)
+      (cl-remf info :mevedel-plan-handoff-source-buffer)
+      (setf (gptel-fsm-info fsm) info)
+      (if (not (buffer-live-p chat-buffer))
+          (display-warning
+           'mevedel
+           "Plan implementation settled after its source buffer was killed; \
+the durable retry was retained"
+           :warning)
+        (with-current-buffer chat-buffer
+          (when (bound-and-true-p mevedel--session)
+            (if (eq status 'success)
+                (mevedel-plan-handoff--implementation-completed
+                 mevedel--session chat-buffer)
+              (mevedel-plan-handoff--implementation-failed
+               mevedel--session chat-buffer
+               (or reason
+                   (if (eq status 'aborted)
+                       "Request aborted"
+                     "Provider request failed"))))))))))
 
 (defun mevedel-plan-handoff--goal-handoff-complete (session chat-buffer)
   "Durably clear SESSION's Plan retry before Goal kickoff from CHAT-BUFFER."
@@ -607,7 +649,8 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
              target-buffer display-text submission)
   "Dispatch one accepted SUBMISSION and settle its durable handoff state."
   (let ((goal-p (eq (plist-get selection :execution) 'goal))
-        goal-started)
+        goal-started
+        request-fsm)
     (condition-case err
         (progn
           (when goal-p
@@ -618,15 +661,16 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
             (mevedel-plan-handoff--clear-target-goal-reservation
              target-session target-buffer))
           (with-current-buffer target-buffer
-            (mevedel--implement-plan
-             (list :permission-mode (plist-get selection :mode)
-                   :display-text display-text
-                   :prompt-submission submission
-                   :prepared-outcome
-                   (mevedel-prompt-submission-outcome submission))))
+            (setq request-fsm
+                  (mevedel--implement-plan
+                   (list :permission-mode (plist-get selection :mode)
+                         :display-text display-text
+                         :prompt-submission submission
+                         :prepared-outcome
+                         (mevedel-prompt-submission-outcome submission)))))
           (unless goal-p
-            (mevedel-plan-handoff--implementation-started
-             session chat-buffer)))
+            (mevedel-plan-handoff--implementation-request-started
+             request-fsm chat-buffer)))
       (error
        (let ((reason (error-message-string err)))
          (if goal-started

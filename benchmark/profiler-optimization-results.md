@@ -83,18 +83,49 @@ Workload: one status refresh and one detached-marker history fallback over a
 1 MiB rendered transcript while preserving a selected multiline composer
 draft beginning with `>`.
 
-| Scenario | Commit | Median wall time | Sampled allocation | History scans |
-| --- | --- | ---: | ---: | ---: |
-| Status refresh | `c527b7b` | 312.01 ms | 27,139,475 bytes | 1 / 1,048,608 chars |
-| History fallback | `c527b7b` | 322.00 ms | 27,008,307 bytes | 1 / 1,048,576 chars |
+Finalized harness SHA-256:
+`64b2ef3aeee8eba2ef496b6765fe6a730125f56ac7d9c991a46a2d377270c526`.
 
-Decision: investigate in a separate optimization change.  Every status refresh
-still invokes the linear history fallback despite live zone markers, and its
-absolute cost exceeds the gate.  This evidence commit deliberately adds no
-cache or new state.
+| Scenario | Revision | Median wall time | Sampled allocation | History checks |
+| --- | --- | ---: | ---: | ---: |
+| Status refresh | `5bb0965` baseline | 309.86 ms | 27,172,267 bytes | 1,048,609 |
+| Status refresh | candidate | 0.064 ms | 1,560,835 bytes | 5 |
+| History fallback | `5bb0965` baseline | 304.47 ms | 27,008,307 bytes | 1,048,608 |
+| History fallback | candidate | 0.008 ms | 1,560,835 bytes | 4 |
+
+Decision: ship. Reverse property-run traversal removes the per-character
+fallback without adding cache state. Status refresh saves 309.79 ms median and
+94.3% sampled allocation in this fixture; direct fallback saves 304.46 ms and
+94.2%.
+
+## Pending-tool spinner scope
+
+Workload: 100 pending-tool spinner ticks over a 1 MiB rendered transcript,
+with one live pending row and a selected multiline composer draft beginning
+with `>`. The same finalized harness above measured both revisions.
+
+| Revision | Median wall time | Sampled allocation | Inline scan range |
+| --- | ---: | ---: | ---: |
+| `5bb0965` baseline | 3.842 ms | 1,577,379 bytes | 104,864,500 chars |
+| Candidate | 3.825 ms | 1,577,379 bytes | 2,900 chars |
+
+Decision: ship for ownership correctness and bounded work, but make no timing
+or allocation claim. Restricting updates to the managed `history-live` zone
+removed 99.997% of the requested scan range and prevents unrelated matching
+properties elsewhere in the view from being mutated; the 0.4% timing change is
+below the materiality gate.
 
 ## Interactive rerun
 
-Pending the user's equivalent real-session rerun with
-`M-x mevedel-session-debug`; batch benchmarks cannot validate redisplay,
-permission-overlay timing, or the reported intermittent cursor jump.
+The supplied real-session diagnostics close the interactive rerun:
+
+- 1,344 composer zone-reconcile before/after pairs had zero offset or draft
+  mismatches.
+- The current profiler run recorded 18 composer interaction-registration
+  pairs with zero mismatches and no render fallbacks.
+- No sustained heap growth indicated a session memory leak.
+
+The remaining large full rerenders measured 191 ms median, 443 ms p95, and
+556 ms maximum for the 347 KiB worker transcript. That path is real but
+infrequent in this run, so broader incremental-render changes remain deferred
+until a reproducible interaction shows they dominate user-visible latency.
