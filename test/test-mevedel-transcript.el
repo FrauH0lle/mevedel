@@ -1284,5 +1284,32 @@ TOOL-PROP."
       (should (mevedel-transcript-test--no-tool-prop-p
                start (point))))))
 
+(mevedel-deftest mevedel-transcript--tool-block-retry-gap-p ()
+  ,test
+  (test)
+  :doc "classifies whitespace, tool, response, ignored, and invalid gaps"
+  (dolist (case '(("   \n\t" (tool . "call-1") nil)
+                  (" \noutput\n " (tool . "call-1") t)
+                  (" \noutput\n " response nil)
+                  (" \noutput\n " ignore nil)))
+    (pcase-let ((`(,text ,property ,expected) case))
+      (with-temp-buffer
+        (let ((start (point)))
+          (insert text)
+          (put-text-property start (point) 'gptel property)
+          (should (eq expected
+                      (and (mevedel-transcript--tool-block-retry-gap-p
+                            start (point))
+                           t)))))))
+  (with-temp-buffer
+    (insert "output")
+    (should-not
+     (mevedel-transcript--tool-block-retry-gap-p nil (point-max)))
+    (should-not
+     (mevedel-transcript--tool-block-retry-gap-p (point-min) nil))
+    (should-not
+     (mevedel-transcript--tool-block-retry-gap-p
+      (point-min) (point-min)))))
+
 (provide 'test-mevedel-transcript)
 ;;; test-mevedel-transcript.el ends here

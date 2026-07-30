@@ -940,8 +940,9 @@ the next real tool call."
   (and block-end
        min-end
        (< block-end min-end)
-       (let ((gap (buffer-substring-no-properties block-end min-end)))
-         (and (string-match-p "[^ \t\n]" gap)
+       (save-excursion
+         (goto-char block-end)
+         (and (re-search-forward "[^ \t\n]" min-end t)
               (mevedel-transcript--range-has-gptel-prop-p
                block-end min-end '(tool))
               (not (mevedel-transcript--range-has-gptel-prop-p
