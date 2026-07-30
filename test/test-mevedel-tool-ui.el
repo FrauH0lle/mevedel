@@ -95,6 +95,12 @@
                 (mevedel-tool-renderer
                  (mevedel-tool-get "ListAgents"))))
     (should (mevedel-tool-async-p (mevedel-tool-get "WaitAgent")))
+    (should (string-match-p
+             "interim"
+             (mevedel-tool-description (mevedel-tool-get "SendMessage"))))
+    (should (string-match-p
+             "Only.*RESULT.*terminal"
+             (mevedel-tool-description (mevedel-tool-get "WaitAgent"))))
     (should-not (mevedel-tool-get "RequestAccess")))
 
   :doc "Agent exposes every optional fork and configuration control"

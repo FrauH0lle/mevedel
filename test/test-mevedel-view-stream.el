@@ -2435,6 +2435,36 @@
           (mevedel-view--spinner-tick)
           (should (= (point) point-before))))))
 
+  :doc "spinner tick updates only history-live and preserves the composer"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-spinner-frames '("-" "+"))
+            (mevedel-view--spinner-frame-index 0)
+            (mevedel-view--pending-tool-calls
+             '(("call-1" . "Calling Read..."))))
+        (mevedel-view--insert-pending-tool-lines
+         mevedel-view--pending-tool-calls)
+        (let ((real-pos
+               (text-property-any
+                (point-min) (point-max)
+                'mevedel-view-inline-spinner-frame t))
+              (decoy-pos (point-min))
+              (inhibit-read-only t))
+          (put-text-property
+           decoy-pos (1+ decoy-pos)
+           'mevedel-view-inline-spinner-frame t)
+          (put-text-property decoy-pos (1+ decoy-pos) 'display "decoy")
+          (mevedel-view-stream-test--insert-composer-draft
+           "> quoted\nsecond line" 4)
+          (let ((point-before (point))
+                (draft-before (mevedel-view--input-text)))
+            (mevedel-view--spinner-tick)
+            (should (equal "+" (get-text-property real-pos 'display)))
+            (should (equal "decoy"
+                           (get-text-property decoy-pos 'display)))
+            (should (= point-before (point)))
+            (should (equal draft-before (mevedel-view--input-text))))))))
+
   :doc "incremental response keeps request progress row visible"
   (mevedel-view-stream-test--with-buffers
     (let (data-turn-start)

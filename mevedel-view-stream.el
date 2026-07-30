@@ -849,13 +849,14 @@ line."
 
 (defun mevedel-view--refresh-inline-spinner-frames ()
   "Refresh all inline pending-tool spinner frame spans."
-  (let ((inhibit-read-only t)
-        (inhibit-modification-hooks t))
-    (mevedel-view--refresh-spinner-frame-spans
-     'mevedel-view-inline-spinner-frame
-     (point-min)
-     (point-max)
-     'mevedel-view-ephemeral)))
+  (when-let* ((region (mevedel-view-zone-region 'history-live)))
+    (let ((inhibit-read-only t)
+          (inhibit-modification-hooks t))
+      (mevedel-view--refresh-spinner-frame-spans
+       'mevedel-view-inline-spinner-frame
+       (overlay-start region)
+       (overlay-end region)
+       'mevedel-view-ephemeral))))
 
 (defun mevedel-view--refresh-request-spinner-frame ()
   "Refresh the request-progress spinner frame without rewriting its text."

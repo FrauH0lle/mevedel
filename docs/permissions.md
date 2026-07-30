@@ -134,9 +134,11 @@ Single-segment Bash approvals may use the recognized safe command pattern.
 Compound commands keep generalized operation rules for their segments but
 store the profile against the complete compound command, preventing one
 segment from inheriting another segment's capability.
-Filesystem entries are exact `(:path ABSOLUTE-PATH :access read-or-write)`
-requirements and become effective only while an equally strong direct resource
-grant still exists. Multiple matching profiles are unioned, with write
+Filesystem entries are exact `(:path PATH :access read-or-write)`
+requirements. `PATH` is either absolute or home-relative with `~`/`~/`; stored
+home-relative paths expand when loaded so project configuration remains
+portable. Entries become effective only while an equally strong direct
+resource grant still exists. Multiple matching profiles are unioned, with write
 dominating read for the same path. Only session, persistent, and defcustom
 rules can contribute a reusable profile. Invocation- and request-scoped
 delegated rules may still authorize ordinary operations but never broaden the
@@ -167,6 +169,13 @@ command, network, and individual path toggles can narrow it before approval.
 The current invocation always receives the complete approved request.
 `.mevedel/permissions.el` stores a plist containing both `:rules` and
 `:resource-grants`.
+
+Global and project stores are validated when a fresh, resumed, or forked
+session initializes. Invalid files contribute no authority and produce one
+actionable warning per file version. Persistent permission changes refuse to
+overwrite an invalid file; fix it to the current
+`(:rules (...) :resource-grants (...))` shape first. Missing files are valid
+empty stores.
 
 Default allowed roots are the workspace root, the system temporary directory,
 configured memory roots, and manually configured additional roots. A native
@@ -588,3 +597,16 @@ avoid matching `lsof`. Supported plain syntax is commands joined by
 `&&`, `||`, `;`, or `|`. Dynamic shell forms are complex and require either
 an interactive decision, `full-auto`, or a deliberately authored direct-user
 pattern.
+
+A portable project-local store that authorizes the Eask CLI, network access,
+and only npm's cache writes is:
+
+```elisp
+(:rules
+ (("Bash" :pattern "npx @emacs-eask/cli *"
+   :network t
+   :file-system ((:path "~/.npm" :access write))
+   :action allow))
+ :resource-grants
+ ((:path "~/.npm" :access write)))
+```

@@ -39,9 +39,11 @@ path-sorted retained roster without storage IDs or transcript content.
 `FollowupAgent` continues an idle retained conversation or steers a running
 invocation at its next safe request boundary; later terminal results still go
 to the original spawn parent. `SendMessage`
-queues plain-text mail for `/root` or any retained path without activating a
-turn. `WaitAgent` suspends its ordinary asynchronous tool callback until mail,
-user steering, follow-up steering, or its bounded successful timeout wakes it.
+queues interim plain-text mail for `/root` or any retained path without
+activating a turn. `WaitAgent` suspends its ordinary asynchronous tool callback
+until mail, user steering, follow-up steering, or its bounded successful
+timeout wakes it. A `MAIL` wake-up is not sender completion; only the canonical
+`RESULT` is terminal.
 `InterruptAgent` aborts one retained non-root agent's current turn by canonical
 path, returns its previous activity, and leaves its identity, conversation,
 mailbox, descendants, and future follow-up capability intact.
@@ -176,7 +178,10 @@ PATH` from the canonical event.
 tree-wide. It queues one canonical `MAIL` record containing type, sender path,
 recipient path, and payload; it never starts an idle turn. Successful sends
 return an empty result and render `Message sent to PATH`. Canonical `MAIL`
-payloads are retained in full without a mailbox body cap.
+payloads are retained in full without a mailbox body cap. Since this delivery
+is interim and may cross a root-turn boundary, an agent should put its final
+verdict in its terminal response rather than treating `SendMessage` as its
+completion channel.
 
 Before a recipient's next model sample, its retained unread queue drains in
 FIFO order. Each record is injected as a separate user-role communication

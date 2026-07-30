@@ -1919,6 +1919,29 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
       (kill-buffer data))))
 
 
+(mevedel-deftest mevedel-view--history-tail-position ()
+  ,test
+  (test)
+  :doc "recovers the last history boundary by property runs"
+  (with-temp-buffer
+    (insert "Header\n")
+    (let ((start (point)))
+      (insert "Assistant answer\n")
+      (put-text-property start (point) 'mevedel-view-type 'response))
+    (let ((expected (point))
+          (original
+           (symbol-function 'mevedel-view--transcript-history-position-p))
+          (calls 0))
+      (insert (propertize "status\n" 'mevedel-view-type 'agent-status))
+      (insert (make-string 100000 ?x))
+      (cl-letf (((symbol-function
+                  'mevedel-view--transcript-history-position-p)
+                 (lambda (pos)
+                   (cl-incf calls)
+                   (funcall original pos))))
+        (should (= expected (mevedel-view--history-tail-position)))
+        (should (< calls 10))))))
+
 (mevedel-deftest mevedel-view--full-rerender-live-tail ()
   ,test
   (test)

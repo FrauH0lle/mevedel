@@ -191,7 +191,8 @@
 				    :root root
 				    :name "init"))
 			(session (mevedel-session-create "main" workspace root))
-			notified-workspace)
+			notified-workspace
+			validated-workspace)
 		   (unwind-protect
 		       (with-temp-buffer
 			 (setq-local mevedel--session session)
@@ -216,6 +217,10 @@
 				    #'ignore)
 				   ((symbol-function 'mevedel-view--ensure)
 				    #'ignore)
+				   ((symbol-function
+				     'mevedel-permission-validate-persistent-stores)
+				    (lambda (workspace)
+				      (setq validated-workspace workspace)))
 				   ((symbol-function 'mevedel--run-session-start-hooks)
 				    #'ignore)
 				   ((symbol-function
@@ -225,6 +230,7 @@
 			   (mevedel--chat-buffer-init-common
 			    (current-buffer) workspace "startup"))
 			 (should (eq notified-workspace workspace))
+			 (should (eq validated-workspace workspace))
 			 (should (memq #'mevedel-tool-repair-pre-tool-call
 				       gptel-pre-tool-call-functions))
 			 (should (memq #'mevedel-tool-repair-post-tool-call

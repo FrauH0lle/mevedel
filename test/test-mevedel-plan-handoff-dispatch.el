@@ -54,6 +54,7 @@
          (rotations 0)
          (attempts 0)
          hook-source
+         request-fsm
          prompts)
     (unwind-protect
         (progn
@@ -91,7 +92,7 @@
                                    (plist-get action :permission-mode)))
                        (when (= attempts 1)
                          (error "Transport refused"))
-                       'started)))
+                       (setq request-fsm (gptel-make-fsm :info nil)))))
             (mevedel-plan-handoff--dispatch-accepted session data-buffer)
             (let ((retry
                    (plist-get (mevedel-session-plan-metadata session)
@@ -106,6 +107,12 @@
             (mevedel-retry-plan-implementation session data-buffer)
             (should (= 1 rotations))
             (should (= 2 attempts))
+            (should
+             (plist-member (mevedel-session-plan-metadata session)
+                           :implementation-retry))
+            (cl-letf (((symbol-function 'mevedel-plan-handoff--persist)
+                       #'ignore))
+              (mevedel-plan-handoff-settle-request request-fsm 'success))
             (should-not
              (plist-member (mevedel-session-plan-metadata session)
                            :implementation-retry))
@@ -440,6 +447,7 @@
          (compact-runs 0)
          (apply-attempts 0)
          (attempts 0)
+         request-fsm
          anchored-summary
          persisted
          prompts)
@@ -447,6 +455,8 @@
         (progn
           (make-directory (file-name-directory accepted-path) t)
           (write-region body nil accepted-path nil 'silent)
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session))
           (cl-letf (((symbol-function 'mevedel-plan-handoff--persist)
                      (lambda (&rest _)
                        (push (copy-tree
@@ -507,7 +517,7 @@
                        (cl-incf attempts)
                        (when (= attempts 1)
                          (error "Request startup failed"))
-                       'started)))
+                       (setq request-fsm (gptel-make-fsm :info nil)))))
             (mevedel-plan-handoff--dispatch-accepted session data-buffer)
             (let ((retry
                    (plist-get (mevedel-session-plan-metadata session)
@@ -534,6 +544,10 @@
                             :summary)))
             (mevedel-retry-plan-implementation session data-buffer)
             (should (= 2 attempts))
+            (should
+             (plist-member (mevedel-session-plan-metadata session)
+                           :implementation-retry))
+            (mevedel-plan-handoff-settle-request request-fsm 'success)
             (should-not
              (plist-member (mevedel-session-plan-metadata session)
                            :implementation-retry))
@@ -588,6 +602,7 @@
          (creates 0)
          (archives 0)
          (attempts 0)
+         request-fsm
          prompts)
     (unwind-protect
         (progn
@@ -641,7 +656,7 @@
                        (cl-incf attempts)
                        (when (= attempts 1)
                          (error "Startup failed"))
-                       'started)))
+                       (setq request-fsm (gptel-make-fsm :info nil)))))
             (mevedel-plan-handoff--dispatch-accepted
              source-session source-buffer)
             (let* ((retry
@@ -677,6 +692,10 @@
             (should (= 1 creates))
             (should (= 1 archives))
             (should (= 2 attempts))
+            (should
+             (plist-member (mevedel-session-plan-metadata source-session)
+                           :implementation-retry))
+            (mevedel-plan-handoff-settle-request request-fsm 'success)
             (should-not
              (plist-member (mevedel-session-plan-metadata source-session)
                            :implementation-retry))
@@ -734,6 +753,7 @@
          (creates 0)
          (archives 0)
          (attempts 0)
+         request-fsm
          clean
          prompts)
     (unwind-protect
@@ -811,7 +831,7 @@
                   (should (eq target-buffer (current-buffer)))
                   (cl-incf attempts)
                   (when (= attempts 1) (error "Startup failed"))
-                  'started)))
+                  (setq request-fsm (gptel-make-fsm :info nil)))))
             (mevedel-plan-handoff--dispatch-accepted
              source-session source-buffer)
             (let* ((retry
@@ -851,6 +871,10 @@
             (with-current-buffer target-buffer
               (should (= 1 (how-many "^#\\+begin_summary"
                                      (point-min) (point-max)))))
+            (should
+             (plist-member (mevedel-session-plan-metadata source-session)
+                           :implementation-retry))
+            (mevedel-plan-handoff-settle-request request-fsm 'success)
             (should-not
              (plist-member (mevedel-session-plan-metadata source-session)
                            :implementation-retry))))

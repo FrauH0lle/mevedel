@@ -1462,23 +1462,163 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
 ;;
 ;;; Persistent rule storage
 
+(defvar mevedel-permission--warned-store-versions
+  (make-hash-table :test #'equal)
+  "Permission store versions already reported as invalid.")
+
 (defun mevedel-permission--persistent-file (workspace)
   "Return the path to WORKSPACE's persistent permission rules file."
   (file-name-concat (mevedel-workspace-state-dir workspace)
                      "permissions.el"))
 
-(defun mevedel-permission--read-store-file (file)
-  "Read the permission store plist from FILE, or nil when invalid."
-  (when (file-readable-p file)
-    (condition-case nil
+(defun mevedel-permission--valid-plist-p (plist allowed required)
+  "Return non-nil when PLIST has unique ALLOWED keys including REQUIRED."
+  (and (proper-list-p plist)
+       (zerop (% (length plist) 2))
+       (let ((keys (cl-loop for (key _) on plist by #'cddr collect key)))
+         (and (cl-every (lambda (key) (memq key allowed)) keys)
+              (= (length keys) (length (delete-dups (copy-sequence keys))))
+              (cl-every (lambda (key) (memq key keys)) required)))))
+
+(defun mevedel-permission--normalize-exact-path (path)
+  "Expand supported exact PATH syntax, or return nil when invalid."
+  (and (stringp path)
+       (or (file-name-absolute-p path)
+           (equal path "~")
+           (string-prefix-p "~/" path))
+       (expand-file-name path)))
+
+(defun mevedel-permission--normalize-resource-grant (grant)
+  "Return normalized exact resource GRANT, or nil when invalid."
+  (when (and (mevedel-permission--valid-plist-p
+              grant '(:path :access) '(:path :access))
+             (memq (plist-get grant :access) '(read write)))
+    (when-let* ((path (mevedel-permission--normalize-exact-path
+                       (plist-get grant :path))))
+      (list :path path :access (plist-get grant :access)))))
+
+(defun mevedel-permission--normalize-rule (rule)
+  "Return normalized persistent permission RULE, or nil when invalid."
+  (when (and (proper-list-p rule) (stringp (car rule)))
+    (let* ((plist (cdr rule))
+           (specifier-keys
+            (cl-remove-if-not
+             (lambda (key) (plist-member plist key))
+             '(:path :pattern :domain :name)))
+           (file-system-present (plist-member plist :file-system))
+           (file-system (plist-get plist :file-system))
+           (normalized-file-system
+            (and file-system-present
+                 (proper-list-p file-system)
+                 (mapcar #'mevedel-permission--normalize-resource-grant
+                         file-system))))
+      (when (and
+             (mevedel-permission--valid-plist-p
+              plist
+              '(:path :pattern :domain :name :network :file-system
+                :sandbox-permissions :action)
+              '(:action))
+             (<= (length specifier-keys) 1)
+             (cl-every (lambda (key) (stringp (plist-get plist key)))
+                       specifier-keys)
+             (memq (plist-get plist :action) '(allow ask deny))
+             (or (not (plist-member plist :network))
+                 (eq (plist-get plist :network) t))
+             (or (not (plist-member plist :sandbox-permissions))
+                 (eq (plist-get plist :sandbox-permissions)
+                     'require-escalated))
+             (or (not file-system-present)
+                 (and (proper-list-p file-system)
+                      (cl-every #'identity normalized-file-system))))
+        (let ((normalized (copy-tree rule)))
+          (when file-system-present
+            (setcdr normalized
+                    (plist-put
+                     (cdr normalized) :file-system
+                     normalized-file-system)))
+          normalized)))))
+
+(defun mevedel-permission--normalize-store (store)
+  "Return normalized permission STORE, or nil when invalid."
+  (when (and (mevedel-permission--valid-plist-p
+              store '(:rules :resource-grants) '(:rules :resource-grants))
+             (proper-list-p (plist-get store :rules))
+             (proper-list-p (plist-get store :resource-grants)))
+    (let ((rules (mapcar #'mevedel-permission--normalize-rule
+                         (plist-get store :rules)))
+          (grants (mapcar #'mevedel-permission--normalize-resource-grant
+                          (plist-get store :resource-grants))))
+      (when (and (cl-every #'identity rules)
+                 (cl-every #'identity grants))
+        (list :rules rules :resource-grants grants)))))
+
+(defun mevedel-permission--store-file-status (file)
+  "Return FILE's permission store status and normalized contents."
+  (cond
+   ((not (file-exists-p file)) '(:status missing))
+   ((not (file-readable-p file))
+    '(:status invalid :reason "file is not readable"))
+   (t
+    (condition-case err
         (with-temp-buffer
           (insert-file-contents file)
-          (let ((store (read (current-buffer))))
-            (and (proper-list-p store)
-                 (plist-member store :rules)
-                 (plist-member store :resource-grants)
-                 store)))
-      (error nil))))
+          (let* ((raw (read (current-buffer)))
+                 (store (mevedel-permission--normalize-store raw))
+                 (single-form-p
+                  (condition-case nil
+                      (progn (read (current-buffer)) nil)
+                    (end-of-file t))))
+            (if (and store single-form-p)
+                (list :status 'valid :store store)
+              '(:status invalid :reason "invalid store shape or value"))))
+      (error
+       (list :status 'invalid :reason (error-message-string err)))))))
+
+(defun mevedel-permission--read-store-file (file)
+  "Read the permission store plist from FILE, or nil when invalid."
+  (let ((result (mevedel-permission--store-file-status file)))
+    (and (eq (plist-get result :status) 'valid)
+         (plist-get result :store))))
+
+(defun mevedel-permission--editable-store (file)
+  "Return FILE's valid store, a new store, or signal on invalid contents."
+  (let ((result (mevedel-permission--store-file-status file)))
+    (pcase (plist-get result :status)
+      ('valid (plist-get result :store))
+      ('missing (list :rules nil :resource-grants nil))
+      (_
+       (user-error
+        "Invalid permission store %s: expected (:rules (...) :resource-grants (...))"
+        file)))))
+
+(defun mevedel-permission--store-version (file)
+  "Return a warning-cache version for FILE."
+  (when-let* ((attributes (file-attributes file)))
+    (list (file-attribute-size attributes)
+          (file-attribute-modification-time attributes))))
+
+(defun mevedel-permission-validate-persistent-stores (workspace)
+  "Warn once per invalid global or WORKSPACE permission store version."
+  (dolist (file (delete-dups
+                 (list (file-name-concat mevedel-user-dir "permissions.el")
+                       (mevedel-permission--persistent-file workspace))))
+    (let* ((result (mevedel-permission--store-file-status file))
+           (status (plist-get result :status)))
+      (if (eq status 'invalid)
+          (let ((version (mevedel-permission--store-version file))
+                (unseen (make-symbol "unseen")))
+            (unless (equal version
+                           (gethash file
+                                    mevedel-permission--warned-store-versions
+                                    unseen))
+              (puthash file version mevedel-permission--warned-store-versions)
+              (display-warning
+               'mevedel
+               (format
+                "Invalid permission store %s (%s); expected (:rules (...) :resource-grants (...)). Authority from this file is disabled until fixed"
+                file (plist-get result :reason))
+               :warning)))
+        (remhash file mevedel-permission--warned-store-versions)))))
 
 (defun mevedel-permission--write-store-file (file store)
   "Write permission STORE plist to FILE."
@@ -1533,8 +1673,7 @@ NETWORK and FILE-SYSTEM record matching additive execution authority.
 SANDBOX-PERMISSIONS qualifies an already requested execution level.  The file
 is created if it does not exist."
   (let* ((file (mevedel-permission--persistent-file workspace))
-         (store (or (mevedel-permission--read-store-file file)
-                    (list :rules nil :resource-grants nil)))
+         (store (mevedel-permission--editable-store file))
          (existing (plist-get store :rules))
          (key (or spec-key (and path :path)))
          (value (or spec-value path))
@@ -1553,8 +1692,7 @@ is created if it does not exist."
     (workspace path access)
   "Persist exact PATH ACCESS for WORKSPACE."
   (let* ((file (mevedel-permission--persistent-file workspace))
-         (store (or (mevedel-permission--read-store-file file)
-                    (list :rules nil :resource-grants nil)))
+         (store (mevedel-permission--editable-store file))
          (grant (mevedel-permission--resource-grant path access))
          (grants
           (mevedel-permission--merge-resource-grant
@@ -1567,9 +1705,9 @@ is created if it does not exist."
     (workspace path access)
   "Revoke WORKSPACE's exact PATH ACCESS resource grant."
   (let* ((file (mevedel-permission--persistent-file workspace))
-         (store (mevedel-permission--read-store-file file))
+         (store (mevedel-permission--editable-store file))
          (grant (mevedel-permission--resource-grant path access)))
-    (when store
+    (when (file-exists-p file)
       (mevedel-permission--write-store-file
        file
        (plist-put store :resource-grants
@@ -1579,8 +1717,8 @@ is created if it does not exist."
 (defun mevedel-permission-remove-persistent-rule (workspace rule)
   "Revoke exact permission RULE from WORKSPACE."
   (let* ((file (mevedel-permission--persistent-file workspace))
-         (store (mevedel-permission--read-store-file file)))
-    (when store
+         (store (mevedel-permission--editable-store file)))
+    (when (file-exists-p file)
       (mevedel-permission--write-store-file
        file
        (plist-put store :rules

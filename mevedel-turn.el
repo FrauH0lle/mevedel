@@ -42,6 +42,11 @@
                   (event event-plist callback
                          &optional session workspace request invocation))
 
+;; `mevedel-plan-handoff'
+(declare-function mevedel-plan-handoff-settle-request
+                  "mevedel-plan-handoff"
+                  (fsm status &optional reason))
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-save
                   "mevedel-session-persistence"
@@ -125,6 +130,17 @@
                                (or (plist-get tokens :cached)
                                    (plist-get tokens :cache-read)
                                    (plist-get tokens :cache_read)))))))))
+
+(defun mevedel--turn-settle-plan-handoff (fsm status)
+  "Settle any Direct Plan handoff attached to FSM with STATUS."
+  (when (fboundp 'mevedel-plan-handoff-settle-request)
+    (mevedel-plan-handoff-settle-request
+     fsm status
+     (and (not (eq status 'success))
+          (or (mevedel--fsm-error-message fsm)
+              (if (eq status 'aborted)
+                  "Request aborted"
+                "Provider request failed"))))))
 
 (defun mevedel--fsm-error-message (fsm)
   "Return a compact error message for FSM, or nil."
@@ -284,6 +300,8 @@
    (list #'mevedel--turn-increment
          (lambda (machine)
            (mevedel--turn-record-settlement machine 'success))
+         (lambda (machine)
+           (mevedel--turn-settle-plan-handoff machine 'success))
          #'mevedel-goal-settle-turn
          #'mevedel--compact-record-token-baseline
          #'mevedel--turn-autosave
@@ -302,6 +320,8 @@
     (list #'mevedel--turn-increment
           (lambda (machine)
             (mevedel--turn-record-settlement machine status))
+          (lambda (machine)
+            (mevedel--turn-settle-plan-handoff machine status))
           #'mevedel--compact-record-token-baseline
           (lambda (machine)
             (mevedel-goal-settle-failure machine status)))

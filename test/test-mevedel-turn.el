@@ -362,6 +362,10 @@
                      (lambda (_fsm) (push 'baseline events)))
                     ((symbol-function 'mevedel--turn-autosave)
                      (lambda (_fsm) (push 'save events)))
+                    ((symbol-function
+                      'mevedel-plan-handoff-settle-request)
+                     (lambda (_fsm status &optional _reason)
+                       (push (list 'plan status) events)))
                     ((symbol-function 'mevedel--run-turn-terminal-hook)
                      (lambda (_fsm event status)
                        (push (list event status
@@ -385,7 +389,7 @@
             (mevedel--complete-turn
              (gptel-make-fsm :info (list :buffer chat-buf)))))
           (should (equal (nreverse events)
-                         '(turn baseline save
+                         '(turn (plan success) baseline save
                            (Stop completed live)
                            restore request-end (drain t))))
           (with-current-buffer chat-buf
@@ -405,6 +409,11 @@
               ((symbol-function 'mevedel-goal-settle-failure)
                (lambda (_fsm &optional _status)
                  (push 'goal-failure events)))
+              ((symbol-function 'mevedel-plan-handoff-settle-request)
+               (lambda (_fsm status &optional _reason)
+                 (push (list 'plan status) events)))
+              ((symbol-function 'mevedel--fsm-error-message)
+               (lambda (_fsm) "Provider failed"))
               ((symbol-function 'mevedel-goal-persist-failure)
                (lambda (_fsm) (push 'goal-save events)))
               ((symbol-function 'mevedel-goal-dispatch-after-turn)
@@ -432,7 +441,7 @@
          (equal
           (nreverse events)
           (append
-           '(turn baseline goal-failure)
+           `(turn (plan ,(car case)) baseline goal-failure)
            (and (eq (car case) 'error)
                 '(failure-record save))
            `((StopFailure ,(car case))

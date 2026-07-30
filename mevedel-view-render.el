@@ -2460,13 +2460,16 @@ from the last rendered transcript character before the composer.  If no
 transcript has been rendered yet, return the position after the header."
   (let* ((after-header (mevedel-view--after-header-position))
          (limit (point-max))
-         (pos after-header)
-         last-history)
-    (while (< pos limit)
-      (when (mevedel-view--transcript-history-position-p pos)
-        (setq last-history (1+ pos)))
-      (setq pos (1+ pos)))
-    (or last-history after-header)))
+         (pos limit))
+    (while (and (> pos after-header)
+                (not
+                 (mevedel-view--transcript-history-position-p (1- pos))))
+      (setq pos (or (previous-property-change pos nil after-header)
+                    after-header)))
+    (if (and (> pos after-header)
+             (mevedel-view--transcript-history-position-p (1- pos)))
+        pos
+      after-header)))
 
 (defun mevedel-view--pending-tool-insertion-target ()
   "Return where pending tool live-tail lines should be inserted.

@@ -157,7 +157,10 @@ and is reported as a conflict.
 Goal construction is the Plan recovery boundary. Once the target Goal is
 durable, the source retry is cleared before kickoff. A kickoff startup failure
 therefore pauses the Goal with its runtime reason and is resumed with ordinary
-`/goal resume`, not Plan retry. Direct retains request-startup retry behavior.
+`/goal resume`, not Plan retry. Direct keeps the exact prepared retry record
+through request startup and clears it only when the canonical request FSM
+settles successfully. Provider errors and aborts retain the record with the
+terminal reason for `mevedel-retry-plan-implementation`.
 If recovery finds the matching Goal already durable but paused by session
 restore, it reactivates it without scheduling before retrying the owned
 kickoff, preventing both duplicate Goals and duplicate continuations.
