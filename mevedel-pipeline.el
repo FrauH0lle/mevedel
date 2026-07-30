@@ -1210,6 +1210,12 @@ explicit `:status' must be `success' or `error'."
        (cl-loop for tail on value by #'cddr
                 always (keywordp (car tail)))
        (plist-member value :result)
+       (let ((render-data (plist-get value :render-data)))
+         (or (null render-data)
+             (and (proper-list-p render-data)
+                  (zerop (% (length render-data) 2))
+                  (cl-loop for tail on render-data by #'cddr
+                           always (keywordp (car tail))))))
        (or (not (plist-member value :status))
            (memq (plist-get value :status) '(success error)))))
 

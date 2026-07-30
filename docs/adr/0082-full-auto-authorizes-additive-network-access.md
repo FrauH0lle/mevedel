@@ -1,6 +1,6 @@
 # Full-auto authorizes additive network access
 
-Status: accepted
+Status: superseded by ADR 0086
 
 `Full-auto` authorizes a model-requested additive network capability without a
 prompt, while `ask` and `edits` require direct user authority. The model must

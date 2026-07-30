@@ -3586,6 +3586,10 @@
 		 :doc "accepts plist with :result and :render-data"
 		 (should (mevedel-pipeline--handler-return-p
 			  '(:result "ok" :render-data (:kind diff))))
+		 :doc "rejects non-plist render-data before attachment"
+		 (should-not
+		  (mevedel-pipeline--handler-return-p
+		   '(:result "ok" :render-data ((:kind first) (:kind second)))))
 		 :doc "accepts explicit success and error status"
 		 (should (mevedel-pipeline--handler-return-p
 			  '(:result "ok" :status success)))

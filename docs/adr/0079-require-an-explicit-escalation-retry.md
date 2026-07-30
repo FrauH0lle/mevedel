@@ -1,6 +1,6 @@
 # Require an explicit escalation retry
 
-Status: accepted
+Status: superseded by ADR 0086
 
 A refused or failed confined invocation returns model-visible instructions for
 requesting additional or full execution authority, but never opens an

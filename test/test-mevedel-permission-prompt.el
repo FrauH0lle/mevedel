@@ -167,6 +167,7 @@
     (should (string-match-p "\\[x\\] Command" text))
     (should (string-match-p "\\[ \\] Network with command" text))
     (should (string-match-p "\\[x\\] Write /output" text))
+    (should (string-match-p "complete selected profile" text))
     (should (string-match-p "p selects an exact path" text))))
 
 (mevedel-deftest mevedel-permission--prompt-body
@@ -177,14 +178,14 @@
   (cl-letf (((symbol-function 'gptel-agent--block-bg)
              (lambda () 'ask)))
     (should (string-match-p
-             "remember for session"
+             "remember selected profile for session"
              (mevedel-permission--prompt-body "Body\n" nil))))
 
   :doc "suppresses session allow without suppressing session deny"
   (cl-letf (((symbol-function 'gptel-agent--block-bg)
              (lambda () 'ask)))
     (let ((body (mevedel-permission--prompt-body "Body\n" nil t)))
-      (should-not (string-match-p "remember for session" body))
+      (should-not (string-match-p "remember selected profile for session" body))
       (should (string-match-p "deny-session" body)))))
 
 (mevedel-deftest mevedel-permission--prompt-async-with-content
@@ -310,7 +311,7 @@
       (should (string-match-p
                "\\[x\\] already granted.*\\[ \\] granted by this approval"
                content))
-      (should (string-match-p "Remember from this approval" content))
+      (should (string-match-p "complete selected profile" content))
       (should (string-match-p "\\[x\\] Command" content))
       (should (string-match-p "\\[x\\] Network" content))
       (should (string-match-p

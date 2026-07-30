@@ -86,6 +86,7 @@
 
 Each entry is a list:
   (TOOL-NAME &key SPECIFIER VALUE :network BOOLEAN
+                   :file-system GRANTS
                    :sandbox-permissions LEVEL
                    :action ACTION)
 
@@ -113,6 +114,11 @@ the matching Bash command or Eval expression.  It also authorizes the
 operation; an otherwise identical rule without `:network' leaves network
 isolated.
 
+The optional `:file-system' qualifier records exact child-process grants as
+`((:path ABSOLUTE-PATH :access ACCESS) ...)', where ACCESS is `read' or
+`write'.  A matching direct resource grant must also exist before a path is
+reopened.
+
 The optional :sandbox-permissions qualifier currently accepts
 `require-escalated'.  Such rules participate only in full execution
 escalation decisions; they do not grant ordinary tool permission.  A
@@ -132,6 +138,9 @@ Example:
    (\"Bash\" :pattern \"ls *\" :action allow)
    (\"Bash\" :pattern \"git log:*\" :action allow)
    (\"Bash\" :pattern \"npx test*\" :network t :action allow)
+   (\"Bash\" :pattern \"make report\"
+           :file-system ((:path \"/srv/report\" :access write))
+           :action allow)
    (\"Bash\" :pattern \"rm *\" :action deny)
    (\"Bash\" :pattern \"curl https://example.com/*\"
            :sandbox-permissions require-escalated :action allow)
@@ -1396,26 +1405,29 @@ mode, and native-resource tail."
                    :test #'equal)))
 
 (cl-defun mevedel-permission--build-rule
-    (tool-name action spec-key spec-value &key network sandbox-permissions)
+    (tool-name action spec-key spec-value
+               &key network file-system sandbox-permissions)
   "Build a permission rule list from the given components.
 
 TOOL-NAME is the tool name string or \"*\".  ACTION is `allow', `deny',
 or `ask'.  SPEC-KEY is one of `:path', `:pattern', `:domain', `:name',
 or nil for an unqualified rule.  SPEC-VALUE is the glob associated with
-SPEC-KEY (ignored when SPEC-KEY is nil).  NETWORK records matching additive
-network authority.  SANDBOX-PERMISSIONS optionally qualifies the already
-requested child-execution level."
+SPEC-KEY (ignored when SPEC-KEY is nil).  NETWORK and FILE-SYSTEM record a
+matching additive execution profile.  SANDBOX-PERMISSIONS optionally qualifies
+the already requested child-execution level."
   (append
    (list tool-name)
    (and spec-key spec-value (list spec-key spec-value))
    (and network (list :network t))
+   (and file-system (list :file-system file-system))
    (and sandbox-permissions
         (list :sandbox-permissions sandbox-permissions))
    (list :action action)))
 
 (cl-defun mevedel-permission--add-session-rule
     (session tool-name action &optional path
-             &key spec-key spec-value network sandbox-permissions)
+             &key spec-key spec-value network file-system
+             sandbox-permissions)
   "Add a permission rule to SESSION's rule list.
 
 TOOL-NAME is the tool name string.  ACTION is `allow' or `deny'.
@@ -1423,9 +1435,9 @@ TOOL-NAME is the tool name string.  ACTION is `allow' or `deny'.
 Positional PATH is retained for existing call sites; when supplied it is
 equivalent to SPEC-KEY `:path' with that value.  Callers specifying
 another specifier should pass SPEC-KEY (e.g. `:pattern') and SPEC-VALUE
-instead, leaving PATH nil.  NETWORK records matching additive network
-authority.  SANDBOX-PERMISSIONS qualifies an already requested execution
-level.
+instead, leaving PATH nil.  NETWORK and FILE-SYSTEM record matching additive
+execution authority.  SANDBOX-PERMISSIONS qualifies an already requested
+execution level.
 
 Mutates SESSION's `permission-rules' slot via `setf' -- this is a
 **by-reference** write.  Sub-agents share the parent session by
@@ -1439,6 +1451,7 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
          (rule (mevedel-permission--build-rule
                 tool-name action key value
                 :network network
+                :file-system file-system
                 :sandbox-permissions sandbox-permissions))
          (rules (mevedel-session-permission-rules session)))
     (unless (member rule rules)
@@ -1509,15 +1522,16 @@ Returns a merged list in `mevedel-permission-rules' format."
 
 (cl-defun mevedel-permission--save-persistent-rule
     (workspace tool-name action &optional path
-               &key spec-key spec-value network sandbox-permissions)
+               &key spec-key spec-value network file-system
+               sandbox-permissions)
   "Append a permission rule to WORKSPACE's persistent rules file.
 
 TOOL-NAME and ACTION define the rule.  Positional PATH is equivalent
 to SPEC-KEY `:path'.  SPEC-KEY/SPEC-VALUE let callers store rules
 qualified by any specifier (`:path', `:pattern', `:domain', `:name').
-NETWORK records matching additive network authority.  SANDBOX-PERMISSIONS
-qualifies an already requested execution level.  The file is created if it
-does not exist."
+NETWORK and FILE-SYSTEM record matching additive execution authority.
+SANDBOX-PERMISSIONS qualifies an already requested execution level.  The file
+is created if it does not exist."
   (let* ((file (mevedel-permission--persistent-file workspace))
          (store (or (mevedel-permission--read-store-file file)
                     (list :rules nil :resource-grants nil)))
@@ -1527,6 +1541,7 @@ does not exist."
          (rule (mevedel-permission--build-rule
                 tool-name action key value
                 :network network
+                :file-system file-system
                 :sandbox-permissions sandbox-permissions))
          (updated (if (member rule existing)
                       existing
@@ -1579,7 +1594,7 @@ does not exist."
 (cl-defun mevedel-permission--apply-prompt-result
     (result tool-name &optional session workspace path
             &key spec-key spec-value resource-access network
-            sandbox-permissions)
+            file-system sandbox-permissions)
   "Dispatch a permission prompt RESULT to the correct storage.
 
 RESULT is one of:
@@ -1594,7 +1609,7 @@ for storage.  Positional PATH scopes the authority to a file path (kept
 for call sites that already pass it).  SPEC-KEY/SPEC-VALUE allow rule
 scoping by any other specifier (`:pattern', `:domain', `:name').
 RESOURCE-ACCESS stores exact path authority separately from rules.
-NETWORK stores a capability-qualified operation rule.
+NETWORK and FILE-SYSTEM store a capability-qualified operation rule.
 SANDBOX-PERMISSIONS qualifies an already requested execution level."
   (cl-flet ((session-rule (action)
               (when session
@@ -1602,6 +1617,7 @@ SANDBOX-PERMISSIONS qualifies an already requested execution level."
                  session tool-name action path
                  :spec-key spec-key :spec-value spec-value
                  :network network
+                 :file-system file-system
                  :sandbox-permissions sandbox-permissions)))
             (session-resource-grant ()
               (when (and session path resource-access)
@@ -1618,6 +1634,7 @@ SANDBOX-PERMISSIONS qualifies an already requested execution level."
                  workspace tool-name action path
                  :spec-key spec-key :spec-value spec-value
                  :network network
+                 :file-system file-system
                  :sandbox-permissions sandbox-permissions))
                (t
                 ;; User clicked always-allow but no workspace is

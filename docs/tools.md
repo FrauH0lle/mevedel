@@ -342,7 +342,10 @@ hidden block wrapped in `<!-- mevedel-render-data -->` delimiters, propertized
 `mevedel-pipeline-extract-render-data`.
 The payload is exactly one proper keyword plist.  Marker-looking text with a
 non-plist payload, trailing Lisp data, or unreadable data is ordinary visible
-tool output and is preserved verbatim.
+tool output and is preserved verbatim. Handler envelopes are validated at the
+pipeline boundary as well: a non-nil `:render-data` value must already be a
+proper, even keyword plist. Malformed renderer metadata becomes a canonical
+tool error instead of reaching transcript serialization.
 
 Child-process settlement may add a model-hidden `:sandbox-summary` to this
 same payload. It contains only logical attempt/start/refusal counts, boundary
@@ -466,7 +469,11 @@ Every observation returns only the newly unread output. `ListExecutions`
 exposes only the caller's yielded handles, and `StopExecution` terminates only
 a handle owned by that caller. Input and stop inherit that execution authority
 without another prompt, while explicit deny rules and permission hooks still
-apply. Each `WriteStdin` attempt records its requested `yield_time_ms` and the
+apply. A successful empty `WriteStdin` poll while the execution remains
+running is model-visible but omitted as a separate view row; progress continues
+to update the original Bash row. Polls with output, input writes, terminal
+observations, and failures remain visible. Each `WriteStdin` attempt records
+its requested `yield_time_ms` and the
 effective wait, making omitted or stale tool arguments visible without storing
 stdin or process output. Terminal facts record PTY mode and preserve the raw
 process exit or signal status. Canonical lifecycle state distinguishes

@@ -177,9 +177,11 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
     (mevedel--prompt-key "RET")
     " allow once  "
     (unless (or suppress-allow-session once-only)
-      (concat (mevedel--prompt-key "s") " remember for session  "))
+      (concat (mevedel--prompt-key "s")
+              " remember selected profile for session  "))
     (when (and include-always (not once-only))
-      (concat (mevedel--prompt-key "A") " Always in this workspace  "))
+      (concat (mevedel--prompt-key "A")
+              " remember selected profile in workspace  "))
     (mevedel--prompt-key "d")
     " deny-once  "
     (unless once-only
@@ -310,7 +312,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
            (network-p (and operation-p (plist-get missing :network))))
       (when (or operation-p network-p resources)
         (concat
-         (propertize "Remember from this approval with s/A\n"
+         (propertize "Session/workspace approval remembers the complete selected profile\n"
                      'font-lock-face '(:inherit bold))
          (when operation-p
            (format "[%s] Command  (c toggles)\n"
