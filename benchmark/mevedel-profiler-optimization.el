@@ -35,6 +35,8 @@
 
 (defconst mevedel-benchmark--warmups 2)
 (defconst mevedel-benchmark--rounds 5)
+(defconst mevedel-benchmark--harness-file
+  (or load-file-name buffer-file-name))
 
 (defun mevedel-benchmark--median (values)
   "Return the median of numeric VALUES."
@@ -66,6 +68,20 @@
       (prin1 metrics (current-buffer))
       (insert "\n"))
     file))
+
+(defun mevedel-benchmark--file-sha256 (file)
+  "Return the SHA-256 digest of FILE."
+  (with-temp-buffer
+    (insert-file-contents-literally file)
+    (secure-hash 'sha256 (current-buffer))))
+
+(defun mevedel-benchmark--worktree-diff-sha256 ()
+  "Return the SHA-256 digest of the current tracked worktree diff."
+  (with-temp-buffer
+    (unless (zerop (process-file "git" nil t nil
+                                 "diff" "--binary" "HEAD"))
+      (error "Could not read worktree diff"))
+    (secure-hash 'sha256 (current-buffer))))
 
 (defun mevedel-benchmark--measure
     (scenario parameters workload directory &optional observe)
@@ -106,6 +122,13 @@ returns additional counters from one unprofiled workload run."
                    (mevedel-benchmark--profile-total profiler-cpu-log)
                    :git-head
                    (car (process-lines "git" "rev-parse" "HEAD"))
+                   :harness-sha256
+                   (mevedel-benchmark--file-sha256
+                    mevedel-benchmark--harness-file)
+                   :worktree-diff-sha256
+                   (mevedel-benchmark--worktree-diff-sha256)
+                   :dirty-files
+                   (process-lines "git" "status" "--short")
                    :emacs-version emacs-version
                    :system-configuration system-configuration)
              (and observe (funcall observe)))))
@@ -145,7 +168,9 @@ returns additional counters from one unprofiled workload run."
             (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
             (setq-local mevedel-session--read-only-mode nil))
           (mevedel-view--setup view-buf data-buf)
-          (funcall function data-buf view-buf))
+          (save-window-excursion
+            (switch-to-buffer view-buf)
+            (funcall function data-buf view-buf)))
       (when (buffer-live-p view-buf)
         (kill-buffer view-buf))
       (when (buffer-live-p data-buf)
@@ -166,6 +191,7 @@ returns additional counters from one unprofiled workload run."
          (goto-char (mevedel-view--input-start))
          (insert "> benchmark draft\nsecond line")
          (goto-char (+ (mevedel-view--input-start) 4))
+         (set-window-point (selected-window) (point))
          (let ((workload
                 (lambda ()
                   (dotimes (_ iterations)
@@ -197,65 +223,92 @@ returns additional counters from one unprofiled workload run."
              (mevedel-view--interaction-register
               (list :id 'benchmark :kind 'ask :body "benchmark\n"))
              (unless (and (= (point) (+ (mevedel-view--input-start) 4))
+                          (= (window-point (selected-window)) (point))
                           (equal (mevedel-view--input-text)
                                  "> benchmark draft\nsecond line"))
                (error "Prompt benchmark moved the composer"))
              metrics)))))))
 
 (defun mevedel-benchmark--tool-segments (directory)
-  "Measure tool-segment copying below DIRECTORY."
+  "Measure tool-segment copying during full redraws below DIRECTORY."
   (let ((block-count 2)
         (body-bytes (* 64 1024))
         (iterations 1))
-    (with-temp-buffer
-      (let (segments)
-        (dotimes (index block-count)
-          (let ((start (point)))
-            (insert "#+begin_tool (Read :file_path \"/tmp/benchmark\")\n"
-                    "(:name \"Read\" :args (:file_path \"/tmp/benchmark\"))\n\n"
-                    (make-string body-bytes (+ ?a (% index 26)))
-                    "\n#+end_tool\n")
-            (put-text-property start (point) 'gptel
-                               (cons 'tool (format "benchmark-%d" index)))
-            (push (list start (point)
-                        (+ start 54) (+ start 100))
-                  segments)))
-        (setq segments (nreverse segments))
-        (let ((workload
-               (lambda ()
-                 (dotimes (_ iterations)
-                   (dolist (segment segments)
-                     (pcase-let ((`(,start ,end ,drift-start ,drift-end)
-                                  segment))
-                       (unless (= (- end start)
-                                  (length
-                                   (mevedel-view--tool-segment-text
-                                    start end)))
-                         (error "Accurate tool bounds changed"))
-                       (unless (= (- end start)
-                                  (length
-                                   (mevedel-view--tool-segment-text
-                                    drift-start drift-end)))
-                         (error "Drifted tool bounds were not recovered"))))))))
-          (mevedel-benchmark--measure
-           'tool-segments
-           (list :block-count block-count :body-bytes body-bytes
-                 :iterations iterations)
-           workload directory
-           (lambda ()
-             (let ((original
-                    (symbol-function 'buffer-substring-no-properties))
-                   (calls 0)
-                   (bytes 0))
-               (cl-letf
-                   (((symbol-function 'buffer-substring-no-properties)
-                     (lambda (start end)
-                       (cl-incf calls)
-                       (cl-incf bytes (- end start))
-                       (funcall original start end))))
-                 (funcall workload))
-               (list :substring-calls calls
-                     :substring-bytes bytes)))))))))
+    (mevedel-benchmark--with-view
+     (lambda (data-buf view-buf)
+       (with-current-buffer data-buf
+         (dotimes (index block-count)
+           (let ((start (point)))
+             (insert
+              (format "#+begin_tool (Bash :command \"echo %d\")\n" index)
+              (format "(:name \"Bash\" :args (:command \"echo %d\"))\n\n"
+                      index)
+              (make-string body-bytes (+ ?a index))
+              "\n#+end_tool\n")
+             (if (zerop index)
+                 (put-text-property
+                  start (point) 'gptel
+                  (cons 'tool (format "benchmark-%d" index)))
+               (put-text-property
+                (+ start 46) (+ start 92) 'gptel
+                (cons 'tool (format "benchmark-%d" index)))))))
+       (with-current-buffer view-buf
+         (goto-char (mevedel-view--input-start))
+         (insert "> benchmark draft\nsecond line")
+         (goto-char (+ (mevedel-view--input-start) 4))
+         (set-window-point (selected-window) (point))
+         (let ((workload
+                (lambda ()
+                  (dotimes (_ iterations)
+                    (mevedel-view--full-rerender data-buf t)))))
+           (let ((metrics
+                  (mevedel-benchmark--measure
+                   'tool-segments
+                   (list :block-count block-count :body-bytes body-bytes
+                         :iterations iterations)
+                   workload directory
+                   (lambda ()
+                     (let ((original-segment
+                            (symbol-function
+                             'mevedel-view--tool-segment-text))
+                           (original-substring
+                            (symbol-function
+                             'buffer-substring-no-properties))
+                           (in-segment nil)
+                           (segment-calls 0)
+                           (substring-calls 0)
+                           (substring-bytes 0))
+                       (cl-letf
+                           (((symbol-function
+                             'mevedel-view--tool-segment-text)
+                             (lambda (start end)
+                               (cl-incf segment-calls)
+                               (let ((previous in-segment))
+                                 (unwind-protect
+                                     (progn
+                                       (setq in-segment t)
+                                       (funcall original-segment start end))
+                                   (setq in-segment previous)))))
+                            ((symbol-function
+                              'buffer-substring-no-properties)
+                             (lambda (start end)
+                               (when in-segment
+                                 (cl-incf substring-calls)
+                                 (cl-incf substring-bytes (- end start)))
+                               (funcall original-substring start end))))
+                         (funcall workload))
+                       (list :tool-segment-calls segment-calls
+                             :substring-calls substring-calls
+                             :substring-bytes substring-bytes))))))
+             (unless (and (save-excursion
+                            (goto-char (point-min))
+                            (search-forward "Bash" nil t))
+                          (= (window-point (selected-window))
+                             (+ (mevedel-view--input-start) 4))
+                          (equal (mevedel-view--input-text)
+                                 "> benchmark draft\nsecond line"))
+               (error "Tool benchmark lost its row or composer"))
+             metrics)))))))
 
 (defun mevedel-benchmark--session (root)
   "Return a benchmark session persisted below ROOT."
@@ -326,6 +379,7 @@ returns additional counters from one unprofiled workload run."
          (goto-char (mevedel-view--input-start))
          (insert "> benchmark draft\nsecond line")
          (goto-char (+ (mevedel-view--input-start) 4))
+         (set-window-point (selected-window) (point))
          (let ((status
                 (mevedel-benchmark--measure
                  'status-refresh
@@ -369,6 +423,7 @@ returns additional counters from one unprofiled workload run."
                          :history-scan-characters
                          (* transcript-bytes history-iterations))))))
            (unless (and (= (point) (+ (mevedel-view--input-start) 4))
+                        (= (window-point (selected-window)) (point))
                         (equal (mevedel-view--input-text)
                                "> benchmark draft\nsecond line"))
              (error "Status/history benchmark moved the composer"))

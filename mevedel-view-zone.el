@@ -294,20 +294,13 @@ When FORCE-NEWLINE is non-nil, return one tagged newline for an empty body."
   (let* ((position (or position (point)))
          (key (get-text-property position 'mevedel-view-zone-key)))
     (when key
-      (let ((start position)
-            (end position))
-        (while (and (> start (point-min))
-                    (mevedel-view-zone--key-match-p
-                     (get-text-property (1- start)
-                                        'mevedel-view-zone-key)
-                     key))
-          (setq start (1- start)))
-        (while (and (< end (point-max))
-                    (mevedel-view-zone--key-match-p
-                     (get-text-property end
-                                        'mevedel-view-zone-key)
-                     key))
-          (setq end (1+ end)))
+      (let ((start (or (previous-single-property-change
+                        (1+ position) 'mevedel-view-zone-key
+                        nil (point-min))
+                       (point-min)))
+            (end (or (next-single-property-change
+                      position 'mevedel-view-zone-key nil (point-max))
+                     (point-max))))
         (list :start start :end end :key key
               :region (nth 0 key)
               :namespace (nth 1 key)

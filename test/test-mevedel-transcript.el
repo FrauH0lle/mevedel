@@ -1309,7 +1309,16 @@ TOOL-PROP."
      (mevedel-transcript--tool-block-retry-gap-p (point-min) nil))
     (should-not
      (mevedel-transcript--tool-block-retry-gap-p
-      (point-min) (point-min)))))
+      (point-min) (point-min))))
+  (with-temp-buffer
+    (insert "output")
+    (put-text-property (point-min) (point-max)
+                       'gptel '(tool . "call-1"))
+    (string-match "\\(sentinel\\)" "sentinel")
+    (let ((before (match-data)))
+      (should (mevedel-transcript--tool-block-retry-gap-p
+               (point-min) (point-max)))
+      (should (equal before (match-data))))))
 
 (provide 'test-mevedel-transcript)
 ;;; test-mevedel-transcript.el ends here

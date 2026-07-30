@@ -221,15 +221,19 @@
                  (plist-get bounds :end))))))
 
 (mevedel-deftest mevedel-view-zone-bounds-at
-  (:doc "finds the managed fragment containing point")
+  (:doc "finds adjacent managed fragments from their interiors")
   (with-temp-buffer
     (mevedel-view-zone-test--setup-markers)
     (mevedel-view-zone-reconcile
      'status (point-min) (point-min)
-     '((:namespace status :id tasks :body "Tasks")))
-    (goto-char (point-min))
-    (should (equal 'tasks
-                   (plist-get (mevedel-view-zone-bounds-at) :id)))))
+     '((:namespace status :id tasks :body "Tasks")
+       (:namespace status :id agents :body "Agents")))
+    (dolist (case '(("Tasks" tasks) ("Agents" agents)))
+      (goto-char (point-min))
+      (search-forward (car case))
+      (backward-char 2)
+      (should (equal (cadr case)
+                     (plist-get (mevedel-view-zone-bounds-at) :id))))))
 
 (mevedel-deftest mevedel-view-zone-clear
   (:doc "removes only the selected managed zone")

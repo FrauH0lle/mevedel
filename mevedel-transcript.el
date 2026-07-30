@@ -941,12 +941,13 @@ the next real tool call."
        min-end
        (< block-end min-end)
        (save-excursion
-         (goto-char block-end)
-         (and (re-search-forward "[^ \t\n]" min-end t)
-              (mevedel-transcript--range-has-gptel-prop-p
-               block-end min-end '(tool))
-              (not (mevedel-transcript--range-has-gptel-prop-p
-                    block-end min-end '(response ignored)))))))
+         (save-match-data
+           (goto-char block-end)
+           (and (re-search-forward "[^ \t\n]" min-end t)
+                (mevedel-transcript--range-has-gptel-prop-p
+                 block-end min-end '(tool))
+                (not (mevedel-transcript--range-has-gptel-prop-p
+                      block-end min-end '(response ignored))))))))
 
 (defun mevedel-transcript--first-tool-close-after (pos &optional limit)
   "Return the first non-response `#+end_tool' marker end after POS.

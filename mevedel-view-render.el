@@ -189,6 +189,8 @@
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start
                   "mevedel-view-composer" ())
+(declare-function mevedel-view--prompt-start-position
+                  "mevedel-view-composer" ())
 (declare-function mevedel-view--set-historical-composer-visible
                   "mevedel-view-composer" (visible))
 (declare-function mevedel-view-refresh-input-prompt
@@ -702,65 +704,70 @@ With prefix argument CLEAR, erase the trace buffer first."
 (defun mevedel-view--debug-state (&optional data-buf start end)
   "Return a plist describing the current view-render state.
 DATA-BUF, START, and END describe the data-buffer range being rendered."
-  (let* ((input (mevedel-view--debug-marker-position
-                 mevedel-view--input-marker))
-         (composer-start (ignore-errors (mevedel-view--input-start)))
-         (window (and (eq (window-buffer (selected-window))
-                          (current-buffer))
-                      (selected-window)))
-         (window-point (and window (window-point window)))
-         (window-start (and window (window-start window)))
-         (status (mevedel-view--debug-marker-position
-                  mevedel-view--status-marker))
-         (interaction (mevedel-view--debug-marker-position
-                       mevedel-view--interaction-marker))
-         (in-flight (mevedel-view--debug-marker-position
-                     mevedel-view--in-flight-turn-start))
-         (data-start (mevedel-view--debug-marker-position
-                      mevedel-view--data-turn-start))
-         (tail-end (or status input))
-         (live-tail (and in-flight tail-end
-                         (<= in-flight tail-end)
-                         (mevedel-view--debug-region in-flight tail-end))))
-    (list :view (buffer-name)
-          :point (point)
-          :point-input-offset (and input (>= (point) input)
-                                   (- (point) input))
-          :point-in-composer (and composer-start
-                                  (>= (point) composer-start))
-          :point-composer-offset (and composer-start
-                                      (>= (point) composer-start)
-                                      (- (point) composer-start))
-          :point-fragment (mevedel-view--debug-fragment-position (point))
-          :window-point window-point
-          :window-input-offset (and input window-point
-                                    (>= window-point input)
-                                    (- window-point input))
-          :window-point-in-composer (and composer-start window-point
-                                         (>= window-point composer-start))
-          :window-composer-offset (and composer-start window-point
-                                       (>= window-point composer-start)
-                                       (- window-point composer-start))
-          :window-point-fragment
-          (mevedel-view--debug-fragment-position window-point)
-          :window-start window-start
-          :window-start-fragment
-          (mevedel-view--debug-fragment-position window-start)
-          :point-max (point-max)
-          :input input
-          :status status
-          :interaction interaction
-          :in-flight in-flight
-          :data-turn-start data-start
-          :pending mevedel-view--pending-tool-calls
-          :spinner (mevedel-view--debug-spinner-state)
-          :live-tail live-tail
-          :data-buffer (and (buffer-live-p data-buf)
-                            (buffer-name data-buf))
-          :data-start start
-          :data-end end
-          :data-point-max (and (buffer-live-p data-buf)
-                               (with-current-buffer data-buf (point-max))))))
+  (when mevedel-view-render-debug
+    (let* ((input (mevedel-view--debug-marker-position
+                   mevedel-view--input-marker))
+           (prompt-start (mevedel-view--prompt-start-position))
+           (composer-start
+            (and prompt-start
+		 (next-single-property-change
+                  prompt-start 'mevedel-view-prompt nil (point-max))))
+           (window (and (eq (window-buffer (selected-window))
+                            (current-buffer))
+			(selected-window)))
+           (window-point (and window (window-point window)))
+           (window-start (and window (window-start window)))
+           (status (mevedel-view--debug-marker-position
+                    mevedel-view--status-marker))
+           (interaction (mevedel-view--debug-marker-position
+			 mevedel-view--interaction-marker))
+           (in-flight (mevedel-view--debug-marker-position
+                       mevedel-view--in-flight-turn-start))
+           (data-start (mevedel-view--debug-marker-position
+			mevedel-view--data-turn-start))
+           (tail-end (or status input))
+           (live-tail (and in-flight tail-end
+                           (<= in-flight tail-end)
+                           (mevedel-view--debug-region in-flight tail-end))))
+      (list :view (buffer-name)
+            :point (point)
+            :point-input-offset (and input (>= (point) input)
+                                     (- (point) input))
+            :point-in-composer (and composer-start
+                                    (>= (point) composer-start))
+            :point-composer-offset (and composer-start
+					(>= (point) composer-start)
+					(- (point) composer-start))
+            :point-fragment (mevedel-view--debug-fragment-position (point))
+            :window-point window-point
+            :window-input-offset (and input window-point
+                                      (>= window-point input)
+                                      (- window-point input))
+            :window-point-in-composer (and composer-start window-point
+                                           (>= window-point composer-start))
+            :window-composer-offset (and composer-start window-point
+					 (>= window-point composer-start)
+					 (- window-point composer-start))
+            :window-point-fragment
+            (mevedel-view--debug-fragment-position window-point)
+            :window-start window-start
+            :window-start-fragment
+            (mevedel-view--debug-fragment-position window-start)
+            :point-max (point-max)
+            :input input
+            :status status
+            :interaction interaction
+            :in-flight in-flight
+            :data-turn-start data-start
+            :pending mevedel-view--pending-tool-calls
+            :spinner (mevedel-view--debug-spinner-state)
+            :live-tail live-tail
+            :data-buffer (and (buffer-live-p data-buf)
+                              (buffer-name data-buf))
+            :data-start start
+            :data-end end
+            :data-point-max (and (buffer-live-p data-buf)
+				 (with-current-buffer data-buf (point-max)))))))
 
 (defun mevedel-view--debug-log (event &rest data)
   "Log EVENT and DATA when `mevedel-view-render-debug' is enabled."
