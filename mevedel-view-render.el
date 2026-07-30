@@ -228,6 +228,8 @@
 (defvar mevedel-view-spinner-frames)
 
 ;; `mevedel-view-zone'
+(declare-function mevedel-view-zone-bounds-at
+                  "mevedel-view-zone" (&optional position))
 (declare-function mevedel-view-zone-next
                   "mevedel-view-zone" (&optional limit))
 (declare-function mevedel-view-zone-previous
@@ -685,15 +687,29 @@ With prefix argument CLEAR, erase the trace buffer first."
          (when (eq buf (current-buffer))
            (list :region (mevedel-view--debug-region start end)))))))))
 
+(defun mevedel-view--debug-fragment-position (position)
+  "Return managed-fragment coordinates for POSITION, or nil."
+  (when (and (integer-or-marker-p position)
+             (< position (point-max)))
+    (require 'mevedel-view-zone)
+    (when-let* ((bounds (mevedel-view-zone-bounds-at position)))
+      (list :namespace (plist-get bounds :namespace)
+            :id (plist-get bounds :id)
+            :section (get-text-property
+                      position 'mevedel-view-zone-section)
+            :offset (- position (plist-get bounds :start))))))
+
 (defun mevedel-view--debug-state (&optional data-buf start end)
   "Return a plist describing the current view-render state.
 DATA-BUF, START, and END describe the data-buffer range being rendered."
   (let* ((input (mevedel-view--debug-marker-position
                  mevedel-view--input-marker))
+         (composer-start (ignore-errors (mevedel-view--input-start)))
          (window (and (eq (window-buffer (selected-window))
                           (current-buffer))
                       (selected-window)))
          (window-point (and window (window-point window)))
+         (window-start (and window (window-start window)))
          (status (mevedel-view--debug-marker-position
                   mevedel-view--status-marker))
          (interaction (mevedel-view--debug-marker-position
@@ -710,11 +726,26 @@ DATA-BUF, START, and END describe the data-buffer range being rendered."
           :point (point)
           :point-input-offset (and input (>= (point) input)
                                    (- (point) input))
+          :point-in-composer (and composer-start
+                                  (>= (point) composer-start))
+          :point-composer-offset (and composer-start
+                                      (>= (point) composer-start)
+                                      (- (point) composer-start))
+          :point-fragment (mevedel-view--debug-fragment-position (point))
           :window-point window-point
           :window-input-offset (and input window-point
                                     (>= window-point input)
                                     (- window-point input))
-          :window-start (and window (window-start window))
+          :window-point-in-composer (and composer-start window-point
+                                         (>= window-point composer-start))
+          :window-composer-offset (and composer-start window-point
+                                       (>= window-point composer-start)
+                                       (- window-point composer-start))
+          :window-point-fragment
+          (mevedel-view--debug-fragment-position window-point)
+          :window-start window-start
+          :window-start-fragment
+          (mevedel-view--debug-fragment-position window-start)
           :point-max (point-max)
           :input input
           :status status

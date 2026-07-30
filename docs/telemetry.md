@@ -77,8 +77,9 @@ creating the Goal:
 For a session-level reproduction, `M-x mevedel-session-debug` starts the same
 profiler while enabling gptel debug logging and the existing view-render trace.
 Run it again to stop and save all three captures. The view trace includes
-buffer point, selected-window point/start, and input-relative offsets around
-interaction registration and full rerenders.
+buffer point, selected-window point/start, composer-relative offsets, and
+managed-fragment coordinates around interaction registration, full rerenders,
+and zone reconciliation.
 
 Each profiler run gets
 `SESSION_DIR/diagnostics/run-TIMESTAMP-ID/`, containing:

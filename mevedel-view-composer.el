@@ -1123,12 +1123,23 @@ NO-SPINNER is non-nil, render only the local user turn."
 
 (defun mevedel-view--prompt-start-position ()
   "Return the start of the read-only input prompt, or nil."
-  (when-let* ((pos (text-property-any
-                    (point-min) (point-max) 'mevedel-view-prompt t)))
-    (while (and (> pos (point-min))
-                (get-text-property (1- pos) 'mevedel-view-prompt))
-      (setq pos (1- pos)))
-    pos))
+  (let* ((marker-pos
+          (and (markerp mevedel-view--input-marker)
+               (eq (marker-buffer mevedel-view--input-marker)
+                   (current-buffer))
+               (marker-position mevedel-view--input-marker)))
+         (pos
+          (if (and marker-pos
+                   (< marker-pos (point-max))
+                   (get-text-property marker-pos 'mevedel-view-prompt))
+              marker-pos
+            (text-property-any
+             (point-min) (point-max) 'mevedel-view-prompt t))))
+    (when pos
+      (while (and (> pos (point-min))
+                  (get-text-property (1- pos) 'mevedel-view-prompt))
+        (setq pos (1- pos)))
+      pos)))
 
 (defun mevedel-view--input-marker-position ()
   "Return the recovered start position of the input prompt.

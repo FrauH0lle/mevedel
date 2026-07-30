@@ -30,6 +30,13 @@
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (defvar mevedel-view--input-marker)
 
+;; `mevedel-view-render'
+(declare-function mevedel-view--debug-log "mevedel-view-render"
+                  (event &rest data))
+(declare-function mevedel-view--debug-state "mevedel-view-render"
+                  (&optional data-buf start end))
+(defvar mevedel-view-render-debug)
+
 (defvar-local mevedel-view-zone--collapse-states nil
   "Buffer-local UI collapse state keyed by fragment collapse keys.")
 
@@ -701,47 +708,68 @@ The zone owns its region identity, mutation preservation, marker
 choreography, and cleanup.  START and END express view layout; existing
 live zone text keeps its current bounds until reconciliation finishes."
   (mevedel-view-zone--validate zone start end fragments)
-  (let* ((table (mevedel-view-zone--region-table))
-         (region (mevedel-view-zone--live-region zone))
-         (logical-state (and region
-                             (mevedel-view-zone--capture-logical-state
-                              zone region)))
-         owned-p)
-    (if (and (null fragments) (null region))
-        (progn
-          (mevedel-view-zone--call-preserving
-           zone
-           (lambda ()
-             (mevedel-view-zone--delete-stale-text zone nil)))
-          nil)
-      (unless region
-        (setq region (make-overlay start end (current-buffer) nil nil))
-        (overlay-put region 'mevedel-view-zone zone)
-        (overlay-put region 'evaporate nil)
-        (puthash zone region table))
-      (setq owned-p
-            (and (< (overlay-start region) (overlay-end region))
-                 (text-property-any
-                  (overlay-start region) (overlay-end region)
-                  'mevedel-view-zone-region region)))
-      (let ((neighbors (mevedel-view-zone--capture-neighbor-regions
-                        zone region)))
-        (unwind-protect
+  (when (and (boundp 'mevedel-view-render-debug)
+             mevedel-view-render-debug)
+    (mevedel-view--debug-log
+     'zone-reconcile-begin
+     :zone zone
+     :start start
+     :end end
+     :fragment-ids (mapcar (lambda (fragment)
+                             (plist-get fragment :id))
+                           fragments)
+     :state (mevedel-view--debug-state)))
+  (unwind-protect
+      (let* ((table (mevedel-view-zone--region-table))
+             (region (mevedel-view-zone--live-region zone))
+             (logical-state (and region
+                                 (mevedel-view-zone--capture-logical-state
+                                  zone region)))
+             owned-p)
+        (if (and (null fragments) (null region))
             (progn
               (mevedel-view-zone--call-preserving
                zone
                (lambda ()
-                 (mevedel-view-zone--delete-stale-text zone region)
-                 (unless owned-p
-                   (move-overlay region start end (current-buffer)))
-                 (mevedel-view-zone--reconcile region zone fragments))))
-          (mevedel-view-zone--restore-neighbor-regions neighbors)))
-      (mevedel-view-zone--restore-logical-state zone logical-state)
-      (if fragments
-          region
-        (delete-overlay region)
-        (remhash zone table)
-        nil))))
+                 (mevedel-view-zone--delete-stale-text zone nil)))
+              nil)
+          (unless region
+            (setq region (make-overlay start end (current-buffer) nil nil))
+            (overlay-put region 'mevedel-view-zone zone)
+            (overlay-put region 'evaporate nil)
+            (puthash zone region table))
+          (setq owned-p
+                (and (< (overlay-start region) (overlay-end region))
+                     (text-property-any
+                      (overlay-start region) (overlay-end region)
+                      'mevedel-view-zone-region region)))
+          (let ((neighbors (mevedel-view-zone--capture-neighbor-regions
+                            zone region)))
+            (unwind-protect
+                (progn
+                  (mevedel-view-zone--call-preserving
+                   zone
+                   (lambda ()
+                     (mevedel-view-zone--delete-stale-text zone region)
+                     (unless owned-p
+                       (move-overlay region start end (current-buffer)))
+                     (mevedel-view-zone--reconcile region zone fragments))))
+              (mevedel-view-zone--restore-neighbor-regions neighbors)))
+          (mevedel-view-zone--restore-logical-state zone logical-state)
+          (if fragments
+              region
+            (delete-overlay region)
+            (remhash zone table)
+            nil)))
+    (when (and (boundp 'mevedel-view-render-debug)
+               mevedel-view-render-debug)
+      (mevedel-view--debug-log
+       'zone-reconcile-end
+       :zone zone
+       :fragment-ids (mapcar (lambda (fragment)
+                               (plist-get fragment :id))
+                             fragments)
+       :state (mevedel-view--debug-state)))))
 
 (defun mevedel-view-zone-region (zone)
   "Return ZONE's live managed region, or nil."
