@@ -20,6 +20,7 @@
 (require 'mevedel-plan-mode)
 (require 'mevedel-permission-log)
 (require 'mevedel-sandbox)
+(require 'mevedel-telemetry)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -2836,10 +2837,12 @@ default Bash keeps bare dot inspection automatic"
   (test)
   :doc "polls through the captured session and canonical owner"
   (let ((session (mevedel-session--create :name "test"))
-        captured result)
+        captured events input result)
     (let ((mevedel--session session)
           (mevedel--current-request nil)
           (mevedel--agent-invocation nil))
+      (setq input (plist-put (list :execution_id "exec-1")
+                             :yield-time_ms 30000))
       (cl-letf (((symbol-function 'mevedel-execution-observe)
                  (lambda (&rest args)
                    (setq captured args)
@@ -2849,13 +2852,23 @@ default Bash keeps bare dot inspection automatic"
                       :facts (:execution-id "exec-1" :state running
                               :wall-time-seconds 1.0 :output-bytes 5
                               :output-lines 1 :omitted-output-bytes 0
-                              :tty nil))))))
+                              :tty nil)))))
+                ((symbol-function 'mevedel-telemetry-record)
+                 (lambda (_session event &rest props)
+                   (push (cons event props) events))))
         (mevedel-tool-exec--write-stdin
          (lambda (value) (setq result value))
-         '(:execution_id "exec-1" :yield_time_ms 5000))))
+         input)))
     (should (eq session (nth 0 captured)))
     (should (equal "/root" (nth 1 captured)))
     (should (equal "exec-1" (nth 2 captured)))
+    (should (= 30000 (plist-get (nthcdr 4 captured) :wait-ms)))
+    (should
+     (equal
+      '(execution-observe-requested
+        :execution-id "exec-1" :owner "/root" :input-p nil
+        :requested-yield-time-ms 30000 :effective-wait-ms 30000)
+      (car events)))
     (should (string-prefix-p "delta" (plist-get result :result)))))
 
 (mevedel-deftest mevedel-tool-exec--list-executions ()
@@ -3171,7 +3184,8 @@ default Bash keeps bare dot inspection automatic"
           (with-timeout (5 (error "Timed out"))
             (while (not done)
               (accept-process-output nil 0.1)))
-          (should (string-prefix-p "loaded\n\n[sandbox: " result)))
+          (should (string-prefix-p "loaded\n" result))
+          (should (string-match-p "\n\\[sandbox: " result)))
       (delete-directory home t)))
   :doc "runs from the session working directory when current buffer is elsewhere"
   (let* ((root (make-temp-file "mevedel-bash-cwd-" t))

@@ -26,19 +26,6 @@
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 .mevedel/hooks/policy.py post-edit-context",
-            "timeout": 5,
-            "description": "Remind agents to validate edited Elisp"
-          }
-        ]
-      }
-    ],
     "PreCompact": [
       {
         "matcher": "*",

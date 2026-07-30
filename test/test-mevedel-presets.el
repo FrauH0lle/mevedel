@@ -495,6 +495,47 @@
     (should (eq 'test-preset
                 (mevedel-session-preset-name mevedel--session)))))
 
+(mevedel-deftest mevedel-preset--refresh-tools
+  (:after-each
+   (progn
+     (remhash '("mevedel" "TestWait") mevedel-tool--registry)
+     (setq mevedel-preset--registry nil)
+     (setq gptel--known-presets
+           (assq-delete-all 'test-preset gptel--known-presets))))
+  ,test
+  (test)
+  :doc "replaces frozen preset tools with the latest registered schema"
+  (let ((gptel-tools nil))
+    (mevedel-define-tool
+      :name "TestWait"
+      :description "Old wait schema"
+      :handler #'ignore
+      :args ((execution_id string :required "Execution ID")
+             (chars string :optional "Input")))
+    (mevedel-define-preset test-preset
+      :tools ((:tool "TestWait")))
+    (setq gptel-tools
+          (list (mevedel-tool-gptel-tool
+                 (mevedel-tool-get "TestWait"))))
+    (mevedel-define-tool
+      :name "TestWait"
+      :description "Current wait schema"
+      :handler #'ignore
+      :args ((execution_id string :required "Execution ID")
+             (chars string :optional "Input")
+             (yield_time_ms integer :optional "Wait")))
+    (let ((latest
+           (mevedel-tool-gptel-tool
+            (mevedel-tool-get "TestWait"))))
+      (should-not (eq latest (car gptel-tools)))
+      (mevedel-preset--refresh-tools 'test-preset)
+      (should (eq latest (car gptel-tools)))
+      (should
+       (equal '("exec-1" "" 30000)
+              (gptel--map-tool-args
+               (car gptel-tools)
+               '(:execution_id "exec-1" :chars "" :yield_time_ms 30000)))))))
+
 (mevedel-deftest mevedel-preset--post
   ()
   ,test
@@ -507,11 +548,13 @@
                (lambda (_) (push 'agents calls)))
               ((symbol-function 'mevedel-preset--setup-deferred)
                (lambda (_) (push 'deferred calls)))
+              ((symbol-function 'mevedel-preset--refresh-tools)
+               (lambda (_) (push 'tools calls)))
               ((symbol-function 'mevedel-preset--setup-extras)
                (lambda (_) (push 'extras calls))))
       (mevedel-preset--post 'test-preset
                             (lambda () (push 'user calls))))
-    (should (equal '(user settings agents deferred extras)
+    (should (equal '(user settings tools agents deferred extras)
                    (nreverse calls)))))
 
 (mevedel-deftest mevedel-preset--define

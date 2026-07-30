@@ -177,6 +177,10 @@
 (declare-function mevedel-system-build-prompt
                   "mevedel-system" (profile &rest keys))
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 
@@ -2537,6 +2541,14 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
     (unless session
       (error "WriteStdin requires an active session"))
     (require 'mevedel-execution)
+    (require 'mevedel-telemetry)
+    (mevedel-telemetry-record
+     session 'execution-observe-requested
+     :execution-id execution-id
+     :owner owner
+     :input-p (not (string-empty-p chars))
+     :requested-yield-time-ms (plist-get args :yield-time_ms)
+     :effective-wait-ms wait-ms)
     (mevedel-execution-observe
      session owner execution-id
      (lambda (observation)

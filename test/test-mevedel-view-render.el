@@ -964,7 +964,9 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
           (with-current-buffer (get-buffer mevedel-view-render-debug-buffer-name)
             (goto-char (point-min))
             (should (search-forward "full-rerender-after-render" nil t))
-            (should (search-forward ":elapsed" nil t))))
+            (should (search-forward ":elapsed" nil t))
+            (should (search-forward ":window-point" nil t))
+            (should (search-forward ":window-start" nil t))))
       (when-let* ((buf (get-buffer mevedel-view-render-debug-buffer-name)))
         (kill-buffer buf))))
   :doc "suppresses modification hooks while rebuilding rendered transcript"
@@ -2253,6 +2255,38 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                    (point-min) mevedel-view--input-marker)))
         (should (= 1 (mevedel-view-test--count-substring "Prompt" text)))
         (should-not (string-match-p "Expanded prompt body" text)))))
+
+  :doc "collapsed tools retain material sandbox disclosure"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "sandboxed tool source\n"))
+    (with-current-buffer view-buf
+      (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+             (rendering
+              '(:header "Bash: test"
+                :body "test output\n"
+                :body-mode text-mode
+                :sandbox-summary
+                (:attempt-count 1 :started-count 1 :refused-count 0
+                 :sandbox bubblewrap :filesystem workspace-write
+                 :network unrestricted :proc fresh
+                 :additional-read-count 0 :additional-write-count 1))))
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (mevedel-view--render-expanded-body rendering source))
+        (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                   (lambda (_buf _start _end &optional _collapsed-only)
+                     rendering)))
+          (goto-char (point-min))
+          (search-forward "test output")
+          (mevedel-view-toggle-section)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "Bash: test" text))
+            (should (string-match-p
+                     "Sandbox:.*network access allowed.*additional filesystem write access"
+                     text))
+            (should-not (string-match-p "test output" text)))))))
 
   :doc "non-expandable tool events remain non-toggleable and untracked"
   (mevedel-view-test--with-buffers

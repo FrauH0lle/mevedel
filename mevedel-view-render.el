@@ -690,6 +690,10 @@ With prefix argument CLEAR, erase the trace buffer first."
 DATA-BUF, START, and END describe the data-buffer range being rendered."
   (let* ((input (mevedel-view--debug-marker-position
                  mevedel-view--input-marker))
+         (window (and (eq (window-buffer (selected-window))
+                          (current-buffer))
+                      (selected-window)))
+         (window-point (and window (window-point window)))
          (status (mevedel-view--debug-marker-position
                   mevedel-view--status-marker))
          (interaction (mevedel-view--debug-marker-position
@@ -704,6 +708,13 @@ DATA-BUF, START, and END describe the data-buffer range being rendered."
                          (mevedel-view--debug-region in-flight tail-end))))
     (list :view (buffer-name)
           :point (point)
+          :point-input-offset (and input (>= (point) input)
+                                   (- (point) input))
+          :window-point window-point
+          :window-input-offset (and input window-point
+                                    (>= window-point input)
+                                    (- window-point input))
+          :window-start (and window (window-start window))
           :point-max (point-max)
           :input input
           :status status
@@ -4813,7 +4824,7 @@ Tool segments with a registered renderer produce the renderer's
          (summary
           (cond
            (rendering
-            (mevedel-view--rendering-header-line rendering))
+            (mevedel-view--rendering-header-block rendering))
            (t
             (pcase vtype
               ('tool-summary

@@ -6,8 +6,10 @@
 
 ;;; Code:
 
+(require 'gptel)
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
+(require 'mevedel-view-render)
 (require 'profiler)
 (require 'helpers
          (file-name-concat
@@ -432,6 +434,86 @@
 		     (setq mevedel-telemetry--profiler-session nil
 			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-debug
+  (:doc "toggles profiling and persists captured gptel and view debug logs")
+  (let* ((root (make-temp-file "mevedel-session-debug-" t))
+         (session (test-mevedel-telemetry--session root))
+         (log-buffer (get-buffer-create gptel--log-buffer-name))
+         (view-buffer (get-buffer-create mevedel-view-render-debug-buffer-name))
+         (gptel-log-level 'info)
+         (mevedel-view-render-debug nil)
+         (mevedel-telemetry--profiler-session nil)
+         (mevedel-telemetry--profiler-run-id nil)
+         (mevedel-telemetry--session-debug-marker nil)
+         (mevedel-telemetry--session-debug-previous-log-level nil)
+         (mevedel-telemetry--session-debug-view-marker nil)
+         (mevedel-telemetry--session-debug-previous-view-debug nil)
+         started stopped)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-save-path session) root)
+          (with-current-buffer log-buffer
+            (erase-buffer))
+          (with-current-buffer view-buffer
+            (erase-buffer))
+          (cl-letf
+              (((symbol-function 'mevedel-telemetry-profiler-start)
+                (lambda (&optional _mode)
+                  (setq started t
+                        mevedel-telemetry--profiler-session session
+                        mevedel-telemetry--profiler-run-id "run-test")))
+               ((symbol-function 'mevedel-telemetry-profiler-stop)
+                (lambda ()
+                  (setq stopped t
+                        mevedel-telemetry--profiler-session nil
+                        mevedel-telemetry--profiler-run-id nil))))
+            (mevedel-session-debug)
+            (should started)
+            (should (eq 'debug gptel-log-level))
+            (should mevedel-view-render-debug)
+            (with-current-buffer log-buffer
+              (insert "captured gptel trace"))
+            (with-current-buffer view-buffer
+              (insert "captured view trace"))
+            (mevedel-session-debug)
+            (should stopped)
+            (should (eq 'info gptel-log-level))
+            (should-not mevedel-view-render-debug)
+            (should-not mevedel-telemetry--session-debug-marker)
+            (let ((gptel-file
+                   (file-name-concat
+                    root "diagnostics" "run-test" "gptel-debug.log"))
+                  (view-file
+                   (file-name-concat
+                    root "diagnostics" "run-test" "view-render-debug.log")))
+              (should (= #o600 (logand #o777 (file-modes gptel-file))))
+              (should (= #o600 (logand #o777 (file-modes view-file))))
+              (with-temp-buffer
+                (insert-file-contents gptel-file)
+                (should (equal "captured gptel trace" (buffer-string))))
+              (with-temp-buffer
+                (insert-file-contents view-file)
+                (should (equal "captured view trace" (buffer-string)))))
+            (setq stopped nil)
+            (mevedel-session-debug)
+            (kill-buffer
+             (marker-buffer mevedel-telemetry--session-debug-marker))
+            (should-error (mevedel-session-debug))
+            (should stopped)
+            (should (eq 'info gptel-log-level))
+            (should-not mevedel-view-render-debug)
+            (should-not mevedel-telemetry--profiler-session)
+            (should-not mevedel-telemetry--session-debug-marker)
+            (should-not mevedel-telemetry--session-debug-view-marker)))
+      (when (buffer-live-p log-buffer)
+        (kill-buffer log-buffer))
+      (when (buffer-live-p view-buffer)
+        (kill-buffer view-buffer))
+      (setq mevedel-telemetry--profiler-session nil
+            mevedel-telemetry--profiler-run-id nil)
+      (delete-directory root t))))
 
 (provide 'test-mevedel-telemetry)
 

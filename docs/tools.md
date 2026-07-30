@@ -136,6 +136,9 @@ validation and telemetry.
 `gptel-get-tool` on every call (so upstream changes take effect without
 rewrapping). Re-registering the same wrapped `(category, name)` replaces
 the prior mevedel wrapper, matching native tool registration.
+Preset application also resolves its tool specs from the current registry.
+Reloading a native tool therefore updates the next request's schema and
+handler instead of leaving a stale `gptel-tool` captured by an older preset.
 
 Tools carry `:groups`. `(:deferred GROUP)` in a preset's or agent's tool
 list pulls every tool tagged with GROUP into the session's deferred set.
@@ -463,12 +466,15 @@ Every observation returns only the newly unread output. `ListExecutions`
 exposes only the caller's yielded handles, and `StopExecution` terminates only
 a handle owned by that caller. Input and stop inherit that execution authority
 without another prompt, while explicit deny rules and permission hooks still
-apply. Terminal facts record PTY mode and preserve the raw process exit or
-signal status. Canonical lifecycle state distinguishes `queued`, `running`,
-`stopping`, and `completed`; Interrupt rejects queued work that has not started,
-while Stop cancels it. There is no chunk ID: each observation advances one
-private unread cursor and returns canonical execution facts separately from the
-raw output. Unread ranges beyond 2000 characters use the shared newline-aware,
+apply. Each `WriteStdin` attempt records its requested `yield_time_ms` and the
+effective wait, making omitted or stale tool arguments visible without storing
+stdin or process output. Terminal facts record PTY mode and preserve the raw
+process exit or signal status. Canonical lifecycle state distinguishes
+`queued`, `running`, `stopping`, and `completed`; Interrupt rejects queued work
+that has not started, while Stop cancels it. There is no chunk ID: each
+observation advances one private unread cursor and returns canonical execution
+facts separately from the raw output. Unread ranges beyond 2000 characters use
+the shared newline-aware,
 equal head-and-tail preview while the retained artifact remains complete.
 
 Managed executions publish transient progress after two seconds, at most four
