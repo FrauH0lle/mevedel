@@ -23,13 +23,23 @@ non-whitespace character is the final character.
 | Revision | Commit | Median wall time | Sampled allocation |
 | --- | --- | ---: | ---: |
 | Baseline | `c553513` | 393.42 ms | 211,284,391 bytes |
-| Bounded search | pending | pending | pending |
+| Bounded search | `67aa18e` | 283.17 ms | 1,561,011 bytes |
 
-Decision: pending.
+Decision: ship.  The bounded search reduced median wall time by 28.0%, removed
+all benchmark GC cycles, and reduced sampled allocation by 99.3%.
 
 ## Marker-first prompt lookup
 
-Workload and results pending.
+Workload: 500 prompt-position lookups over a 5 MiB rendered transcript,
+followed by a real status/interaction redraw with a selected multiline
+composer draft beginning with `>`.
+
+| Revision | Commit | Median wall time | Sampled allocation | Prompt scans |
+| --- | --- | ---: | ---: | ---: |
+| Baseline | `67aa18e` | 0.226 ms | 1,560,835 bytes | 500 |
+| Marker first | pending | pending | pending | pending |
+
+Decision: pending.
 
 ## Tool-segment copying
 

@@ -15,7 +15,20 @@
 (require 'benchmark)
 (require 'cl-lib)
 (require 'mevedel)
+(require 'mevedel-view)
+(require 'mevedel-view-composer)
+(require 'mevedel-view-interaction)
+(require 'mevedel-view-render)
+(require 'mevedel-view-zone)
 (require 'profiler)
+
+(defvar mevedel-session--read-only-mode)
+(defvar org-persist-directory)
+
+(setq org-persist-directory
+      (file-name-as-directory
+       (file-name-concat temporary-file-directory
+                         "mevedel-benchmark-org-persist")))
 
 (defconst mevedel-benchmark--warmups 2)
 (defconst mevedel-benchmark--rounds 5)
@@ -51,9 +64,11 @@
       (insert "\n"))
     file))
 
-(defun mevedel-benchmark--measure (scenario parameters workload directory)
+(defun mevedel-benchmark--measure
+    (scenario parameters workload directory &optional observe)
   "Measure SCENARIO WORKLOAD and write artifacts below DIRECTORY.
-PARAMETERS describes the deterministic workload."
+PARAMETERS describes the deterministic workload.  OBSERVE, when non-nil,
+returns additional counters from one unprofiled workload run."
   (dotimes (_ mevedel-benchmark--warmups)
     (funcall workload))
   (let (rounds)
@@ -70,25 +85,27 @@ PARAMETERS describes the deterministic workload."
            (gc-counts (mapcar #'cadr rounds))
            (gc-times (mapcar #'caddr rounds))
            (metrics
-            (list :schema-version 1
-                  :scenario scenario
-                  :parameters parameters
-                  :warmups mevedel-benchmark--warmups
-                  :rounds mevedel-benchmark--rounds
-                  :elapsed-seconds elapsed
-                  :elapsed-median (mevedel-benchmark--median elapsed)
-                  :gc-counts gc-counts
-                  :gc-count-median (mevedel-benchmark--median gc-counts)
-                  :gc-seconds gc-times
-                  :gc-seconds-median (mevedel-benchmark--median gc-times)
-                  :sampled-allocation
-                  (mevedel-benchmark--profile-total profiler-memory-log)
-                  :cpu-samples
-                  (mevedel-benchmark--profile-total profiler-cpu-log)
-                  :git-head
-                  (car (process-lines "git" "rev-parse" "HEAD"))
-                  :emacs-version emacs-version
-                  :system-configuration system-configuration)))
+            (append
+             (list :schema-version 1
+                   :scenario scenario
+                   :parameters parameters
+                   :warmups mevedel-benchmark--warmups
+                   :rounds mevedel-benchmark--rounds
+                   :elapsed-seconds elapsed
+                   :elapsed-median (mevedel-benchmark--median elapsed)
+                   :gc-counts gc-counts
+                   :gc-count-median (mevedel-benchmark--median gc-counts)
+                   :gc-seconds gc-times
+                   :gc-seconds-median (mevedel-benchmark--median gc-times)
+                   :sampled-allocation
+                   (mevedel-benchmark--profile-total profiler-memory-log)
+                   :cpu-samples
+                   (mevedel-benchmark--profile-total profiler-cpu-log)
+                   :git-head
+                   (car (process-lines "git" "rev-parse" "HEAD"))
+                   :emacs-version emacs-version
+                   :system-configuration system-configuration)
+             (and observe (funcall observe)))))
       (mevedel-telemetry--write-profiler-artifacts directory)
       (mevedel-benchmark--write-metrics directory metrics)
       metrics)))
@@ -113,10 +130,80 @@ PARAMETERS describes the deterministic workload."
          (list :gap-bytes size :iterations iterations)
          workload directory)))))
 
+(defun mevedel-benchmark--with-view (function)
+  "Call FUNCTION with initialized data and view buffers."
+  (let ((data-buf (generate-new-buffer " *mevedel-benchmark-data*"))
+        (view-buf (generate-new-buffer " *mevedel-benchmark-view*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local gptel-response-separator "\n\n")
+            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+            (setq-local mevedel-session--read-only-mode nil))
+          (mevedel-view--setup view-buf data-buf)
+          (funcall function data-buf view-buf))
+      (when (buffer-live-p view-buf)
+        (kill-buffer view-buf))
+      (when (buffer-live-p data-buf)
+        (kill-buffer data-buf)))))
+
+(defun mevedel-benchmark--prompt-redraw (directory)
+  "Run large-view prompt lookup and redraw workload below DIRECTORY."
+  (let ((transcript-bytes (* 5 1024 1024))
+        (iterations 500))
+    (mevedel-benchmark--with-view
+     (lambda (_data-buf view-buf)
+       (with-current-buffer view-buf
+         (let ((inhibit-read-only t))
+           (mevedel-view--call-with-render-boundaries-advancing
+            (lambda ()
+              (goto-char (mevedel-view--history-insertion-marker))
+              (insert (make-string transcript-bytes ?x)))))
+         (goto-char (mevedel-view--input-start))
+         (insert "> benchmark draft\nsecond line")
+         (goto-char (+ (mevedel-view--input-start) 4))
+         (let ((workload
+                (lambda ()
+                  (dotimes (_ iterations)
+                    (unless (mevedel-view--prompt-start-position)
+                      (error "Prompt benchmark lost the prompt"))))))
+           (let ((metrics
+                  (mevedel-benchmark--measure
+                   'prompt-redraw
+                   (list :transcript-bytes transcript-bytes
+                         :iterations iterations)
+                   workload directory
+                   (lambda ()
+                     (let ((original (symbol-function 'text-property-any))
+                           (calls 0)
+                           (scanned 0))
+                       (cl-letf
+                           (((symbol-function 'text-property-any)
+                             (lambda (start end property value
+                                            &optional object)
+                               (when (eq property 'mevedel-view-prompt)
+                                 (cl-incf calls)
+                                 (cl-incf scanned (- end start)))
+                               (funcall original start end property value
+                                        object))))
+                         (funcall workload))
+                       (list :prompt-scan-calls calls
+                             :prompt-scan-characters scanned))))))
+             (mevedel-view--render-status)
+             (mevedel-view--interaction-register
+              (list :id 'benchmark :kind 'ask :body "benchmark\n"))
+             (unless (and (= (point) (+ (mevedel-view--input-start) 4))
+                          (equal (mevedel-view--input-text)
+                                 "> benchmark draft\nsecond line"))
+               (error "Prompt benchmark moved the composer"))
+             metrics)))))))
+
 (defun mevedel-benchmark-run (scenario directory)
   "Run named SCENARIO and write its artifacts below DIRECTORY."
   (pcase scenario
     ("retry-gap" (mevedel-benchmark--retry-gap directory))
+    ("prompt-redraw" (mevedel-benchmark--prompt-redraw directory))
     (_ (error "Unknown benchmark scenario: %s" scenario))))
 
 (when noninteractive
