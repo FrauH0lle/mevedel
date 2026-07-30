@@ -1,6 +1,6 @@
 # Store network authority in qualified tool rules
 
-Status: accepted
+Status: superseded by ADR 0086
 
 Reusable network authority in `ask` and `edits` is stored as a session or
 workspace-persistent tool allow rule qualified by the network capability. The

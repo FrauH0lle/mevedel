@@ -31,6 +31,7 @@
           "helpers"))
 
 (declare-function gptel-tool-args "gptel" (tool))
+(declare-function gptel-tool-function "gptel" (tool))
 
 (defun test-bash-permissions--read-permission-log (session)
   "Read permission log entries for SESSION."
@@ -368,6 +369,233 @@ additive child permissions are available only to batch Eval"
     (mevedel-tool-exec--additional-profile
      t '((:path "/tmp/input" :access read))))))
 
+(mevedel-deftest mevedel-tool-exec--current-permission-context ()
+  ,test
+  (test)
+  :doc "derives the current Bash permission facts from the active session"
+  (let ((root (make-temp-file "mevedel-permission-context-" t)))
+    (unwind-protect
+        (let* ((workspace (mevedel-workspace--create :root root))
+               (session
+                (mevedel-session--create
+                 :name "context" :workspace workspace)))
+          (mevedel-tool-exec--register)
+          (with-temp-buffer
+            (let ((context
+                   (mevedel-tool-exec--current-permission-context
+                    "Bash" '(:command "printf ok") session)))
+              (should (eq session (plist-get context :session)))
+              (should (eq workspace (plist-get context :workspace)))
+              (should (eq (current-buffer) (plist-get context :buffer)))
+              (should (equal "printf ok" (plist-get context :pattern))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-exec--merge-additional-profiles ()
+  ,test
+  (test)
+  :doc "unions capabilities and keeps the strongest exact-path access"
+  (let ((path (expand-file-name "profile" temporary-file-directory)))
+    (should
+     (equal
+      `(:network t :file-system ((:path ,path :access write)))
+      (mevedel-tool-exec--merge-additional-profiles
+       `(:file-system ((:path ,path :access read)))
+       `(:network t
+         :file-system ((:path ,path :access write)
+                       (:path "relative" :access read))))))))
+
+(mevedel-deftest mevedel-tool-exec--direct-resource-grants ()
+  ,test
+  (test)
+  :doc "returns exact grants owned directly by the session"
+  (let* ((grant '(:path "/tmp/mevedel-direct" :access read))
+         (session
+          (mevedel-session--create
+           :name "direct" :resource-grants (list grant))))
+    (should
+     (equal (list grant)
+            (mevedel-tool-exec--direct-resource-grants
+             `(:session ,session))))))
+
+(mevedel-deftest mevedel-tool-exec--remembered-additional-profile ()
+  ,test
+  (test)
+  :doc "resolves matching direct rules whose exact grants remain sufficient"
+  (let* ((path "/tmp/mevedel-remembered")
+         (profile `((:path ,path :access write)))
+         (rules
+          `(("Bash" :pattern "make:*" :network t
+             :file-system ,profile :action allow)))
+         (session
+          (mevedel-session--create
+           :name "remembered" :resource-grants profile)))
+    (should
+     (equal
+      `(:network t :file-system ,profile)
+      (mevedel-tool-exec--remembered-additional-profile
+       "Bash" "make report"
+       `(:session ,session :buckets ((:session ,@rules))))))))
+
+(mevedel-deftest mevedel-tool-exec--apply-remembered-authority ()
+  ,test
+  (test)
+  :doc "binds a compound command profile to the complete workload"
+  (let* ((command "pwd && package fetch dependencies")
+         (session (mevedel-session--create :name "compound"))
+         (request
+          `(:operation-pattern ,command
+            :remember-patterns ("pwd" "package fetch:*")
+            :remember-cell ((:operation t :network t)))))
+    (mevedel-tool-exec--apply-remembered-authority
+     'allow-session "Bash" request session nil)
+    (let ((rules (mevedel-session-permission-rules session)))
+      (should (member '("Bash" :pattern "pwd" :action allow) rules))
+      (should
+       (member '("Bash" :pattern "package fetch:*" :action allow) rules))
+      (should
+       (member `("Bash" :pattern ,command :network t :action allow)
+               rules))
+      (should-not
+       (seq-some
+        (lambda (rule)
+          (and (equal "pwd" (plist-get (cdr rule) :pattern))
+               (plist-get (cdr rule) :network)))
+        rules)))))
+
+(mevedel-deftest mevedel-tool-exec--effective-sandbox-request ()
+  ,test
+  (test)
+  :doc "reuses a matching direct network profile for a default Bash call"
+  (let* ((rules
+          '(("Bash" :pattern "npx @emacs-eask/cli:*"
+                    :network t :action allow)))
+         (context
+          `(:buckets ((:session ,@rules))
+            :session-rules ,rules)))
+    (should
+     (equal
+      '(:level additive :additional-permissions (:network t))
+      (mevedel-tool-exec--effective-sandbox-request
+       '(:command "npx @emacs-eask/cli test ert")
+       "Bash" "npx @emacs-eask/cli test ert" nil context))))
+  :doc "does not copy a profile to a non-matching Bash command"
+  (let* ((rules
+          '(("Bash" :pattern "npx @emacs-eask/cli:*"
+                    :network t :action allow)))
+         (context `(:buckets ((:session ,@rules)))))
+    (should
+     (equal
+      '(:level use-default :additional-permissions nil)
+      (mevedel-tool-exec--effective-sandbox-request
+       '(:command "git status") "Bash" "git status" nil context))))
+  :doc "unions remembered authority with an explicit capability delta"
+  (let* ((path "/tmp/mevedel-output")
+         (rules
+          '(("Bash" :pattern "npx test" :network t :action allow)))
+         (context `(:buckets ((:session ,@rules)))))
+    (should
+     (equal
+      `(:level additive
+        :additional-permissions
+        (:network t :file-system ((:path ,path :access write)))
+        :justification "Write the report?")
+      (mevedel-tool-exec--effective-sandbox-request
+       `(:command "npx test"
+         :sandbox_permissions "with_additional_permissions"
+         :additional_permissions (:file_system (:write [,path]))
+         :justification "Write the report?")
+       "Bash" "npx test" nil context))))
+  :doc "reattaches an exact path only while its resource grant is sufficient"
+  (let* ((path "/tmp/mevedel-input")
+         (profile `((:path ,path :access write)))
+         (rules
+          `(("Bash" :pattern "make:*" :file-system ,profile
+                    :action allow)))
+         (read-session
+          (mevedel-session--create
+           :name "read"
+           :resource-grants `((:path ,path :access read))))
+         (write-session
+          (mevedel-session--create
+           :name "write"
+           :resource-grants `((:path ,path :access write)))))
+    (should
+     (equal
+      '(:level use-default :additional-permissions nil)
+      (mevedel-tool-exec--effective-sandbox-request
+       '(:command "make build") "Bash" "make build" nil
+       `(:session ,read-session :buckets ((:session ,@rules))))))
+    (should
+     (equal
+      `(:level additive
+        :additional-permissions (:file-system ,profile))
+      (mevedel-tool-exec--effective-sandbox-request
+       '(:command "make build") "Bash" "make build" nil
+       `(:session ,write-session :buckets ((:session ,@rules)))))))
+  :doc "unions matching direct profiles and keeps the strongest path access"
+  (let* ((path "/tmp/mevedel-output")
+         (rules
+          `(("Bash" :pattern "make:*" :network t :action allow)
+            ("Bash" :pattern "make:*"
+             :file-system ((:path ,path :access read)) :action allow)
+            ("Bash" :pattern "make:*"
+             :file-system ((:path ,path :access write)) :action allow)))
+         (session
+          (mevedel-session--create
+           :name "write"
+           :resource-grants `((:path ,path :access write)))))
+    (should
+     (equal
+      `(:level additive
+        :additional-permissions
+        (:network t :file-system ((:path ,path :access write))))
+      (mevedel-tool-exec--effective-sandbox-request
+       '(:command "make build") "Bash" "make build" nil
+       `(:session ,session :buckets ((:session ,@rules)))))))
+  :doc "delegated profiles and full escalation never become sticky additions"
+  (let ((delegated
+         '(("Bash" :pattern "make:*" :network t :action allow))))
+    (should
+     (equal
+      '(:level use-default :additional-permissions nil)
+      (mevedel-tool-exec--effective-sandbox-request
+       '(:command "make build") "Bash" "make build" nil
+       `(:buckets ((:invocation ,@delegated))))))
+    (should
+     (equal
+      '(:level escalated
+        :sandbox-permissions require-escalated
+        :additional-permissions nil
+        :justification "Run directly?")
+      (mevedel-tool-exec--effective-sandbox-request
+       '(:expression "(+ 1 2)" :mode "batch"
+         :sandbox_permissions "require_escalated"
+         :justification "Run directly?")
+       "Eval" "(+ 1 2)" 'batch
+       '(:buckets ((:session)))))))
+  :doc "reuses an exact direct Eval profile"
+  (let* ((rules
+          '(("Eval" :pattern "(url-retrieve-synchronously url)"
+                    :network t :action allow)))
+         (context `(:buckets ((:session ,@rules)))))
+    (should
+     (equal
+      '(:level additive :additional-permissions (:network t))
+      (mevedel-tool-exec--effective-sandbox-request
+       '(:expression "(url-retrieve-synchronously url)" :mode "batch")
+       "Eval" "(url-retrieve-synchronously url)" 'batch context))))
+  :doc "does not attach a remembered child profile to live Eval"
+  (let* ((rules
+          '(("Eval" :pattern "(url-retrieve-synchronously url)"
+                    :network t :action allow)))
+         (context `(:buckets ((:session ,@rules)))))
+    (should
+     (equal
+      '(:level use-default :additional-permissions nil)
+      (mevedel-tool-exec--effective-sandbox-request
+       '(:expression "(url-retrieve-synchronously url)" :mode "live")
+       "Eval" "(url-retrieve-synchronously url)" 'live context)))))
+
 (mevedel-deftest mevedel-tool-exec--additional-authority-state ()
   ,test
   (test)
@@ -487,7 +715,7 @@ recognized command authority is followed by a once-only network prompt"
                    (plist-get entry :additional-permissions)))
     (should (eq 'allow outcome)))
   :doc "session Bash approval:
-the default selection remembers the operation but still grants current network"
+the default selection remembers the complete requested profile"
   (let* ((root (make-temp-file "mevedel-bash-remember-" t))
          (workspace (mevedel-workspace-get-or-create
                      'test root root "test"))
@@ -500,7 +728,7 @@ the default selection remembers the operation but still grants current network"
         (cl-letf (((symbol-function 'mevedel-permission--enqueue)
                    (lambda (entry &optional _session)
                      (should
-                      (equal '(:operation t)
+                      (equal '(:operation t :network t)
                              (car
                               (plist-get
                                entry :remember-authority-cell))))
@@ -520,11 +748,7 @@ the default selection remembers the operation but still grants current network"
            (seq-some
             (lambda (rule)
               (and (equal "pwd" (plist-get (cdr rule) :pattern))
-                   (not (plist-get (cdr rule) :network))))
-            (mevedel-session-permission-rules session)))
-          (should-not
-           (seq-some
-            (lambda (rule) (plist-get (cdr rule) :network))
+                   (plist-get (cdr rule) :network)))
             (mevedel-session-permission-rules session))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))
@@ -571,9 +795,6 @@ selecting network stores qualified authority and reuses it without prompting"
             (mevedel-tool-exec--check-permission-async
              nil
              `(:command "pwd"
-               :sandbox_permissions "with_additional_permissions"
-               :additional_permissions (:network t)
-               :justification "Contact the service?"
                :permission-context
                (:session ,session :workspace ,workspace :mode ask))
              (lambda (result) (setq outcome result))))
@@ -756,7 +977,7 @@ an ungranted exact filesystem path still prompts and stores session authority"
                    (mevedel-session-resource-grants session))))
       (delete-directory root t)))
   :doc "session resource approval:
-an unchecked path is granted now without being remembered"
+the complete requested path profile is selected by default"
   (let* ((root (make-temp-file "mevedel-bash-resource-once-" t))
          (path (file-name-concat root "secret"))
          (workspace (mevedel-workspace--create :root root))
@@ -773,13 +994,14 @@ an unchecked path is granted now without being remembered"
           (with-temp-file path (insert "secret"))
           (cl-letf (((symbol-function 'mevedel-permission--enqueue)
                      (lambda (entry &optional _session)
-                       (should-not
+                     (should-not
+                       (null
                         (plist-get
                          (car
                           (plist-get entry :remember-authority-cell))
-                         :file-system))
-                       (funcall (plist-get entry :callback)
-                                'allow-session))))
+                         :file-system)))
+                      (funcall (plist-get entry :callback)
+                               'allow-session))))
             (mevedel-tool-exec--check-permission-async
              nil
              `(:command ,(format "cat %s" path)
@@ -791,7 +1013,9 @@ an unchecked path is granted now without being remembered"
                 :resource-grants nil))
              (lambda (result) (setq outcome result))))
           (should (eq 'allow outcome))
-          (should-not (mevedel-session-resource-grants session)))
+          (should
+           (member `(:path ,path :access read)
+                   (mevedel-session-resource-grants session))))
       (delete-directory root t)))
   :doc "pregranted protected resource:
 an exact session grant skips only the filesystem prompt"
@@ -965,9 +1189,6 @@ the exact expression and selected network authority are reused together"
                (:session ,session :workspace ,workspace :mode ask))
              (lambda (result) (setq outcome result))))
           (should
-           (member '("Eval" :pattern "(+ 1 2)" :action allow)
-                   (mevedel-session-permission-rules session)))
-          (should
            (member
             '("Eval" :pattern "(+ 1 2)" :network t :action allow)
             (mevedel-session-permission-rules session)))
@@ -978,9 +1199,6 @@ the exact expression and selected network authority are reused together"
              nil
              `(:expression "(+ 1 2)"
                :mode "batch"
-               :sandbox_permissions "with_additional_permissions"
-               :additional_permissions (:network t)
-               :justification "Fetch package metadata?"
                :permission-context
                (:session ,session :workspace ,workspace :mode ask))
              (lambda (result) (setq outcome result))))
@@ -2869,7 +3087,36 @@ default Bash keeps bare dot inspection automatic"
         :execution-id "exec-1" :owner "/root" :input-p nil
         :requested-yield-time-ms 30000 :effective-wait-ms 30000)
       (car events)))
-    (should (string-prefix-p "delta" (plist-get result :result)))))
+    (should (string-prefix-p "delta" (plist-get result :result)))
+    (should (eq 'poll
+                (plist-get (plist-get result :render-data)
+                           :execution-control)))
+    (should (plist-get (plist-get result :render-data)
+                       :observation-output-p)))
+  :doc "marks input writes separately from empty output polls"
+  (let ((session (mevedel-session--create :name "test"))
+        result)
+    (let ((mevedel--session session)
+          (mevedel--current-request nil)
+          (mevedel--agent-invocation nil))
+      (cl-letf (((symbol-function 'mevedel-execution-observe)
+                 (lambda (_session _owner _execution-id callback &rest _)
+                   (funcall
+                    callback
+                    '(:output ""
+                      :facts (:execution-id "exec-1" :state running
+                              :wall-time-seconds 1.0 :output-bytes 0
+                              :output-lines 0 :omitted-output-bytes 0
+                              :tty t)))))
+                ((symbol-function 'mevedel-telemetry-record) #'ignore))
+        (mevedel-tool-exec--write-stdin
+         (lambda (value) (setq result value))
+         '(:execution_id "exec-1" :chars "yes\n"))))
+    (should (eq 'input
+                (plist-get (plist-get result :render-data)
+                           :execution-control)))
+    (should-not (plist-get (plist-get result :render-data)
+                           :observation-output-p))))
 
 (mevedel-deftest mevedel-tool-exec--list-executions ()
   ,test
@@ -2888,8 +3135,26 @@ default Bash keeps bare dot inspection automatic"
                       :output-lines 0 :omitted-output-bytes 0 :tty nil)))))
         (let ((envelope (mevedel-tool-exec--list-executions nil)))
           (should (string-match-p "execution_id=\"exec-1\""
-                                  (plist-get envelope :result))))))
-    (should (equal (list session "/root") captured))))
+                                  (plist-get envelope :result)))
+          (should-not (plist-member envelope :render-data)))))
+    (should (equal (list session "/root") captured)))
+  :doc "registered dispatch completes through the full pipeline"
+  (let ((session (mevedel-session--create :name "test"))
+        result)
+    (require 'mevedel-tools)
+    (mevedel-tool-exec--register)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-execution-list)
+                 (lambda (&rest _)
+                   '((:execution-id "exec-1" :state running
+                      :wall-time-seconds 1.0 :output-bytes 0
+                      :output-lines 0 :omitted-output-bytes 0 :tty nil)))))
+        (let* ((tool (mevedel-tool-get "ListExecutions" "mevedel"))
+               (fn (gptel-tool-function (mevedel-tool-gptel-tool tool))))
+          (funcall fn (lambda (value) (setq result value))))))
+    (should (string-match-p "execution_id=\"exec-1\"" result))
+    (should-not (string-match-p "Error:" result))))
 
 (mevedel-deftest mevedel-tool-exec--stop-execution ()
   ,test
@@ -2983,6 +3248,20 @@ default Bash keeps bare dot inspection automatic"
                    (plist-get (cdr captured) :tool-use-id)))
     (should (equal '(:command "printf identity" :yield-time_ms 250)
                    (plist-get (cdr captured) :tool-args))))
+  :doc "launches a default call with its matching remembered profile"
+  (let* ((session
+          (mevedel-session--create
+           :name "profile"
+           :permission-rules
+           '(("Bash" :pattern "npx test" :network t :action allow))))
+         (mevedel--session session)
+         captured)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-tool-exec--bash #'ignore '(:command "npx test")))
+    (should
+     (equal '(:network t)
+            (plist-get (cdr captured) :additional-permissions))))
   :doc "forwards only proven read-only analysis to scheduler admission"
   (let (read-only unknown)
     (cl-letf (((symbol-function 'mevedel-execution-start-bash)
@@ -3532,7 +3811,7 @@ the execution boundary owns the session's single unavailable warning"
   (let* ((bash (mevedel-tool-get "Bash"))
          (args (gptel-tool-args (mevedel-tool-gptel-tool bash)))
          (yield (seq-find (lambda (arg)
-                            (equal "yield_time_ms" (plist-get arg :name)))
+                            (equal "yield-time_ms" (plist-get arg :name)))
                           args))
          (timeout (seq-find (lambda (arg)
                               (equal "timeout_seconds"
@@ -3547,6 +3826,22 @@ the execution boundary owns the session's single unavailable warning"
     (should (plist-get tty :optional))
     (dolist (name '("WriteStdin" "ListExecutions" "StopExecution"))
       (should (mevedel-tool-get name))))
+  :doc "registered WriteStdin dispatch preserves the underscored schema key"
+  (progn
+    (mevedel-tool-exec--register)
+    (let* ((tool (mevedel-tool-get "WriteStdin" "mevedel"))
+           (fn (gptel-tool-function (mevedel-tool-gptel-tool tool)))
+           captured)
+      (should (eq 'yield-time_ms
+                  (car (nth 2 (mevedel-tool-args tool)))))
+      (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+                 (lambda (_tool _callback args)
+                   (setq captured args))))
+        (funcall fn #'ignore "exec-1" "" 12345))
+      (should (equal "exec-1" (plist-get captured :execution_id)))
+      (should (equal ":yield-time_ms" (symbol-name (nth 4 captured))))
+      (should (= 12345 (nth 5 captured)))
+      (should-not (plist-member captured :yield-time-ms))))
   :doc "execution control inherits authority without becoming read-only"
   (mevedel-tool-exec--register)
   (dolist (name '("WriteStdin" "StopExecution"))
@@ -3973,7 +4268,30 @@ the execution boundary owns the session's single unavailable warning"
           (concat "Hello, Ada\n\n"
                   "<bash-execution execution_id=\"exec-1\" state=\"completed\"/>")
           '(:status success :state completed))))
-    (should (equal "Hello, Ada" (plist-get plist :body)))))
+    (should (equal "Hello, Ada" (plist-get plist :body))))
+
+  :doc "hides only successful empty polls while execution remains running"
+  (let ((hidden
+         (mevedel-tool-exec--render-bash
+          "WriteStdin" nil
+          "<bash-execution execution_id=\"exec-1\" state=\"running\"/>"
+          '(:status success :state running
+            :execution-control poll :observation-output-p nil)))
+        (terminal
+         (mevedel-tool-exec--render-bash
+          "WriteStdin" nil
+          "<bash-execution execution_id=\"exec-1\" state=\"completed\"/>"
+          '(:status success :state completed
+            :execution-control poll :observation-output-p nil)))
+        (input
+         (mevedel-tool-exec--render-bash
+          "WriteStdin" nil
+          "<bash-execution execution_id=\"exec-1\" state=\"running\"/>"
+          '(:status success :state running
+            :execution-control input :observation-output-p nil))))
+    (should (eq t (plist-get hidden :hidden-p)))
+    (should-not (plist-get terminal :hidden-p))
+    (should-not (plist-get input :hidden-p))))
 
 (provide 'test-mevedel-tools-bash-permissions)
 ;;; test-mevedel-tools-bash-permissions.el ends here

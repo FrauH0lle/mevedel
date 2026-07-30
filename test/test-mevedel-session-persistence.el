@@ -4196,7 +4196,10 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 (setf (mevedel-session-permission-rules session)
                       '(("Read" :path "/tmp/foo/**" :action allow)
                         ("Bash" :pattern "npx test*"
-                         :network t :action allow)))
+                         :network t
+                         :file-system
+                         ((:path "/tmp/external-input" :access read))
+                         :action allow)))
                 (setf (mevedel-session-resource-grants session)
                       '((:path "/tmp/external-input" :access read)))
                 (with-current-buffer buf
@@ -4214,7 +4217,10 @@ rotation never saves through a rebound temporary visited filename or prompts"
                    (equal
                     '(("Read" :path "/tmp/foo/**" :action allow)
                       ("Bash" :pattern "npx test*"
-                       :network t :action allow))
+                       :network t
+                       :file-system
+                       ((:path "/tmp/external-input" :access read))
+                       :action allow))
                     (mevedel-session-permission-rules
                      mevedel--session)))
                   (should
@@ -5836,7 +5842,11 @@ The result is a plist whose :tempdir owns every created file."
                  :turn 3))
                (_ (setf (mevedel-session-permission-mode session) 'full-auto
                         (mevedel-session-permission-rules session)
-                        '(("Bash" :pattern "npx test*" :action allow))
+                        '(("Bash" :pattern "npx test*"
+                           :network t
+                           :file-system
+                           ((:path "/tmp/source-only" :access read))
+                           :action allow))
                         (mevedel-session-preset-name session) 'test-preset
                         (mevedel-session-sandbox-mode session) 'required
                         (mevedel-session-preset-settings session)
@@ -5902,7 +5912,11 @@ The result is a plist whose :tempdir owns every created file."
                       (mevedel-session-permission-mode child)))
           (should (eq 'required (mevedel-session-sandbox-mode child)))
           (should (equal
-                   '(("Bash" :pattern "npx test*" :action allow))
+                   '(("Bash" :pattern "npx test*"
+                      :network t
+                      :file-system
+                      ((:path "/tmp/source-only" :access read))
+                      :action allow))
                    (mevedel-session-permission-rules child)))
           (should-not (eq (mevedel-session-permission-rules session)
                           (mevedel-session-permission-rules child)))
@@ -5959,7 +5973,11 @@ The result is a plist whose :tempdir owns every created file."
                       (mevedel-session-permission-mode session)))
           (should (eq 'required (mevedel-session-sandbox-mode session)))
           (should (equal
-                   '(("Bash" :pattern "npx test*" :action allow))
+                   '(("Bash" :pattern "npx test*"
+                      :network t
+                      :file-system
+                      ((:path "/tmp/source-only" :access read))
+                      :action allow))
                    (mevedel-session-permission-rules session)))
           (should-not
            (member '(:path "/tmp/child-only" :access read)

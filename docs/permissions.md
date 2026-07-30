@@ -103,7 +103,8 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
 ## Rule format
 
 Rules live on `mevedel-permission-rules` with form
-`(TOOL-NAME &key SPECIFIER VALUE :sandbox-permissions LEVEL :action ACTION)`.
+`(TOOL-NAME &key SPECIFIER VALUE :network BOOL :file-system GRANTS
+:sandbox-permissions LEVEL :action ACTION)`.
 One specifier per rule:
 
 | Key        | Matches                | Used by                           |
@@ -126,6 +127,21 @@ pattern scopes authority to the matching Bash command or Eval expression, and
 omitting the pattern deliberately authorizes every expression for that tool at
 that execution level. Qualified and ordinary explicit denies remain final.
 
+`:network` and `:file-system` form an execution permission profile on a
+matching Bash or batch-Eval allow rule. The profile records the additive child
+authority approved with that operation; it is not a workload classifier.
+Single-segment Bash approvals may use the recognized safe command pattern.
+Compound commands keep generalized operation rules for their segments but
+store the profile against the complete compound command, preventing one
+segment from inheriting another segment's capability.
+Filesystem entries are exact `(:path ABSOLUTE-PATH :access read-or-write)`
+requirements and become effective only while an equally strong direct resource
+grant still exists. Multiple matching profiles are unioned, with write
+dominating read for the same path. Only session, persistent, and defcustom
+rules can contribute a reusable profile. Invocation- and request-scoped
+delegated rules may still authorize ordinary operations but never broaden the
+child sandbox.
+
 `mevedel-protected-paths` is an alist from glob to `read-only` or
 `inaccessible`. The default `.git` glob is read-only; the default SSH and GnuPG
 credential globs are inaccessible. String-only entries are invalid by design.
@@ -144,8 +160,13 @@ Configuration, interactive commands, and persisted sessions accept only these
 canonical values.
 
 The prompt offers allow/deny choices for the invocation, session, or persistent
-workspace scope. `.mevedel/permissions.el` stores a plist containing both
-`:rules` and `:resource-grants`.
+workspace scope. When one Bash or batch-Eval call needs both operation and
+additive authority, one card presents the complete request. Session and
+workspace approval default to remembering the complete selected profile;
+command, network, and individual path toggles can narrow it before approval.
+The current invocation always receives the complete approved request.
+`.mevedel/permissions.el` stores a plist containing both `:rules` and
+`:resource-grants`.
 
 Default allowed roots are the workspace root, the system temporary directory,
 configured memory roots, and manually configured additional roots. A native
@@ -298,15 +319,28 @@ needed to reach that exact target.
 A justified additive filesystem request names exact absolute paths and marks
 each as read or write. Ungranted paths prompt in every permission mode;
 invocation, session, and persistent approvals use the same exact resource-grant
-store as native filesystem tools. Approved paths are rebound at only the
-requested access level. A grant that contains a protected descendant is bound
-before that descendant is masked; all other grants are bound after protected
-masks are installed. Inaccessible parents expose traversal only far enough to
-reach the named mount, so their contents and sibling resources remain hidden.
-Command or Eval authorization is resolved independently and is never supplied
-by the resource grant. Explicit path denies remain final. Network and
-filesystem additions may be combined
-without changing any unrequested confinement boundary.
+store as native filesystem tools. Reusable approval also records those exact
+requirements in the matching operation profile. A later matching default call
+reattaches a path only while both the profile and a sufficient direct resource
+grant remain; removing either immediately restores confinement. Approved paths
+are rebound at only the requested access level. A grant that contains a
+protected descendant is bound before that descendant is masked; all other
+grants are bound after protected masks are installed. Inaccessible parents
+expose traversal only far enough to reach the named mount, so their contents
+and sibling resources remain hidden. Command or Eval authorization is resolved
+independently and is never supplied by the resource grant. Explicit path denies
+remain final. Network and filesystem additions may be combined without
+changing any unrequested confinement boundary.
+
+Before Bash or batch Eval starts, one shared resolver merges capabilities
+explicitly requested by that invocation with every matching direct
+session/workspace/global profile. A non-empty effective profile promotes
+`use_default` to additive confinement; `require_escalated` is never changed.
+This resolution happens both during permission checking and immediately before
+child launch. It never applies to live Eval. A capability not present in a
+matching approved profile is not inferred from failures or earlier commands:
+the model must make a new explicit invocation with the missing capability and
+justification. A started process is never replayed.
 
 Before Bash executes, identified literal resources are resolved against the
 working directory. Resources outside the allowed roots require an exact

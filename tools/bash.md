@@ -13,8 +13,10 @@ editing files. Use the provided file tools instead: `Read`, `Write`,
 - Commands run from the session working directory by default
 - Commands run with filesystem and process confinement and without network by
   default when the platform sandbox is available
-- Permission fields apply only to their invocation. Start each new command with
-  the default sandbox; never copy an earlier call's additional permissions
+- Request every capability already known to be necessary in one invocation.
+  Do not copy capabilities merely because an earlier command used them;
+  mevedel reapplies a user-approved session/workspace profile when the command
+  matches it
 - Bash waits up to `yield_time_ms` (10 seconds by default) and returns an
   `execution_id` when the command is still running. Use `WriteStdin` with empty
   `chars` to poll unread output, `ListExecutions` to list your yielded commands,

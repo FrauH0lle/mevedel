@@ -113,6 +113,10 @@
 (declare-function mevedel-permission--first-non-nil-action-with-bucket
                   "mevedel-permissions"
                   (buckets tool-name path pattern domain name))
+(declare-function mevedel-permission--invocation-context
+                  "mevedel-permissions" (&rest keys))
+(declare-function mevedel-permission--load-persistent-resource-grants
+                  "mevedel-permissions" (workspace))
 (declare-function mevedel-permission--load-persistent-rules "mevedel-permissions"
                   (workspace))
 (declare-function mevedel-permission--network-rule-decision
@@ -199,6 +203,20 @@
   "Return the session visible to a Bash/Eval permission adapter."
   (or (and (boundp 'mevedel--session) mevedel--session)
       (mevedel-permission-queue--current-session)))
+
+(defun mevedel-tool-exec--current-permission-context
+    (tool-name args &optional session)
+  "Return TOOL-NAME's direct execution context for ARGS and SESSION."
+  (require 'mevedel-permissions)
+  (mevedel-permission--invocation-context
+   :tool-name tool-name
+   :args args
+   :session session
+   :workspace (and session (mevedel-session-workspace session))
+   :request mevedel--current-request
+   :invocation (and (boundp 'mevedel--agent-invocation)
+                    mevedel--agent-invocation)
+   :buffer (current-buffer)))
 
 (defun mevedel-tool-exec--capture-permission-origin (input)
   "Return INPUT with its permission owner and session captured."
@@ -460,6 +478,101 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
       (setq profile (plist-put profile :file-system grants)))
     profile))
 
+(defun mevedel-tool-exec--merge-additional-profiles (&rest profiles)
+  "Return the normalized union of additive PROFILES."
+  (let (network grants)
+    (dolist (profile profiles)
+      (when (plist-get profile :network)
+        (setq network t))
+      (dolist (grant (plist-get profile :file-system))
+        (when (and (stringp (plist-get grant :path))
+                   (file-name-absolute-p (plist-get grant :path))
+                   (memq (plist-get grant :access) '(read write)))
+          (let* ((path (expand-file-name (plist-get grant :path)))
+                 (access (plist-get grant :access))
+                 (existing
+                  (cl-find path grants
+                           :key (lambda (item) (plist-get item :path))
+                           :test #'string-equal)))
+            (if existing
+                (when (eq access 'write)
+                  (plist-put existing :access 'write))
+              (setq grants
+                    (append grants
+                            (list (list :path path :access access)))))))))
+    (mevedel-tool-exec--additional-profile network grants)))
+
+(defun mevedel-tool-exec--direct-resource-grants (permission-context)
+  "Return direct user resource grants from PERMISSION-CONTEXT."
+  (let* ((session (plist-get permission-context :session))
+         (workspace
+          (or (plist-get permission-context :workspace)
+              (and session (mevedel-session-workspace session)))))
+    (append
+     (and session (mevedel-session-resource-grants session))
+     (and workspace
+          (mevedel-permission--load-persistent-resource-grants workspace)))))
+
+(defun mevedel-tool-exec--remembered-additional-profile
+    (tool-name operation permission-context)
+  "Return direct remembered authority for TOOL-NAME and OPERATION."
+  (let* ((buckets (mevedel-tools--bash-buckets permission-context))
+         (direct-buckets
+          (seq-filter
+           (lambda (entry)
+             (memq (car entry) '(:session :persistent :defcustom)))
+           buckets))
+         (network
+          (eq 'allow
+              (mevedel-permission--network-rule-decision
+               buckets tool-name operation)))
+         candidates)
+    (dolist (entry direct-buckets)
+      (dolist (rule
+               (mevedel-permission--find-rules
+                (cdr entry) tool-name :pattern operation))
+        (when (eq 'allow (plist-get (cdr rule) :action))
+          (setq candidates
+                (append candidates
+                        (plist-get (cdr rule) :file-system))))))
+    (let ((grants
+           (mevedel-tool-exec--direct-resource-grants permission-context)))
+      (mevedel-tool-exec--additional-profile
+       network
+       (cl-remove-if-not
+        (lambda (candidate)
+          (mevedel-permission--resource-granted-p
+           (plist-get candidate :path)
+           (plist-get candidate :access)
+           grants))
+        (plist-get
+         (mevedel-tool-exec--merge-additional-profiles
+          (list :file-system candidates))
+         :file-system))))))
+
+(defun mevedel-tool-exec--effective-sandbox-request
+    (args tool-name operation &optional eval-mode permission-context)
+  "Resolve ARGS into TOOL-NAME's effective child authority for OPERATION.
+EVAL-MODE distinguishes live from batch Eval.  PERMISSION-CONTEXT supplies
+remembered direct user authority."
+  (let ((request
+         (mevedel-tool-exec--sandbox-request
+          args (if (equal tool-name "Bash") 'bash 'eval) eval-mode)))
+    (if (eq (plist-get request :level) 'escalated)
+        request
+      (let ((profile
+             (mevedel-tool-exec--merge-additional-profiles
+              (plist-get request :additional-permissions)
+              (and (or (equal tool-name "Bash")
+                       (eq eval-mode 'batch))
+                   (mevedel-tool-exec--remembered-additional-profile
+                    tool-name operation permission-context)))))
+        (if profile
+            (let ((copy (copy-sequence request)))
+              (setq copy (plist-put copy :level 'additive))
+              (plist-put copy :additional-permissions profile))
+          request)))))
+
 (defun mevedel-tool-exec--additional-authority-state
     (tool-name request permission-context)
   "Classify TOOL-NAME's additive REQUEST under PERMISSION-CONTEXT."
@@ -535,11 +648,23 @@ OPERATION-PATTERN is the exact Bash command or Eval expression."
         (setq copy
               (plist-put copy :remember-cell
                          (list (and reusable '(:operation t))))))
-      (setq copy
-            (plist-put
-             copy :authority-state
-             (mevedel-tool-exec--additional-authority-state
-              tool-name copy permission-context)))
+      (let* ((state
+              (mevedel-tool-exec--additional-authority-state
+               tool-name copy permission-context))
+             (missing (plist-get state :missing))
+             (selection
+              (append
+               (and (plist-get copy :reusable-operation-p)
+                    '(:operation t))
+               (and (plist-get copy :reusable-operation-p)
+                    (plist-get missing :network)
+                    '(:network t))
+               (and (plist-get missing :file-system)
+                    (list :file-system
+                          (copy-tree
+                           (plist-get missing :file-system)))))))
+        (setq copy (plist-put copy :authority-state state))
+        (setcar (plist-get copy :remember-cell) selection))
       (plist-put copy :approval-cell (list nil)))))
 
 (defun mevedel-tool-exec--apply-remembered-authority
@@ -548,16 +673,33 @@ OPERATION-PATTERN is the exact Bash command or Eval expression."
   (when (memq outcome '(allow-session always-allow))
     (let* ((selection
             (car (plist-get request :remember-cell)))
-           (patterns (plist-get request :remember-patterns)))
+           (patterns (plist-get request :remember-patterns))
+           (profile
+            (mevedel-tool-exec--additional-profile
+             (plist-get selection :network)
+             (plist-get selection :file-system)))
+           (profile-patterns
+            (and (plist-get selection :operation)
+                 profile
+                 (if (and (equal tool-name "Bash")
+                          (cdr (plist-get
+                                (mevedel-tool-exec--analyze-bash
+                                 (plist-get request :operation-pattern))
+                                :segments)))
+                     (list (plist-get request :operation-pattern))
+                   patterns))))
       (dolist (pattern patterns)
-        (when (plist-get selection :operation)
+        (when (and (plist-get selection :operation)
+                   (not (member pattern profile-patterns)))
           (mevedel-permission--apply-prompt-result
            outcome tool-name session workspace nil
-           :spec-key :pattern :spec-value pattern))
-        (when (plist-get selection :network)
-          (mevedel-permission--apply-prompt-result
-           outcome tool-name session workspace nil
-           :spec-key :pattern :spec-value pattern :network t)))
+           :spec-key :pattern :spec-value pattern)))
+      (dolist (pattern profile-patterns)
+        (mevedel-permission--apply-prompt-result
+         outcome tool-name session workspace nil
+         :spec-key :pattern :spec-value pattern
+         :network (plist-get profile :network)
+         :file-system (plist-get profile :file-system)))
       (dolist (grant (plist-get selection :file-system))
         (let ((path (plist-get grant :path))
               (access (plist-get grant :access)))
@@ -1887,7 +2029,9 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
              (request
               (mevedel-tool-exec--prepare-additional-authority-request
                "Eval"
-               (mevedel-tool-exec--sandbox-request input 'eval mode)
+               (mevedel-tool-exec--effective-sandbox-request
+                input "Eval" (plist-get input :expression) mode
+                (plist-get input :permission-context))
                (plist-get input :permission-context)
                (plist-get input :expression)))
              (sandbox-mode
@@ -2150,7 +2294,9 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
              (request
               (mevedel-tool-exec--prepare-additional-authority-request
                "Bash"
-               (mevedel-tool-exec--sandbox-request input 'bash)
+               (mevedel-tool-exec--effective-sandbox-request
+                input "Bash" (plist-get input :command) nil
+                (plist-get input :permission-context))
                (plist-get input :permission-context)
                (plist-get input :command)))
              (sandbox-mode
@@ -2487,8 +2633,12 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
     (let* ((analysis (mevedel-tool-exec--analyze-bash command))
            (_ (when (plist-get analysis :background-p)
                 (error "Shell-native background execution is not supported; use yield_time_ms")))
-           (sandbox-request (mevedel-tool-exec--sandbox-request args 'bash))
            (session (mevedel-tool-exec--permission-log-session))
+           (sandbox-request
+            (mevedel-tool-exec--effective-sandbox-request
+             args "Bash" command nil
+             (mevedel-tool-exec--current-permission-context
+              "Bash" args session)))
            (invocation
             (and (boundp 'mevedel--agent-invocation)
                  mevedel--agent-invocation))
@@ -2552,8 +2702,20 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
     (mevedel-execution-observe
      session owner execution-id
      (lambda (observation)
-       (funcall callback
-                (mevedel-tool-exec--observation-envelope observation)))
+       (let* ((envelope
+               (mevedel-tool-exec--observation-envelope observation))
+              (render-data
+               (copy-sequence (plist-get envelope :render-data))))
+         (setq render-data
+               (plist-put render-data :execution-control
+                          (if (string-empty-p chars) 'poll 'input)))
+         (setq render-data
+               (plist-put
+                render-data :observation-output-p
+                (not (string-empty-p (or (plist-get observation :output)
+                                         "")))))
+         (funcall callback
+                  (plist-put envelope :render-data render-data))))
      :chars chars :wait-ms wait-ms :request mevedel--current-request)))
 
 (defun mevedel-tool-exec--list-executions (_args)
@@ -2568,7 +2730,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
             (if facts
                 (mapconcat #'mevedel-tool-exec--execution-facts-xml facts "\n")
               "No yielded executions.")))
-      (list :result result :status 'success :render-data facts))))
+      (list :result result :status 'success))))
 
 (defun mevedel-tool-exec--stop-execution (callback args)
   "Stop one owner-scoped yielded execution named by ARGS."
@@ -2812,7 +2974,12 @@ CALLBACK receives the result envelope.  ARGS is a plist with :expression."
         (mode (mevedel-tool-exec--eval-mode args)))
     (unless (stringp expression)
       (error "Parameter expression is required"))
-    (let ((request (mevedel-tool-exec--sandbox-request args 'eval mode)))
+    (let* ((session (mevedel-tool-exec--permission-log-session))
+           (request
+            (mevedel-tool-exec--effective-sandbox-request
+             args "Eval" expression mode
+             (mevedel-tool-exec--current-permission-context
+              "Eval" args session))))
       (pcase mode
         ('live
          (mevedel-tool-exec--eval-live
@@ -2850,6 +3017,12 @@ Header shows a truncated first line of the command; body fontifies as
             :body body
             :body-mode 'sh-mode
             :status status
+            :hidden-p
+            (and (equal name "WriteStdin")
+                 (eq status 'success)
+                 (eq state 'running)
+                 (eq (plist-get render-data :execution-control) 'poll)
+                 (not (plist-get render-data :observation-output-p)))
             :force-expanded-p
             (and (plist-get render-data :live-execution-p) t)
             :initially-collapsed-p
@@ -2891,7 +3064,7 @@ Header shows a truncated first line of the command; body fontifies as
     :handler #'mevedel-tool-exec--bash
     :args ((command string :required
                    "The Bash command to execute from the session working directory. Can include pipes and standard shell operators.")
-           (yield_time_ms integer :optional
+           (yield-time_ms integer :optional
                           "Milliseconds to wait before yielding a still-running command. Defaults to 10000; range 250-30000.")
            (tty boolean :optional
                 "Allocate a PTY and retain stdin for prompts or REPL input. Defaults to false.")
@@ -2935,7 +3108,7 @@ Header shows a truncated first line of the command; body fontifies as
                          "Opaque execution ID returned by Bash.")
            (chars string :optional
                   "Input to send. Omit or use an empty string to poll. Ordinary input requires a PTY; a single Ctrl-C character interrupts either mode.")
-           (yield_time_ms integer :optional
+           (yield-time_ms integer :optional
                           "Wait before returning: polls default to 5000ms (5000-300000); input defaults to 250ms (250-30000)."))
     :async-p t
     :max-result-size 30000
