@@ -889,6 +889,44 @@
               (set-buffer-modified-p nil))
             (kill-buffer buffer)))))))
 
+(mevedel-deftest mevedel-view--prompt-start-position ()
+  ,test
+  (test)
+  :doc "uses a live marker at the prompt start without a full-buffer scan"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((expected (marker-position mevedel-view--input-marker)))
+        (cl-letf (((symbol-function 'text-property-any)
+                   (lambda (&rest _)
+                     (ert-fail "Live prompt marker triggered a scan"))))
+          (should (= expected (mevedel-view--prompt-start-position)))))))
+
+  :doc "walks backward when the live marker points inside the prompt"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((expected (marker-position mevedel-view--input-marker)))
+        (set-marker mevedel-view--input-marker (1+ expected))
+        (cl-letf (((symbol-function 'text-property-any)
+                   (lambda (&rest _)
+                     (ert-fail "Prompt-local recovery triggered a scan"))))
+          (should (= expected (mevedel-view--prompt-start-position)))))))
+
+  :doc "recovers by property scan from a stale marker in the draft"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((expected (marker-position mevedel-view--input-marker)))
+        (goto-char (mevedel-view--input-start))
+        (insert "draft")
+        (set-marker mevedel-view--input-marker (point-max))
+        (should (= expected (mevedel-view--prompt-start-position))))))
+
+  :doc "recovers by property scan from a detached marker"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((expected (marker-position mevedel-view--input-marker)))
+        (set-marker mevedel-view--input-marker nil)
+        (should (= expected (mevedel-view--prompt-start-position)))))))
+
 (mevedel-deftest mevedel-view-refresh-input-prompt
   (:doc "updates the prompt prefix without disturbing draft input")
   ,test
