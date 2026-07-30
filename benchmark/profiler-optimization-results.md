@@ -85,3 +85,9 @@ Decision: investigate in a separate optimization change.  Every status refresh
 still invokes the linear history fallback despite live zone markers, and its
 absolute cost exceeds the gate.  This evidence commit deliberately adds no
 cache or new state.
+
+## Interactive rerun
+
+Pending the user's equivalent real-session rerun with
+`M-x mevedel-session-debug`; batch benchmarks cannot validate redisplay,
+permission-overlay timing, or the reported intermittent cursor jump.
