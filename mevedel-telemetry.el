@@ -13,7 +13,12 @@
 
 (eval-when-compile (require 'cl-lib))
 
+;; `emacs'
+(defvar default-file-modes)
+
 ;; `gptel'
+(defvar gptel--log-buffer-name)
+(defvar gptel-log-level)
 (defvar gptel-version)
 
 ;; `mevedel-agents'
@@ -42,6 +47,10 @@
 (defvar mevedel--agent-invocation)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
+
+;; `mevedel-view-render'
+(defvar mevedel-view-render-debug)
+(defvar mevedel-view-render-debug-buffer-name)
 
 ;; `profiler'
 (declare-function profiler-cpu-profile "profiler" ())
@@ -125,6 +134,18 @@ they never move backwards within the process."
 
 (defvar mevedel-telemetry--profiler-run-id nil
   "Identifier of the currently active mevedel profiler run.")
+
+(defvar mevedel-telemetry--session-debug-marker nil
+  "Marker delimiting the active session's gptel debug capture.")
+
+(defvar mevedel-telemetry--session-debug-previous-log-level nil
+  "Gptel log level to restore after session debugging.")
+
+(defvar mevedel-telemetry--session-debug-view-marker nil
+  "Marker delimiting the active session's view-render debug capture.")
+
+(defvar mevedel-telemetry--session-debug-previous-view-debug nil
+  "View-render debug state to restore after session debugging.")
 
 (defvar mevedel-telemetry--prompt-advices nil
   "Alist of prompt functions and temporary profiler advice closures.")
@@ -598,6 +619,72 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
       (mevedel-telemetry--remove-prompt-guard)
       (setq mevedel-telemetry--profiler-session nil
             mevedel-telemetry--profiler-run-id nil))))
+
+;;;###autoload
+(defun mevedel-session-debug ()
+  "Toggle profiler and gptel debug-log capture for the current session.
+Stopping writes the captured log suffix to gptel-debug.log in the profiler
+run's diagnostics directory.  The log may contain raw request data and
+connection settings."
+  (interactive)
+  (require 'gptel)
+  (if mevedel-telemetry--session-debug-marker
+      (let* ((marker mevedel-telemetry--session-debug-marker)
+             (view-marker mevedel-telemetry--session-debug-view-marker)
+             (session mevedel-telemetry--profiler-session))
+        (unwind-protect
+            (let* ((directory
+                    (mevedel-telemetry-profiler-directory session))
+                   (gptel-file
+                    (file-name-concat directory "gptel-debug.log"))
+                   (view-file
+                    (file-name-concat directory "view-render-debug.log"))
+                   (default-file-modes #o600))
+              (unless (marker-buffer marker)
+                (user-error "The active gptel debug log buffer was killed"))
+              (make-directory directory t)
+              (with-current-buffer (marker-buffer marker)
+                (write-region marker (point-max) gptel-file nil 'silent))
+              (set-file-modes gptel-file #o600)
+              (when (and (markerp view-marker)
+                         (marker-buffer view-marker))
+                (with-current-buffer (marker-buffer view-marker)
+                  (write-region view-marker (point-max)
+                                view-file nil 'silent))
+                (set-file-modes view-file #o600))
+              (mevedel-telemetry-profiler-stop)
+              (message "mevedel: session debug artifacts saved under %s"
+                       directory))
+          (when mevedel-telemetry--profiler-session
+            (ignore-errors (mevedel-telemetry-profiler-stop)))
+          (setq gptel-log-level
+                mevedel-telemetry--session-debug-previous-log-level
+                mevedel-telemetry--session-debug-previous-log-level nil
+                mevedel-view-render-debug
+                mevedel-telemetry--session-debug-previous-view-debug
+                mevedel-telemetry--session-debug-previous-view-debug nil)
+          (set-marker marker nil)
+          (when (markerp view-marker)
+            (set-marker view-marker nil))
+          (setq mevedel-telemetry--session-debug-marker nil
+                mevedel-telemetry--session-debug-view-marker nil)))
+    (require 'mevedel-view-render)
+    (let ((previous-level gptel-log-level)
+          (previous-view-debug mevedel-view-render-debug))
+      (mevedel-telemetry-profiler-start)
+      (setq mevedel-telemetry--session-debug-previous-log-level previous-level
+            mevedel-telemetry--session-debug-marker
+            (with-current-buffer (get-buffer-create gptel--log-buffer-name)
+              (copy-marker (point-max)))
+            mevedel-telemetry--session-debug-previous-view-debug
+            previous-view-debug
+            mevedel-telemetry--session-debug-view-marker
+            (with-current-buffer
+                (get-buffer-create mevedel-view-render-debug-buffer-name)
+              (copy-marker (point-max)))
+            gptel-log-level 'debug
+            mevedel-view-render-debug t)
+      (message "mevedel: session debug capture started"))))
 
 (provide 'mevedel-telemetry)
 

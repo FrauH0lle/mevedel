@@ -49,7 +49,7 @@ The event stream covers:
   settlement, cancellation, and teardown;
 - every tool pipeline step, permission queue transition, interaction lifetime,
   sandbox preparation/fallback, scheduler dwell, child start/first output/end,
-  and result return;
+  `WriteStdin` requested/effective wait, and result return;
 - every hook handler and aggregate hook event, including handler identity,
   process outcome, contributed-context size, and acquisition/release of
   slow-hook status ownership;
@@ -74,6 +74,12 @@ creating the Goal:
 3. Let the Goal reach a terminal state or a clearly stranded state.
 4. Run `M-x mevedel-telemetry-profiler-stop`.
 
+For a session-level reproduction, `M-x mevedel-session-debug` starts the same
+profiler while enabling gptel debug logging and the existing view-render trace.
+Run it again to stop and save all three captures. The view trace includes
+buffer point, selected-window point/start, and input-relative offsets around
+interaction registration and full rerenders.
+
 Each profiler run gets
 `SESSION_DIR/diagnostics/run-TIMESTAMP-ID/`, containing:
 
@@ -83,6 +89,8 @@ profiler-cpu-report.txt       rendered CPU report, when enabled
 profiler-memory-profile.el    native readable Emacs memory profile, when enabled
 profiler-memory-report.txt    rendered memory report, when enabled
 full-suite-time.txt           GNU time report, when a full Eask suite ran
+gptel-debug.log               gptel log captured by mevedel-session-debug
+view-render-debug.log         view trace captured by mevedel-session-debug
 ```
 
 Native profile files are written through `profiler-write-profile`, which
@@ -90,6 +98,11 @@ normalizes sampled runtime objects before serialization.  Open them with
 `M-x profiler-find-profile`.  A run is recorded as `profiler-stopped` only
 after every expected profile and report exists and is nonempty; otherwise it
 records `profiler-stop-failed` and signals the save error.
+
+The two debug logs are explicit opt-in artifacts and may contain raw prompts,
+responses, request headers, connection settings, and short rendered text
+previews. They are written with owner-only permissions (`0600`); still treat
+the diagnostics directory as sensitive session data.
 
 While profiling is active, the first full Eask ERT suite is transparently run
 under `/usr/bin/time -v` when GNU time is installed. Focused test files and

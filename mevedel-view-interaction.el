@@ -81,6 +81,12 @@
 (declare-function mevedel-view--session "mevedel-view-composer" nil)
 (defvar mevedel-view--prompt-hook-pending)
 
+;; `mevedel-view-render'
+(declare-function mevedel-view--debug-log "mevedel-view-render"
+                  (event &rest data))
+(declare-function mevedel-view--debug-state "mevedel-view-render"
+                  (&optional data-buf start end))
+
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--render-request-progress
                   "mevedel-view-stream" nil)
@@ -589,6 +595,11 @@ This deletes only interaction UI overlays and never settles callbacks."
                (gethash id mevedel-view--interaction-overlays)))
          (overlay (or existing-overlay
                       (make-overlay anchor anchor (current-buffer) nil t))))
+    (mevedel-view--debug-log
+     'interaction-register-begin
+     :interaction-id id
+     :kind (plist-get descriptor :kind)
+     :state (mevedel-view--debug-state mevedel--data-buffer))
     (unless (hash-table-p mevedel-view--interaction-telemetry-opened)
       (setq mevedel-view--interaction-telemetry-opened
             (make-hash-table :test #'equal)))
@@ -635,6 +646,11 @@ This deletes only interaction UI overlays and never settles callbacks."
     (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
     (mevedel-view--interaction-sync-approval-wait)
     (mevedel-view--interaction-render)
+    (mevedel-view--debug-log
+     'interaction-register-end
+     :interaction-id id
+     :kind (plist-get descriptor :kind)
+     :state (mevedel-view--debug-state mevedel--data-buffer))
     overlay))
 
 (defun mevedel-view--interaction-unregister (id)

@@ -238,6 +238,7 @@ Mevedel public and private variables take precedence over gptel variables."
   "Run USER-POST and required mevedel setup for preset NAME."
   (when user-post (funcall user-post))
   (mevedel-preset--apply-settings name)
+  (mevedel-preset--refresh-tools name)
   (mevedel-agents--setup-for-request name)
   (mevedel-preset--setup-deferred name)
   (mevedel-preset--setup-extras name))
@@ -434,6 +435,14 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
 
 ;;
 ;;; Request-time preset setup
+
+(defun mevedel-preset--refresh-tools (preset-name)
+  "Resolve PRESET-NAME's active tools from the current registry."
+  (when-let* ((meta (mevedel-preset--resolved-metadata preset-name))
+              (tool-specs (plist-get meta :tool-specs)))
+    (setq-local
+     gptel-tools
+     (plist-get (mevedel-tool-resolve-gptel tool-specs) :active))))
 
 (defun mevedel-preset--setup-deferred (preset-name)
   "Populate the current session's deferred tool set from PRESET-NAME.

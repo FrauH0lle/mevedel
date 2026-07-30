@@ -80,14 +80,6 @@ def generated_file_guard() -> None:
             return
 
 
-def post_edit_context() -> None:
-    path = path_value(payload())
-    if path.endswith(".el"):
-        additional_context(
-            "An Emacs Lisp file was edited. Before final response, run the focused ERT test if one matches the module, and run `npx @emacs-eask/cli compile` for shared or cross-module changes. Keep byte compiler output warning-free."
-        )
-
-
 def precompact_context() -> None:
     additional_context(
         "Preserve the current objective, changed file paths/functions, failing diagnostics or tests, outstanding tasks, reviewer/verifier verdicts, hook or permission decisions, agent transcript handles, and explicit user constraints."
@@ -119,7 +111,6 @@ def main() -> None:
     handlers = {
         "bash-safety": bash_safety,
         "generated-file-guard": generated_file_guard,
-        "post-edit-context": post_edit_context,
         "precompact-context": precompact_context,
         "subagent-context": subagent_context,
         "risky-skill-context": risky_skill_context,
