@@ -37,18 +37,51 @@ composer draft beginning with `>`.
 | Revision | Commit | Median wall time | Sampled allocation | Prompt scans |
 | --- | --- | ---: | ---: | ---: |
 | Baseline | `67aa18e` | 0.226 ms | 1,560,835 bytes | 500 |
-| Marker first | pending | pending | pending | pending |
+| Marker first | `6605bb8` | 0.292 ms | 1,560,835 bytes | 0 |
 
-Decision: pending.
+Decision: ship.  The live-marker path removed all 500 full-range scan
+requests.  The 0.066 ms aggregate timing difference is below the materiality
+gate, so no wall-time claim is made.
 
 ## Tool-segment copying
 
-Workload and results pending.
+Workload: one accurate and one drifted lookup for each of two 64 KiB persisted
+tool blocks.
+
+| Commit | Median wall time | Sampled allocation | Substrings | Bytes copied |
+| --- | ---: | ---: | ---: | ---: |
+| `ea479c0` | 43.60 ms | 2,480,947 bytes | 6 | 262,684 |
+
+Decision: defer optimization.  Four requested segment strings account for
+approximately four full block copies; drift recovery adds two small initial
+slices, not repeated copies of the recovered full ranges.  A persistent cache
+is not justified by this workload.
 
 ## Telemetry perturbation
 
-Workload and results pending.
+Workload: 250 identical sanitized events with persistence enabled and disabled.
+
+| Mode | Commit | Median wall time | Sampled allocation | Emitted bytes |
+| --- | --- | ---: | ---: | ---: |
+| Enabled | `ea479c0` | 40.88 ms | 12,586,905 bytes | 47,890 |
+| Disabled | `ea479c0` | 0.076 ms | 1,560,835 bytes | 0 |
+
+Decision: defer batching.  Persistence adds about 0.163 ms and 44 KiB sampled
+allocation per event, below both absolute per-iteration gates.  The current
+append durability remains unchanged.
 
 ## Status and history scans
 
-Workload and results pending.
+Workload: one status refresh and one detached-marker history fallback over a
+1 MiB rendered transcript while preserving a selected multiline composer
+draft beginning with `>`.
+
+| Scenario | Commit | Median wall time | Sampled allocation | History scans |
+| --- | --- | ---: | ---: | ---: |
+| Status refresh | `514ddff` | 305.95 ms | 27,139,475 bytes | 1 / 1,048,608 chars |
+| History fallback | `514ddff` | 305.52 ms | 27,008,307 bytes | 1 / 1,048,576 chars |
+
+Decision: investigate in a separate optimization change.  Every status refresh
+still invokes the linear history fallback despite live zone markers, and its
+absolute cost exceeds the gate.  This evidence commit deliberately adds no
+cache or new state.
