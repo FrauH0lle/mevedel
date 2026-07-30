@@ -935,6 +935,30 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
 ;;
 ;;; Full rendering
 
+(mevedel-deftest mevedel-view--debug-state ()
+  ,test
+  (test)
+  :doc "does not repair drifted zone markers while observing state"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((prompt-start (marker-position mevedel-view--input-marker)))
+        (goto-char (mevedel-view--input-start))
+        (insert "> existing\nmultiline draft")
+        (set-marker mevedel-view--input-marker (point-max))
+        (let ((drifted (marker-position mevedel-view--input-marker))
+              (mevedel-view-render-debug nil))
+          (should-not (mevedel-view--debug-state data-buf))
+          (should (= drifted
+                     (marker-position mevedel-view--input-marker)))
+          (let ((mevedel-view-render-debug t))
+            (let ((state (mevedel-view--debug-state data-buf)))
+              (should (plist-member state :point-in-composer))
+              (should (= drifted (plist-get state :input)))
+              (should (< prompt-start drifted))
+              (should (= drifted
+                         (marker-position
+                          mevedel-view--input-marker))))))))))
+
 (mevedel-deftest mevedel-view--full-rerender ()
   ,test
   (test)
