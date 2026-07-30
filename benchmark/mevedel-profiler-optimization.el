@@ -336,7 +336,25 @@ returns additional counters from one unprofiled workload run."
                      (mevedel-view--render-status)))
                  (file-name-concat directory "status")
                  (lambda ()
-                   (list :status-redraw-calls status-iterations))))
+                   (let ((original
+                          (symbol-function
+                           'mevedel-view--history-tail-position))
+                         (scans 0)
+                         (characters 0))
+                     (cl-letf
+                         (((symbol-function
+                            'mevedel-view--history-tail-position)
+                           (lambda ()
+                             (cl-incf scans)
+                             (cl-incf characters
+                                      (- (point-max)
+                                         (mevedel-view--after-header-position)))
+                             (funcall original))))
+                       (dotimes (_ status-iterations)
+                         (mevedel-view--render-status)))
+                     (list :status-redraw-calls status-iterations
+                           :history-scan-calls scans
+                           :history-scan-characters characters)))))
                (history
                 (mevedel-benchmark--measure
                  'history-fallback
