@@ -4306,6 +4306,42 @@ the execution boundary owns the session's single unavailable warning"
           '(:status success :state completed))))
     (should (equal "Hello, Ada" (plist-get plist :body))))
 
+  :doc "labels polls and input as background-process interactions"
+  (let ((poll
+         (mevedel-tool-exec--render-bash
+          "WriteStdin" '(:execution_id "exec-1")
+          "<bash-execution execution_id=\"exec-1\" state=\"completed\"/>"
+          '(:status success :state completed :execution-id "exec-1"
+            :execution-control poll :observation-output-p nil)))
+        (input
+         (mevedel-tool-exec--render-bash
+          "WriteStdin" '(:execution_id "exec-1" :chars "yes\n")
+          "<bash-execution execution_id=\"exec-1\" state=\"running\"/>"
+          '(:status success :state running :execution-id "exec-1"
+            :execution-control input :observation-output-p nil))))
+    (should (equal "Polled background process (completed · exec-1)"
+                   (plist-get poll :header)))
+    (should (equal "WriteStdin:exec-1"
+                   (plist-get poll :coalesce-key)))
+    (should
+     (equal "Interacted with background process (running · exec-1)"
+            (plist-get input :header)))
+    (should-not (plist-get input :coalesce-key)))
+
+  :doc "coalesces only successful output-free polls"
+  (dolist (render-data
+           '((:status success :state completed :execution-id "exec-1"
+              :execution-control poll :observation-output-p t)
+             (:status error :state completed :execution-id "exec-1"
+              :execution-control poll :observation-output-p nil)
+             (:status success :state completed :execution-id "exec-1"
+              :execution-control input :observation-output-p nil)))
+    (should-not
+     (plist-get
+      (mevedel-tool-exec--render-bash
+       "WriteStdin" '(:execution_id "exec-1") "result" render-data)
+      :coalesce-key)))
+
   :doc "hides only successful empty polls while execution remains running"
   (let ((hidden
          (mevedel-tool-exec--render-bash

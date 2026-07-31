@@ -1045,7 +1045,52 @@
            (goto-char (point-max))
            (insert "new output\n")))
         (should (= (point) point-before))
-        (should (= (window-start) start-before))))))
+        (should (= (window-start) start-before)))))
+
+  :doc "active selections survive delete-and-reinsert rendering"
+  (dolist (backward '(nil t))
+    (with-temp-buffer
+      (setq-local transient-mark-mode t)
+      (insert "before\nselected\nafter\n")
+      (goto-char (point-min))
+      (search-forward "selected")
+      (let ((start (match-beginning 0))
+            (end (match-end 0)))
+        (goto-char (if backward start end))
+        (set-mark (if backward end start)))
+      (activate-mark)
+      (let ((point-before (point))
+            (mark-before (mark))
+            (text (buffer-string)))
+        (mevedel-view--call-preserving-window-state
+         (lambda ()
+           (delete-region (point-min) (point-max))
+           (insert text)))
+        (should mark-active)
+        (should (= (point) point-before))
+        (should (= (mark) mark-before))
+        (should (equal "selected"
+                       (buffer-substring-no-properties
+                        (region-beginning) (region-end)))))))
+
+  :doc "composer selections retain their offsets when history grows"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (setq-local transient-mark-mode t)
+      (goto-char (mevedel-view--input-start))
+      (insert "draft selection")
+      (search-backward "selection")
+      (set-mark (match-end 0))
+      (activate-mark)
+      (mevedel-view--call-preserving-window-state
+       (lambda ()
+         (let ((inhibit-read-only t))
+           (goto-char (point-min))
+           (insert "new history\n"))))
+      (should mark-active)
+      (should (equal "selection"
+                     (buffer-substring-no-properties
+                      (region-beginning) (region-end)))))))
 
 (mevedel-deftest mevedel-view--input-text ()
   ,test

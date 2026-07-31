@@ -225,15 +225,20 @@
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-ui--render-agent-interaction
-    (name _args result render-data)
+    (name args result render-data)
   "Render an agent interaction RESULT from RENDER-DATA."
   (when (and (stringp result)
              (stringp (plist-get render-data :path)))
-    (list :header (format (if (equal name "SendMessage")
-                             "Message sent to %s"
-                           "Interacted with %s")
-                          (plist-get render-data :path))
-          :expandable-p nil)))
+    (let ((path (plist-get render-data :path)))
+      (if (equal name "SendMessage")
+          (list :header (format "Message sent to %s" path)
+                :body (or (plist-get args :message) "")
+                :body-mode nil
+                :agent-path path
+                :initially-collapsed-p t)
+        (list :header (format "Interacted with %s" path)
+              :agent-path path
+              :expandable-p nil)))))
 
 (defun mevedel-tool-ui--result-status (result)
   "Return a renderer status for RESULT."
@@ -314,8 +319,9 @@
   "Render completed WaitAgent RESULT from RENDER-DATA."
   (when (and (stringp result)
              (eq (plist-get render-data :event) 'finished-waiting))
-    (list :header "WaitAgent"
-          :hidden-p t)))
+    (list :header (format "Waited for agents (%s)" result)
+          :expandable-p nil
+          :coalesce-key "WaitAgent")))
 
 
 ;;

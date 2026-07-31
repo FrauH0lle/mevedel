@@ -342,12 +342,22 @@
                    :additional-write-count))))
             (let ((visible (buffer-substring-no-properties
                             (point-min) (mevedel-view--input-start))))
-              (should (string-match-p "whole head" visible))
-              (should (string-match-p "whole tail" visible))
+              (should-not (string-match-p "whole head" visible))
+              (should-not (string-match-p "whole tail" visible))
               (should (string-match-p
                        "Sandbox:.*additional filesystem write access"
                        visible))
               (should (string-match-p "completed" visible)))
+            (save-excursion
+              (goto-char (point-min))
+              (search-forward "Bash: printf run")
+              (goto-char (match-beginning 0))
+              (should (get-text-property (point) 'mevedel-view-collapsed))
+              (mevedel-view-toggle-section)
+              (let ((visible (buffer-substring-no-properties
+                              (point-min) (mevedel-view--input-start))))
+                (should (string-match-p "whole head" visible))
+                (should (string-match-p "whole tail" visible))))
             (should-not
              (mevedel-view-stream-handle-execution-event
               (list :type 'progress :session session :data-buffer data-buf

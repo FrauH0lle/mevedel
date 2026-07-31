@@ -177,11 +177,12 @@ PATH` from the canonical event.
 `SendMessage(target, message)` resolves canonical or relative retained paths
 tree-wide. It queues one canonical `MAIL` record containing type, sender path,
 recipient path, and payload; it never starts an idle turn. Successful sends
-return an empty result and render `Message sent to PATH`. Canonical `MAIL`
-payloads are retained in full without a mailbox body cap. Since this delivery
-is interim and may cross a root-turn boundary, an agent should put its final
-verdict in its terminal response rather than treating `SendMessage` as its
-completion channel.
+return an empty result and render a collapsed `Message sent to PATH`
+disclosure whose path opens the retained transcript and whose body contains the
+sent message. Canonical `MAIL` payloads are retained in full without a mailbox
+body cap. Since this delivery is interim and may cross a root-turn boundary,
+an agent should put its final verdict in its terminal response rather than
+treating `SendMessage` as its completion channel.
 
 Before a recipient's next model sample, its retained unread queue drains in
 FIFO order. Each record is injected as a separate user-role communication
@@ -200,7 +201,9 @@ can run before the input is visible. The default timeout is 30,000 ms.
 Positive shorter values are clamped to 10,000 ms, values above 3,600,000 ms
 are rejected, and timeout is a successful outcome. Its result
 contains only the wake reason. The view renders `Waiting for agents` while the
-tool is pending and removes the transient wait row after it settles.
+tool is pending. Settled waits render `Waited for agents (OUTCOME)`;
+consecutive calls coalesce into the final row with a count while every
+canonical call remains in the transcript.
 
 Independently completed yielded Bash executions use the session or invocation
 object captured for their fixed owner when Bash starts. A retained invocation
