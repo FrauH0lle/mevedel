@@ -2722,6 +2722,38 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should (equal sent-prompt "system"))
       (should (= (mevedel--compact-run-state-attempt state) 1)))))
 
+(mevedel-deftest mevedel--compact-run-prepare ()
+  ,test
+  (test)
+  :doc "populates the run state from compactable and pending text"
+  (with-temp-buffer
+    (insert "history\n")
+    (let* ((pending-start (point))
+           (_ (insert "pending"))
+           (ready #'identity)
+           (state
+            (mevedel--compact-run-state-create
+             :aggressive t
+             :target '(:body-start 1 :invocation root))))
+      (cl-letf (((symbol-function 'mevedel--compact-prompt)
+                 (lambda (&rest _) "system")))
+        (should
+         (eq state
+             (mevedel--compact-run-prepare
+              state pending-start '(:summary-policy policy)
+              "instructions" pending-start "prepared" ready))))
+      (should (equal "history\n"
+                     (mevedel--compact-run-state-old-content state)))
+      (should (equal "pending"
+                     (mevedel--compact-run-state-pending-text state)))
+      (should (eq 'policy (mevedel--compact-run-state-policy state)))
+      (should (equal "system"
+                     (mevedel--compact-run-state-base-system-prompt state)))
+      (should (equal "prepared"
+                     (mevedel--compact-run-state-prepared-summary state)))
+      (should (eq ready
+                  (mevedel--compact-run-state-summary-ready state))))))
+
 (mevedel-deftest mevedel--compact-run ()
   ,test
   (test)

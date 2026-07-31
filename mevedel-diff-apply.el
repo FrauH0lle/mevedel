@@ -720,6 +720,9 @@ the overlays."
                    (delete-file file))))
              (message "Saved %d buffers" (hash-table-count edits-by-buffer))))
           (t
+           (dolist (file created-files)
+             (when (file-exists-p file)
+               (delete-file file)))
            (message "%d hunks failed; no buffers changed" failures)))))
 
 (provide 'mevedel-diff-apply)
