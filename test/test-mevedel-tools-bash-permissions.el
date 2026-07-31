@@ -3605,6 +3605,52 @@ the execution boundary owns the session's single unavailable warning"
 ;;
 ;;; Eval check-permission adapter
 
+(mevedel-deftest mevedel-tool-exec--eval-prompt-result ()
+  ,test
+  (test)
+  :doc "normalizes direct, feedback, abort, and unknown Eval outcomes"
+  (should (eq 'allow
+              (mevedel-tool-exec--eval-prompt-result
+               'allow-once nil nil "(+ 1 2)" nil)))
+  (should (eq 'deny
+              (mevedel-tool-exec--eval-prompt-result
+               'deny-once nil nil "(+ 1 2)" nil)))
+  (should (equal '(deny . "Eval cancelled by user. Feedback: no")
+                 (mevedel-tool-exec--eval-prompt-result
+                  '(feedback . "no") nil nil "(+ 1 2)" nil)))
+  (should (eq 'aborted
+              (mevedel-tool-exec--eval-prompt-result
+               'aborted nil nil "(+ 1 2)" nil)))
+  (should (eq 'deny
+              (mevedel-tool-exec--eval-prompt-result
+               'unexpected nil nil "(+ 1 2)" nil)))
+  :doc "applies stored Eval outcomes through the canonical rule writer"
+  (let (seen)
+    (cl-letf (((symbol-function 'mevedel-permission--apply-prompt-result)
+               (lambda (outcome tool session workspace path &rest props)
+                 (push (list outcome tool session workspace path props) seen)
+                 (if (memq outcome '(allow-session always-allow))
+                     'allow
+                   'deny))))
+      (should (eq 'allow
+                  (mevedel-tool-exec--eval-prompt-result
+                   'allow-session 'session 'workspace "(+ 1 2)" nil)))
+      (should (eq 'deny
+                  (mevedel-tool-exec--eval-prompt-result
+                   'deny-session 'session 'workspace "(+ 1 2)" nil))))
+    (should (= 2 (length seen)))
+    (dolist (call seen)
+      (should (equal "Eval" (nth 1 call)))
+      (should (equal '(:spec-key :pattern :spec-value "(+ 1 2)")
+                     (nth 5 call)))))
+  :doc "returns structured Eval metadata when requested"
+  (let ((result (mevedel-tool-exec--eval-prompt-result
+                 '(deny . "reason") nil nil "(+ 1 2)" t)))
+    (should (eq 'deny (plist-get result :outcome)))
+    (should (equal '(deny . "reason") (plist-get result :raw-outcome)))
+    (should (eq 'eval-policy (plist-get result :via)))
+    (should (plist-get result :logged))))
+
 (mevedel-deftest mevedel-tool-exec--eval-check-permission-async ()
   ,test
   (test)
@@ -3687,6 +3733,53 @@ the execution boundary owns the session's single unavailable warning"
     (should (eq 'deny (car outcome)))
     (should (equal "Eval cancelled by user. Feedback: too dangerous"
                    (cdr outcome)))))
+
+(mevedel-deftest mevedel-tool-exec--bash-prompt-result ()
+  ,test
+  (test)
+  :doc "normalizes direct, feedback, abort, and unknown Bash outcomes"
+  (should (eq 'allow
+              (mevedel-tool-exec--bash-prompt-result
+               'allow nil nil "make test" nil nil)))
+  (should (eq 'deny
+              (mevedel-tool-exec--bash-prompt-result
+               'deny nil nil "make test" nil nil)))
+  (should (equal '(deny . "Command cancelled by user. Feedback: no")
+                 (mevedel-tool-exec--bash-prompt-result
+                  '(feedback . "no") nil nil "make test" nil nil)))
+  (should (eq 'aborted
+              (mevedel-tool-exec--bash-prompt-result
+               'aborted nil nil "make test" nil nil)))
+  (should (eq 'deny
+              (mevedel-tool-exec--bash-prompt-result
+               'unexpected nil nil "make test" nil nil)))
+  :doc "routes scoped Bash outcomes through the canonical rule writer"
+  (let (seen)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--apply-bash-prompt-result)
+               (lambda (&rest args)
+                 (push args seen)
+                 'allow)))
+      (should (eq 'allow
+                  (mevedel-tool-exec--bash-prompt-result
+                   'allow-session 'session 'workspace "make test"
+                   '("make *") nil))))
+    (should (equal '((allow-session session workspace "make test" ("make *")))
+                   seen)))
+  :doc "contains Bash rule-write failures in the permission result"
+  (cl-letf (((symbol-function 'mevedel-tool-exec--apply-bash-prompt-result)
+             (lambda (&rest _) (error "write failed"))))
+    (should (string-prefix-p
+             "Error: Bash rule write failed:"
+             (mevedel-tool-exec--bash-prompt-result
+              'allow-session nil nil "make test" nil nil))))
+  :doc "returns structured Bash metadata with the canonical specifier"
+  (let ((result (mevedel-tool-exec--bash-prompt-result
+                 '(deny . "reason") nil nil "make test" nil t)))
+    (should (eq 'deny (plist-get result :outcome)))
+    (should (equal '(deny . "reason") (plist-get result :raw-outcome)))
+    (should (eq 'bash-classifier (plist-get result :via)))
+    (should (eq :pattern (plist-get result :specifier-key)))
+    (should (equal "make" (plist-get result :specifier-value)))))
 
 (mevedel-deftest mevedel-tool-exec--eval-check-permission-async/trusted ()
   ,test

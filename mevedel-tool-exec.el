@@ -1874,8 +1874,29 @@ mode.  TRUST-LITERAL-P identifies author-written skill body injections."
      ((eq mode 'full-auto)
       'allow)
      (trust-literal-p
-      (or action 'ask))
+     (or action 'ask))
      (t 'ask))))
+
+(defun mevedel-tool-exec--eval-prompt-result
+    (outcome session workspace expression metadata-p)
+  "Apply Eval prompt OUTCOME and return its canonical permission result."
+  (let ((result
+         (pcase outcome
+           ((or 'allow 'allow-once) 'allow)
+           ((or 'allow-session 'always-allow 'deny-session)
+            (mevedel-permission--apply-prompt-result
+             outcome "Eval" session workspace nil
+             :spec-key :pattern
+             :spec-value expression))
+           ((or 'deny 'deny-once) 'deny)
+           (`(deny . ,reason) (cons 'deny reason))
+           (`(feedback . ,text)
+            (cons 'deny
+                  (format "Eval cancelled by user. Feedback: %s" text)))
+           ('aborted 'aborted)
+           (_ 'deny))))
+    (mevedel-tool-exec--permission-decision-result
+     metadata-p result 'eval-policy)))
 
 (defun mevedel-tool-exec--eval-check-command-permission-async
     (_tool-struct input cont)
@@ -1969,53 +1990,10 @@ denial parity with the sync slot is preserved."
                      permission-context)
                     :callback
                     (lambda (outcome)
-                      (pcase outcome
-                        ((or 'allow 'allow-once)
-                         (funcall
-                          cont
-                          (mevedel-tool-exec--permission-decision-result
-                           metadata-p 'allow 'eval-policy)))
-                        ((or 'allow-session 'always-allow)
-                         (let ((stored
-                                (mevedel-permission--apply-prompt-result
-                                 outcome "Eval" session workspace nil
-                                 :spec-key :pattern
-                                 :spec-value expression)))
-                           (funcall
-                            cont
-                            (mevedel-tool-exec--permission-decision-result
-                             metadata-p stored 'eval-policy))))
-                        ((or 'deny 'deny-once)
-                         (funcall
-                          cont
-                          (mevedel-tool-exec--permission-decision-result
-                           metadata-p 'deny 'eval-policy)))
-                        (`(deny . ,reason)
-                         (funcall
-                          cont
-                          (mevedel-tool-exec--permission-decision-result
-                           metadata-p (cons 'deny reason) 'eval-policy)))
-                        (`(feedback . ,text)
-                         (funcall
-                          cont
-                          (mevedel-tool-exec--permission-decision-result
-                           metadata-p
-                           (cons
-                            'deny
-                            (format
-                             "Eval cancelled by user. Feedback: %s"
-                             text))
-                           'eval-policy)))
-                        ('aborted
-                         (funcall
-                          cont
-                          (mevedel-tool-exec--permission-decision-result
-                           metadata-p 'aborted 'eval-policy)))
-                        (_
-                         (funcall
-                          cont
-                          (mevedel-tool-exec--permission-decision-result
-                           metadata-p 'deny 'eval-policy)))))))
+                      (funcall
+                       cont
+                       (mevedel-tool-exec--eval-prompt-result
+                        outcome session workspace expression metadata-p)))))
             permission-context
             (plist-get permission-context :session)))))))))
 
@@ -2059,6 +2037,58 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
 
 ;;
 ;;; Bash Prompt UI
+
+(defun mevedel-tool-exec--apply-bash-prompt-result
+    (outcome session workspace command allow-patterns)
+  "Apply Bash prompt OUTCOME for SESSION, WORKSPACE, and COMMAND.
+
+Session/permanent allow outcomes store ALLOW-PATTERNS as Bash
+`:pattern' rules instead of saving COMMAND verbatim.  Deny-session
+stays exact to avoid broad negative rules from a single rejection."
+  (pcase outcome
+    ('allow-once 'allow)
+    ((or 'allow-session 'always-allow)
+     (dolist (pattern (or allow-patterns (list command)))
+       (mevedel-permission--apply-prompt-result
+        outcome "Bash" session workspace nil
+        :spec-key :pattern
+        :spec-value pattern))
+     'allow)
+    ('deny-once 'deny)
+    ('deny-session
+     (mevedel-permission--apply-prompt-result
+      outcome "Bash" session workspace nil
+      :spec-key :pattern
+      :spec-value command)
+     'deny)
+    (_ 'deny)))
+
+(defun mevedel-tool-exec--bash-prompt-result
+    (outcome session workspace command allow-patterns metadata-p)
+  "Apply Bash prompt OUTCOME and return its canonical permission result."
+  (let ((specifier
+         (mevedel-tool-exec--bash-decision-specifier-value command))
+        (result
+         (pcase outcome
+           ((or 'allow-once 'allow-session 'always-allow
+                'deny-once 'deny-session)
+            (condition-case err
+                (mevedel-tool-exec--apply-bash-prompt-result
+                 outcome session workspace command allow-patterns)
+              (error
+               (format "Error: Bash rule write failed: %S" err))))
+           ('allow 'allow)
+           ('deny 'deny)
+           (`(deny . ,reason) (cons 'deny reason))
+           (`(feedback . ,text)
+            (cons 'deny
+                  (format "Command cancelled by user. Feedback: %s" text)))
+           ('aborted 'aborted)
+           (_ 'deny))))
+    (mevedel-tool-exec--permission-decision-result
+     metadata-p result 'bash-classifier
+     :specifier-key :pattern
+     :specifier-value specifier)))
 
 (defun mevedel-tool-exec--check-command-permission-async
     (_tool-struct input cont)
@@ -2172,87 +2202,11 @@ parity with the sync slot."
                         :callback
                         (lambda (outcome)
                           (setq guardian-pending nil)
-                          (pcase outcome
-                            ;; Route 5-button outcomes through
-                            ;; --apply-bash-prompt-result so allow-session /
-                            ;; always-allow create the suggested pattern rule
-                            ;; before we settle the slot.  The function
-                            ;; collapses each outcome to 'allow / 'deny.
-                            ((or 'allow-once 'allow-session 'always-allow
-                                 'deny-once 'deny-session)
-                             (condition-case err
-                                 (let ((collapsed
-                                        (mevedel-tool-exec--apply-bash-prompt-result
-                                         outcome session workspace command
-                                         allow-patterns)))
-                                   (funcall
-                                    cont
-                                    (mevedel-tool-exec--permission-decision-result
-                                     metadata-p collapsed 'bash-classifier
-                                     :specifier-key :pattern
-                                     :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
-                                 command))))
-                               (error
-                                (funcall
-                                 cont
-                                 (mevedel-tool-exec--permission-decision-result
-                                  metadata-p
-                                  (format "Error: Bash rule write failed: %S" err)
-                                  'bash-classifier
-                                  :specifier-key :pattern
-                                  :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
-                                 command))))))
-                            ('allow
-                             (funcall
-                              cont
-                              (mevedel-tool-exec--permission-decision-result
-                               metadata-p 'allow 'bash-classifier
-                               :specifier-key :pattern
-                               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
-                                 command))))
-                            ('deny
-                             (funcall
-                              cont
-                              (mevedel-tool-exec--permission-decision-result
-                               metadata-p 'deny 'bash-classifier
-                               :specifier-key :pattern
-                               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
-                                 command))))
-                            (`(deny . ,reason)
-                             (funcall
-                              cont
-                              (mevedel-tool-exec--permission-decision-result
-                               metadata-p (cons 'deny reason) 'bash-classifier
-                               :specifier-key :pattern
-                               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
-                                 command))))
-                            (`(feedback . ,text)
-                             (funcall
-                              cont
-                              (mevedel-tool-exec--permission-decision-result
-                               metadata-p
-                               (cons 'deny
-                                     (format "Command cancelled by user. Feedback: %s"
-                                             text))
-                               'bash-classifier
-                               :specifier-key :pattern
-                               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
-                                 command))))
-                            ('aborted
-                             (funcall
-                              cont
-                              (mevedel-tool-exec--permission-decision-result
-                               metadata-p 'aborted 'bash-classifier
-                               :specifier-key :pattern
-                               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
-                                 command))))
-                            (_ (funcall
-                                cont
-                                (mevedel-tool-exec--permission-decision-result
-                                 metadata-p 'deny 'bash-classifier
-                                 :specifier-key :pattern
-                                 :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
-                                 command)))))))))
+                          (funcall
+                           cont
+                           (mevedel-tool-exec--bash-prompt-result
+                            outcome session workspace command allow-patterns
+                            metadata-p))))))
             (when metadata-p
               (mevedel-tool-exec--log-permission-decision
                "Bash" 'ask 'bash-classifier permission-context
@@ -2349,32 +2303,6 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
       (mevedel-tool-exec--permission-decision-result
        (plist-get input :permission-decision-metadata)
        (cons 'deny (error-message-string err)) 'sandbox-policy)))))
-
-(defun mevedel-tool-exec--apply-bash-prompt-result
-    (outcome session workspace command allow-patterns)
-  "Apply Bash prompt OUTCOME for SESSION, WORKSPACE, and COMMAND.
-
-Session/permanent allow outcomes store ALLOW-PATTERNS as Bash
-`:pattern' rules instead of saving COMMAND verbatim.  Deny-session
-stays exact to avoid broad negative rules from a single rejection."
-  (pcase outcome
-    ('allow-once 'allow)
-    ((or 'allow-session 'always-allow)
-     (dolist (pattern (or allow-patterns (list command)))
-       (mevedel-permission--apply-prompt-result
-        outcome "Bash" session workspace nil
-        :spec-key :pattern
-        :spec-value pattern))
-     'allow)
-    ('deny-once 'deny)
-    ('deny-session
-     (mevedel-permission--apply-prompt-result
-      outcome "Bash" session workspace nil
-      :spec-key :pattern
-      :spec-value command)
-     'deny)
-    (_ 'deny)))
-
 
 ;;
 ;;; Bash
