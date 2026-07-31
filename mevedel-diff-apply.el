@@ -358,6 +358,246 @@ current line if none above."
                   (looking-at-p diff-hunk-header-re))))
     (list files-to-create files-to-remove)))
 
+(defun mevedel-diff-apply--change (edit)
+  "Return the canonical minimal text change for EDIT in the current buffer."
+  (let* ((pos (plist-get edit :pos))
+         (src (plist-get edit :src))
+         (dst (plist-get edit :dst))
+         (hunk-start (car pos))
+         (hunk-end (cdr pos))
+         (buffer-text (buffer-substring-no-properties hunk-start hunk-end))
+         (old-text (replace-regexp-in-string "\r" "" (car src)))
+         (new-text (replace-regexp-in-string "\r" "" (car dst)))
+         (text-offset
+          (or (cl-loop for i from 0 to (length old-text)
+                       when (and (<= (+ i (length buffer-text))
+                                     (length old-text))
+                                 (string= buffer-text
+                                          (substring old-text i
+                                                     (+ i
+                                                        (length buffer-text)))))
+                       return i)
+              0))
+         (old-text (if (> text-offset 0)
+                       (substring old-text text-offset)
+                     old-text))
+         (new-text (if (> text-offset 0)
+                       (substring new-text text-offset)
+                     new-text))
+         (regions (mevedel--safe-string-diff-regions old-text new-text))
+         (prefix-length (nth 0 regions))
+         (suffix-length (nth 1 regions))
+         (old-middle (nth 2 regions))
+         (new-middle (nth 3 regions))
+         (start (+ hunk-start prefix-length))
+         (end (- hunk-end suffix-length)))
+    (list :hunk-start hunk-start
+          :hunk-end hunk-end
+          :start start
+          :end end
+          :old old-middle
+          :new new-middle
+          :delta (- (length new-middle) (- end start)))))
+
+(defun mevedel-diff-apply--analyze-overlays (buffer changes)
+  "Return overlay adjustments and ordered deltas for CHANGES in BUFFER."
+  (let (saved-overlays all-changes)
+    (dolist (change changes)
+      (let* ((hunk-start (plist-get change :hunk-start))
+             (hunk-end (plist-get change :hunk-end))
+             (old-middle (plist-get change :old))
+             (new-middle (plist-get change :new))
+             (change-start (plist-get change :start))
+             (change-end (plist-get change :end))
+             (line-changes
+              (mevedel--parse-hunk-lines
+               old-middle new-middle change-start)))
+        (push (list change-start (plist-get change :delta)) all-changes)
+        (dolist (overlay
+                 (seq-filter
+                  (lambda (candidate)
+                    (and (overlay-get candidate 'mevedel-instruction)
+                         (overlay-start candidate)
+                         (overlay-end candidate)
+                         (not (or (>= (overlay-start candidate) change-end)
+                                  (<= (overlay-end candidate) change-start)))))
+                  (overlays-in hunk-start hunk-end)))
+          (unless (mevedel--instruction-bufferlevel-p overlay)
+            (let* ((start (overlay-start overlay))
+                   (end (overlay-end overlay))
+                   (line-based-p
+                    (mevedel--overlay-is-line-based-p start end buffer))
+                   (relationship
+                    (mevedel--classify-change-relationship
+                     start end change-start change-end))
+                   (granular
+                    (unless (and (eq relationship 'encompasses)
+                                 (not (string-empty-p new-middle)))
+                      (mevedel--calculate-overlay-adjustment-granular
+                       overlay line-changes)))
+                   (adjustment
+                    (cond
+                     ((and (eq relationship 'encompasses)
+                           (not (string-empty-p new-middle)))
+                      (list change-start
+                            (+ change-start (length new-middle))))
+                     ((and granular
+                           (car granular)
+                           (cadr granular)
+                           (/= (car granular) (cadr granular)))
+                      granular)
+                     ((and (>= start change-start)
+                           (< start change-end)
+                           (not (string-empty-p new-middle))
+                           (eq relationship 'complex))
+                      (list change-start
+                            (+ change-start (length new-middle))))
+                     (t (list change-start change-start)))))
+              (push (list overlay (car adjustment) (cadr adjustment)
+                          change-start line-based-p start end)
+                    saved-overlays))))))
+    (list saved-overlays all-changes)))
+
+(defun mevedel-diff-apply--restore-overlays
+    (buffer saved-overlays all-changes)
+  "Restore SAVED-OVERLAYS in BUFFER after ALL-CHANGES were applied.
+Return a hash table of the final live overlays."
+  (cl-labels
+      ((stub-bounds (position line-based-p)
+         (let ((position (max (point-min) (min position (point-max)))))
+           (if line-based-p
+               (let ((line (mevedel--find-stub-line buffer position)))
+                 (list (car line) (cdr line)))
+             (list position (min (1+ position) (point-max))))))
+       (snap (start end line-based-p)
+         (if (and line-based-p (< start end))
+             (let ((bounds (mevedel--snap-to-full-lines start end buffer)))
+               (list (car bounds) (cdr bounds)))
+           (list start end))))
+    (let ((final-overlays (make-hash-table :test 'eq)))
+      (dolist (record saved-overlays)
+        (let* ((overlay (nth 0 record))
+               (calculated-start (nth 1 record))
+               (calculated-end (nth 2 record))
+               (hunk-position (nth 3 record))
+               (line-based-p (nth 4 record))
+               (original-start (nth 5 record))
+               (original-end (nth 6 record))
+               (cumulative-delta
+                (cl-loop for (position delta) in all-changes
+                         when (< position hunk-position)
+                         sum delta))
+               (final-start (+ calculated-start cumulative-delta))
+               (final-end (+ calculated-end cumulative-delta))
+               (encompassing-change
+                (cl-find-if
+                 (lambda (change)
+                   (let ((position (car change))
+                         (delta (cadr change)))
+                     (and (<= position original-start)
+                          (>= (+ position (abs delta)) original-end)
+                          (> delta 0))))
+                 all-changes)))
+          (when (or (>= final-start final-end)
+                    (< final-start (point-min))
+                    (> final-end (point-max)))
+            (if encompassing-change
+                (setq final-start
+                      (+ (car encompassing-change) cumulative-delta)
+                      final-end
+                      (+ (car encompassing-change)
+                         (cadr encompassing-change)
+                         cumulative-delta))
+              (pcase-let ((`(,start ,end)
+                           (stub-bounds hunk-position line-based-p)))
+                (setq final-start start
+                      final-end end))))
+          (pcase-let ((`(,start ,end)
+                       (snap final-start final-end line-based-p)))
+            (setq final-start start
+                  final-end end))
+          (when (and (>= final-start (point-min))
+                     (<= final-end (point-max))
+                     (< final-start final-end))
+            (if-let* ((existing (gethash overlay final-overlays)))
+                (puthash overlay (plist-put existing :duplicate t)
+                         final-overlays)
+              (puthash overlay
+                       (list :orig-start original-start
+                             :orig-end original-end
+                             :final-start final-start
+                             :final-end final-end
+                             :hunk-pos hunk-position
+                             :was-line-based line-based-p
+                             :duplicate nil)
+                       final-overlays)))))
+      (maphash
+       (lambda (overlay state)
+         (let ((original-start (plist-get state :orig-start))
+               (original-end (plist-get state :orig-end))
+               (final-start (plist-get state :final-start))
+               (final-end (plist-get state :final-end)))
+           (when (plist-get state :duplicate)
+             (setq final-start original-start
+                   final-end original-end)
+             (dolist (change all-changes)
+               (when (< (car change) original-start)
+                 (cl-incf final-start (cadr change)))
+               (when (< (car change) original-end)
+                 (cl-incf final-end (cadr change))))
+             (pcase-let ((`(,start ,end)
+                          (snap final-start final-end
+                                (plist-get state :was-line-based))))
+               (setq final-start start
+                     final-end end)))
+           (when (or (>= final-start final-end)
+                     (< final-start (point-min))
+                     (> final-end (point-max)))
+             (pcase-let ((`(,start ,end)
+                          (stub-bounds
+                           (or (plist-get state :hunk-pos) original-start)
+                           (plist-get state :was-line-based))))
+               (setq final-start start
+                     final-end end)))
+           (move-overlay overlay final-start final-end (current-buffer))))
+       final-overlays)
+      final-overlays)))
+
+(defun mevedel-diff-apply--apply-buffer (buffer edits)
+  "Apply EDITS and preserve instruction overlays in BUFFER."
+  (with-current-buffer buffer
+    (let* ((changes
+            (mapcar #'mevedel-diff-apply--change (reverse edits)))
+           (analysis
+            (mevedel-diff-apply--analyze-overlays buffer changes))
+           (saved-overlays (car analysis))
+           (all-changes (cadr analysis)))
+      (atomic-change-group
+        (dolist (record saved-overlays)
+          (delete-overlay (car record)))
+        (let ((inhibit-read-only t))
+          (dolist (change changes)
+            (mevedel--replace-text
+             (plist-get change :start)
+             (plist-get change :end)
+             (plist-get change :new))))
+        (let ((final-overlays
+               (mevedel-diff-apply--restore-overlays
+                buffer saved-overlays all-changes)))
+          (save-buffer)
+          (mevedel--instruction-activate-buffer buffer)
+          (let ((instruction-alist (mevedel--instruction-alist-value)))
+            (maphash
+             (lambda (overlay _state)
+               (cl-pushnew overlay (alist-get buffer instruction-alist)
+                           :test #'eq))
+             final-overlays)
+            (setf (alist-get buffer instruction-alist)
+                  (cl-remove-if
+                   (lambda (overlay) (null (overlay-buffer overlay)))
+                   (alist-get buffer instruction-alist)))
+            (mevedel--set-instruction-alist-value instruction-alist)))))))
+
 (defun mevedel-diff-apply-buffer (&optional no-prompt)
   "Apply diff using delete-and-recreate approach for overlay preservation.
 
@@ -425,323 +665,7 @@ the overlays."
                (let ((buf (plist-get edit :buf)))
                  (push edit (gethash buf edits-by-buffer))))
 
-             (maphash
-              (lambda (buf edits)
-                (with-current-buffer buf
-                  (let ((saved-overlays nil)   ; (start end properties final-start final-end)
-                        (all-changes nil))     ; (position delta)
-
-                    ;; PHASE 1: Analyze all hunks and calculate final overlay positions
-                    (message "\n=== PHASE 1: Analyzing hunks and calculating positions ===")
-                    (dolist (edit (reverse edits))
-                      (let* ((pos (plist-get edit :pos))
-                             (src (plist-get edit :src))
-                             (dst (plist-get edit :dst))
-                             (inhibit-read-only t)
-                             (hunk-start (car pos))
-                             (hunk-end (cdr pos))
-                             (old-text-full (car src))
-                             (new-text-full (car dst))
-                             (buffer-text (buffer-substring-no-properties hunk-start hunk-end))
-                             (old-text-norm (replace-regexp-in-string "\r" "" old-text-full))
-                             (new-text-norm (replace-regexp-in-string "\r" "" new-text-full))
-                             (text-offset (or (cl-loop for i from 0 to (length old-text-norm)
-                                                       when (and (<= (+ i (length buffer-text))
-                                                                     (length old-text-norm))
-                                                                 (string= buffer-text
-                                                                          (substring old-text-norm i
-                                                                                     (+ i (length buffer-text)))))
-                                                       return i)
-                                              0))
-                             (old-text-aligned (if (> text-offset 0)
-                                                   (substring old-text-norm text-offset)
-                                                 old-text-norm))
-                             (new-text-aligned (if (> text-offset 0)
-                                                   (substring new-text-norm text-offset)
-                                                 new-text-norm))
-                             (diff-regions (mevedel--safe-string-diff-regions
-                                            old-text-aligned new-text-aligned))
-                             (prefix-len (nth 0 diff-regions))
-                             (suffix-len (nth 1 diff-regions))
-                             (old-middle (nth 2 diff-regions))
-                             (new-middle (nth 3 diff-regions))
-                             (change-start (+ hunk-start prefix-len))
-                             (change-end (- hunk-end suffix-len)))
-
-                        (message "Hunk [%d-%d] -> Change [%d-%d]" hunk-start hunk-end change-start change-end)
-
-                        ;; Record this change
-                        (push (list change-start (- (length new-middle) (- change-end change-start)))
-                              all-changes)
-
-                        ;; Find affected overlays
-                        (let ((affected-ovs (seq-filter
-                                             (lambda (ov)
-                                               (and (overlay-get ov 'mevedel-instruction)
-                                                    (overlay-start ov)
-                                                    (overlay-end ov)
-                                                    (not (or (>= (overlay-start ov) change-end)
-                                                             (<= (overlay-end ov) change-start)))))
-                                             (overlays-in hunk-start hunk-end))))
-
-                          (when affected-ovs
-                            (message "  ⚠ %d overlays affected" (length affected-ovs))
-
-                            ;; Parse into lines
-                            (let ((line-changes (mevedel--parse-hunk-lines
-                                                 old-middle new-middle change-start)))
-
-                              ;; Calculate final position for each overlay
-                              (dolist (ov affected-ovs)
-                                ;; Skip buffer-level overlays - they span the whole buffer
-                                ;; and changes are always within them, so no adjustment needed
-                                (unless (mevedel--instruction-bufferlevel-p ov)
-                                  (let* ((ov-start (overlay-start ov))
-                                         (ov-end (overlay-end ov))
-                                         (was-line-based (mevedel--overlay-is-line-based-p ov-start ov-end buf))
-                                         (relationship (mevedel--classify-change-relationship
-                                                        ov-start ov-end change-start change-end))
-                                         (adjustment
-                                          (if (and (eq relationship 'encompasses)
-                                                   (> (length new-middle) 0))
-                                              ;; Encompasses with replacement: expand to cover it
-                                              (list change-start (+ change-start (length new-middle)))
-                                            ;; Use granular calculation for other cases
-                                            (let ((granular-result (mevedel--calculate-overlay-adjustment-granular
-                                                                    ov line-changes)))
-                                              ;; Check if granular result is invalid (empty or nil)
-                                              (if (or (null granular-result)
-                                                      (null (car granular-result))
-                                                      (null (cadr granular-result))
-                                                      (= (car granular-result) (cadr granular-result)))
-                                                  ;; Granular failed - determine appropriate action
-                                                  (if (and (>= ov-start change-start)
-                                                           (< ov-start change-end)
-                                                           (> (length new-middle) 0)
-                                                           (eq relationship 'complex))  ; Only for complex overlapping cases
-                                                      ;; Expand to cover replacement as fallback
-                                                      (list change-start (+ change-start (length new-middle)))
-                                                    ;; For deletions or other failures: return invalid positions to trigger stub creation
-                                                    (list change-start change-start))
-                                                ;; Granular succeeded - use it
-                                                granular-result)))))
-                                    (when adjustment
-                                      (let ((calc-start (car adjustment))
-                                            (calc-end (cadr adjustment)))
-                                        (message "    Overlay [%d-%d] -> calculated [%d-%d]"
-                                                 ov-start ov-end calc-start calc-end)
-                                        ;; Store original positions on overlay for later reference
-                                        (overlay-put ov 'mevedel-diff-orig-start ov-start)
-                                        (overlay-put ov 'mevedel-diff-orig-end ov-end)
-                                        ;; Save for later: overlay object, calculated pos, hunk pos,
-                                        ;; line-based status, and original bounds.  The same
-                                        ;; overlay can be touched by more than one hunk; keep the
-                                        ;; original bounds in each record so later duplicate records
-                                        ;; do not depend on temporary overlay properties that an
-                                        ;; earlier record may have cleared.
-                                        (push (list ov calc-start calc-end change-start
-                                                    was-line-based ov-start ov-end)
-                                              saved-overlays)))))))))))
-
-                    (atomic-change-group
-                      ;; PHASE 2: Delete the affected overlays (detach from buffer)
-                      (message "\n=== PHASE 2: Deleting %d overlays ===" (length saved-overlays))
-                    (dolist (ov-data saved-overlays)
-                      (let ((ov (nth 0 ov-data)))
-                        (delete-overlay ov)))
-
-                    ;; PHASE 3: Apply all text changes
-                    (message "\n=== PHASE 3: Applying text changes ===")
-                    (let ((inhibit-read-only t))
-                      (dolist (edit (reverse edits))
-                        (let* ((pos (plist-get edit :pos))
-                               (src (plist-get edit :src))
-                               (dst (plist-get edit :dst))
-                               (hunk-start (car pos))
-                               (hunk-end (cdr pos))
-                               (old-text-full (car src))
-                               (new-text-full (car dst))
-                               (buffer-text (buffer-substring-no-properties hunk-start hunk-end))
-                               (old-text-norm (replace-regexp-in-string "\r" "" old-text-full))
-                               (new-text-norm (replace-regexp-in-string "\r" "" new-text-full))
-                               (text-offset (or (cl-loop for i from 0 to (length old-text-norm)
-                                                         when (and (<= (+ i (length buffer-text))
-                                                                       (length old-text-norm))
-                                                                   (string= buffer-text
-                                                                            (substring old-text-norm i
-                                                                                       (+ i (length buffer-text)))))
-                                                         return i)
-                                                0))
-                               (old-text-aligned (if (> text-offset 0)
-                                                     (substring old-text-norm text-offset)
-                                                   old-text-norm))
-                               (new-text-aligned (if (> text-offset 0)
-                                                     (substring new-text-norm text-offset)
-                                                   new-text-norm))
-                               (diff-regions (mevedel--safe-string-diff-regions
-                                              old-text-aligned new-text-aligned))
-                               (prefix-len (nth 0 diff-regions))
-                               (suffix-len (nth 1 diff-regions))
-                               ;; (old-middle (nth 2 diff-regions))  ; Not needed in Phase 3
-                               (new-middle (nth 3 diff-regions))
-                               (change-start (+ hunk-start prefix-len))
-                               (change-end (- hunk-end suffix-len)))
-
-                          (message "  Applying change at [%d-%d]" change-start change-end)
-                          (mevedel--replace-text change-start change-end new-middle))))
-
-                    ;; PHASE 4: Move overlays to their new positions
-                    (message "\n=== PHASE 4: Moving %d overlays ===" (length saved-overlays))
-                    (message "All changes: %S" all-changes)
-                    (let ((final-overlays (make-hash-table :test 'eq)))
-                      (dolist (ov-data saved-overlays)
-                        (let* ((ov (nth 0 ov-data))
-                               (calc-start (nth 1 ov-data))
-                               (calc-end (nth 2 ov-data))
-                               (hunk-pos (nth 3 ov-data))
-                               (was-line-based (nth 4 ov-data))
-                               (orig-start (nth 5 ov-data))
-                               (orig-end (nth 6 ov-data)))
-
-                          ;; Calculate cumulative delta from changes before this overlay's hunk
-                          (let ((cumulative-delta 0))
-                            (dolist (change all-changes)
-                              (when (< (car change) hunk-pos)
-                                (setq cumulative-delta (+ cumulative-delta (cadr change)))))
-
-                            ;; Check if overlay was deleted (invalid calc positions)
-                            (let ((final-start (+ calc-start cumulative-delta))
-                                  (final-end (+ calc-end cumulative-delta)))
-
-                              ;; Check if this is an "encompasses" case - need to look at the actual change
-                              ;; Find the corresponding change to see if there's replacement content
-                              (let ((encompassing-change nil))
-                                (dolist (change all-changes)
-                                  (let ((ch-pos (car change))
-                                        (ch-delta (cadr change)))
-                                    ;; If change encompasses original overlay and has positive delta (replacement)
-                                    (when (and (<= ch-pos orig-start)
-                                               (>= (+ ch-pos (abs ch-delta)) orig-end)
-                                               (> ch-delta 0))
-                                      (setq encompassing-change change))))
-
-                                ;; Handle stub creation for deleted overlays
-                                (when (or (>= final-start final-end)
-                                          (< final-start (point-min))
-                                          (> final-end (point-max)))
-                                  (if encompassing-change
-                                      ;; Replacement case: expand to cover the new content
-                                      (let ((ch-pos (car encompassing-change))
-                                            (ch-delta (cadr encompassing-change)))
-                                        (message "  Overlay [%d-%d] encompassed by replacement, expanding" orig-start orig-end)
-                                        (setq final-start (+ ch-pos cumulative-delta))
-                                        (setq final-end (+ ch-pos ch-delta cumulative-delta)))
-                                    ;; Deletion case: create stub
-                                    (message "  Overlay [%d-%d] was deleted, creating stub" orig-start orig-end)
-                                    (let ((stub-line (mevedel--find-stub-line buf hunk-pos)))
-                                      (if was-line-based
-                                          ;; Full line stub
-                                          (setq final-start (car stub-line)
-                                                final-end (cdr stub-line))
-                                        ;; Single char stub at deletion point
-                                        (let ((stub-pos (max (point-min) (min hunk-pos (point-max)))))
-                                          (setq final-start stub-pos
-                                                final-end (min (1+ stub-pos) (point-max)))))))))
-
-                              ;; Apply line-span snapping if needed
-                              (when (and was-line-based
-                                         (< final-start final-end))
-                                (let ((snapped (mevedel--snap-to-full-lines final-start final-end buf)))
-                                  (setq final-start (car snapped))
-                                  (setq final-end (cdr snapped))))
-
-                              (message "  Overlay [%d-%d] calculated [%d-%d] delta %d final [%d-%d]"
-                                       orig-start orig-end calc-start calc-end
-                                       cumulative-delta final-start final-end)
-
-                              ;; The same overlay can appear once per hunk.  Merge
-                              ;; all calculated ranges and move the overlay only
-                              ;; once, after every saved record has contributed.
-                              (when (and (>= final-start (point-min))
-                                         (<= final-end (point-max))
-                                         (< final-start final-end))
-                                (if-let* ((existing (gethash ov final-overlays)))
-                                    (puthash ov (plist-put existing :duplicate t)
-                                             final-overlays)
-                                  (puthash ov
-                                           (list :orig-start orig-start
-                                                 :orig-end orig-end
-                                                 :final-start final-start
-                                                 :final-end final-end
-                                                 :hunk-pos hunk-pos
-                                                 :was-line-based was-line-based
-                                                 :duplicate nil)
-                                           final-overlays)))))))
-                      (maphash
-                       (lambda (ov state)
-                         (let ((orig-start (plist-get state :orig-start))
-                               (orig-end (plist-get state :orig-end))
-                               (final-start (plist-get state :final-start))
-                               (final-end (plist-get state :final-end)))
-                           (when (plist-get state :duplicate)
-                             (setq final-start orig-start
-                                   final-end orig-end)
-                             (dolist (change all-changes)
-                               (let ((change-start (car change))
-                                     (change-delta (cadr change)))
-                                 (when (< change-start orig-start)
-                                   (setq final-start (+ final-start change-delta)))
-                                 (when (< change-start orig-end)
-                                   (setq final-end (+ final-end change-delta)))))
-                             (when (and (plist-get state :was-line-based)
-                                        (< final-start final-end))
-                               (let ((snapped (mevedel--snap-to-full-lines
-                                               final-start final-end buf)))
-                                 (setq final-start (car snapped)
-                                       final-end (cdr snapped)))))
-                           (when (or (>= final-start final-end)
-                                     (< final-start (point-min))
-                                     (> final-end (point-max)))
-                             (message "  Overlay [%d-%d] was deleted, creating stub"
-                                      orig-start orig-end)
-                             (let ((stub-pos (max (point-min)
-                                                  (min (or (plist-get state :hunk-pos)
-                                                           orig-start)
-                                                       (point-max)))))
-                               (if (plist-get state :was-line-based)
-                                   (let ((stub-line (mevedel--find-stub-line
-                                                     buf stub-pos)))
-                                     (setq final-start (car stub-line)
-                                           final-end (cdr stub-line)))
-                                 (setq final-start stub-pos
-                                       final-end (min (1+ stub-pos) (point-max))))))
-                           (move-overlay ov final-start final-end (current-buffer))
-                           ;; Clean up temporary properties
-                           (overlay-put ov 'mevedel-diff-orig-start nil)
-                           (overlay-put ov 'mevedel-diff-orig-end nil)
-                           (message "  Overlay [%d-%d] final [%d-%d]"
-                                    orig-start orig-end final-start final-end)
-                           (message "    Moved: %S"
-                                    (let ((c (buffer-substring-no-properties final-start final-end)))
-                                      (if (< (length c) 40) c
-                                        (concat (substring c 0 37) "..."))))))
-                       final-overlays)
-                      (save-buffer)
-                      (mevedel--instruction-activate-buffer buf)
-                      (let ((instruction-alist
-                             (mevedel--instruction-alist-value)))
-                        (maphash
-                         (lambda (ov _state)
-                           (unless (memq ov (alist-get buf instruction-alist))
-                             (push ov (alist-get buf instruction-alist))))
-                         final-overlays)
-                        (setf (alist-get buf instruction-alist)
-                              (cl-remove-if
-                               (lambda (ov) (null (overlay-buffer ov)))
-                               (alist-get buf instruction-alist)))
-                        (mevedel--set-instruction-alist-value
-                         instruction-alist)))))))
-              edits-by-buffer)
+             (maphash #'mevedel-diff-apply--apply-buffer edits-by-buffer)
 
              (when files-to-remove
                (dolist (file files-to-remove)

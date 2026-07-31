@@ -237,6 +237,105 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
 
 
 ;;
+;;; mevedel-diff-apply--change
+
+(mevedel-deftest mevedel-diff-apply--change ()
+  ,test
+  (test)
+  :doc "derives one minimal replacement from a diff edit"
+  (with-temp-buffer
+    (insert "abc old xyz")
+    (should
+     (equal '(:hunk-start 1 :hunk-end 12
+              :start 5 :end 8 :old "old" :new "new" :delta 0)
+            (mevedel-diff-apply--change
+             '(:pos (1 . 12)
+               :src ("abc old xyz")
+               :dst ("abc new xyz"))))))
+  :doc "aligns source text that contains leading diff context"
+  (with-temp-buffer
+    (insert "abc old xyz")
+    (should
+     (equal '(:hunk-start 1 :hunk-end 12
+              :start 5 :end 8 :old "old" :new "newer" :delta 2)
+            (mevedel-diff-apply--change
+             '(:pos (1 . 12)
+               :src ("headerabc old xyz")
+               :dst ("headerabc newer xyz")))))))
+
+(mevedel-deftest mevedel-diff-apply--analyze-overlays ()
+  ,test
+  (test)
+  :doc "returns overlay records and ordered deltas without mutating overlays"
+  (with-temp-buffer
+    (insert "old")
+    (let ((overlay (make-overlay 1 4)))
+      (overlay-put overlay 'mevedel-instruction t)
+      (cl-letf (((symbol-function 'mevedel--instruction-bufferlevel-p)
+                 (lambda (_) nil)))
+        (pcase-let ((`(,records ,deltas)
+                     (mevedel-diff-apply--analyze-overlays
+                      (current-buffer)
+                      '((:hunk-start 1 :hunk-end 4
+                         :start 1 :end 4 :old "old" :new "new"
+                         :delta 0)))))
+          (should (equal '((1 0)) deltas))
+          (should (= 1 (length records)))
+          (should (eq overlay (caar records)))
+          (should (= 1 (overlay-start overlay)))
+          (should (= 4 (overlay-end overlay))))))))
+
+(mevedel-deftest mevedel-diff-apply--restore-overlays ()
+  ,test
+  (test)
+  :doc "reattaches one analyzed overlay at its final bounds"
+  (with-temp-buffer
+    (insert "new")
+    (let ((overlay (make-overlay 1 4)))
+      (delete-overlay overlay)
+      (let ((restored
+             (mevedel-diff-apply--restore-overlays
+              (current-buffer)
+              (list (list overlay 1 4 1 nil 1 4))
+              '((1 0)))))
+        (should (gethash overlay restored))
+        (should (eq (current-buffer) (overlay-buffer overlay)))
+        (should (= 1 (overlay-start overlay)))
+        (should (= 4 (overlay-end overlay)))))))
+
+(mevedel-deftest mevedel-diff-apply--apply-buffer ()
+  ,test
+  (test)
+  :doc "applies canonical edits, saves, then synchronizes instruction state"
+  (let* ((file (make-temp-file "mevedel-diff-apply-buffer-" nil ".txt"
+                               "old"))
+         (buffer (find-file-noselect file))
+         activated
+         synchronized)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel--instruction-activate-buffer)
+                   (lambda (value) (setq activated value)))
+                  ((symbol-function 'mevedel--instruction-alist-value)
+                   (lambda () nil))
+                  ((symbol-function 'mevedel--set-instruction-alist-value)
+                   (lambda (value) (setq synchronized value))))
+          (mevedel-diff-apply--apply-buffer
+           buffer
+           (list (list :pos '(1 . 4) :src '("old") :dst '("new"))))
+          (should (eq buffer activated))
+          (should (equal `((,buffer)) synchronized))
+          (should (equal "new\n"
+                         (with-current-buffer buffer (buffer-string))))
+          (should (equal "new\n"
+                         (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (delete-file file))))
+
+
+;;
 ;;; mevedel--parse-hunk-lines
 
 (mevedel-deftest mevedel--parse-hunk-lines ()
