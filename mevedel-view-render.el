@@ -5859,6 +5859,222 @@ SOURCE is the source range of the skipped summary in the data buffer."
       (mevedel-view--hook-audit-records-from-text
        (buffer-substring-no-properties start end)))))
 
+(defun mevedel-view--full-rerender-reset
+    (data-buf session-data-buf historical-p agent-transcript-p)
+  "Reset the current view before projecting DATA-BUF.
+SESSION-DATA-BUF supplies the live header.  HISTORICAL-P inserts the
+historical banner.  AGENT-TRANSCRIPT-P selects the headerless layout."
+  (if agent-transcript-p
+      (progn
+        (mevedel-view--debug-log
+         'full-rerender-delete-transcript
+         :region (mevedel-view--debug-region (point-min) (point-max))
+         :state (mevedel-view--debug-state data-buf))
+        (delete-region (point-min) (point-max))
+        (goto-char (point-min)))
+    (mevedel-view--debug-log
+     'full-rerender-delete-display
+     :region (mevedel-view--debug-region
+              (point-min)
+              (marker-position mevedel-view--input-marker))
+     :state (mevedel-view--debug-state data-buf))
+    (delete-region (point-min) mevedel-view--input-marker)
+    (mevedel-view--forget-request-progress-region)
+    (goto-char (point-min))
+    (insert (mevedel-view--header-string session-data-buf))
+    (when historical-p
+      (insert (mevedel-view--historical-segment-banner))))
+  (set-marker mevedel-view--input-marker (point))
+  (when (markerp mevedel-view--status-marker)
+    (set-marker mevedel-view--status-marker (point)))
+  (when (markerp mevedel-view--interaction-marker)
+    (set-marker mevedel-view--interaction-marker (point)))
+  (mevedel-view--debug-log
+   'full-rerender-after-header
+   :state (mevedel-view--debug-state data-buf)))
+
+(defun mevedel-view--full-rerender-project
+    (data-buf session-data-buf render-view-buf
+              agent-transcript-p data-turn-start-pos saved-states)
+  "Project DATA-BUF into its view and return the last-turn rendering state.
+SESSION-DATA-BUF supplies live session metadata.  RENDER-VIEW-BUF is
+used for agent transcripts.  DATA-TURN-START-POS identifies the live
+turn.  SAVED-STATES restores matching disclosure state."
+  (with-current-buffer data-buf
+    (unless (mevedel-view--running-agent-transcript-buffer-p)
+      (require 'mevedel-transcript-restore)
+      (mevedel-transcript-restore-properties t))
+    (let ((scan-start
+           (mevedel-transcript--skip-leading-properties-drawer
+            (point-min)))
+          (view-buf
+           (if agent-transcript-p
+               render-view-buf
+             (buffer-local-value 'mevedel--view-buffer data-buf)))
+          (compaction-indicator-inserted nil))
+      (when (eq (get-text-property scan-start 'face) 'shadow)
+        (setq scan-start
+              (or (next-single-property-change
+                   scan-start 'face nil (point-max))
+                  (point-max)))
+        (let ((summary-start scan-start))
+          (save-excursion
+            (goto-char scan-start)
+            (when (re-search-forward "^#\\+end_summary\n\\|^```\n" nil t)
+              (setq scan-start (point))))
+          (mevedel-view--insert-compaction-indicator
+           view-buf
+           (mevedel-view--summary-hook-audits
+            data-buf summary-start scan-start)
+           (cons summary-start scan-start)))
+        (setq compaction-indicator-inserted t))
+      (let ((after-summary
+             (mevedel-transcript--skip-leading-summary-block scan-start)))
+        (when (> after-summary scan-start)
+          (unless compaction-indicator-inserted
+            (mevedel-view--insert-compaction-indicator
+             view-buf
+             (mevedel-view--summary-hook-audits
+              data-buf scan-start after-summary)
+             (cons scan-start after-summary)))
+          (setq scan-start after-summary))
+      (save-restriction
+        (narrow-to-region scan-start (point-max))
+        (let* ((segments
+                (mevedel-transcript-segments (point-min) (point-max)))
+               (turns (mevedel-view--group-into-turns segments data-buf))
+               (session
+                (and (not agent-transcript-p)
+                     (buffer-local-value
+                      'mevedel--session session-data-buf)))
+               (mevedel-view--conversation-variant-sessions
+                (when (and session
+                           (mevedel-session-save-path session)
+                           (mevedel-session-workspace session))
+                  (require 'mevedel-session-persistence)
+                  (mevedel-session-persistence-list-sessions
+                   (mevedel-session-workspace session))))
+               last-assistant-turn-start
+               last-current-assistant-turn-start
+               last-turn-role)
+          (with-current-buffer view-buf
+            (dolist (turn turns)
+              (setq last-turn-role (plist-get turn :role))
+              (when (eq last-turn-role 'assistant)
+                (let ((view-turn-start
+                       (copy-marker mevedel-view--input-marker nil)))
+                  (setq last-assistant-turn-start view-turn-start)
+                  (when (and data-turn-start-pos
+                             (plist-get turn :end)
+                             (> (plist-get turn :end)
+                                data-turn-start-pos))
+                    (setq last-current-assistant-turn-start
+                          view-turn-start))))
+              (mevedel-view--render-turn turn data-buf t session))
+            (when saved-states
+              (mevedel-view--apply-collapse-states
+               (point-min)
+               (marker-position mevedel-view--input-marker)
+               saved-states)))
+          (list
+           :view-buffer view-buf
+           :last-assistant-turn-start last-assistant-turn-start
+           :last-current-assistant-turn-start
+           last-current-assistant-turn-start
+           :last-turn-role last-turn-role)))))))
+
+(defun mevedel-view--full-rerender-reanchor
+    (data-buf rendering in-flight-was data-turn-start-pos preserved-live-tail)
+  "Recover the live-turn anchor after projecting DATA-BUF.
+RENDERING is the projection state.  IN-FLIGHT-WAS enables recovery.
+DATA-TURN-START-POS identifies the active data turn, and
+PRESERVED-LIVE-TAIL contains any view-only streamed text."
+  (when in-flight-was
+    (let ((view-buf (plist-get rendering :view-buffer))
+          (last-assistant
+           (plist-get rendering :last-assistant-turn-start))
+          (last-current-assistant
+           (plist-get rendering :last-current-assistant-turn-start))
+          (last-role (plist-get rendering :last-turn-role)))
+      (with-current-buffer view-buf
+        (let ((tail-start
+               (and preserved-live-tail
+                    (mevedel-view--live-tail-rendered-position
+                     preserved-live-tail mevedel-view--input-marker))))
+          (cond
+           (last-current-assistant
+            (mevedel-view--debug-log
+             'full-rerender-reanchor
+             :decision 'current-assistant
+             :last-turn-role last-role
+             :last-assistant-turn-start last-assistant
+             :last-current-assistant-turn-start last-current-assistant
+             :data-turn-start data-turn-start-pos
+             :state (mevedel-view--debug-state data-buf))
+            (mevedel-view--set-in-flight-turn-start
+             last-current-assistant))
+           ((and (not data-turn-start-pos)
+                 (eq last-role 'assistant)
+                 last-assistant)
+            (mevedel-view--debug-log
+             'full-rerender-reanchor
+             :decision 'last-assistant
+             :last-turn-role last-role
+             :last-assistant-turn-start last-assistant
+             :state (mevedel-view--debug-state data-buf))
+            (mevedel-view--set-in-flight-turn-start last-assistant))
+           (tail-start
+            (mevedel-view--debug-log
+             'full-rerender-reanchor
+             :decision 'existing-live-tail
+             :last-turn-role last-role
+             :tail-start tail-start
+             :state (mevedel-view--debug-state data-buf))
+            (mevedel-view--set-in-flight-turn-start tail-start))
+           (preserved-live-tail
+            (goto-char mevedel-view--input-marker)
+            (mevedel-view-render--with-boundaries-advancing
+              (let ((tail-start (point)))
+                (insert preserved-live-tail)
+                (mevedel-view--debug-log
+                 'full-rerender-reanchor
+                 :decision 'preserved-live-tail
+                 :last-turn-role last-role
+                 :tail-start tail-start
+                 :state (mevedel-view--debug-state data-buf))
+                (mevedel-view--set-in-flight-turn-start tail-start))))
+           (t
+            (mevedel-view--debug-log
+             'full-rerender-reanchor
+             :decision 'input-marker
+             :last-turn-role last-role
+             :state (mevedel-view--debug-state data-buf))
+            (mevedel-view--set-in-flight-turn-start
+             mevedel-view--input-marker))))))))
+
+(defun mevedel-view--full-rerender-finish
+    (data-buf live-data-buf rendering historical-p start-time)
+  "Rebuild live chrome after projecting DATA-BUF.
+LIVE-DATA-BUF owns live status.  RENDERING identifies the view.
+HISTORICAL-P suppresses live-only rows.  START-TIME is for diagnostics."
+  (with-current-buffer (plist-get rendering :view-buffer)
+    (unless mevedel-view--agent-transcript-p
+      (mevedel-view-refresh-input-prompt)
+      (when (and (not historical-p)
+                 mevedel-view--pending-tool-calls)
+        (mevedel-view--refresh-pending-tool-lines))
+      (mevedel-view--render-status live-data-buf)
+      (mevedel-view--interaction-rebuild)
+      (mevedel-view--ensure-request-progress live-data-buf))
+    (mevedel-view--debug-log
+     'full-rerender-after-render
+     :last-assistant-turn-start
+     (plist-get rendering :last-assistant-turn-start)
+     :last-current-assistant-turn-start
+     (plist-get rendering :last-current-assistant-turn-start)
+     :elapsed (- (float-time) start-time)
+     :state (mevedel-view--debug-state data-buf))))
+
 (defun mevedel-view--full-rerender (&optional transcript-buffer source-changed-p)
   "Re-render the view from TRANSCRIPT-BUFFER or its displayed transcript.
 Wipe all rendered content and re-render from scratch.  Used after
@@ -5867,16 +6083,9 @@ compaction, session resume, or manual refresh.
 When SOURCE-CHANGED-P is non-nil, do not carry disclosure state from the
 previously projected transcript into this render.
 
-Re-anchors `mevedel-view--in-flight-turn-start' to the rerendered
-position of the last (in-flight) turn when a turn was in flight at
-the time of the rerender; otherwise the wipe collapses the marker to
-`point-min' and the next incremental render erases the freshly
-rerendered history (and its `You' header along with it).
-
-Preserves live window state so
-the caret + scroll position survive a rerender triggered
-mid-stream (e.g. by the post-permission accept callback's view
-rerender)."
+Preserves the active composer, live window state, and an in-flight
+assistant anchor while rebuilding the transcript projection and live
+view chrome."
   (require 'mevedel-transcript)
   (unless mevedel--data-buffer
     (error "No data buffer"))
@@ -5884,271 +6093,64 @@ rerender)."
    (mevedel-view--call-preserving-input-text
     (lambda ()
       (let* ((start-time (float-time))
-            (data-buf (or transcript-buffer
-                          (mevedel-view--display-data-buffer)))
-            (live-data-buf mevedel--data-buffer)
-            (historical-p
-             (not (eq data-buf mevedel--data-buffer)))
-            (session-data-buf
-             (if historical-p live-data-buf data-buf))
-            (render-view-buf (current-buffer))
-            (render-agent-transcript-p mevedel-view--agent-transcript-p)
-            (inhibit-read-only t)
-            (inhibit-modification-hooks t)
-            (inhibit-redisplay t)
-            (saved-states
-             (and (not source-changed-p)
-                  (markerp mevedel-view--input-marker)
-                  (marker-position mevedel-view--input-marker)
-                  (mevedel-view--capture-collapse-states
-                   (point-min)
-                   (marker-position mevedel-view--input-marker))))
-            (data-turn-start-pos
-             (and (not historical-p)
-                  (markerp mevedel-view--data-turn-start)
-                  (marker-position mevedel-view--data-turn-start)))
-            (in-flight-was
-             (and (not historical-p)
-                  (mevedel-view--in-flight-turn-start-position)))
-            (preserved-live-tail
-             (when-let* (((not historical-p))
-                         ((not mevedel-view--agent-transcript-p))
-                         (tail-start
-                          (mevedel-view--in-flight-turn-start-position))
-                         ((markerp mevedel-view--status-marker))
-                         (tail-end (marker-position mevedel-view--status-marker))
-                         ((< tail-start tail-end)))
-               (mevedel-view--strip-history-live-fragments-from-string
-                (buffer-substring tail-start tail-end)))))
+             (data-buf
+              (or transcript-buffer
+                  (mevedel-view--display-data-buffer)))
+             (live-data-buf mevedel--data-buffer)
+             (historical-p (not (eq data-buf live-data-buf)))
+             (session-data-buf
+              (if historical-p live-data-buf data-buf))
+             (render-view-buf (current-buffer))
+             (agent-transcript-p mevedel-view--agent-transcript-p)
+             (inhibit-read-only t)
+             (inhibit-modification-hooks t)
+             (inhibit-redisplay t)
+             (saved-states
+              (and (not source-changed-p)
+                   (markerp mevedel-view--input-marker)
+                   (marker-position mevedel-view--input-marker)
+                   (mevedel-view--capture-collapse-states
+                    (point-min)
+                    (marker-position mevedel-view--input-marker))))
+             (data-turn-start-pos
+              (and (not historical-p)
+                   (markerp mevedel-view--data-turn-start)
+                   (marker-position mevedel-view--data-turn-start)))
+             (in-flight-was
+              (and (not historical-p)
+                   (mevedel-view--in-flight-turn-start-position)))
+             (preserved-live-tail
+              (when-let* (((not historical-p))
+                          ((not agent-transcript-p))
+                          (tail-start
+                           (mevedel-view--in-flight-turn-start-position))
+                          ((markerp mevedel-view--status-marker))
+                          (tail-end
+                           (marker-position mevedel-view--status-marker))
+                          ((< tail-start tail-end)))
+                (mevedel-view--strip-history-live-fragments-from-string
+                 (buffer-substring tail-start tail-end)))))
         (unless mevedel-view--pending-tool-calls
           (mevedel-view--delete-pending-tool-live-lines))
         (mevedel-view--debug-log
          'full-rerender-begin
          :in-flight-was in-flight-was
-         :preserved-live-tail-len (and preserved-live-tail
-                                       (length preserved-live-tail))
+         :preserved-live-tail-len
+         (and preserved-live-tail (length preserved-live-tail))
          :state (mevedel-view--debug-state data-buf))
-        ;; Full rerender is also the recovery path for compaction, resume,
-        ;; and explicit refresh.  Capture/apply below preserves matching
-        ;; live sections; the table itself must not keep stale source keys
-        ;; from a data-buffer rewrite or clear.
         (setq mevedel-view--source-collapse-states
               (make-hash-table :test #'equal))
-        (if mevedel-view--agent-transcript-p
-            (progn
-              (mevedel-view--debug-log
-               'full-rerender-delete-transcript
-               :region (mevedel-view--debug-region (point-min) (point-max))
-               :state (mevedel-view--debug-state data-buf))
-              (delete-region (point-min) (point-max))
-              (goto-char (point-min))
-              (set-marker mevedel-view--input-marker (point))
-              (when (markerp mevedel-view--status-marker)
-                (set-marker mevedel-view--status-marker (point)))
-              (when (markerp mevedel-view--interaction-marker)
-                (set-marker mevedel-view--interaction-marker (point))))
-          ;; Wipe history/status/interaction/request-progress rows above the input marker.
-          (mevedel-view--debug-log
-           'full-rerender-delete-display
-           :region (mevedel-view--debug-region
-                    (point-min)
-                    (marker-position mevedel-view--input-marker))
-           :state (mevedel-view--debug-state data-buf))
-          (delete-region (point-min) mevedel-view--input-marker)
-          (mevedel-view--forget-request-progress-region)
-          ;; Re-insert header and reset all three zone markers to the
-          ;; end of the header so the zone ordering invariant holds after
-          ;; full rerender (compaction, resume, manual refresh).
-          (goto-char (point-min))
-          (insert (mevedel-view--header-string session-data-buf))
-          (when historical-p
-            (insert (mevedel-view--historical-segment-banner)))
-          (set-marker mevedel-view--input-marker (point))
-          (when (markerp mevedel-view--status-marker)
-            (set-marker mevedel-view--status-marker (point)))
-          (when (markerp mevedel-view--interaction-marker)
-            (set-marker mevedel-view--interaction-marker (point))))
-        (mevedel-view--debug-log
-         'full-rerender-after-header
-         :state (mevedel-view--debug-state data-buf))
-    ;; Render all content from data buffer
-    (with-current-buffer data-buf
-      (unless (mevedel-view--running-agent-transcript-buffer-p)
-        (require 'mevedel-transcript-restore)
-        (mevedel-transcript-restore-properties t))
-      ;; Skip compacted region at the start.  In-place compaction leaves
-      ;; ignored/shadowed old content followed by a
-      ;; summary block; segment rotation starts directly with a summary
-      ;; block followed by live tail content.
-      (let ((scan-start (mevedel-transcript--skip-leading-properties-drawer
-                         (point-min)))
-            (view-buf (if render-agent-transcript-p
-                          render-view-buf
-                        (buffer-local-value 'mevedel--view-buffer
-                                            data-buf)))
-            (compaction-indicator-inserted nil))
-        (when (eq (get-text-property scan-start 'face) 'shadow)
-          ;; Skip past shadow region (old conversation)
-          (setq scan-start (or (next-single-property-change
-                                scan-start 'face nil (point-max))
-                               (point-max)))
-          ;; Skip past the compaction separator + summary block by
-          ;; searching for the end marker.
-          (let ((summary-start scan-start))
-            (save-excursion
-              (goto-char scan-start)
-              (when (re-search-forward
-                     "^#\\+end_summary\n\\|^```\n" nil t)
-                (setq scan-start (point))))
-            (mevedel-view--insert-compaction-indicator
-             view-buf
-             (mevedel-view--summary-hook-audits
-              data-buf summary-start scan-start)
-             (cons summary-start scan-start)))
-          (setq compaction-indicator-inserted t))
-        (let ((after-summary
-               (mevedel-transcript--skip-leading-summary-block scan-start)))
-          (when (> after-summary scan-start)
-            (unless compaction-indicator-inserted
-              (mevedel-view--insert-compaction-indicator
-               view-buf
-               (mevedel-view--summary-hook-audits
-                data-buf scan-start after-summary)
-               (cons scan-start after-summary))
-              (setq compaction-indicator-inserted t)))
-          (setq scan-start after-summary))
-        ;; Narrow so that transcript segment boundary expansion
-        ;; (`previous-single-property-change' bounded by `point-min')
-        ;; can't walk back into the leading drawer / compacted region.
-        (save-restriction
-          (narrow-to-region scan-start (point-max))
-          (let* ((segments (mevedel-transcript-segments
-                            (point-min) (point-max)))
-                 (turns (mevedel-view--group-into-turns segments data-buf))
-                 (session
-                  (and (not render-agent-transcript-p)
-                       (buffer-local-value
-                        'mevedel--session session-data-buf)))
-                 (mevedel-view--conversation-variant-sessions
-                  (when (and session
-                             (mevedel-session-save-path session)
-                             (mevedel-session-workspace session))
-                    (require 'mevedel-session-persistence)
-                    (mevedel-session-persistence-list-sessions
-                     (mevedel-session-workspace session))))
-                 (view-buf (if render-agent-transcript-p
-                               render-view-buf
-                             (buffer-local-value 'mevedel--view-buffer
-                                                 data-buf)))
-                 (last-assistant-turn-start nil)
-                 (last-current-assistant-turn-start nil)
-                 (last-turn-role nil))
-            (with-current-buffer view-buf
-              (dolist (turn turns)
-                (setq last-turn-role (plist-get turn :role))
-                (when (eq (plist-get turn :role) 'assistant)
-                  (let ((view-turn-start
-                         (copy-marker mevedel-view--input-marker nil)))
-                    (setq last-assistant-turn-start view-turn-start)
-                    (when (and data-turn-start-pos
-                               (plist-get turn :end)
-                               (> (plist-get turn :end)
-                                  data-turn-start-pos))
-                      (setq last-current-assistant-turn-start
-                            view-turn-start))))
-                (mevedel-view--render-turn turn data-buf t session))
-              (when saved-states
-                (mevedel-view--apply-collapse-states
-                 (point-min)
-                 (marker-position mevedel-view--input-marker)
-                 saved-states)))
-            ;; Re-anchor `in-flight-turn-start' for the in-flight assistant
-            ;; turn.  Prefer an assistant turn overlapping the current
-            ;; data-turn range; mailbox/user turns can arrive after that
-            ;; assistant while the request is still in flight, and the
-            ;; next incremental render still needs to replace from the
-            ;; assistant start.  If a new request has rendered its user
-            ;; turn but no assistant replacement yet, the last assistant
-            ;; belongs to the previous exchange and must not become the
-            ;; new wipe start.  Without a correct in-flight anchor, the
-            ;; wipe above collapsed the marker to point-min and the next
-            ;; incremental render would erase the rerendered history.
-            (when in-flight-was
-              (with-current-buffer view-buf
-                (cond
-                 (last-current-assistant-turn-start
-                  (mevedel-view--debug-log
-                   'full-rerender-reanchor
-                   :decision 'current-assistant
-                   :last-turn-role last-turn-role
-                   :last-assistant-turn-start last-assistant-turn-start
-                   :last-current-assistant-turn-start
-                   last-current-assistant-turn-start
-                   :data-turn-start data-turn-start-pos
-                   :state (mevedel-view--debug-state data-buf))
-                  (mevedel-view--set-in-flight-turn-start
-                   last-current-assistant-turn-start))
-                 ((and (not data-turn-start-pos)
-                       (eq last-turn-role 'assistant)
-                       last-assistant-turn-start)
-                  (mevedel-view--debug-log
-                   'full-rerender-reanchor
-                   :decision 'last-assistant
-                   :last-turn-role last-turn-role
-                   :last-assistant-turn-start last-assistant-turn-start
-                   :state (mevedel-view--debug-state data-buf))
-                  (mevedel-view--set-in-flight-turn-start
-                   last-assistant-turn-start))
-                 ((and preserved-live-tail
-                       (mevedel-view--live-tail-rendered-position
-                        preserved-live-tail mevedel-view--input-marker))
-                  (let ((tail-start
-                         (mevedel-view--live-tail-rendered-position
-                          preserved-live-tail mevedel-view--input-marker)))
-                    (mevedel-view--debug-log
-                     'full-rerender-reanchor
-                     :decision 'existing-live-tail
-                     :last-turn-role last-turn-role
-                     :tail-start tail-start
-                     :state (mevedel-view--debug-state data-buf))
-                    (mevedel-view--set-in-flight-turn-start tail-start)))
-                 (preserved-live-tail
-                  (goto-char mevedel-view--input-marker)
-                  (mevedel-view-render--with-boundaries-advancing
-                    (let ((tail-start (point)))
-                      (insert preserved-live-tail)
-                      (mevedel-view--debug-log
-                       'full-rerender-reanchor
-                       :decision 'preserved-live-tail
-                       :last-turn-role last-turn-role
-                       :tail-start tail-start
-                       :state (mevedel-view--debug-state data-buf))
-                      (mevedel-view--set-in-flight-turn-start tail-start))))
-                 (t
-                  (mevedel-view--debug-log
-                   'full-rerender-reanchor
-                   :decision 'input-marker
-                   :last-turn-role last-turn-role
-                   :state (mevedel-view--debug-state data-buf))
-                  (mevedel-view--set-in-flight-turn-start
-                   mevedel-view--input-marker)))))
-            (with-current-buffer view-buf
-              (unless mevedel-view--agent-transcript-p
-                (mevedel-view-refresh-input-prompt)
-                (when (and (not historical-p)
-                           mevedel-view--pending-tool-calls)
-                  (mevedel-view--refresh-pending-tool-lines))
-                (mevedel-view--render-status live-data-buf)
-                (mevedel-view--interaction-rebuild)
-                (mevedel-view--ensure-request-progress live-data-buf))
-              (mevedel-view--debug-log
-               'full-rerender-after-render
-               :last-assistant-turn-start last-assistant-turn-start
-               :last-current-assistant-turn-start
-               last-current-assistant-turn-start
-               :elapsed (- (float-time) start-time)
-               :state (mevedel-view--debug-state data-buf))))))))))))
-
+        (mevedel-view--full-rerender-reset
+         data-buf session-data-buf historical-p agent-transcript-p)
+        (let ((rendering
+               (mevedel-view--full-rerender-project
+                data-buf session-data-buf render-view-buf
+                agent-transcript-p data-turn-start-pos saved-states)))
+          (mevedel-view--full-rerender-reanchor
+           data-buf rendering in-flight-was
+           data-turn-start-pos preserved-live-tail)
+          (mevedel-view--full-rerender-finish
+           data-buf live-data-buf rendering historical-p start-time)))))))
 
 ;;
 ;;; Optimistic user turn rendering
