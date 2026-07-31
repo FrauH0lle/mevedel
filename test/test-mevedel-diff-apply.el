@@ -630,6 +630,23 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
        (kill-buffer buf))))
   ,test
   (test)
+  :doc "removes files created before hunk resolution fails"
+  (let ((file (make-temp-name
+               (expand-file-name "mevedel-diff-unresolved-"
+                                 temporary-file-directory))))
+    (unwind-protect
+        (with-temp-buffer
+          (cl-letf (((symbol-function 'mevedel--diff-find-file-operations)
+                     (lambda () (list (list file) nil)))
+                    ((symbol-function 'diff-beginning-of-hunk) #'ignore)
+                    ((symbol-function 'diff-find-source-location)
+                     (lambda (&rest _) '(nil nil nil nil nil nil)))
+                    ((symbol-function 'diff-hunk-next) #'ignore)
+                    ((symbol-function 'message) #'ignore))
+            (mevedel-diff-apply-buffer))
+          (should-not (file-exists-p file)))
+      (when (file-exists-p file)
+        (delete-file file))))
   :doc "`mevedel-diff-apply-buffer': noninteractive repair rejection is deterministic and side-effect free"
   (let* ((original "alpha\nold\nomega\n")
          (test-file (make-temp-file "mevedel-test-" nil ".txt" original))

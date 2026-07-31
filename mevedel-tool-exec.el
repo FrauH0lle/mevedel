@@ -1874,7 +1874,7 @@ mode.  TRUST-LITERAL-P identifies author-written skill body injections."
      ((eq mode 'full-auto)
       'allow)
      (trust-literal-p
-     (or action 'ask))
+      (or action 'ask))
      (t 'ask))))
 
 (defun mevedel-tool-exec--normalize-prompt-result

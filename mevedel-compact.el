@@ -2058,6 +2058,62 @@ the persistent failure counter unchanged."
        (mevedel--compact-run-finish state (format "%s" err))
        (signal (car err) (cdr err))))))
 
+(defun mevedel--compact-run-prepare
+    (state limit admission instructions pending-start
+           prepared-summary summary-ready)
+  "Populate compaction STATE from history ending at LIMIT."
+  (let* ((target (mevedel--compact-run-state-target state))
+         (aggressive (mevedel--compact-run-state-aggressive state))
+         (body-start (plist-get target :body-start))
+         (tail-start
+          (mevedel--compact-tail-start limit aggressive body-start))
+         (compact-end (max body-start tail-start))
+         (history-regions
+          (append (plist-get target :history-prefix-regions)
+                  (list (cons body-start compact-end))))
+         (archived-tool-use-ids
+          (delete-dups
+           (mapcan
+            (lambda (range)
+              (mevedel--compact-archived-tool-use-ids
+               (car range) (cdr range)))
+            history-regions)))
+         (old-content
+          (mapconcat
+           (lambda (range)
+             (mevedel--compact-region-with-tool-output-cap
+              (car range) (cdr range)
+              mevedel-compact-body-tool-output-max t))
+           history-regions "")))
+    (setf
+     (mevedel--compact-run-state-archived-tool-use-ids state)
+     archived-tool-use-ids
+     (mevedel--compact-run-state-base-system-prompt state)
+     (mevedel--compact-prompt
+      (plist-get target :previous-summary)
+      instructions (plist-get target :prompt-session))
+     (mevedel--compact-run-state-instructions state) instructions
+     (mevedel--compact-run-state-invocation state)
+     (plist-get target :invocation)
+     (mevedel--compact-run-state-old-content state) old-content
+     (mevedel--compact-run-state-pending-text state)
+     (and pending-start
+          (buffer-substring pending-start (point-max)))
+     (mevedel--compact-run-state-policy state)
+     (or (plist-get admission :summary-policy)
+         (mevedel--compact-workload-policy))
+     (mevedel--compact-run-state-prepared-summary state)
+     prepared-summary
+     (mevedel--compact-run-state-preserved-tail-turns state)
+     (mevedel--compact-preserved-tail-turn-count
+      tail-start limit aggressive)
+     (mevedel--compact-run-state-summary-ready state) summary-ready
+     (mevedel--compact-run-state-tail-text state)
+     (and (not aggressive)
+          (mevedel--compact-region-with-tool-output-cap
+           tail-start limit mevedel-compact-tail-tool-output-max)))
+    state))
+
 (cl-defun mevedel--compact-run
     (&key aggressive instructions pending-start callback auto
           admission target prepared-summary summary-ready)
@@ -2086,7 +2142,21 @@ before it is applied."
                       :tokens-before tokens-before
                       :target-origin (plist-get target :origin)
                       (mevedel--compact-telemetry-inputs
-                       tokens-before target-policy)))))
+                       tokens-before target-policy))))
+         (state
+          (mevedel--compact-run-state-create
+           :aggressive aggressive
+           :auto auto
+           :callback callback
+           :chat-buffer chat-buffer
+           :max-attempts 3
+           :session session
+           :stream gptel-stream
+           :target target
+           :telemetry-span telemetry-span
+           :tokens-before tokens-before
+           :trigger (if auto "auto" "manual")
+           :workspace (plist-get target :workspace))))
     (setq mevedel--compact-current-request-reminder nil
           mevedel--compact-current-request-hook-context nil)
     (when mevedel--compaction-in-flight
@@ -2102,85 +2172,24 @@ before it is applied."
       (unless limit
         (if auto
             (cl-return-from mevedel--compact-run
-              (let ((state
-                     (mevedel--compact-run-state-create
-                      :callback callback
-                      :chat-buffer chat-buffer
-                      :telemetry-span telemetry-span)))
-                (mevedel--compact-run-finish state :skip)))
+              (mevedel--compact-run-finish state :skip))
           (user-error "Not enough conversation content to compact")))
-      (let* ((body-start (plist-get target :body-start))
-             (tail-start
-              (mevedel--compact-tail-start limit aggressive body-start))
-             (compact-end (max body-start tail-start))
-             (history-regions
-              (append (plist-get target :history-prefix-regions)
-                      (list (cons body-start compact-end))))
-             (archived-tool-use-ids
-              (delete-dups
-               (mapcan
-                (lambda (range)
-                  (mevedel--compact-archived-tool-use-ids
-                   (car range) (cdr range)))
-                history-regions)))
-             (preserved-tail-turns
-              (mevedel--compact-preserved-tail-turn-count
-               tail-start limit aggressive))
-             (old-content
-              (mapconcat
-               (lambda (range)
-                 (mevedel--compact-region-with-tool-output-cap
-                  (car range) (cdr range)
-                  mevedel-compact-body-tool-output-max t))
-               history-regions ""))
-             (tail-text
-              (unless aggressive
-                (mevedel--compact-region-with-tool-output-cap
-                 tail-start limit mevedel-compact-tail-tool-output-max)))
-             (state
-              (mevedel--compact-run-state-create
-               :aggressive aggressive
-               :archived-tool-use-ids archived-tool-use-ids
-               :auto auto
-               :base-system-prompt
-               (mevedel--compact-prompt
-                (plist-get target :previous-summary)
-                instructions (plist-get target :prompt-session))
-               :callback callback
-               :chat-buffer chat-buffer
-               :instructions instructions
-               :invocation (plist-get target :invocation)
-               :max-attempts 3
-               :old-content old-content
-               :pending-text
-               (when pending-start
-                 (buffer-substring pending-start (point-max)))
-               :policy
-               (or (plist-get admission :summary-policy)
-                   (mevedel--compact-workload-policy))
-               :prepared-summary prepared-summary
-               :preserved-tail-turns preserved-tail-turns
-               :session session
-               :stream gptel-stream
-               :summary-ready summary-ready
-               :tail-text tail-text
-               :target target
-               :telemetry-span telemetry-span
-               :tokens-before tokens-before
-               :trigger (if auto "auto" "manual")
-               :workspace (plist-get target :workspace))))
-        (when (string-blank-p old-content)
-          (if auto
-              (cl-return-from mevedel--compact-run
-                (mevedel--compact-run-finish
-                 state
-                 (if (plist-get admission :target-pressure)
-                     "No compactable history remains at target pressure"
-                   :skip)))
-            (user-error "Not enough conversation content to compact")))
-        (require 'mevedel-hooks)
-        (setq mevedel--compaction-in-flight t)
-        (mevedel--compact-run-begin-attempt state)))))
+      (mevedel--compact-run-prepare
+       state limit admission instructions pending-start
+       prepared-summary summary-ready)
+      (when (string-blank-p
+             (mevedel--compact-run-state-old-content state))
+        (if auto
+            (cl-return-from mevedel--compact-run
+              (mevedel--compact-run-finish
+               state
+               (if (plist-get admission :target-pressure)
+                   "No compactable history remains at target pressure"
+                 :skip)))
+          (user-error "Not enough conversation content to compact")))
+      (require 'mevedel-hooks)
+      (setq mevedel--compaction-in-flight t)
+      (mevedel--compact-run-begin-attempt state))))
 ;;;###autoload
 (defun mevedel-compact (&optional aggressive instructions)
   "Compact the current mevedel chat buffer.
