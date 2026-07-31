@@ -1884,341 +1884,420 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
                                 mevedel-directive-succeeded-actions-map
                                 mevedel-directive-failed-actions-map))
 
-(defun mevedel--update-instruction-overlay (instruction &optional update-children)
-  "Update the appearance of the INSTRUCTION overlay.
+(defun mevedel--instruction-directive-color (instruction)
+  "Return the status color for directive INSTRUCTION."
+  (let ((own-color
+         (pcase (overlay-get instruction 'mevedel-directive-status)
+           ('processing mevedel-directive-processing-color)
+           ('succeeded mevedel-directive-success-color)
+           ('failed mevedel-directive-fail-color)
+           (_ mevedel-directive-color))))
+    (if-let* ((parent
+               (mevedel--topmost-instruction instruction 'directive)))
+        (pcase (overlay-get parent 'mevedel-directive-status)
+          ('processing mevedel-directive-processing-color)
+          ('failed mevedel-directive-fail-color)
+          (_ own-color))
+      own-color)))
 
-This function updates the overlay label text, color of the label text,
-and the background of the instruction overlay.  This function should be
-called every time there is a hierarchy or status change in the
-instruction overlay that we wish to reflect.
+(defun mevedel--instruction-action-setup (instruction instruction-type)
+  "Install interaction properties for INSTRUCTION of INSTRUCTION-TYPE."
+  (add-hook 'eldoc-documentation-functions
+            #'mevedel--ov-actions-help nil 'local)
+  (let ((status (overlay-get instruction 'mevedel-directive-status)))
+    (overlay-put
+     instruction 'keymap
+     (if (eq instruction-type 'reference)
+         mevedel-reference-actions-map
+       (pcase status
+         ('processing mevedel-directive-processing-actions-map)
+         ('succeeded mevedel-directive-succeeded-actions-map)
+         ('failed mevedel-directive-failed-actions-map)
+         (_ mevedel-directive-actions-map))))
+    (overlay-put
+     instruction 'help-echo
+     (format
+      "%s \\[mevedel--ov-actions-dispatch] for options"
+      (if (eq instruction-type 'reference)
+          "Press"
+        (pcase status
+          ('processing "Request in progress, press")
+          ('succeeded "Request succeeded, press")
+          ('failed "Request failed, press")
+          (_ "Press")))))))
 
-Also updates the child instructions of the INSTRUCTION, if
-UPDATE-CHILDREN is non-nil."
-  (cl-labels
-      ((directive-color (directive)
-         (cl-labels ((dircol ()
-                       (pcase (overlay-get directive 'mevedel-directive-status)
-                         ('processing mevedel-directive-processing-color)
-                         ('succeeded  mevedel-directive-success-color)
-                         ('failed     mevedel-directive-fail-color)
-                         (_           mevedel-directive-color))))
-           (if-let* ((parent-directive (mevedel--topmost-instruction directive 'directive)))
-               (let ((parent-status (overlay-get parent-directive 'mevedel-directive-status)))
-                 (if (eq parent-status 'processing)
-                     mevedel-directive-processing-color
-                   (if (eq parent-status 'failed)
-                       mevedel-directive-fail-color
-                     (dircol))))
-             (dircol))))
-       (aux (instruction &optional update-children priority (parent nil))
-         (let* ((instruction-type (mevedel--instruction-type instruction))
-                (padding (with-current-buffer (overlay-buffer instruction)
-                           (save-excursion
-                             (goto-char (overlay-start instruction))
-                             (make-string (current-column) ? ))))
-                (is-bufferlevel (mevedel--instruction-bufferlevel-p instruction))
-                (parent-bufferlevel (and parent (mevedel--instruction-bufferlevel-p parent)))
-                ;; This is to prevent the buffer-level instruction from having a
-                ;; background color.
-                (priority (if is-bufferlevel (1- priority) priority))
-                (label "")
-                color)
-           (cl-labels
-               ((action-setup ()
-                  (add-hook 'eldoc-documentation-functions #'mevedel--ov-actions-help nil 'local)
-                  (overlay-put instruction 'keymap (pcase instruction-type
-                                                     (`reference mevedel-reference-actions-map)
-                                                     (`directive
-                                                      (pcase (overlay-get instruction 'mevedel-directive-status)
-                                                        ('processing mevedel-directive-processing-actions-map)
-                                                        ('succeeded mevedel-directive-succeeded-actions-map)
-                                                        ('failed mevedel-directive-failed-actions-map)
-                                                        (_ mevedel-directive-actions-map)))))
-                  (overlay-put
-                   instruction 'help-echo
-                   (format (concat "%s \\[mevedel--ov-actions-dispatch] for options")
-                           (pcase instruction-type
-                             (`reference "Press")
-                             (`directive
-                              (pcase (overlay-get instruction 'mevedel-directive-status)
-                                ('processing "Request in progress, press")
-                                ('succeeded "Request succeeded, press")
-                                ('failed "Request failed, press")
-                                (_ "Press")))))))
+(defun mevedel--instruction-label
+    (instruction instruction-type padding bufferlevel-p
+                 parent parent-bufferlevel-p)
+  "Return (LABEL . COLOR) for INSTRUCTION.
+INSTRUCTION-TYPE, PADDING, BUFFERLEVEL-P, PARENT, and
+PARENT-BUFFERLEVEL-P describe its position in the instruction tree."
+  (let ((label "")
+        color)
+    (cl-labels
+        ((append-label (content &optional prefix)
+           (setq label
+                 (concat
+                  label
+                  (if (string-empty-p label) "" (concat "\n" padding))
+                  (mevedel--fill-label-string
+                   content (or prefix "") padding
+                   (overlay-buffer instruction)))))
+         (stylized-id (id)
+           (propertize (format "#%d" id)
+                       'face 'font-lock-constant-face))
+         (filter-link-ids (ids)
+           (cl-loop
+            for id in ids
+            unless
+            (let ((target (mevedel--instruction-with-id id)))
+              (or (null target)
+                  (eq (mevedel--instruction-type target)
+                      instruction-type)))
+            collect id))
+         (append-links ()
+           (let ((outlinks
+                  (filter-link-ids
+                   (mevedel--instruction-outlinks instruction)))
+                 (inlinks
+                  (filter-link-ids
+                   (mevedel--instruction-inlinks instruction))))
+             (when (or outlinks inlinks)
+               (append-label
+                (concat
+                 (when outlinks
+                   (format "TO: %s"
+                           (string-join
+                            (mapcar #'stylized-id outlinks) ", ")))
+                 (when inlinks
+                   (format "%sFROM: %s"
+                           (if outlinks "\n" "")
+                           (string-join
+                            (mapcar #'stylized-id inlinks) ", "))))
+                (format "%s LINKS: "
+                        (if (eq instruction-type 'reference)
+                            "REFERENCE"
+                          "DIRECTIVE"))))))
+         (tags-string (tags common-tags)
+           (string-join
+            (mapcar
+             (lambda (tag)
+               (propertize
+                (symbol-name tag) 'face
+                (if (memq tag common-tags)
+                    'font-lock-warning-face
+                  'font-lock-constant-face)))
+             tags)
+            " ")))
+      (pcase instruction-type
+        ('reference
+         (setq color mevedel-reference-color)
+         (cond
+          ((and parent
+                (eq (mevedel--instruction-type parent) 'reference)
+                (not parent-bufferlevel-p))
+           (append-label
+            (format "SUBREFERENCE %s"
+                    (stylized-id
+                     (mevedel--instruction-id instruction)))))
+          (bufferlevel-p
+           (append-label
+            (format "BUFFER REFERENCE %s"
+                    (stylized-id
+                     (mevedel--instruction-id instruction)))))
+          (t
+           (append-label
+            (format "REFERENCE %s"
+                    (stylized-id
+                     (mevedel--instruction-id instruction))))))
+         (let* ((direct-tags (mevedel--reference-tags instruction))
+                (inherited-tags (mevedel--inherited-tags instruction))
+                (common-tags
+                 (cl-intersection inherited-tags direct-tags))
+                (unique-tags
+                 (cl-set-difference direct-tags common-tags)))
+           (when inherited-tags
+             (append-label
+              (tags-string
+               (sort (append inherited-tags) #'string-lessp)
+               common-tags)
+              (if common-tags
+                  "INHERITED & COMMON TAGS: "
+                "INHERITED TAGS: ")))
+           (when unique-tags
+             (append-label
+              (tags-string
+               (sort unique-tags #'string-lessp) common-tags)
+              (if inherited-tags
+                  (if common-tags "UNIQUE TAGS: " "DIRECT TAGS: ")
+                "TAGS: "))))
+         (append-links)
+         (let ((commentary
+                (string-trim
+                 (or
+                  (if (eq
+                       (overlay-get
+                        instruction 'mevedel-instruction-collapse-p)
+                       'collapse)
+                      (mevedel--commentary-truncated-text instruction)
+                    (mevedel--commentary-text instruction))
+                  ""))))
+           (unless (string-empty-p commentary)
+             (append-label commentary "COMMENTARY: "))))
+        ('directive
+         (pcase (overlay-get instruction 'mevedel-directive-status)
+           ('processing (append-label "PROCESSING"))
+           ('succeeded (append-label "SUCCEEDED"))
+           ('failed
+            (append-label
+             (overlay-get instruction 'mevedel-directive-fail-reason)
+             "FAILED: ")))
+         (setq color
+               (mevedel--instruction-directive-color instruction))
+         (let ((directive-typename "DIRECTIVE"))
+           (if (and parent (mevedel--directivep parent))
+               (progn
+                 (setq directive-typename
+                       (pcase
+                           (overlay-get
+                            parent 'mevedel-directive-status)
+                         ((or 'processing 'failed)
+                          (or
+                           (overlay-get
+                            instruction
+                            'mevedel-subdirective-typename)
+                           "HINT"))
+                         ('succeeded "CORRECTION")
+                         (_ "HINT")))
+                 (overlay-put
+                  instruction 'mevedel-subdirective-typename
+                  directive-typename))
+             (overlay-put
+              instruction 'mevedel-subdirective-typename nil))
+           (let* ((directive
+                   (string-trim
+                    (or
+                     (if (eq
+                          (overlay-get
+                           instruction 'mevedel-instruction-collapse-p)
+                          'collapse)
+                         (mevedel--directive-truncated-text instruction)
+                       (mevedel--directive-text instruction))
+                     "")))
+                  (prefix
+                   (format "%s %s"
+                           directive-typename
+                           (stylized-id
+                            (mevedel--instruction-id instruction)))))
+             (append-label
+              directive
+              (if (string-empty-p directive)
+                  (concat "EMPTY " prefix)
+                (concat prefix ": ")))))
+         (when-let* ((provider
+                      (overlay-get
+                       instruction
+                       'mevedel-directive-model-provider)))
+           (append-label
+            (format
+             "%s · effort %s"
+             provider
+             (or
+              (overlay-get
+               instruction
+               'mevedel-directive-reasoning-effort)
+              "default"))
+            "MODEL: "))
+         (unless (mevedel--parent-instruction instruction 'directive)
+           (if-let* ((query
+                      (overlay-get
+                       instruction
+                       'mevedel-directive-infix-tag-query-string)))
+               (append-label query "TAG QUERY: ")
+             (append-label
+              (cond
+               (mevedel-empty-tag-query-matches-all
+                "REFERENCES ALL")
+               (mevedel-always-match-untagged-references
+                "REFERENCES UNTAGGED ONLY")
+               (t "REFERENCES NOTHING"))))
+           (append-links))))
+      (cons label color))))
 
-                (append-to-label (content &optional prefix)
-                  (setq label
-                        (concat label
-                                (if (string-empty-p label) "" (concat "\n" padding))
-                                (mevedel--fill-label-string content
-                                                            (or prefix "")
-                                                            padding
-                                                            (overlay-buffer instruction)))))
-                (stylized-id-str (id)
-                  (propertize (format "#%d" id) 'face 'font-lock-constant-face))
-                (append-links-to-label ()
-                  (cl-labels ((filter-ids (ids)
-                                (cl-loop for id in ids
-                                         unless
-                                         (let ((instr (mevedel--instruction-with-id id)))
-                                           (or (null instr)
-                                               (not (eq (mevedel--instruction-type instr)
-                                                        instruction-type))))
-                                         collect id)))
-                    (let ((outlinks (filter-ids (mevedel--instruction-outlinks instruction)))
-                          (inlinks (filter-ids (mevedel--instruction-inlinks instruction))))
-                      (when (or outlinks inlinks)
-                        (let ((prefix (format "%s LINKS: "
-                                              (if (eq instruction-type instruction)
-                                                  "REFERENCE"
-                                                "DIRECTIVE")))
-                              (link-list-text
-                               (concat
-                                (when outlinks
-                                  (format "TO: %s"
-                                          (string-join (mapcar #'stylized-id-str
-                                                               outlinks)
-                                                       ", ")))
-                                (when inlinks
-                                  (format "%sFROM: %s"
-                                          (if outlinks "\n" "")
-                                          (string-join (mapcar #'stylized-id-str
-                                                               inlinks)
-                                                       ", "))))))
-                          (append-to-label link-list-text
-                                           prefix)))))))
-             (pcase instruction-type
-               ('reference ; REFERENCE
-                (setq color mevedel-reference-color)
-                (if (and parent
-                         (and (eq (mevedel--instruction-type parent) 'reference)
-                              (not parent-bufferlevel)))
-                    (append-to-label (format "SUBREFERENCE %s"
-                                             (stylized-id-str (mevedel--instruction-id instruction))))
-                  (if is-bufferlevel
-                      (append-to-label (format "BUFFER REFERENCE %s"
-                                               (stylized-id-str (mevedel--instruction-id instruction))))
-                    (append-to-label (format "REFERENCE %s"
-                                             (stylized-id-str (mevedel--instruction-id instruction))))))
-                (let* ((direct-tags (mevedel--reference-tags instruction))
-                       (inherited-tags (mevedel--inherited-tags instruction))
-                       (common-tags (cl-intersection inherited-tags direct-tags))
-                       (unique-tags (cl-set-difference direct-tags common-tags)))
-                  (cl-labels
-                      ((propertized-string-from-tags (tags)
-                         (string-join
-                          (mapcar (lambda (tag)
-                                    (propertize (symbol-name tag)
-                                                'face
-                                                (if (memq tag common-tags)
-                                                    'font-lock-warning-face
-                                                  'font-lock-constant-face)))
-                                  tags)
-                          " ")))
-                    (when inherited-tags
-                      (append-to-label (propertized-string-from-tags
-                                        (sort (append inherited-tags) #'string-lessp))
-                                       (if common-tags
-                                           "INHERITED & COMMON TAGS: "
-                                         "INHERITED TAGS: ")))
-                    (when unique-tags
-                      (append-to-label (propertized-string-from-tags
-                                        (sort unique-tags #'string-lessp))
-                                       (if inherited-tags
-                                           (if common-tags
-                                               "UNIQUE TAGS: "
-                                             "DIRECT TAGS: ")
-                                         "TAGS: ")))))
-                (append-links-to-label)
-                (let ((commentary (string-trim (or (if (eq (overlay-get instruction 'mevedel-instruction-collapse-p)
-                                                           'collapse)
-                                                       (mevedel--commentary-truncated-text instruction)
-                                                     (mevedel--commentary-text instruction))
-                                                   ""))))
-                  (unless (string-empty-p commentary)
-                    (append-to-label commentary "COMMENTARY: ")))
-                (action-setup))
-               ('directive ; DIRECTIVE
-                (pcase (overlay-get instruction 'mevedel-directive-status)
-                  ('processing (append-to-label "PROCESSING"))
-                  ('succeeded (append-to-label "SUCCEEDED"))
-                  ('failed (append-to-label (overlay-get instruction
-                                                         'mevedel-directive-fail-reason)
-                                            "FAILED: ")))
-                (setq color (directive-color instruction))
-                (let (sublabel
-                      (directive-typename "DIRECTIVE"))
-                  (if (and parent
-                           (mevedel--directivep parent))
-                      (progn
-                        (pcase (overlay-get parent 'mevedel-directive-status)
-                          ((or 'processing 'failed)
-                           (if-let* ((existing-typename (overlay-get instruction
-                                                                     'mevedel-subdirective-typename)))
-                               (setq directive-typename existing-typename)
-                             (setq directive-typename "HINT")))
-                          ('succeeded (setq directive-typename "CORRECTION"))
-                          (_ (setq directive-typename "HINT")))
-                        (setf (overlay-get instruction 'mevedel-subdirective-typename)
-                              directive-typename))
-                    (setf (overlay-get instruction 'mevedel-subdirective-typename) nil))
-                  (setq sublabel (concat
-                                  sublabel
-                                  (format "%s %s"
-                                          directive-typename
-                                          (stylized-id-str (mevedel--instruction-id instruction)))))
-                  (let ((directive (string-trim (or (if (eq (overlay-get instruction 'mevedel-instruction-collapse-p)
-                                                            'collapse)
-                                                        (mevedel--directive-truncated-text instruction)
-                                                      (mevedel--directive-text instruction))
-                                                    ""))))
-                    (if (string-empty-p directive)
-                        (setq sublabel (concat "EMPTY " sublabel))
-                      (setq sublabel (concat sublabel ": ")))
-                    (setq label (concat
-                                 label
-                                 (unless (string-empty-p label)
-                                   (concat "\n" padding))
-                                 (mevedel--fill-label-string directive
-                                                             sublabel
-                                                             padding
-                                                             (overlay-buffer instruction))))
-                    (when-let* ((provider
-                                 (overlay-get
-                                  instruction
-                                  'mevedel-directive-model-provider)))
-                      (append-to-label
-                       (format "%s · effort %s"
-                               provider
-                               (or (overlay-get
-                                    instruction
-                                    'mevedel-directive-reasoning-effort)
-                                   "default"))
-                       "MODEL: "))
-                    (unless (mevedel--parent-instruction instruction 'directive)
-                      (if-let* ((query-string (overlay-get instruction
-                                                           'mevedel-directive-infix-tag-query-string)))
-                          (append-to-label query-string "TAG QUERY: ")
-                        (let (matchinfo)
-                          (if mevedel-empty-tag-query-matches-all
-                              (setq matchinfo "REFERENCES ALL")
-                            (if mevedel-always-match-untagged-references
-                                (setq matchinfo "REFERENCES UNTAGGED ONLY")
-                              (setq matchinfo "REFERENCES NOTHING")))
-                          (setq label (concat label "\n" padding matchinfo))))
-                      (append-links-to-label))))
-                (action-setup)))
-             (let* ((default-fg (face-foreground 'default))
-                    (default-bg (face-background 'default))
-                    (bg-tint-intensity
-                     (if (and parent (not parent-bufferlevel))
-                         (* mevedel-subinstruction-tint-coefficient mevedel-instruction-bg-tint-intensity)
-                       mevedel-instruction-bg-tint-intensity))
-                    (label-color (if is-bufferlevel
-                                     (mevedel--tint default-fg color mevedel-instruction-label-tint-intensity)
-                                   (let ((tint (mevedel--tint default-fg
-                                                              color
-                                                              mevedel-instruction-label-tint-intensity)))
-                                     (dotimes (_  (- priority
-                                                     mevedel--default-instruction-priority))
-                                       (setq tint (mevedel--tint tint
-                                                                 color
-                                                                 mevedel-instruction-label-tint-intensity)))
-                                     tint)))
-                    ;; We want to make sure that the buffer-level instructions don't superfluously
-                    ;; tint the background.
-                    (bg-color (if (and is-bufferlevel (eq instruction-type 'reference))
-                                  default-bg
-                                (let ((tint (mevedel--tint default-bg
-                                                           color
-                                                           mevedel-instruction-bg-tint-intensity)))
-                                  (dotimes (_ (- priority
-                                                 mevedel--default-instruction-priority))
-                                    (setq tint (mevedel--tint tint color bg-tint-intensity)))
-                                  tint))))
-               (overlay-put instruction 'mevedel-bg-color bg-color)
-               (overlay-put instruction 'mevedel-label-color label-color)
-               (overlay-put instruction 'priority priority)
-               (when (eq instruction
-                         mevedel--highlighted-instruction)
-                 (setq bg-color
-                       (mevedel--tint default-bg
-                                      mevedel-highlighted-instruction-color
-                                      mevedel-highlighted-instruction-tint-intensity)))
-               (let ((instruction-is-at-eol (with-current-buffer (overlay-buffer instruction)
-                                              (save-excursion
-                                                (goto-char (overlay-end instruction))
-                                                (eolp)))))
-                 ;; Propertize specific parts of the before-string of the label, to give
-                 ;; the illusion that its a "sticker" in the buffer.
-                 (cl-labels
-                     ((colorize-region (beg end &optional fg bg)
-                        (unless (= beg end)
-                          (let ((fg (or fg label-color))
-                                (bg (or bg bg-color)))
-                            (add-face-text-property beg end
-                                                    (list :inherit 'default
-                                                          :extend t
-                                                          :foreground fg
-                                                          :background bg)
-                                                    t))))
-                      (colorize-region-as-parent (beg end)
-                        (when-let* ((parent (mevedel--parent-instruction instruction)))
-                          (colorize-region beg end
-                                           (overlay-get parent 'mevedel-label-color)
-                                           (overlay-get parent 'mevedel-bg-color)))))
-                   (let ((before-string
-                          (with-temp-buffer
-                            (insert label)
-                            (if (mevedel--bodyless-instruction-p instruction)
-                                (unless instruction-is-at-eol
-                                  (insert "\n"))
-                              (insert "\n"))
-                            (goto-char (point-min))
-                            (end-of-line)
-                            (unless (eobp)
-                              (forward-char))
-                            (colorize-region (point-min) (point))
-                            (goto-char (point-min))
-                            (forward-line)
-                            (while (not (eobp))
-                              (beginning-of-line)
-                              (let ((mark (point)))
-                                (forward-char (length padding))
-                                (colorize-region-as-parent mark (point)))
-                              (let ((went-to-next-line))
-                                (let ((mark (point)))
-                                  (end-of-line)
-                                  (unless (eobp)
-                                    (setq went-to-next-line t)
-                                    (forward-char))
-                                  (colorize-region mark (point)))
-                                (unless went-to-next-line
-                                  (forward-line))))
-                            (unless (mevedel--bodyless-instruction-p instruction)
-                              (let ((mark (point)))
-                                (insert padding)
-                                (colorize-region-as-parent mark (point))))
-                            (buffer-string))))
-                     (overlay-put instruction 'before-string before-string))))
-               (overlay-put instruction 'face `(:extend t :background ,bg-color)))
-             (when update-children
-               (dolist (child (mevedel--child-instructions instruction))
-                 (aux child update-children (1+ priority) instruction)))))))
-    (let ((instructions-conflicting (cl-some (lambda (instr)
-                                               (and (not (eq instr instruction))
-                                                    (mevedel--instructions-congruent-p instruction
-                                                                                       instr)))
-                                             (mevedel--instructions-at (overlay-start instruction)))))
-      (if instructions-conflicting
-          ;; This instruction is causing conflicts, and therefore must be
-          ;; deleted.
-          (mevedel--delete-instruction instruction)
-        (let ((parent (mevedel--parent-instruction instruction)))
-          (let ((priority (if parent
-                              (1+ (overlay-get parent 'priority))
-                            mevedel--default-instruction-priority)))
-            (aux instruction update-children priority parent)))))))
+(defun mevedel--instruction-style
+    (instruction instruction-type label color padding priority parent)
+  "Apply visual style to INSTRUCTION.
+INSTRUCTION-TYPE, LABEL, COLOR, PADDING, PRIORITY, and PARENT describe
+the presentation computed for the instruction tree node."
+  (let* ((default-fg (face-foreground 'default))
+         (default-bg (face-background 'default))
+         (bufferlevel-p
+          (mevedel--instruction-bufferlevel-p instruction))
+         (parent-bufferlevel-p
+          (and parent
+               (mevedel--instruction-bufferlevel-p parent)))
+         (bg-tint-intensity
+          (if (and parent (not parent-bufferlevel-p))
+              (* mevedel-subinstruction-tint-coefficient
+                 mevedel-instruction-bg-tint-intensity)
+            mevedel-instruction-bg-tint-intensity))
+         (label-color
+          (if bufferlevel-p
+              (mevedel--tint
+               default-fg color
+               mevedel-instruction-label-tint-intensity)
+            (let ((tint
+                   (mevedel--tint
+                    default-fg color
+                    mevedel-instruction-label-tint-intensity)))
+              (dotimes
+                  (_ (- priority
+                        mevedel--default-instruction-priority))
+                (setq tint
+                      (mevedel--tint
+                       tint color
+                       mevedel-instruction-label-tint-intensity)))
+              tint)))
+         (bg-color
+          (if (and bufferlevel-p
+                   (eq instruction-type 'reference))
+              default-bg
+            (let ((tint
+                   (mevedel--tint
+                    default-bg color
+                    mevedel-instruction-bg-tint-intensity)))
+              (dotimes
+                  (_ (- priority
+                        mevedel--default-instruction-priority))
+                (setq tint
+                      (mevedel--tint
+                       tint color bg-tint-intensity)))
+              tint))))
+    (overlay-put instruction 'mevedel-bg-color bg-color)
+    (overlay-put instruction 'mevedel-label-color label-color)
+    (overlay-put instruction 'priority priority)
+    (when (eq instruction mevedel--highlighted-instruction)
+      (setq bg-color
+            (mevedel--tint
+             default-bg
+             mevedel-highlighted-instruction-color
+             mevedel-highlighted-instruction-tint-intensity)))
+    (let ((instruction-at-eol-p
+           (with-current-buffer (overlay-buffer instruction)
+             (save-excursion
+               (goto-char (overlay-end instruction))
+               (eolp)))))
+      (cl-labels
+          ((colorize (beg end &optional fg bg)
+             (unless (= beg end)
+               (add-face-text-property
+                beg end
+                (list :inherit 'default
+                      :extend t
+                      :foreground (or fg label-color)
+                      :background (or bg bg-color))
+                t)))
+           (colorize-as-parent (beg end)
+             (when-let* ((actual-parent
+                          (mevedel--parent-instruction instruction)))
+               (colorize
+                beg end
+                (overlay-get
+                 actual-parent 'mevedel-label-color)
+                (overlay-get actual-parent 'mevedel-bg-color)))))
+        (overlay-put
+         instruction 'before-string
+         (with-temp-buffer
+           (insert label)
+           (if (mevedel--bodyless-instruction-p instruction)
+               (unless instruction-at-eol-p
+                 (insert "\n"))
+             (insert "\n"))
+           (goto-char (point-min))
+           (end-of-line)
+           (unless (eobp)
+             (forward-char))
+           (colorize (point-min) (point))
+           (goto-char (point-min))
+           (forward-line)
+           (while (not (eobp))
+             (beginning-of-line)
+             (let ((mark (point)))
+               (forward-char (length padding))
+               (colorize-as-parent mark (point)))
+             (let ((mark (point))
+                   advanced)
+               (end-of-line)
+               (unless (eobp)
+                 (setq advanced t)
+                 (forward-char))
+               (colorize mark (point))
+               (unless advanced
+                 (forward-line))))
+           (unless (mevedel--bodyless-instruction-p instruction)
+             (let ((mark (point)))
+               (insert padding)
+               (colorize-as-parent mark (point))))
+           (buffer-string)))))
+    (overlay-put
+     instruction 'face `(:extend t :background ,bg-color))))
+
+(defun mevedel--update-instruction-overlay-tree
+    (instruction update-children priority parent)
+  "Render INSTRUCTION and optionally UPDATE-CHILDREN.
+PRIORITY is the inherited priority and PARENT is the tree parent."
+  (let* ((instruction-type
+          (mevedel--instruction-type instruction))
+         (padding
+          (with-current-buffer (overlay-buffer instruction)
+            (save-excursion
+              (goto-char (overlay-start instruction))
+              (make-string (current-column) ? ))))
+         (bufferlevel-p
+          (mevedel--instruction-bufferlevel-p instruction))
+         (parent-bufferlevel-p
+          (and parent
+               (mevedel--instruction-bufferlevel-p parent)))
+         (priority
+          (if bufferlevel-p (1- priority) priority))
+         (presentation
+          (mevedel--instruction-label
+           instruction instruction-type padding bufferlevel-p
+           parent parent-bufferlevel-p)))
+    (mevedel--instruction-action-setup
+     instruction instruction-type)
+    (mevedel--instruction-style
+     instruction instruction-type
+     (car presentation) (cdr presentation)
+     padding priority parent)
+    (when update-children
+      (dolist (child
+               (mevedel--child-instructions instruction))
+        (mevedel--update-instruction-overlay-tree
+         child update-children (1+ priority) instruction)))))
+
+(defun mevedel--update-instruction-overlay
+    (instruction &optional update-children)
+  "Update INSTRUCTION's presentation and optionally UPDATE-CHILDREN."
+  (let ((conflicting
+         (cl-some
+          (lambda (other)
+            (and
+             (not (eq other instruction))
+             (mevedel--instructions-congruent-p
+              instruction other)))
+          (mevedel--instructions-at
+           (overlay-start instruction)))))
+    (if conflicting
+        (mevedel--delete-instruction instruction)
+      (let* ((parent
+              (mevedel--parent-instruction instruction))
+             (priority
+              (if parent
+                  (1+ (overlay-get parent 'priority))
+                mevedel--default-instruction-priority)))
+        (mevedel--update-instruction-overlay-tree
+         instruction update-children priority parent)))))
 
 (defun mevedel--buffer-has-instructions-p (buffer)
   "Return non-nil if BUFFER has any mevedel instructions associated with it."

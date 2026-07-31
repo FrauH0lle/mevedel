@@ -46,6 +46,165 @@
 
 
 ;;
+;;; Instruction presentation
+
+(mevedel-deftest mevedel--instruction-directive-color ()
+  ,test
+  (test)
+  :doc "inherits processing and failure colors from the top directive"
+  (with-temp-buffer
+    (insert "directive")
+    (let ((parent (make-overlay 1 5))
+          (child (make-overlay 2 4))
+          (mevedel-directive-processing-color "processing")
+          (mevedel-directive-fail-color "failed")
+          (mevedel-directive-success-color "succeeded"))
+      (overlay-put parent 'mevedel-directive-status 'processing)
+      (overlay-put child 'mevedel-directive-status 'succeeded)
+      (cl-letf (((symbol-function 'mevedel--topmost-instruction)
+                 (lambda (&rest _) parent)))
+        (should (equal "processing"
+                       (mevedel--instruction-directive-color child)))
+        (overlay-put parent 'mevedel-directive-status 'failed)
+        (should (equal "failed"
+                       (mevedel--instruction-directive-color child)))))))
+
+(mevedel-deftest mevedel--instruction-action-setup ()
+  ,test
+  (test)
+  :doc "selects status-specific directive interactions"
+  (with-temp-buffer
+    (insert "directive")
+    (let ((instruction (make-overlay 1 5)))
+      (overlay-put instruction 'mevedel-directive-status 'failed)
+      (mevedel--instruction-action-setup instruction 'directive)
+      (should (eq (overlay-get instruction 'keymap)
+                  mevedel-directive-failed-actions-map))
+      (should (string-match-p
+               "Request failed"
+               (overlay-get instruction 'help-echo))))))
+
+(mevedel-deftest mevedel--instruction-label ()
+  ,test
+  (test)
+  :doc "labels cross-type reference links as reference links"
+  (with-temp-buffer
+    (insert "reference")
+    (let ((reference (make-overlay 1 5))
+          (directive (make-overlay 2 4))
+          (mevedel-reference-color "reference-color"))
+      (overlay-put reference 'mevedel-id 1)
+      (overlay-put reference 'mevedel-links '(:to (2)))
+      (overlay-put directive 'mevedel-id 2)
+      (overlay-put directive 'mevedel-instruction-type 'directive)
+      (cl-letf (((symbol-function 'mevedel--instruction-with-id)
+                 (lambda (id) (and (= id 2) directive)))
+                ((symbol-function 'mevedel--parent-instruction)
+                 (lambda (&rest _) nil)))
+        (let ((presentation
+               (mevedel--instruction-label
+                reference 'reference "" nil nil nil)))
+          (should (equal (cdr presentation) "reference-color"))
+          (should (string-match-p
+                   "REFERENCE LINKS: TO: #2"
+                   (substring-no-properties (car presentation)))))))))
+
+(mevedel-deftest mevedel--instruction-style ()
+  ,test
+  (test)
+  :doc "stores priority, colors, label, and body face on the overlay"
+  (with-temp-buffer
+    (insert "abc")
+    (let ((instruction (make-overlay 1 2)))
+      (cl-letf (((symbol-function 'face-foreground)
+                 (lambda (&rest _) "foreground"))
+                ((symbol-function 'face-background)
+                 (lambda (&rest _) "background"))
+                ((symbol-function 'mevedel--tint)
+                 (lambda (_source tint &optional _intensity) tint))
+                ((symbol-function 'mevedel--parent-instruction)
+                 (lambda (&rest _) nil)))
+        (mevedel--instruction-style
+         instruction 'reference "REFERENCE #1" "reference"
+         "" mevedel--default-instruction-priority nil))
+      (should (= (overlay-get instruction 'priority)
+                 mevedel--default-instruction-priority))
+      (should (string-match-p
+               "REFERENCE #1"
+               (substring-no-properties
+                (overlay-get instruction 'before-string))))
+      (should (overlay-get instruction 'mevedel-bg-color))
+      (should (overlay-get instruction 'face)))))
+
+(mevedel-deftest mevedel--update-instruction-overlay-tree ()
+  ,test
+  (test)
+  :doc "renders a requested child tree with increasing priorities"
+  (with-temp-buffer
+    (insert "abcdef")
+    (let ((parent (make-overlay 1 6))
+          (child (make-overlay 2 4))
+          rendered)
+      (dolist (instruction (list parent child))
+        (overlay-put instruction 'mevedel-instruction-type 'reference))
+      (cl-letf (((symbol-function 'mevedel--instruction-bufferlevel-p)
+                 (lambda (_instruction) nil))
+                ((symbol-function 'mevedel--instruction-label)
+                 (lambda (&rest _) '("label" . "color")))
+                ((symbol-function 'mevedel--instruction-action-setup)
+                 #'ignore)
+                ((symbol-function 'mevedel--instruction-style)
+                 (lambda (instruction _type _label _color _padding
+                                      priority _parent)
+                   (push (cons instruction priority) rendered)))
+                ((symbol-function 'mevedel--child-instructions)
+                 (lambda (instruction)
+                   (and (eq instruction parent) (list child)))))
+        (mevedel--update-instruction-overlay-tree
+         parent t mevedel--default-instruction-priority nil))
+      (should
+       (equal (mapcar #'cdr (nreverse rendered))
+              (list mevedel--default-instruction-priority
+                    (1+ mevedel--default-instruction-priority)))))))
+
+(mevedel-deftest mevedel--update-instruction-overlay ()
+  ,test
+  (test)
+  :doc "deletes a congruent conflicting instruction"
+  (with-temp-buffer
+    (insert "abc")
+    (let ((instruction (make-overlay 1 2))
+          (other (make-overlay 1 2))
+          deleted)
+      (cl-letf (((symbol-function 'mevedel--instructions-at)
+                 (lambda (_point) (list instruction other)))
+                ((symbol-function 'mevedel--instructions-congruent-p)
+                 (lambda (&rest _) t))
+                ((symbol-function 'mevedel--delete-instruction)
+                 (lambda (value &rest _) (setq deleted value))))
+        (mevedel--update-instruction-overlay instruction))
+      (should (eq deleted instruction))))
+  :doc "renders a non-conflicting root at the default priority"
+  (with-temp-buffer
+    (insert "abc")
+    (let ((instruction (make-overlay 1 2))
+          rendered)
+      (cl-letf (((symbol-function 'mevedel--instructions-at)
+                 (lambda (_point) (list instruction)))
+                ((symbol-function 'mevedel--parent-instruction)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel--update-instruction-overlay-tree)
+                 (lambda (value children priority parent)
+                   (setq rendered
+                         (list value children priority parent)))))
+        (mevedel--update-instruction-overlay instruction t))
+      (should
+       (equal rendered
+              (list instruction t
+                    mevedel--default-instruction-priority nil))))))
+
+
+;;
 ;;; Directive model selection
 
 (mevedel-deftest mevedel--directive-model-values ()
