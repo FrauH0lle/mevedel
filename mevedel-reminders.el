@@ -1302,6 +1302,7 @@ identifies the turn.  FLYMAKE-P and FLYCHECK-P select the active checkers."
                 (mevedel-reminders--record-diagnostic-telemetry
                  buffer 'started)
                 (finish 'ready t))
+            (setq settled t)
             (funcall continuation))
         (mevedel-reminders--record-diagnostic-telemetry buffer 'started)
         (setq timer
