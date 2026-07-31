@@ -1402,6 +1402,19 @@
           (should continued)
           (should-not timer-callback)
           (should (equal '(started ready) (nreverse telemetry)))
+          (let ((continuation-calls 0)
+                late-report)
+            (cl-letf (((symbol-function 'flymake-start)
+                       (lambda (&rest _)
+                         (setq late-report
+                               (flymake-make-report-fn 'failed-backend))
+                         (error "Cannot start backend"))))
+              (mevedel-reminders--diagnostics-run-checkers
+               chat "/tmp/source.el" source owner
+               (lambda () (cl-incf continuation-calls)) t nil))
+            (should (= 1 continuation-calls))
+            (funcall late-report nil)
+            (should (= 1 continuation-calls)))
           (setq timer-callback nil
                 cancelled nil
                 telemetry nil
