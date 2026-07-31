@@ -679,51 +679,64 @@ the overlays."
   (pcase-let ((buffer-edits nil)
               (failures 0)
               (created-files nil)
+              (preexisting-buffers nil)
+              (applied nil)
               (diff-refine nil)
               (`(,files-to-create ,files-to-remove) (mevedel--diff-find-file-operations)))
-    (when files-to-create
-      (dolist (file files-to-create)
-        (unless (file-exists-p file)
-          (make-empty-file file 'parents)
-          (push file created-files))))
-    (save-excursion
-      (goto-char (point-min))
-      (diff-beginning-of-hunk t)
-      (while (pcase-let ((`(,buf ,line-offset ,pos ,src ,dst ,switched)
-                          (diff-find-source-location nil nil no-prompt)))
-               (cond ((and line-offset (not switched))
-                      (push (list :buf buf :pos pos :src src :dst dst)
-                            buffer-edits))
-                     (t (setq failures (1+ failures))))
-               (and (not (eq (prog1 (point) (ignore-errors (diff-hunk-next)))
-                             (point)))
-                    (looking-at-p diff-hunk-header-re)))))
+    (unwind-protect
+        (progn
+          (dolist (file files-to-create)
+            (unless (file-exists-p file)
+              (when-let* ((buffer (find-buffer-visiting file)))
+                (push buffer preexisting-buffers))
+              (make-empty-file file 'parents)
+              (push file created-files)))
+          (save-excursion
+            (goto-char (point-min))
+            (diff-beginning-of-hunk t)
+            (while
+                (pcase-let
+                    ((`(,buf ,line-offset ,pos ,src ,dst ,switched)
+                      (diff-find-source-location nil nil no-prompt)))
+                  (cond ((and line-offset (not switched))
+                         (push (list :buf buf :pos pos :src src :dst dst)
+                               buffer-edits))
+                        (t (setq failures (1+ failures))))
+                  (and
+                   (not
+                    (eq (prog1 (point) (ignore-errors (diff-hunk-next)))
+                        (point)))
+                   (looking-at-p diff-hunk-header-re)))))
 
-    (cond ((zerop failures)
-           (let ((edits-by-buffer (make-hash-table :test 'eq)))
-             (dolist (edit buffer-edits)
-               (let ((buf (plist-get edit :buf)))
-                 (push edit (gethash buf edits-by-buffer))))
+          (if (zerop failures)
+              (let ((edits-by-buffer (make-hash-table :test 'eq)))
+                (dolist (edit buffer-edits)
+                  (let ((buf (plist-get edit :buf)))
+                    (push edit (gethash buf edits-by-buffer))))
 
-             (maphash
-              (lambda (buffer edits)
-                (mevedel-diff-apply--apply-buffer
-                 buffer edits
-                 (member (buffer-file-name buffer) created-files)))
-              edits-by-buffer)
+                (maphash
+                 (lambda (buffer edits)
+                   (mevedel-diff-apply--apply-buffer
+                    buffer edits
+                    (member (buffer-file-name buffer) created-files)))
+                 edits-by-buffer)
 
-             (when files-to-remove
-               (dolist (file files-to-remove)
-                 (when (file-exists-p file)
-                   (when-let* ((buf (find-buffer-visiting file)))
-                     (kill-buffer buf))
-                   (delete-file file))))
-             (message "Saved %d buffers" (hash-table-count edits-by-buffer))))
-          (t
-           (dolist (file created-files)
-             (when (file-exists-p file)
-               (delete-file file)))
-           (message "%d hunks failed; no buffers changed" failures)))))
+                (dolist (file files-to-remove)
+                  (when (file-exists-p file)
+                    (when-let* ((buf (find-buffer-visiting file)))
+                      (kill-buffer buf))
+                    (delete-file file)))
+                (setq applied t)
+                (message "Saved %d buffers"
+                         (hash-table-count edits-by-buffer)))
+            (message "%d hunks failed; no buffers changed" failures)))
+      (unless applied
+        (dolist (file created-files)
+          (when-let* ((buffer (find-buffer-visiting file))
+                      ((not (memq buffer preexisting-buffers))))
+            (kill-buffer buffer))
+          (when (file-exists-p file)
+            (delete-file file)))))))
 
 (provide 'mevedel-diff-apply)
 

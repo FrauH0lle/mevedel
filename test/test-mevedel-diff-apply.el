@@ -630,6 +630,28 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
        (kill-buffer buf))))
   ,test
   (test)
+  :doc "cleans created files and buffers when hunk collection signals"
+  (let ((file (make-temp-name
+               (expand-file-name "mevedel-diff-throwing-"
+                                 temporary-file-directory)))
+        opened-buffer)
+    (unwind-protect
+        (with-temp-buffer
+          (cl-letf (((symbol-function 'mevedel--diff-find-file-operations)
+                     (lambda () (list (list file) nil)))
+                    ((symbol-function 'diff-beginning-of-hunk) #'ignore)
+                    ((symbol-function 'diff-find-source-location)
+                     (lambda (&rest _)
+                       (setq opened-buffer (find-file-noselect file))
+                       (error "Resolution exploded"))))
+            (should-error (mevedel-diff-apply-buffer)
+                          :type 'error))
+          (should-not (file-exists-p file))
+          (should-not (buffer-live-p opened-buffer)))
+      (when (buffer-live-p opened-buffer)
+        (kill-buffer opened-buffer))
+      (when (file-exists-p file)
+        (delete-file file))))
   :doc "removes files created before hunk resolution fails"
   (let ((file (make-temp-name
                (expand-file-name "mevedel-diff-unresolved-"
