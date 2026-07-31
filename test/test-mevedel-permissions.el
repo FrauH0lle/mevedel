@@ -1742,8 +1742,11 @@ must restore the prior value to avoid cross-test pollution."
   :doc "extracts specifiers and collects rule buckets once per invocation"
   (let* ((getter-calls 0)
          (bucket-calls 0)
+         (boundary-calls 0)
          (original-collect (symbol-function
                             'mevedel-permission--collect-buckets))
+         (original-boundary (symbol-function
+                             'mevedel-permission--path-in-allowed-roots-p))
          (tool (mevedel-tool--create
                 :name "Read"
                 :read-only-p t
@@ -1754,7 +1757,12 @@ must restore the prior value to avoid cross-test pollution."
     (cl-letf (((symbol-function 'mevedel-permission--collect-buckets)
                (lambda (&rest buckets)
                  (cl-incf bucket-calls)
-                 (apply original-collect buckets))))
+                 (apply original-collect buckets)))
+              ((symbol-function
+                'mevedel-permission--path-in-allowed-roots-p)
+               (lambda (path roots)
+                 (cl-incf boundary-calls)
+                 (funcall original-boundary path roots))))
       (setq context
             (mevedel-permission--invocation-context
              :tool tool
@@ -1767,7 +1775,8 @@ must restore the prior value to avoid cross-test pollution."
                   "Read"
                   (mevedel-permission--checker-args context)))))
     (should (= 1 getter-calls))
-    (should (= 1 bucket-calls))))
+    (should (= 1 bucket-calls))
+    (should (= 1 boundary-calls))))
 
 (mevedel-deftest mevedel-permission--parse-rule-string ()
   ,test

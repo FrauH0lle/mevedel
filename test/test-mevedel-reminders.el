@@ -1168,6 +1168,8 @@
             (mevedel-reminders-diagnostics-before-edit chat file))
           (cl-letf (((symbol-function 'flymake-start)
                      (lambda (&rest _) (setq started t)))
+                    ((symbol-function 'flymake-disabled-backends)
+                     (lambda () nil))
                     ((symbol-function 'mevedel-telemetry-current-session)
                      (lambda (&optional _buffer) session))
                     ((symbol-function 'mevedel-telemetry-record)
@@ -1336,6 +1338,8 @@
                        (setq flymake-report
                              (flymake-make-report-fn 'async-backend))
                        (funcall synchronous nil))))
+                  ((symbol-function 'flymake-disabled-backends)
+                   (lambda () nil))
                   ((symbol-function 'flycheck-stop) #'ignore)
                   ((symbol-function 'flycheck-buffer) #'ignore)
                   ((symbol-function 'run-at-time)
@@ -1387,12 +1391,27 @@
                 cancelled nil
                 telemetry nil
                 continued nil)
+          (cl-letf (((symbol-function 'flymake-start)
+                     (lambda (&rest _)
+                       (flymake-make-report-fn 'failed-backend)))
+                    ((symbol-function 'flymake-disabled-backends)
+                     (lambda () '(failed-backend))))
+            (mevedel-reminders--diagnostics-run-checkers
+             chat "/tmp/source.el" source owner
+             (lambda () (setq continued t)) t nil))
+          (should continued)
+          (should-not timer-callback)
+          (should (equal '(started ready) (nreverse telemetry)))
+          (setq timer-callback nil
+                cancelled nil
+                telemetry nil
+                continued nil)
           (mevedel-reminders--diagnostics-run-checkers
            chat "/tmp/source.el" source owner
            (lambda () (setq continued t)) nil t)
           (kill-buffer source)
           (funcall timer-callback)
-          (should-not continued)
+          (should continued)
           (should (eq 'diagnostic-timer cancelled))
           (should (equal '(started stale) (nreverse telemetry))))
       (when (buffer-live-p source) (kill-buffer source))

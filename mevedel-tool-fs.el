@@ -1353,14 +1353,20 @@ content, not a read failure.\n</system-reminder>" filename))
   "Truncate the current buffer at a complete line before MAXIMUM-SIZE bytes.
 When GUIDANCE is non-nil, append a byte-limit message after truncation."
   (when (> (1- (position-bytes (point-max))) maximum-size)
-    (goto-char (byte-to-position (1+ maximum-size)))
-    (beginning-of-line)
-    (delete-region (point) (point-max))
-    (when guidance
-      (goto-char (point-max))
-      (insert
-       (format "\n... Output truncated at %dK byte limit. %s"
-               (/ maximum-size 1024) guidance)))))
+    (let* ((notice (and guidance
+                        (format "\n... Output truncated at %dK byte limit. %s"
+                                (/ maximum-size 1024) guidance)))
+           (content-limit (- maximum-size (string-bytes (or notice "")))))
+      (if (< content-limit 0)
+          (progn
+            (erase-buffer)
+            (insert (substring notice 0 maximum-size)))
+        (goto-char (byte-to-position (1+ content-limit)))
+        (beginning-of-line)
+        (delete-region (point) (point-max))
+        (when notice
+          (goto-char (point-max))
+          (insert notice))))))
 
 (defun mevedel-tool-fs--finalize-glob-buffer ()
   "Bound current buffer and return the model-visible Glob result."

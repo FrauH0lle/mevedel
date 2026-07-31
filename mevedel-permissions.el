@@ -985,9 +985,7 @@ happen for a non-read-only tool."
                               (path :path)))
          (specifier-value (or pattern domain name path))
          (workspace-boundary-p
-          (and path
-               (not (mevedel-permission--path-in-allowed-roots-p
-                     path (plist-get context :allowed-roots)))))
+          (plist-get context :workspace-boundary-p))
          (rule-key (if workspace-boundary-p :path specifier-key))
          (rule-value (if workspace-boundary-p
                          (expand-file-name path)
@@ -1068,7 +1066,9 @@ non-nil, is returned unchanged so a caller can reuse an invocation preflight."
               pattern (extract #'mevedel-tool-get-pattern pattern)
               domain (extract #'mevedel-tool-get-domain domain)
               name (extract #'mevedel-tool-get-name name))))
-    (let* ((read-only-p
+    (let* ((allowed-roots (or allowed-roots
+                              (and workspace-root (list workspace-root))))
+           (read-only-p
             (when tool-struct (mevedel-tool-read-only-p tool-struct)))
            (native-edit-p
             (and tool-struct (memq 'edit (mevedel-tool-groups tool-struct))))
@@ -1101,13 +1101,16 @@ non-nil, is returned unchanged so a caller can reuse an invocation preflight."
             :mode mode
             :read-only-p read-only-p
             :buckets buckets
-            :allowed-roots (or allowed-roots
-                               (and workspace-root (list workspace-root)))
+            :allowed-roots allowed-roots
             :exact-allowed-paths exact-allowed-paths
             :resource-access resource-access
             :resource-grants resource-grants
             :resource-granted-p resource-granted-p
             :protected-path-p (mevedel-permission--path-protected-p path)
+            :workspace-boundary-p
+            (and path
+                 (not (mevedel-permission--path-in-allowed-roots-p
+                       path allowed-roots)))
             :early-decision early-decision))))
 
 (defun mevedel-permission--sync-tool-decision (context)
@@ -1243,8 +1246,7 @@ exact-match in-bounds path list."
         (mevedel-permission--decision 'allow 'resource-grant))
        ((plist-get context :protected-path-p)
         (mevedel-permission--decision 'ask 'protected-path))
-       ((mevedel-permission--path-in-allowed-roots-p
-         path (plist-get context :allowed-roots))
+       ((not (plist-get context :workspace-boundary-p))
         (mevedel-permission--decision 'allow 'allowed-root))
        ((mevedel-permission--path-in-exact-allowed-paths-p
          path (plist-get context :exact-allowed-paths))
