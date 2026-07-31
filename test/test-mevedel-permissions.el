@@ -1715,23 +1715,59 @@ must restore the prior value to avoid cross-test pollution."
 (mevedel-deftest mevedel-permission--checker-args ()
   ,test
   (test)
-  :doc "returns the existing checker keyword interface from context"
+  :doc "passes the normalized invocation preflight without rebuilding it"
   (let* ((tool (mevedel-tool--create :name "Read" :read-only-p t))
-         (context (list :tool tool
-                        :path "/tmp/file.txt"
-                        :session-rules '(("Read" :action allow))
-                        :mode 'ask
-                        :workspace-root "/tmp/"
-                        :allowed-roots '("/tmp/")
-                        :exact-allowed-paths '("/tmp/file.txt")))
+         (context
+          (mevedel-permission--invocation-context
+           :tool tool
+           :path "/tmp/file.txt"
+           :session-rules '(("Read" :action allow))
+           :mode 'ask
+           :workspace-root "/tmp/"
+           :allowed-roots '("/tmp/")
+           :exact-allowed-paths '("/tmp/file.txt")))
          (args (mevedel-permission--checker-args context)))
-    (should (eq tool (plist-get args :tool-struct)))
+    (should (equal :normalized-context (car args)))
+    (should (= 2 (length args)))
+    (setq args (plist-get args :normalized-context))
+    (should (eq tool (plist-get args :tool)))
     (should (equal "/tmp/file.txt" (plist-get args :path)))
-    (should (equal '(("Read" :action allow))
-                   (plist-get args :session-rules)))
     (should (eq 'ask (plist-get args :mode)))
     (should (equal '("/tmp/file.txt")
                    (plist-get args :exact-allowed-paths)))))
+
+(mevedel-deftest mevedel-permission--invocation-preflight-reuse ()
+  ,test
+  (test)
+  :doc "extracts specifiers and collects rule buckets once per invocation"
+  (let* ((getter-calls 0)
+         (bucket-calls 0)
+         (original-collect (symbol-function
+                            'mevedel-permission--collect-buckets))
+         (tool (mevedel-tool--create
+                :name "Read"
+                :read-only-p t
+                :get-path (lambda (args)
+                            (cl-incf getter-calls)
+                            (plist-get args :path))))
+         context)
+    (cl-letf (((symbol-function 'mevedel-permission--collect-buckets)
+               (lambda (&rest buckets)
+                 (cl-incf bucket-calls)
+                 (apply original-collect buckets))))
+      (setq context
+            (mevedel-permission--invocation-context
+             :tool tool
+             :args '(:path "/project/file.el")
+             :workspace-root "/project"
+             :mode 'ask))
+      (should
+       (eq 'allow
+           (apply #'mevedel-check-permission
+                  "Read"
+                  (mevedel-permission--checker-args context)))))
+    (should (= 1 getter-calls))
+    (should (= 1 bucket-calls))))
 
 (mevedel-deftest mevedel-permission--parse-rule-string ()
   ,test
