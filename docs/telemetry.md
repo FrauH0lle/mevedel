@@ -102,8 +102,11 @@ records `profiler-stop-failed` and signals the save error.
 
 The two debug logs are explicit opt-in artifacts and may contain raw prompts,
 responses, request headers, connection settings, and short rendered text
-previews. They are written with owner-only permissions (`0600`); still treat
-the diagnostics directory as sensitive session data.
+previews. Before persistence, mevedel replaces `Authorization`,
+`ChatGPT-Account-Id`, and `Session-Id` header values in the gptel log with
+`<redacted>`. Other diagnostic content remains raw. The logs are written with
+owner-only permissions (`0600`); still treat the diagnostics directory as
+sensitive session data.
 
 While profiling is active, the first full Eask ERT suite is transparently run
 under `/usr/bin/time -v` when GNU time is installed. Focused test files and
