@@ -1033,6 +1033,54 @@
   (should (eq 'failure
               (mevedel-tool-fs--rg-outcome '(:exit-code 2)))))
 
+(mevedel-deftest mevedel-tool-fs--truncate-output-buffer ()
+  ,test
+  (test)
+  :doc "bounds multibyte output at a complete line and appends optional guidance"
+  (with-temp-buffer
+    (insert "keep\n" (make-string 20 #x00e9))
+    (mevedel-tool-fs--truncate-output-buffer 12)
+    (should (equal "keep\n" (buffer-string)))
+    (should (<= (string-bytes (buffer-string)) 12)))
+  (with-temp-buffer
+    (insert (make-string 20 ?x))
+    (mevedel-tool-fs--truncate-output-buffer 10 "Narrow it.")
+    (should (equal "\n... Output truncated at 0K byte limit. Narrow it."
+                   (buffer-string)))))
+
+(mevedel-deftest mevedel-tool-fs--settle-rg-result ()
+  ,test
+  (test)
+  :doc "settles every ripgrep child outcome with shared messages and metadata"
+  (cl-labels
+      ((settle
+        (facts)
+        (with-temp-buffer
+          (let ((metadata
+                 (mevedel-tool-fs--settle-rg-result
+                  facts "search" "No matches" "Narrow scope.")))
+            (cons (buffer-string) metadata)))))
+    (let ((result (settle '(:error (error "boom") :exit-code 1))))
+      (should (equal "Error: search failed to start: boom" (car result)))
+      (should-not (plist-get (cdr result) :pageable-p)))
+    (let ((result (settle '(:timed-out-p t :exit-code 1
+                            :output "partial\r\n"))))
+      (should (equal "partial\n" (car result)))
+      (should (plist-get (cdr result) :pageable-p))
+      (should (string-match-p
+               "timed out.*partial"
+               (plist-get (cdr result) :partial-warning))))
+    (should
+     (equal "Error: search reached its output limit; narrow the search"
+            (car (settle '(:output-limit-p t :exit-code 1 :output "")))))
+    (let ((result (settle '(:exit-code 0 :output "match\n"))))
+      (should (equal "match\n" (car result)))
+      (should (plist-get (cdr result) :pageable-p)))
+    (should (equal "No matches"
+                   (car (settle '(:exit-code 1 :output "ignored")))))
+    (should (equal "Error: search failed (exit code 2). Narrow scope.\n\nraw"
+                   (car (settle '(:exit-code 2 :output "raw")))))))
+
 (mevedel-deftest mevedel-tool-fs--vcs-metadata-path-p ()
   ,test
   (test)
@@ -1114,7 +1162,7 @@
           (concat "first\n" (make-string 100 ?x))
           40)))
     (should (string-prefix-p "Warning: partial." result))
-    (should (<= (length result) 40))))
+    (should (<= (string-bytes result) 40))))
 
 (mevedel-deftest mevedel-tool-fs--finalize-glob-buffer ()
   ,test
