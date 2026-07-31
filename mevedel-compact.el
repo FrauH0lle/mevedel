@@ -1684,6 +1684,352 @@ AUTO is non-nil for automatic compaction."
       (error "Compaction target lacks %s operation" operation))
     (apply function target args)))
 
+(cl-defstruct (mevedel--compact-run-state
+               (:constructor mevedel--compact-run-state-create))
+  "Mutable state for one asynchronous compaction run."
+  admission
+  aggressive
+  archived-tool-use-ids
+  auto
+  base-system-prompt
+  callback
+  chat-buffer
+  instructions
+  invocation
+  max-attempts
+  old-content
+  pending-text
+  policy
+  prepared-summary
+  preserved-tail-turns
+  session
+  settled
+  summary-ready
+  tail-text
+  target
+  telemetry-span
+  tokens-before
+  trigger
+  workspace
+  (attempt 0))
+
+(defun mevedel--compact-run-finish (state err)
+  "Settle compaction STATE once with ERR."
+  (unless (mevedel--compact-run-state-settled state)
+    (setf (mevedel--compact-run-state-settled state) t)
+    (let ((chat-buffer (mevedel--compact-run-state-chat-buffer state))
+          (span (mevedel--compact-run-state-telemetry-span state)))
+      (when (buffer-live-p chat-buffer)
+        (with-current-buffer chat-buffer
+          (setq-local mevedel--compaction-in-flight nil)))
+      (when span
+        (mevedel-telemetry-finish
+         span
+         :outcome (cond
+                   ((null err) 'success)
+                   ((eq err :skip) 'skipped)
+                   (t 'error))
+         :tokens-after
+         (and (buffer-live-p chat-buffer)
+              (with-current-buffer chat-buffer
+                (ignore-errors (mevedel--estimate-tokens))))
+         :error-class
+         (and err (if (symbolp err) err 'compaction-error))))
+      (when-let* ((callback (mevedel--compact-run-state-callback state)))
+        (funcall callback err)))))
+
+(defun mevedel--compact-run-fail
+    (state err retryable &optional ignore-failure-count)
+  "Fail compaction STATE with ERR.
+Retry when RETRYABLE and attempts remain.  IGNORE-FAILURE-COUNT leaves
+the persistent failure counter unchanged."
+  (if (and retryable
+           (< (mevedel--compact-run-state-attempt state)
+              (mevedel--compact-run-state-max-attempts state)))
+      (let* ((attempt (mevedel--compact-run-state-attempt state))
+             (delay (expt 2 (1- attempt)))
+             (chat-buffer (mevedel--compact-run-state-chat-buffer state)))
+        (message "mevedel: compaction failed, retrying in %ss (%s)"
+                 delay err)
+        (run-at-time
+         delay nil
+         (lambda ()
+           (when (buffer-live-p chat-buffer)
+             (with-current-buffer chat-buffer
+               (mevedel--compact-run-begin-attempt state))))))
+    (unless ignore-failure-count
+      (cl-incf mevedel--compact-failure-count))
+    (display-warning 'mevedel err :warning)
+    (unless (mevedel--compact-run-state-auto state)
+      (when-let* ((vb mevedel--view-buffer)
+                  (_ (buffer-live-p vb)))
+        (with-current-buffer vb
+          (if (fboundp 'mevedel-view--stop-request-progress)
+              (mevedel-view--stop-request-progress)
+            (mevedel-view--stop-spinner)))))
+    (mevedel--compact-run-finish state err)))
+
+(defun mevedel--compact-run-finish-success (state summary)
+  "Complete compaction STATE after applying SUMMARY."
+  (let* ((tokens-before (mevedel--compact-run-state-tokens-before state))
+         (tokens-after (mevedel--estimate-tokens))
+         (aggressive (mevedel--compact-run-state-aggressive state))
+         (session (mevedel--compact-run-state-session state))
+         (workspace (mevedel--compact-run-state-workspace state))
+         (target (mevedel--compact-run-state-target state)))
+    (message
+     "mevedel: compaction complete (%dk -> %dk tokens, %d turns preserved)"
+     (/ tokens-before 1000)
+     (/ tokens-after 1000)
+     (if aggressive 0 mevedel-compact-tail-turns))
+    (mevedel-hooks-run-event
+     'PostCompact
+     (mevedel-hooks-event-plist
+      'PostCompact session workspace
+      :trigger (mevedel--compact-run-state-trigger state)
+      :summary summary
+      :tokens-before tokens-before
+      :tokens-after tokens-after
+      :aggressive aggressive
+      :origin (plist-get target :origin)
+      :transcript-path (plist-get target :transcript-path))
+     (lambda (_decision)
+       (unwind-protect
+           (progn
+             (condition-case err
+                 (mevedel--compact-begin-root-context-epoch
+                  target (mevedel--compact-run-state-auto state))
+               (error
+                (display-warning
+                 'mevedel
+                 (format "SessionStart after compaction failed: %s"
+                         (error-message-string err))
+                 :warning)))
+             (condition-case err
+                 (mevedel--compact-target-call
+                  target :complete
+                  (mevedel--compact-run-state-auto state))
+               (error
+                (display-warning
+                 'mevedel
+                 (format "Compaction view completion failed: %s"
+                         (error-message-string err))
+                 :warning)))
+             (when (and (plist-get target :warn-on-completion)
+                        mevedel-compact-warn-on-completion
+                        (not mevedel--compact-warning-shown))
+               (setq mevedel--compact-warning-shown t)
+               (message
+                "mevedel: long threads with multiple compactions can reduce model accuracy; consider starting a new session for unrelated work")))
+         (mevedel--compact-run-finish state nil)))
+     session workspace nil
+     (mevedel--compact-run-state-invocation state))))
+
+(defun mevedel--compact-run-apply-summary (state summary hook-audits)
+  "Apply SUMMARY and HOOK-AUDITS for compaction STATE once."
+  (condition-case err
+      (progn
+        (when-let* ((summary-ready
+                     (mevedel--compact-run-state-summary-ready state)))
+          (setq summary (funcall summary-ready summary)))
+        (when (mevedel--compact-run-state-archived-tool-use-ids state)
+          (require 'mevedel-view-stream)
+          (setf
+           (mevedel--compact-run-state-target state)
+           (plist-put
+            (mevedel--compact-run-state-target state)
+            :execution-archive-plan
+            (mevedel-view-stream-prepare-execution-row-archive
+             (mevedel--compact-run-state-chat-buffer state)
+             (mevedel--compact-run-state-archived-tool-use-ids state)))))
+        (mevedel--compact-target-call
+         (mevedel--compact-run-state-target state)
+         :apply summary
+         (mevedel--compact-run-state-tail-text state)
+         (mevedel--compact-run-state-pending-text state)
+         hook-audits
+         (mevedel--compact-run-state-auto state)
+         (mevedel--compact-run-state-preserved-tail-turns state))
+        (setq mevedel--known-token-baseline nil
+              mevedel--compact-failure-count 0)
+        (mevedel--compact-run-finish-success state summary))
+    (error
+     (mevedel--compact-run-fail state (format "%s" err) nil))))
+
+(defun mevedel--compact-run-send-request (state system-prompt hook-audits)
+  "Send STATE's summary request with SYSTEM-PROMPT and HOOK-AUDITS."
+  (let ((request-stream gptel-stream)
+        (summary-parts nil)
+        (summary-applied nil)
+        (first-response nil)
+        (summary-span
+         (and (not (mevedel--compact-run-state-prepared-summary state))
+              (mevedel--compact-run-state-session state)
+              (fboundp 'mevedel-telemetry-start)
+              (mevedel-telemetry-start
+               (mevedel--compact-run-state-session state)
+               'compaction-summary-request
+               :attempt (mevedel--compact-run-state-attempt state)
+               :backend
+               (ignore-errors
+                 (gptel-backend-name
+                  (plist-get
+                   (mevedel--compact-run-state-policy state) :backend)))
+               :model
+               (plist-get (mevedel--compact-run-state-policy state) :model)
+               :effort
+               (plist-get (mevedel--compact-run-state-policy state) :effort)))))
+    (cl-labels
+        ((record-first-response ()
+           (unless first-response
+             (setq first-response t)
+             (when (and (mevedel--compact-run-state-session state)
+                        (fboundp 'mevedel-telemetry-record))
+               (mevedel-telemetry-record
+                (mevedel--compact-run-state-session state)
+                'compaction-summary-first-response
+                :attempt (mevedel--compact-run-state-attempt state)))))
+         (finish-telemetry (outcome info)
+           (when summary-span
+             (mevedel-telemetry-finish
+              summary-span
+              :outcome outcome
+              :input-tokens
+              (and (listp (plist-get info :tokens))
+                   (plist-get (plist-get info :tokens) :input))
+              :output-tokens
+              (and (listp (plist-get info :tokens))
+                   (plist-get (plist-get info :tokens) :output)))
+             (setq summary-span nil)))
+         (apply-summary (summary)
+           (unless summary-applied
+             (setq summary-applied t)
+             (mevedel--compact-run-apply-summary
+              state summary hook-audits)))
+         (handle-response (response info)
+           (with-current-buffer
+               (mevedel--compact-run-state-chat-buffer state)
+             (pcase response
+               ('nil
+                (finish-telemetry 'error info)
+                (mevedel--compact-run-fail
+                 state
+                 (format "Compaction failed: %s"
+                         (or (plist-get info :error)
+                             (plist-get info :status)
+                             "unknown error"))
+                 t))
+               ('abort
+                (finish-telemetry 'aborted info)
+                (mevedel--compact-run-fail
+                 state "Compaction aborted" nil))
+               ((pred stringp)
+                (if (plist-get info :stream)
+                    (progn
+                      (record-first-response)
+                      (push response summary-parts))
+                  (record-first-response)
+                  (finish-telemetry 'success info)
+                  (apply-summary response)))
+               ('t
+                (finish-telemetry 'success info)
+                (apply-summary
+                 (apply #'concat (nreverse summary-parts))))))))
+      (condition-case err
+          (let ((gptel-use-tools nil)
+                (gptel-tools nil))
+            (gptel-with-preset 'gptel-default
+              (let ((gptel-backend
+                     (plist-get
+                      (mevedel--compact-run-state-policy state) :backend))
+                    (gptel-model
+                     (plist-get
+                      (mevedel--compact-run-state-policy state) :model))
+                    (gptel-reasoning-effort
+                     (plist-get
+                      (mevedel--compact-run-state-policy state) :effort)))
+                (if-let* ((prepared
+                           (mevedel--compact-run-state-prepared-summary state)))
+                    (apply-summary prepared)
+                  (gptel-request
+                   (mevedel--compact-run-state-old-content state)
+                   :system system-prompt
+                   :buffer (mevedel--compact-run-state-chat-buffer state)
+                   :stream request-stream
+                   :transforms nil
+                   :context (list :mevedel-compaction t)
+                   :callback #'handle-response)))))
+        (error
+         (when summary-span
+           (mevedel-telemetry-finish
+            summary-span :outcome 'error :error-class (car-safe err))
+           (setq summary-span nil))
+         (mevedel--compact-run-fail state (format "%s" err) t))))))
+
+(defun mevedel--compact-run-begin-attempt (state)
+  "Run STATE's PreCompact hook and start one summary attempt."
+  (cl-incf (mevedel--compact-run-state-attempt state))
+  (let ((session (mevedel--compact-run-state-session state))
+        (workspace (mevedel--compact-run-state-workspace state))
+        (target (mevedel--compact-run-state-target state)))
+    (condition-case err
+        (mevedel-hooks-run-event
+         'PreCompact
+         (mevedel-hooks-event-plist
+          'PreCompact session workspace
+          :trigger (mevedel--compact-run-state-trigger state)
+          :tokens-before (mevedel--compact-run-state-tokens-before state)
+          :aggressive (mevedel--compact-run-state-aggressive state)
+          :instructions (mevedel--compact-run-state-instructions state)
+          :origin (plist-get target :origin)
+          :transcript-path (plist-get target :transcript-path))
+         (lambda (decision)
+           (if (and (plist-member decision :continue)
+                    (not (plist-get decision :continue)))
+               (mevedel--compact-run-finish
+                state
+                (or (plist-get decision :stop-reason)
+                    "PreCompact hook stopped compaction"))
+             (let* ((context
+                     (mevedel-hooks-additional-context-string
+                      decision 'PreCompact))
+                    (hook-audits
+                     (and context
+                          (mevedel--compact-hook-audit-records decision)))
+                    (system-prompt
+                     (if context
+                         (concat
+                          (mevedel--compact-run-state-base-system-prompt state)
+                          "\n\n" context)
+                       (mevedel--compact-run-state-base-system-prompt state)))
+                    (request-tokens
+                     (mevedel--compact-summary-request-token-estimate
+                      (mevedel--compact-run-state-old-content state)
+                      system-prompt))
+                    (usable-tokens
+                     (mevedel--compact-policy-usable-tokens
+                      (mevedel--compact-run-state-policy state))))
+               (if (> request-tokens usable-tokens)
+                   (mevedel--compact-run-fail
+                    state
+                    (format
+                     "Compaction request (%d tokens) exceeds summarizer usable context (%d tokens)"
+                     request-tokens usable-tokens)
+                    nil t)
+                 (message "mevedel: compacting (%dk -> ...)"
+                          (/ (mevedel--compact-run-state-tokens-before state)
+                             1000))
+                 (when (= (mevedel--compact-run-state-attempt state) 1)
+                   (mevedel--compact-target-call target :start))
+                 (require 'gptel)
+                 (mevedel--compact-run-send-request
+                  state system-prompt hook-audits)))))
+         session workspace nil
+         (mevedel--compact-run-state-invocation state))
+      (error
+       (mevedel--compact-run-finish state (format "%s" err))
+       (signal (car err) (cdr err))))))
+
 (cl-defun mevedel--compact-run
     (&key aggressive instructions pending-start callback auto
           admission target prepared-summary summary-ready)
@@ -1699,9 +2045,7 @@ request.  SUMMARY-READY may persist or normalize a completed summary
 before it is applied."
   (let* ((chat-buffer (current-buffer))
          (target (or target (mevedel--compact-main-target)))
-         (invocation (plist-get target :invocation))
          (session (plist-get target :session))
-         (workspace (plist-get target :workspace))
          (tokens-before (mevedel--estimate-tokens))
          (target-policy (mevedel--compact-target-policy))
          (telemetry-span
@@ -1714,360 +2058,101 @@ before it is applied."
                       :tokens-before tokens-before
                       :target-origin (plist-get target :origin)
                       (mevedel--compact-telemetry-inputs
-                       tokens-before target-policy))))
-         (settled nil))
-    (cl-labels
-        ((finish (finish-err)
-           (unless settled
-             (setq settled t)
-             (when (buffer-live-p chat-buffer)
-               (with-current-buffer chat-buffer
-                 (setq-local mevedel--compaction-in-flight nil)))
-             (when telemetry-span
-               (mevedel-telemetry-finish
-                telemetry-span
-                :outcome (cond
-                          ((null finish-err) 'success)
-                          ((eq finish-err :skip) 'skipped)
-                          (t 'error))
-                :tokens-after
-                (and (buffer-live-p chat-buffer)
-                     (with-current-buffer chat-buffer
-                       (ignore-errors (mevedel--estimate-tokens))))
-                :error-class
-                (and finish-err
-                     (if (symbolp finish-err) finish-err 'compaction-error))))
-             (when callback (funcall callback finish-err)))))
-      (setq mevedel--compact-current-request-reminder nil
-            mevedel--compact-current-request-hook-context nil)
-      (when mevedel--compaction-in-flight
-        (user-error "Compaction already in progress"))
-      (when (bound-and-true-p mevedel-session--read-only-mode)
-        (user-error "Session is read-only"))
-      (when (and (not pending-start)
-                 (mevedel--compact-buffer-active-p chat-buffer))
-        (user-error "Cannot compact while a request is active"))
-      (unless (plist-get target :eligible-p)
-        (user-error "Current buffer is not the active persisted segment"))
-      (let* ((limit (or pending-start (mevedel--compact-find-boundary))))
-        (unless limit
+                       tokens-before target-policy)))))
+    (setq mevedel--compact-current-request-reminder nil
+          mevedel--compact-current-request-hook-context nil)
+    (when mevedel--compaction-in-flight
+      (user-error "Compaction already in progress"))
+    (when (bound-and-true-p mevedel-session--read-only-mode)
+      (user-error "Session is read-only"))
+    (when (and (not pending-start)
+               (mevedel--compact-buffer-active-p chat-buffer))
+      (user-error "Cannot compact while a request is active"))
+    (unless (plist-get target :eligible-p)
+      (user-error "Current buffer is not the active persisted segment"))
+    (let ((limit (or pending-start (mevedel--compact-find-boundary))))
+      (unless limit
+        (if auto
+            (cl-return-from mevedel--compact-run
+              (let ((state
+                     (mevedel--compact-run-state-create
+                      :callback callback
+                      :chat-buffer chat-buffer
+                      :telemetry-span telemetry-span)))
+                (mevedel--compact-run-finish state :skip)))
+          (user-error "Not enough conversation content to compact")))
+      (let* ((body-start (plist-get target :body-start))
+             (tail-start
+              (mevedel--compact-tail-start limit aggressive body-start))
+             (compact-end (max body-start tail-start))
+             (history-regions
+              (append (plist-get target :history-prefix-regions)
+                      (list (cons body-start compact-end))))
+             (archived-tool-use-ids
+              (delete-dups
+               (mapcan
+                (lambda (range)
+                  (mevedel--compact-archived-tool-use-ids
+                   (car range) (cdr range)))
+                history-regions)))
+             (preserved-tail-turns
+              (mevedel--compact-preserved-tail-turn-count
+               tail-start limit aggressive))
+             (old-content
+              (mapconcat
+               (lambda (range)
+                 (mevedel--compact-region-with-tool-output-cap
+                  (car range) (cdr range)
+                  mevedel-compact-body-tool-output-max t))
+               history-regions ""))
+             (tail-text
+              (unless aggressive
+                (mevedel--compact-region-with-tool-output-cap
+                 tail-start limit mevedel-compact-tail-tool-output-max)))
+             (state
+              (mevedel--compact-run-state-create
+               :admission admission
+               :aggressive aggressive
+               :archived-tool-use-ids archived-tool-use-ids
+               :auto auto
+               :base-system-prompt
+               (mevedel--compact-prompt
+                (plist-get target :previous-summary)
+                instructions (plist-get target :prompt-session))
+               :callback callback
+               :chat-buffer chat-buffer
+               :instructions instructions
+               :invocation (plist-get target :invocation)
+               :max-attempts 3
+               :old-content old-content
+               :pending-text
+               (when pending-start
+                 (buffer-substring pending-start (point-max)))
+               :policy
+               (or (plist-get admission :summary-policy)
+                   (mevedel--compact-workload-policy))
+               :prepared-summary prepared-summary
+               :preserved-tail-turns preserved-tail-turns
+               :session session
+               :summary-ready summary-ready
+               :tail-text tail-text
+               :target target
+               :telemetry-span telemetry-span
+               :tokens-before tokens-before
+               :trigger (if auto "auto" "manual")
+               :workspace (plist-get target :workspace))))
+        (when (string-blank-p old-content)
           (if auto
               (cl-return-from mevedel--compact-run
-                (finish :skip))
+                (mevedel--compact-run-finish
+                 state
+                 (if (plist-get admission :target-pressure)
+                     "No compactable history remains at target pressure"
+                   :skip)))
             (user-error "Not enough conversation content to compact")))
-        (let* ((body-start (plist-get target :body-start))
-               (tail-start (mevedel--compact-tail-start
-                            limit aggressive body-start))
-               (compact-end (max body-start tail-start))
-               (history-regions
-                (append (plist-get target :history-prefix-regions)
-                        (list (cons body-start compact-end))))
-               (archived-tool-use-ids
-                (delete-dups
-                 (mapcan
-                  (lambda (range)
-                    (mevedel--compact-archived-tool-use-ids
-                     (car range) (cdr range)))
-                  history-regions)))
-               (preserved-tail-turns
-                (mevedel--compact-preserved-tail-turn-count
-                 tail-start limit aggressive))
-               (old-content
-                (mapconcat
-                 (lambda (range)
-                   (mevedel--compact-region-with-tool-output-cap
-                    (car range) (cdr range)
-                    mevedel-compact-body-tool-output-max
-                    t))
-                 history-regions ""))
-               (tail-text (unless aggressive
-                            (mevedel--compact-region-with-tool-output-cap
-                             tail-start limit
-                             mevedel-compact-tail-tool-output-max)))
-               (pending-text (when pending-start
-                               (buffer-substring pending-start (point-max))))
-               (previous-summary (plist-get target :previous-summary))
-               (base-system-prompt
-                (mevedel--compact-prompt previous-summary
-                                         instructions
-                                         (plist-get target :prompt-session)))
-               (policy (or (plist-get admission :summary-policy)
-                           (mevedel--compact-workload-policy)))
-               (attempt 0)
-               (max-attempts 3))
-          (when (string-blank-p old-content)
-            (if auto
-              (cl-return-from mevedel--compact-run
-                  (finish
-                   (if (plist-get admission :target-pressure)
-                       "No compactable history remains at target pressure"
-                     :skip)))
-              (user-error "Not enough conversation content to compact")))
-	          (require 'mevedel-hooks)
-	          (let ((trigger (if auto "auto" "manual")))
-            (cl-labels
-                ((fail (fail-err retryable &optional ignore-failure-count)
-                   (if (and retryable (< attempt max-attempts))
-                       (let ((delay (expt 2 (1- attempt))))
-                         (message
-                          "mevedel: compaction failed, retrying in %ss (%s)"
-                          delay fail-err)
-                         (run-at-time
-                          delay nil
-                          (lambda ()
-                            (when (buffer-live-p chat-buffer)
-                              (with-current-buffer chat-buffer
-                                (begin-attempt))))))
-                     (unless ignore-failure-count
-                       (cl-incf mevedel--compact-failure-count))
-                     (display-warning 'mevedel fail-err :warning)
-                     (unless auto
-                       (when-let* ((vb mevedel--view-buffer)
-                                   (_ (buffer-live-p vb)))
-                         (with-current-buffer vb
-                           (if (fboundp 'mevedel-view--stop-request-progress)
-                               (mevedel-view--stop-request-progress)
-                             (mevedel-view--stop-spinner)))))
-                     (finish fail-err)))
-                 (finish-success (summary)
-                   (let ((tokens-after (mevedel--estimate-tokens)))
-                     (message
-                      "mevedel: compaction complete (%dk -> %dk tokens, %d turns preserved)"
-                      (/ tokens-before 1000)
-                      (/ tokens-after 1000)
-                      (if aggressive 0 mevedel-compact-tail-turns))
-                     (mevedel-hooks-run-event
-                      'PostCompact
-                      (mevedel-hooks-event-plist
-                       'PostCompact
-                       session workspace
-                       :trigger trigger
-                       :summary summary
-                       :tokens-before tokens-before
-                       :tokens-after tokens-after
-                       :aggressive aggressive
-                       :origin (plist-get target :origin)
-                       :transcript-path (plist-get target :transcript-path))
-                      (lambda (_decision)
-                        (unwind-protect
-                            (progn
-                              (condition-case epoch-err
-                                  (mevedel--compact-begin-root-context-epoch
-                                   target auto)
-                                (error
-                                 (display-warning
-                                  'mevedel
-                                  (format
-                                   "SessionStart after compaction failed: %s"
-                                   (error-message-string epoch-err))
-                                  :warning)))
-                              (condition-case completion-err
-                                  (mevedel--compact-target-call
-                                   target :complete auto)
-                                (error
-                                 (display-warning
-                                  'mevedel
-                                  (format
-                                   "Compaction view completion failed: %s"
-                                   (error-message-string completion-err))
-                                  :warning)))
-                              (when (and
-                                     (plist-get target :warn-on-completion)
-                                     mevedel-compact-warn-on-completion
-                                     (not mevedel--compact-warning-shown))
-                                (setq mevedel--compact-warning-shown t)
-                                (message
-                                 "mevedel: long threads with multiple compactions can reduce model accuracy; consider starting a new session for unrelated work")))
-                          (finish nil)))
-                      session workspace nil invocation)))
-                 (send-request (system-prompt hook-audits)
-                   (let ((request-stream gptel-stream)
-                         (summary-parts nil)
-                         (summary-applied nil)
-                         (summary-first-response nil)
-                         (summary-span
-                          (and (not prepared-summary)
-                               session
-                               (fboundp 'mevedel-telemetry-start)
-                               (mevedel-telemetry-start
-                                session 'compaction-summary-request
-                                :attempt attempt
-                                :backend
-                                (ignore-errors
-                                  (gptel-backend-name
-                                   (plist-get policy :backend)))
-                                :model (plist-get policy :model)
-                                :effort (plist-get policy :effort)))))
-                     (cl-labels
-                         ((record-first-response
-                           ()
-                           (unless summary-first-response
-                             (setq summary-first-response t)
-                             (when (and session
-                                        (fboundp 'mevedel-telemetry-record))
-                               (mevedel-telemetry-record
-                                session 'compaction-summary-first-response
-                                :attempt attempt))))
-                          (finish-summary-telemetry
-                           (outcome info)
-                           (when summary-span
-                             (mevedel-telemetry-finish
-                              summary-span
-                              :outcome outcome
-                              :input-tokens
-                              (and (listp (plist-get info :tokens))
-                                   (plist-get (plist-get info :tokens) :input))
-                              :output-tokens
-                              (and (listp (plist-get info :tokens))
-                                   (plist-get (plist-get info :tokens)
-                                              :output)))
-                             (setq summary-span nil)))
-                          (apply-summary
-                           (summary)
-                           (unless summary-applied
-                             (setq summary-applied t)
-                             (condition-case apply-err
-                                 (progn
-                                    (when summary-ready
-                                      (setq summary
-                                            (funcall summary-ready summary)))
-                                   (when archived-tool-use-ids
-                                     (require 'mevedel-view-stream)
-                                     (setq target
-                                           (plist-put
-                                            target :execution-archive-plan
-                                            (mevedel-view-stream-prepare-execution-row-archive
-                                             chat-buffer
-                                             archived-tool-use-ids))))
-                                   (mevedel--compact-target-call
-                                    target :apply summary tail-text pending-text
-                                    hook-audits auto
-                                    preserved-tail-turns)
-                                   (setq mevedel--known-token-baseline nil)
-                                   (setq mevedel--compact-failure-count 0)
-                                   (finish-success summary))
-                               (error
-                                (fail (format "%s" apply-err) nil))))))
-                       (condition-case request-err
-                           (let ((gptel-use-tools nil)
-                                 (gptel-tools nil))
-                             (gptel-with-preset 'gptel-default
-                               (let ((request-fn
-                                      (lambda ()
-                                        (gptel-request old-content
-                                          :system system-prompt
-                                          :buffer chat-buffer
-                                          :stream request-stream
-                                          :transforms nil
-                                          :context (list :mevedel-compaction t)
-                                          :callback
-                                          (lambda (response info)
-                                            (with-current-buffer chat-buffer
-                                              (pcase response
-                                                ('nil
-                                                 (finish-summary-telemetry
-                                                  'error info)
-                                                 (fail
-                                                  (format "Compaction failed: %s"
-                                                          (or (plist-get info :error)
-                                                              (plist-get info :status)
-                                                              "unknown error"))
-                                                  t))
-                                                ('abort
-                                                 (finish-summary-telemetry
-                                                  'aborted info)
-                                                 (fail "Compaction aborted" nil))
-                                                ((pred stringp)
-                                                 (if (plist-get info :stream)
-                                                     (progn
-                                                       (record-first-response)
-                                                       (push response
-                                                             summary-parts))
-                                                   (record-first-response)
-                                                   (finish-summary-telemetry
-                                                    'success info)
-                                                   (apply-summary response)))
-                                                ('t
-                                                 (finish-summary-telemetry
-                                                  'success info)
-                                                 (apply-summary
-                                                  (apply #'concat
-                                                         (nreverse
-                                                          summary-parts)))))))))))
-                                 (let ((gptel-backend
-                                        (plist-get policy :backend))
-                                       (gptel-model
-                                        (plist-get policy :model))
-                                       (gptel-reasoning-effort
-                                        (plist-get policy :effort)))
-                                   (if prepared-summary
-                                       (apply-summary prepared-summary)
-                                     (funcall request-fn))))))
-                         (error
-                          (when summary-span
-                            (mevedel-telemetry-finish
-                             summary-span :outcome 'error
-                             :error-class (car-safe request-err))
-                            (setq summary-span nil))
-                          (fail (format "%s" request-err) t))))))
-                 (begin-attempt ()
-                   (cl-incf attempt)
-                   (condition-case hook-err
-                       (mevedel-hooks-run-event
-                        'PreCompact
-                        (mevedel-hooks-event-plist
-                         'PreCompact session workspace
-                         :trigger trigger
-                         :tokens-before tokens-before
-                         :aggressive aggressive
-                         :instructions instructions
-                         :origin (plist-get target :origin)
-                         :transcript-path (plist-get target :transcript-path))
-                        (lambda (decision)
-                          (cond
-                           ((and (plist-member decision :continue)
-                                 (not (plist-get decision :continue)))
-                            (finish
-                             (or (plist-get decision :stop-reason)
-                                 "PreCompact hook stopped compaction")))
-                           (t
-                            (let* ((context
-                                    (mevedel-hooks-additional-context-string
-                                     decision 'PreCompact))
-                                   (hook-audits
-                                    (and context
-                                         (mevedel--compact-hook-audit-records
-                                          decision)))
-                                   (system-prompt
-                                    (if context
-                                        (concat base-system-prompt
-                                                "\n\n" context)
-                                      base-system-prompt))
-                                   (request-tokens
-                                    (mevedel--compact-summary-request-token-estimate
-                                     old-content system-prompt))
-                                   (usable-tokens
-                                    (mevedel--compact-policy-usable-tokens
-                                     policy)))
-                              (if (> request-tokens usable-tokens)
-                                  (fail
-                                   (format
-                                    "Compaction request (%d tokens) exceeds summarizer usable context (%d tokens)"
-                                    request-tokens usable-tokens)
-                                   nil t)
-                                (message "mevedel: compacting (%dk -> ...)"
-                                         (/ tokens-before 1000))
-                                (when (= attempt 1)
-                                  (mevedel--compact-target-call target :start))
-                                (require 'gptel)
-                                (send-request system-prompt hook-audits))))))
-                        session workspace nil invocation)
-                     (error
-                      (finish (format "%s" hook-err))
-                      (signal (car hook-err) (cdr hook-err))))))
-              (setq mevedel--compaction-in-flight t)
-              (begin-attempt))))))))
-
+        (require 'mevedel-hooks)
+        (setq mevedel--compaction-in-flight t)
+        (mevedel--compact-run-begin-attempt state)))))
 ;;;###autoload
 (defun mevedel-compact (&optional aggressive instructions)
   "Compact the current mevedel chat buffer.

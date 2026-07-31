@@ -2514,6 +2514,152 @@ missing or zero prompt-side usage cannot become the active baseline"
                 (insert-file-contents canonical-path)
                 (buffer-string)))))))
 
+(mevedel-deftest mevedel--compact-run-finish ()
+  ,test
+  (test)
+  :doc "settles once and clears the in-flight marker"
+  (with-temp-buffer
+    (setq-local mevedel--compaction-in-flight t)
+    (let* (results
+           (state
+            (mevedel--compact-run-state-create
+             :callback (lambda (err) (push err results))
+             :chat-buffer (current-buffer))))
+      (mevedel--compact-run-finish state nil)
+      (mevedel--compact-run-finish state "late")
+      (should (equal results '(nil)))
+      (should-not mevedel--compaction-in-flight))))
+
+(mevedel-deftest mevedel--compact-run-fail ()
+  ,test
+  (test)
+  :doc "records one terminal failure and settles the run"
+  (with-temp-buffer
+    (setq-local mevedel--compaction-in-flight t)
+    (let* ((mevedel--compact-failure-count 0)
+           result
+           (state
+            (mevedel--compact-run-state-create
+             :attempt 1
+             :auto t
+             :callback (lambda (err) (setq result err))
+             :chat-buffer (current-buffer)
+             :max-attempts 1)))
+      (cl-letf (((symbol-function 'display-warning) #'ignore))
+        (mevedel--compact-run-fail state "failed" t))
+      (should (equal result "failed"))
+      (should (= mevedel--compact-failure-count 1))
+      (should-not mevedel--compaction-in-flight))))
+
+(mevedel-deftest mevedel--compact-run-finish-success ()
+  ,test
+  (test)
+  :doc "runs PostCompact and target completion before settling"
+  (let (completed result)
+    (let ((state
+           (mevedel--compact-run-state-create
+            :aggressive t
+            :callback (lambda (err) (setq result err))
+            :chat-buffer (current-buffer)
+            :target
+            (list :complete (lambda (&rest _) (setq completed t)))
+            :tokens-before 200
+            :trigger "manual")))
+      (cl-letf (((symbol-function 'mevedel--estimate-tokens)
+                 (lambda () 100))
+                ((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback nil)))
+                ((symbol-function 'message) #'ignore))
+        (let ((mevedel-compact-warn-on-completion nil))
+          (mevedel--compact-run-finish-success state "summary")))
+      (should completed)
+      (should-not result))))
+
+(mevedel-deftest mevedel--compact-run-apply-summary ()
+  ,test
+  (test)
+  :doc "normalizes and applies the summary before successful settlement"
+  (let (applied result)
+    (let ((state
+           (mevedel--compact-run-state-create
+            :aggressive t
+            :callback (lambda (err) (setq result err))
+            :chat-buffer (current-buffer)
+            :max-attempts 1
+            :summary-ready (lambda (summary) (concat summary " ready"))
+            :target
+            (list :apply
+                  (lambda (_target summary &rest _)
+                    (setq applied summary))
+                  :complete #'ignore)
+            :tokens-before 200
+            :trigger "manual")))
+      (cl-letf (((symbol-function 'mevedel--estimate-tokens)
+                 (lambda () 100))
+                ((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback nil)))
+                ((symbol-function 'message) #'ignore))
+        (let ((mevedel-compact-warn-on-completion nil))
+          (mevedel--compact-run-apply-summary state "summary" nil)))
+      (should (equal applied "summary ready"))
+      (should-not result))))
+
+(mevedel-deftest mevedel--compact-run-send-request ()
+  ,test
+  (test)
+  :doc "applies a prepared summary without sending a model request"
+  (let (applied)
+    (let ((state
+           (mevedel--compact-run-state-create
+            :chat-buffer (current-buffer)
+            :policy nil
+            :prepared-summary "prepared")))
+      (cl-letf (((symbol-function 'gptel-get-preset)
+                 (lambda (&rest _) '(:description "test")))
+                ((symbol-function 'gptel-request)
+                 (lambda (&rest _)
+                   (ert-fail "Prepared summary sent a request")))
+                ((symbol-function 'mevedel--compact-run-apply-summary)
+                 (lambda (_state summary _audits)
+                   (setq applied summary))))
+        (mevedel--compact-run-send-request state "system" nil))
+      (should (equal applied "prepared")))))
+
+(mevedel-deftest mevedel--compact-run-begin-attempt ()
+  ,test
+  (test)
+  :doc "admits the first attempt and starts the target once"
+  (let (started sent-prompt)
+    (let ((state
+           (mevedel--compact-run-state-create
+            :base-system-prompt "system"
+            :max-attempts 3
+            :old-content "body"
+            :policy nil
+            :target
+            (list :origin "/root"
+                  :start (lambda (_target) (setq started t)))
+            :tokens-before 100
+            :trigger "manual")))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback nil)))
+                ((symbol-function 'mevedel--compact-policy-usable-tokens)
+                 (lambda (_policy) 1000))
+                ((symbol-function
+                  'mevedel--compact-summary-request-token-estimate)
+                 (lambda (&rest _) 10))
+                ((symbol-function 'mevedel--compact-run-send-request)
+                 (lambda (_state system-prompt _audits)
+                   (setq sent-prompt system-prompt)))
+                ((symbol-function 'message) #'ignore))
+        (mevedel--compact-run-begin-attempt state))
+      (should started)
+      (should (equal sent-prompt "system"))
+      (should (= (mevedel--compact-run-state-attempt state) 1)))))
+
 (mevedel-deftest mevedel--compact-run ()
   ,test
   (test)
