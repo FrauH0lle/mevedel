@@ -904,15 +904,6 @@ hook boundary before it enters the shared queue."
   (setq tool (or tool
                  (and tool-name (mevedel-tool-ensure tool-name)))
         tool-name (or tool-name (and tool (mevedel-tool-name tool))))
-  (when (and tool args)
-    (cl-flet ((extract (getter current)
-                (or current
-                    (when-let* ((fn (funcall getter tool)))
-                      (ignore-errors (funcall fn args))))))
-      (setq path    (extract #'mevedel-tool-get-path    path)
-            pattern (extract #'mevedel-tool-get-pattern pattern)
-            domain  (extract #'mevedel-tool-get-domain  domain)
-            name    (extract #'mevedel-tool-get-name    name))))
   (setq workspace (or workspace
                       (and session (mevedel-session-workspace session)))
         workspace-root
@@ -965,7 +956,30 @@ This usually means the tool was dispatched from a buffer whose \
 happen for a non-read-only tool."
              tool-name)
      :warning))
-  (let* ((specifier-key (cond (pattern :pattern)
+  (let* ((context
+          (mevedel-permission--preflight
+           tool-name
+           :tool-struct tool
+           :path path
+           :pattern pattern
+           :domain domain
+           :name name
+           :content args
+           :invocation-rules invocation-rules
+           :request-rules request-rules
+           :session-rules session-rules
+           :persistent-rules persistent-rules
+           :mode mode
+           :session session
+           :workspace-root workspace-root
+           :allowed-roots allowed-roots
+           :exact-allowed-paths exact-allowed-paths
+           :resource-grants resource-grants))
+         (path (plist-get context :path))
+         (pattern (plist-get context :pattern))
+         (domain (plist-get context :domain))
+         (name (plist-get context :name))
+         (specifier-key (cond (pattern :pattern)
                               (domain :domain)
                               (name :name)
                               (path :path)))
@@ -973,55 +987,32 @@ happen for a non-read-only tool."
          (workspace-boundary-p
           (and path
                (not (mevedel-permission--path-in-allowed-roots-p
-                     path (or allowed-roots
-                              (and workspace-root
-                                   (list workspace-root)))))))
-         (resource-access (and path
-                               (if (and tool (mevedel-tool-read-only-p tool))
-                                   'read
-                                 'write)))
-         (resource-request-p
-          (and resource-access
-               (or workspace-boundary-p
-                   (mevedel-permission--path-protected-p path))))
+                     path (plist-get context :allowed-roots)))))
          (rule-key (if workspace-boundary-p :path specifier-key))
          (rule-value (if workspace-boundary-p
                          (expand-file-name path)
-                       specifier-value))
-         (buckets (mevedel-permission--collect-buckets
-                   invocation-rules request-rules
-                   session-rules persistent-rules)))
-    (list :tool tool
-          :tool-name tool-name
-          :args args
-          :session session
-          :workspace workspace
-          :request request
-          :invocation invocation
-          :buffer buffer
-          :path path
-          :pattern pattern
-          :domain domain
-          :name name
-          :specifier-key specifier-key
-          :specifier-value specifier-value
-          :protected-path (and path (mevedel-permission--path-protected-p path))
-          :workspace-root workspace-root
-          :allowed-roots allowed-roots
-          :exact-allowed-paths exact-allowed-paths
-          :resource-access (and resource-request-p resource-access)
-          :resource-grants resource-grants
-          :rule-tool (if workspace-boundary-p "*" tool-name)
-          :rule-key rule-key
-          :rule-value rule-value
-          :include-always (not (null workspace))
-          :invocation-rules invocation-rules
-          :request-rules request-rules
-          :session-rules session-rules
-          :persistent-rules persistent-rules
-          :buckets buckets
-          :mode mode
-          :permission-request permission-request)))
+                       specifier-value)))
+    (append
+     context
+     (list :args args
+           :session session
+           :workspace workspace
+           :request request
+           :invocation invocation
+           :buffer buffer
+           :specifier-key specifier-key
+           :specifier-value specifier-value
+           :protected-path (plist-get context :protected-path-p)
+           :workspace-root workspace-root
+           :rule-tool (if workspace-boundary-p "*" tool-name)
+           :rule-key rule-key
+           :rule-value rule-value
+           :include-always (not (null workspace))
+           :invocation-rules invocation-rules
+           :request-rules request-rules
+           :session-rules session-rules
+           :persistent-rules persistent-rules
+           :permission-request permission-request))))
 
 (defun mevedel-permission--checker-args (context)
   "Return `mevedel-check-permission' keyword args for CONTEXT."
@@ -1032,24 +1023,8 @@ happen for a non-read-only tool."
                (keywordp (car-safe content)))
       (setq content (plist-put (copy-sequence content)
                                :permission-context context)))
-    (list :tool-struct (plist-get context :tool)
-          :path (plist-get context :path)
-          :pattern (plist-get context :pattern)
-          :domain (plist-get context :domain)
-          :name (plist-get context :name)
-          :content content
-          :invocation-rules (plist-get context :invocation-rules)
-          :request-rules (plist-get context :request-rules)
-          :session-rules (plist-get context :session-rules)
-          :persistent-rules (plist-get context :persistent-rules)
-          :mode (plist-get context :mode)
-          :session (plist-get context :session)
-          :workspace-root (plist-get context :workspace-root)
-          :allowed-roots (plist-get context :allowed-roots)
-          :exact-allowed-paths
-          (plist-get context :exact-allowed-paths)
-          :resource-access (plist-get context :resource-access)
-          :resource-grants (plist-get context :resource-grants))))
+    (list :normalized-context
+          (plist-put (copy-sequence context) :content content))))
 
 (defun mevedel-permission--plan-mode-p (&optional session)
   "Return non-nil when the owning session is in Plan mode."
@@ -1066,7 +1041,7 @@ happen for a non-read-only tool."
     (tool-name &key tool-struct path pattern domain name content
                invocation-rules request-rules session-rules persistent-rules
                mode session workspace-root allowed-roots exact-allowed-paths
-               resource-access resource-grants)
+               resource-access resource-grants normalized-context)
   "Return normalized permission facts and any decision before the tool slot.
 
 This pure preflight owns specifier extraction, rule buckets, absolute
@@ -1079,57 +1054,61 @@ and input.  PATH, PATTERN, DOMAIN, and NAME may supply pre-extracted
 specifiers.  INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, and
 PERSISTENT-RULES are the ordered rule sources.  MODE selects the permission
 mode.  WORKSPACE-ROOT, ALLOWED-ROOTS, EXACT-ALLOWED-PATHS, and
-RESOURCE-GRANTS define the filesystem boundary."
-  (setq mode (or mode mevedel-permission-mode))
-  (when (and tool-struct content)
-    (cl-flet ((extract (getter current)
-                (or current
-                    (when-let* ((fn (funcall getter tool-struct)))
-                      (ignore-errors (funcall fn content))))))
-      (setq path (extract #'mevedel-tool-get-path path)
-            pattern (extract #'mevedel-tool-get-pattern pattern)
-            domain (extract #'mevedel-tool-get-domain domain)
-            name (extract #'mevedel-tool-get-name name))))
-  (let* ((read-only-p
-          (when tool-struct (mevedel-tool-read-only-p tool-struct)))
-         (native-edit-p
-          (and tool-struct (memq 'edit (mevedel-tool-groups tool-struct))))
-         (resource-access (or resource-access
-                              (if read-only-p 'read 'write)))
-         (resource-granted-p
-          (mevedel-permission--resource-granted-p
-           path resource-access resource-grants))
-         (buckets
-          (mevedel-permission--collect-buckets
-           invocation-rules request-rules session-rules persistent-rules))
-         (deny-bucket
-          (mevedel-permission--first-deny-bucket
-           buckets tool-name path pattern domain name))
-         (early-decision
-          (cond
+RESOURCE-GRANTS define the filesystem boundary.  NORMALIZED-CONTEXT, when
+non-nil, is returned unchanged so a caller can reuse an invocation preflight."
+  (if normalized-context
+      normalized-context
+    (setq mode (or mode mevedel-permission-mode))
+    (when (and tool-struct content)
+      (cl-flet ((extract (getter current)
+                  (or current
+                      (when-let* ((fn (funcall getter tool-struct)))
+                        (ignore-errors (funcall fn content))))))
+        (setq path (extract #'mevedel-tool-get-path path)
+              pattern (extract #'mevedel-tool-get-pattern pattern)
+              domain (extract #'mevedel-tool-get-domain domain)
+              name (extract #'mevedel-tool-get-name name))))
+    (let* ((read-only-p
+            (when tool-struct (mevedel-tool-read-only-p tool-struct)))
+           (native-edit-p
+            (and tool-struct (memq 'edit (mevedel-tool-groups tool-struct))))
+           (resource-access (or resource-access
+                                (if read-only-p 'read 'write)))
+           (resource-granted-p
+            (mevedel-permission--resource-granted-p
+             path resource-access resource-grants))
+           (buckets
+            (mevedel-permission--collect-buckets
+             invocation-rules request-rules session-rules persistent-rules))
            (deny-bucket
-           (mevedel-permission--decision
-             'deny 'deny-rule :bucket deny-bucket))
-           ((and (or native-edit-p (equal tool-name "Eval"))
-                 (mevedel-permission--plan-mode-p session))
-            (mevedel-permission--decision 'deny 'plan-mode)))))
-    (list :tool-name tool-name
-          :tool tool-struct
-          :content content
-          :path path
-          :pattern pattern
-          :domain domain
-          :name name
-          :mode mode
-          :read-only-p read-only-p
-          :buckets buckets
-          :allowed-roots (or allowed-roots
-                             (and workspace-root (list workspace-root)))
-          :exact-allowed-paths exact-allowed-paths
-          :resource-access resource-access
-          :resource-granted-p resource-granted-p
-          :protected-path-p (mevedel-permission--path-protected-p path)
-          :early-decision early-decision)))
+            (mevedel-permission--first-deny-bucket
+             buckets tool-name path pattern domain name))
+           (early-decision
+            (cond
+             (deny-bucket
+              (mevedel-permission--decision
+               'deny 'deny-rule :bucket deny-bucket))
+             ((and (or native-edit-p (equal tool-name "Eval"))
+                   (mevedel-permission--plan-mode-p session))
+              (mevedel-permission--decision 'deny 'plan-mode)))))
+      (list :tool-name tool-name
+            :tool tool-struct
+            :content content
+            :path path
+            :pattern pattern
+            :domain domain
+            :name name
+            :mode mode
+            :read-only-p read-only-p
+            :buckets buckets
+            :allowed-roots (or allowed-roots
+                               (and workspace-root (list workspace-root)))
+            :exact-allowed-paths exact-allowed-paths
+            :resource-access resource-access
+            :resource-grants resource-grants
+            :resource-granted-p resource-granted-p
+            :protected-path-p (mevedel-permission--path-protected-p path)
+            :early-decision early-decision))))
 
 (defun mevedel-permission--sync-tool-decision (context)
   "Return the synchronous tool-slot decision for preflight CONTEXT.
