@@ -31,6 +31,33 @@
 (mevedel-deftest mevedel-execution-start-one-shot ()
   ,test
   (test)
+  :doc "settles a child that exits before launch setup resumes"
+  (let ((original-make-process (symbol-function 'make-process))
+        (original-accept-process-output
+         (symbol-function 'accept-process-output))
+        (mevedel-sandbox-mode 'off)
+        done result)
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest args)
+                 (let ((process (apply original-make-process args)))
+                   (while (process-live-p process)
+                     (funcall original-accept-process-output
+                              process 0.01 nil t))
+                   process))))
+      (mevedel-execution-start-one-shot
+       (lambda (child-result)
+         (setq result child-result
+               done t))
+       :name "mevedel-test-immediate-exit"
+       :command '("sh" "-c" "printf immediate")
+       :workdir temporary-file-directory
+       :writable-roots (list temporary-file-directory))
+      (with-timeout (2 (error "Immediate child did not settle"))
+        (while (not done)
+          (funcall original-accept-process-output nil 0.01)))
+      (should (= 0 (plist-get result :exit-code)))
+      (should-not (plist-get result :error))
+      (should (equal "immediate" (plist-get result :output)))))
   :doc "preserves filter output when the watchdog observes exit before delivery"
   (let ((original-make-process (symbol-function 'make-process))
         (original-accept-process-output
