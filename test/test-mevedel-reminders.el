@@ -1168,8 +1168,6 @@
             (mevedel-reminders-diagnostics-before-edit chat file))
           (cl-letf (((symbol-function 'flymake-start)
                      (lambda (&rest _) (setq started t)))
-                    ((symbol-function 'flymake-running-backends)
-                     (lambda () nil))
                     ((symbol-function 'mevedel-telemetry-current-session)
                      (lambda (&optional _buffer) session))
                     ((symbol-function 'mevedel-telemetry-record)
@@ -1218,9 +1216,9 @@
           (cl-letf (((symbol-function 'flycheck-stop)
                      (lambda () (push 'stop events)))
                     ((symbol-function 'flycheck-buffer)
-                     (lambda () (push 'start events)))
-                    ((symbol-function 'flycheck-running-p)
-                     (lambda () nil))
+                     (lambda ()
+                       (push 'start events)
+                       (run-hooks 'flycheck-after-syntax-check-hook)))
                     ((symbol-function
                       'mevedel-reminders--collect-diagnostics-in-buffer)
                      (lambda ()
@@ -1261,8 +1259,6 @@
           (cl-letf (((symbol-function 'flycheck-stop) #'ignore)
                     ((symbol-function 'flycheck-buffer)
                      (lambda () (error "Cannot start checker")))
-                    ((symbol-function 'flycheck-running-p)
-                     (lambda () nil))
                     ((symbol-function
                       'mevedel-reminders--collect-diagnostics-in-buffer)
                      (lambda ()
@@ -1319,6 +1315,88 @@
         (kill-buffer source))
       (when (buffer-live-p chat) (kill-buffer chat))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-reminders--diagnostics-run-checkers
+  ()
+  ,test
+  (test)
+  :doc "settles checker events, timeout, and dead-buffer cleanup exactly once"
+  (let ((chat (generate-new-buffer " *mevedel-diag-chat*"))
+        (source (generate-new-buffer " *mevedel-diag-source*"))
+        (owner 'request-1)
+        flymake-report timer-callback cancelled telemetry continued)
+    (unwind-protect
+        (cl-letf (((symbol-function 'flymake-make-report-fn)
+                   (lambda (&rest _)
+                     (lambda (&rest _) nil)))
+                  ((symbol-function 'flymake-start)
+                   (lambda (&rest _)
+                     (let ((synchronous
+                            (flymake-make-report-fn 'sync-backend)))
+                       (setq flymake-report
+                             (flymake-make-report-fn 'async-backend))
+                       (funcall synchronous nil))))
+                  ((symbol-function 'flycheck-stop) #'ignore)
+                  ((symbol-function 'flycheck-buffer) #'ignore)
+                  ((symbol-function 'run-at-time)
+                   (lambda (delay repeat function &rest _)
+                     (should (= 30 delay))
+                     (should-not repeat)
+                     (setq timer-callback function)
+                     'diagnostic-timer))
+                  ((symbol-function 'cancel-timer)
+                   (lambda (timer) (setq cancelled timer)))
+                  ((symbol-function 'mevedel-reminders--turn-owner)
+                   (lambda (_) owner))
+                  ((symbol-function
+                    'mevedel-reminders--collect-diagnostics-in-buffer)
+                   (lambda () '(("source.el" 1 "error" "fresh"))))
+                  ((symbol-function
+                    'mevedel-reminders--diagnostics-record-current)
+                   (lambda (&rest _) '(:new (diagnostic))))
+                  ((symbol-function
+                    'mevedel-reminders--record-diagnostic-telemetry)
+                   (lambda (_buffer outcome &optional _report)
+                     (push outcome telemetry))))
+          (mevedel-reminders--diagnostics-run-checkers
+           chat "/tmp/source.el" source owner
+           (lambda () (setq continued t)) t t)
+          (should timer-callback)
+          (should-not continued)
+          (with-current-buffer source
+            (run-hooks 'flycheck-after-syntax-check-hook))
+          (should-not continued)
+          (funcall flymake-report nil)
+          (should continued)
+          (should (eq 'diagnostic-timer cancelled))
+          (should (equal '(started ready) (nreverse telemetry)))
+          (with-current-buffer source
+            (should-not flycheck-after-syntax-check-hook))
+          (setq timer-callback nil
+                cancelled nil
+                telemetry nil
+                continued nil)
+          (mevedel-reminders--diagnostics-run-checkers
+           chat "/tmp/source.el" source owner
+           (lambda () (setq continued t)) nil t)
+          (funcall timer-callback)
+          (should continued)
+          (should (eq 'diagnostic-timer cancelled))
+          (should (equal '(started timeout) (nreverse telemetry)))
+          (setq timer-callback nil
+                cancelled nil
+                telemetry nil
+                continued nil)
+          (mevedel-reminders--diagnostics-run-checkers
+           chat "/tmp/source.el" source owner
+           (lambda () (setq continued t)) nil t)
+          (kill-buffer source)
+          (funcall timer-callback)
+          (should-not continued)
+          (should (eq 'diagnostic-timer cancelled))
+          (should (equal '(started stale) (nreverse telemetry))))
+      (when (buffer-live-p source) (kill-buffer source))
+      (when (buffer-live-p chat) (kill-buffer chat)))))
 
 (mevedel-deftest mevedel-reminders--format-diagnostic-reports
   ()

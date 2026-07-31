@@ -24,15 +24,14 @@
 (declare-function flycheck-error-line "ext:flycheck" (err) t)
 (declare-function flycheck-error-message "ext:flycheck" (err) t)
 (declare-function flycheck-overlay-errors-in "ext:flycheck" (beg end))
-(declare-function flycheck-running-p "ext:flycheck" ())
 (declare-function flycheck-stop "ext:flycheck" ())
+(defvar flycheck-after-syntax-check-hook)
 
 ;; `flymake'
 (declare-function flymake-diagnostic-beg "flymake" (diag))
 (declare-function flymake-diagnostic-text "flymake" (diag))
 (declare-function flymake-diagnostic-type "flymake" (diag))
 (declare-function flymake-diagnostics "flymake" (&optional beg end))
-(declare-function flymake-running-backends "flymake" ())
 (declare-function flymake-start "flymake" (&optional defer force))
 
 ;; `gptel'
@@ -1200,6 +1199,105 @@ Scans the current buffer."
      :resolved-count (length (plist-get report :resolved))
      :omitted-count (or (plist-get report :omitted) 0))))
 
+(defun mevedel-reminders--diagnostics-run-checkers
+    (buffer path source owner continuation flymake-p flycheck-p)
+  "Run active diagnostic checkers and settle CONTINUATION once.
+BUFFER owns the turn for PATH, SOURCE is its visited file buffer, and OWNER
+identifies the turn.  FLYMAKE-P and FLYCHECK-P select the active checkers."
+  (let ((pending (delq nil (list (and flymake-p 'flymake)
+                                 (and flycheck-p 'flycheck))))
+        (initializing t)
+        (settled nil)
+        (started-p nil)
+        (flymake-left 0)
+        (flymake-starting nil)
+        flycheck-hook timer)
+    (cl-labels
+        ((finish
+          (outcome collect-p)
+          (unless settled
+            (setq settled t)
+            (when timer
+              (cancel-timer timer)
+              (setq timer nil))
+            (when (and flycheck-hook (buffer-live-p source))
+              (with-current-buffer source
+                (remove-hook 'flycheck-after-syntax-check-hook
+                             flycheck-hook t)))
+            (let* ((current-p
+                    (and (buffer-live-p source)
+                         (buffer-live-p buffer)
+                         (eq owner (mevedel-reminders--turn-owner buffer))))
+                   (report
+                    (when (and current-p collect-p)
+                      (mevedel-reminders--diagnostics-record-current
+                       buffer path
+                       (with-current-buffer source
+                         (mevedel-reminders--collect-diagnostics-in-buffer))))))
+              (mevedel-reminders--record-diagnostic-telemetry
+               buffer (if current-p outcome 'stale) report)
+              (when current-p
+                (funcall continuation)))))
+         (ready
+          (checker)
+          (setq pending (delq checker pending))
+          (when (and (not initializing) (null pending))
+            (finish 'ready t)))
+         (make-report-advice
+          (make-report &rest args)
+          (let ((report (apply make-report args))
+                (reported nil))
+            (cl-incf flymake-left)
+            (lambda (&rest report-args)
+              (prog1 (apply report report-args)
+                (unless reported
+                  (setq reported t)
+                  (cl-decf flymake-left)
+                  (when (and (not flymake-starting)
+                             (zerop flymake-left))
+                    (ready 'flymake))))))))
+      (with-current-buffer source
+        (when flymake-p
+          (setq flymake-starting t)
+          (advice-add 'flymake-make-report-fn :around #'make-report-advice)
+          (unwind-protect
+              (condition-case nil
+                  (progn
+                    (flymake-start nil t)
+                    (setq started-p t))
+                (error (setq pending (delq 'flymake pending))))
+            (advice-remove 'flymake-make-report-fn #'make-report-advice)
+            (setq flymake-starting nil))
+          (when (zerop flymake-left)
+            (ready 'flymake)))
+        (when flycheck-p
+          (setq flycheck-hook (lambda () (ready 'flycheck)))
+          (condition-case nil
+              (progn
+                (flycheck-stop)
+                (add-hook 'flycheck-after-syntax-check-hook
+                          flycheck-hook nil t)
+                (flycheck-buffer)
+                (setq started-p t))
+            (error
+             (remove-hook 'flycheck-after-syntax-check-hook
+                          flycheck-hook t)
+             (setq pending (delq 'flycheck pending))))))
+      (setq initializing nil)
+      (if (null pending)
+          (if started-p
+              (progn
+                (mevedel-reminders--record-diagnostic-telemetry
+                 buffer 'started)
+                (finish 'ready t))
+            (funcall continuation))
+        (mevedel-reminders--record-diagnostic-telemetry buffer 'started)
+        (setq timer
+              (run-at-time
+               30 nil
+               (lambda ()
+                 (finish 'timeout nil))))))))
+
 (defun mevedel-reminders-diagnostics-after-edit (buffer path continuation)
   "Refresh diagnostics for PATH, then call CONTINUATION.
 Only an existing visited buffer is checked.  Active Flymake and Flycheck
@@ -1212,89 +1310,24 @@ checkers get up to 30 seconds to finish."
          (owner (and source (mevedel-reminders--turn-owner buffer))))
     (if (not (and source owner))
         (funcall continuation)
-      (let (flymake-p flycheck-p timer)
+      (with-current-buffer source
+        (if (and (not (verify-visited-file-modtime source))
+                 (buffer-modified-p source))
+            (setq source nil)
+          (unless (verify-visited-file-modtime source)
+            (condition-case nil
+                (revert-buffer t t t)
+              (error (setq source nil))))))
+      (if (not source)
+          (funcall continuation)
         (with-current-buffer source
-          (if (and (not (verify-visited-file-modtime source))
-                   (buffer-modified-p source))
-              (setq source nil)
-            (unless (verify-visited-file-modtime source)
-              (condition-case nil
-                  (revert-buffer t t t)
-                (error (setq source nil))))
-            (when source
-              (setq flymake-p
-                    (and (bound-and-true-p flymake-mode)
-                         (fboundp 'flymake-start)
-                         (fboundp 'flymake-running-backends))
-                    flycheck-p
-                    (and (bound-and-true-p flycheck-mode)
-                         (fboundp 'flycheck-buffer)
-                         (fboundp 'flycheck-running-p)
-                         (fboundp 'flycheck-stop))))))
-        (if (or (not source) (not (or flymake-p flycheck-p)))
-            (funcall continuation)
-          (cl-labels
-              ((finish
-                (outcome collect-p)
-                (when timer
-                  (cancel-timer timer)
-                  (setq timer nil))
-                (let* ((live-owner
-                        (and (buffer-live-p buffer)
-                             (eq owner
-                                 (mevedel-reminders--turn-owner buffer))))
-                       (report
-                        (when (and live-owner collect-p
-                                   (buffer-live-p source))
-                          (mevedel-reminders--diagnostics-record-current
-                           buffer path
-                           (with-current-buffer source
-                             (mevedel-reminders--collect-diagnostics-in-buffer))))))
-                  (mevedel-reminders--record-diagnostic-telemetry
-                   buffer outcome report)
-                  (when live-owner
-                    (funcall continuation)))))
-            (with-current-buffer source
-              (when flymake-p
-                (condition-case nil
-                    (flymake-start nil t)
-                  (error (setq flymake-p nil))))
-              (when flycheck-p
-                (condition-case nil
-                    (progn
-                      (flycheck-stop)
-                      (flycheck-buffer))
-                  (error (setq flycheck-p nil)))))
-            (if (not (or flymake-p flycheck-p))
-                (funcall continuation)
-              (mevedel-reminders--record-diagnostic-telemetry
-               buffer 'started)
-              (if (with-current-buffer source
-                    (and (or (not flymake-p)
-                             (not (flymake-running-backends)))
-                         (or (not flycheck-p)
-                             (not (flycheck-running-p)))))
-                  (finish 'ready t)
-                (let ((deadline (+ (float-time) 30)))
-                  (setq timer
-                        (run-at-time
-                         0.05 0.05
-                         (lambda ()
-                           (cond
-                            ((or (not (buffer-live-p source))
-                                 (not (buffer-live-p buffer))
-                                 (not (eq owner
-                                          (mevedel-reminders--turn-owner
-                                           buffer))))
-                             (finish 'stale nil))
-                            ((with-current-buffer source
-                               (and (or (not flymake-p)
-                                        (not (flymake-running-backends)))
-                                    (or (not flycheck-p)
-                                        (not (flycheck-running-p)))))
-                             (finish 'ready t))
-                            ((>= (float-time) deadline)
-                             (finish 'timeout nil)))))))))))))))
+          (mevedel-reminders--diagnostics-run-checkers
+           buffer path source owner continuation
+           (and (bound-and-true-p flymake-mode)
+                (fboundp 'flymake-start))
+           (and (bound-and-true-p flycheck-mode)
+                (fboundp 'flycheck-buffer)
+                (fboundp 'flycheck-stop))))))))
 
 
 ;;
