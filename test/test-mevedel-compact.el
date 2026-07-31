@@ -2606,6 +2606,68 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should (equal applied "summary ready"))
       (should-not result))))
 
+(mevedel-deftest mevedel--compact-run-record-first-response ()
+  ,test
+  (test)
+  :doc "records first-response telemetry once per run"
+  (let ((state (mevedel--compact-run-state-create
+                :attempt 2 :session 'session))
+        records)
+    (cl-letf (((symbol-function 'mevedel-telemetry-record)
+               (lambda (&rest args) (push args records))))
+      (mevedel--compact-run-record-first-response state)
+      (mevedel--compact-run-record-first-response state))
+    (should (= 1 (length records)))
+    (should (equal '(session compaction-summary-first-response :attempt 2)
+                   (car records)))))
+
+(mevedel-deftest mevedel--compact-run-finish-summary-telemetry ()
+  ,test
+  (test)
+  :doc "finishes summary telemetry once and clears its span"
+  (let ((state (mevedel--compact-run-state-create :summary-span 'span))
+        finished)
+    (cl-letf (((symbol-function 'mevedel-telemetry-finish)
+               (lambda (&rest args) (setq finished args))))
+      (mevedel--compact-run-finish-summary-telemetry
+       state 'success '(:tokens (:input 3 :output 5))))
+    (should
+     (equal '(span :outcome success :input-tokens 3 :output-tokens 5)
+            finished))
+    (should-not (mevedel--compact-run-state-summary-span state))))
+
+(mevedel-deftest mevedel--compact-run-apply-response-summary ()
+  ,test
+  (test)
+  :doc "applies a completed response summary once"
+  (let ((state (mevedel--compact-run-state-create))
+        applied)
+    (cl-letf (((symbol-function 'mevedel--compact-run-apply-summary)
+               (lambda (_state summary audits)
+                 (push (list summary audits) applied))))
+      (mevedel--compact-run-apply-response-summary state "first" 'audit)
+      (mevedel--compact-run-apply-response-summary state "late" nil))
+    (should (equal '(("first" audit)) applied))))
+
+(mevedel-deftest mevedel--compact-run-handle-response ()
+  ,test
+  (test)
+  :doc "accumulates streaming response chunks on the run state"
+  (with-temp-buffer
+    (let ((state (mevedel--compact-run-state-create
+                  :chat-buffer (current-buffer)))
+          applied)
+      (cl-letf (((symbol-function
+                  'mevedel--compact-run-apply-response-summary)
+                 (lambda (_state summary audits)
+                   (setq applied (list summary audits)))))
+        (mevedel--compact-run-handle-response
+         state "one" '(:stream t) 'audit)
+        (mevedel--compact-run-handle-response
+         state "two" '(:stream t) 'audit)
+        (mevedel--compact-run-handle-response state t nil 'audit))
+      (should (equal '("onetwo" audit) applied)))))
+
 (mevedel-deftest mevedel--compact-run-send-request ()
   ,test
   (test)

@@ -3605,6 +3605,23 @@ the execution boundary owns the session's single unavailable warning"
 ;;
 ;;; Eval check-permission adapter
 
+(mevedel-deftest mevedel-tool-exec--normalize-prompt-result ()
+  ,test
+  (test)
+  :doc "normalizes stored and feedback prompt outcomes"
+  (let (stored)
+    (should
+     (eq 'allow
+         (mevedel-tool-exec--normalize-prompt-result
+          'allow-session
+          (lambda (outcome) (setq stored outcome) 'allow)
+          "Feedback: ")))
+    (should (eq stored 'allow-session))
+    (should
+     (equal '(deny . "Feedback: no")
+            (mevedel-tool-exec--normalize-prompt-result
+             '(feedback . "no") #'ignore "Feedback: ")))))
+
 (mevedel-deftest mevedel-tool-exec--eval-prompt-result ()
   ,test
   (test)
@@ -3625,24 +3642,18 @@ the execution boundary owns the session's single unavailable warning"
               (mevedel-tool-exec--eval-prompt-result
                'unexpected nil nil "(+ 1 2)" nil)))
   :doc "applies stored Eval outcomes through the canonical rule writer"
-  (let (seen)
-    (cl-letf (((symbol-function 'mevedel-permission--apply-prompt-result)
-               (lambda (outcome tool session workspace path &rest props)
-                 (push (list outcome tool session workspace path props) seen)
-                 (if (memq outcome '(allow-session always-allow))
-                     'allow
-                   'deny))))
-      (should (eq 'allow
-                  (mevedel-tool-exec--eval-prompt-result
-                   'allow-session 'session 'workspace "(+ 1 2)" nil)))
-      (should (eq 'deny
-                  (mevedel-tool-exec--eval-prompt-result
-                   'deny-session 'session 'workspace "(+ 1 2)" nil))))
-    (should (= 2 (length seen)))
-    (dolist (call seen)
-      (should (equal "Eval" (nth 1 call)))
-      (should (equal '(:spec-key :pattern :spec-value "(+ 1 2)")
-                     (nth 5 call)))))
+  (let ((session (mevedel-session--create :name "eval-prompt")))
+    (should (eq 'allow
+                (mevedel-tool-exec--eval-prompt-result
+                 'allow-session session nil "(+ 1 2)" nil)))
+    (should (eq 'deny
+                (mevedel-tool-exec--eval-prompt-result
+                 'deny-session session nil "(delete-file x)" nil)))
+    (should
+     (equal
+      '(("Eval" :pattern "(+ 1 2)" :action allow)
+        ("Eval" :pattern "(delete-file x)" :action deny))
+      (mevedel-session-permission-rules session))))
   :doc "returns structured Eval metadata when requested"
   (let ((result (mevedel-tool-exec--eval-prompt-result
                  '(deny . "reason") nil nil "(+ 1 2)" t)))
@@ -3754,17 +3765,14 @@ the execution boundary owns the session's single unavailable warning"
               (mevedel-tool-exec--bash-prompt-result
                'unexpected nil nil "make test" nil nil)))
   :doc "routes scoped Bash outcomes through the canonical rule writer"
-  (let (seen)
-    (cl-letf (((symbol-function 'mevedel-tool-exec--apply-bash-prompt-result)
-               (lambda (&rest args)
-                 (push args seen)
-                 'allow)))
-      (should (eq 'allow
-                  (mevedel-tool-exec--bash-prompt-result
-                   'allow-session 'session 'workspace "make test"
-                   '("make *") nil))))
-    (should (equal '((allow-session session workspace "make test" ("make *")))
-                   seen)))
+  (let ((session (mevedel-session--create :name "bash-prompt")))
+    (should (eq 'allow
+                (mevedel-tool-exec--bash-prompt-result
+                 'allow-session session nil "make test"
+                 '("make *") nil)))
+    (should
+     (equal '(("Bash" :pattern "make *" :action allow))
+            (mevedel-session-permission-rules session))))
   :doc "contains Bash rule-write failures in the permission result"
   (cl-letf (((symbol-function 'mevedel-tool-exec--apply-bash-prompt-result)
              (lambda (&rest _) (error "write failed"))))

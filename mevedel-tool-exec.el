@@ -1877,24 +1877,32 @@ mode.  TRUST-LITERAL-P identifies author-written skill body injections."
      (or action 'ask))
      (t 'ask))))
 
+(defun mevedel-tool-exec--normalize-prompt-result
+    (outcome apply-stored feedback-prefix)
+  "Normalize prompt OUTCOME using APPLY-STORED and FEEDBACK-PREFIX."
+  (pcase outcome
+    ((or 'allow 'allow-once) 'allow)
+    ((or 'allow-session 'always-allow 'deny-session)
+     (funcall apply-stored outcome))
+    ((or 'deny 'deny-once) 'deny)
+    (`(deny . ,reason) (cons 'deny reason))
+    (`(feedback . ,text)
+     (cons 'deny (format "%s%s" feedback-prefix text)))
+    ('aborted 'aborted)
+    (_ 'deny)))
+
 (defun mevedel-tool-exec--eval-prompt-result
     (outcome session workspace expression metadata-p)
   "Apply Eval prompt OUTCOME and return its canonical permission result."
   (let ((result
-         (pcase outcome
-           ((or 'allow 'allow-once) 'allow)
-           ((or 'allow-session 'always-allow 'deny-session)
+         (mevedel-tool-exec--normalize-prompt-result
+          outcome
+          (lambda (stored-outcome)
             (mevedel-permission--apply-prompt-result
-             outcome "Eval" session workspace nil
+             stored-outcome "Eval" session workspace nil
              :spec-key :pattern
              :spec-value expression))
-           ((or 'deny 'deny-once) 'deny)
-           (`(deny . ,reason) (cons 'deny reason))
-           (`(feedback . ,text)
-            (cons 'deny
-                  (format "Eval cancelled by user. Feedback: %s" text)))
-           ('aborted 'aborted)
-           (_ 'deny))))
+          "Eval cancelled by user. Feedback: ")))
     (mevedel-tool-exec--permission-decision-result
      metadata-p result 'eval-policy)))
 
@@ -2069,22 +2077,15 @@ stays exact to avoid broad negative rules from a single rejection."
   (let ((specifier
          (mevedel-tool-exec--bash-decision-specifier-value command))
         (result
-         (pcase outcome
-           ((or 'allow-once 'allow-session 'always-allow
-                'deny-once 'deny-session)
+         (mevedel-tool-exec--normalize-prompt-result
+          outcome
+          (lambda (stored-outcome)
             (condition-case err
                 (mevedel-tool-exec--apply-bash-prompt-result
-                 outcome session workspace command allow-patterns)
+                 stored-outcome session workspace command allow-patterns)
               (error
                (format "Error: Bash rule write failed: %S" err))))
-           ('allow 'allow)
-           ('deny 'deny)
-           (`(deny . ,reason) (cons 'deny reason))
-           (`(feedback . ,text)
-            (cons 'deny
-                  (format "Command cancelled by user. Feedback: %s" text)))
-           ('aborted 'aborted)
-           (_ 'deny))))
+          "Command cancelled by user. Feedback: ")))
     (mevedel-tool-exec--permission-decision-result
      metadata-p result 'bash-classifier
      :specifier-key :pattern

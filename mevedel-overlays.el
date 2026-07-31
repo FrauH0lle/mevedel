@@ -1926,12 +1926,23 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
           ('failed "Request failed, press")
           (_ "Press")))))))
 
+(defun mevedel--instruction-directive-typename (instruction parent)
+  "Return the display type name for directive INSTRUCTION under PARENT."
+  (if (and parent (mevedel--directivep parent))
+      (pcase (overlay-get parent 'mevedel-directive-status)
+        ((or 'processing 'failed)
+         (or (overlay-get instruction 'mevedel-subdirective-typename)
+             "HINT"))
+        ('succeeded "CORRECTION")
+        (_ "HINT"))
+    "DIRECTIVE"))
+
 (defun mevedel--instruction-label
-    (instruction instruction-type padding bufferlevel-p
+    (instruction instruction-type directive-typename padding bufferlevel-p
                  parent parent-bufferlevel-p)
   "Return (LABEL . COLOR) for INSTRUCTION.
-INSTRUCTION-TYPE, PADDING, BUFFERLEVEL-P, PARENT, and
-PARENT-BUFFERLEVEL-P describe its position in the instruction tree."
+INSTRUCTION-TYPE, DIRECTIVE-TYPENAME, PADDING, BUFFERLEVEL-P, PARENT,
+and PARENT-BUFFERLEVEL-P describe its position in the instruction tree."
   (let ((label "")
         color)
     (cl-labels
@@ -1952,8 +1963,8 @@ PARENT-BUFFERLEVEL-P describe its position in the instruction tree."
             unless
             (let ((target (mevedel--instruction-with-id id)))
               (or (null target)
-                  (eq (mevedel--instruction-type target)
-                      instruction-type)))
+                  (not (eq (mevedel--instruction-type target)
+                           instruction-type))))
             collect id))
          (append-links ()
            (let ((outlinks
@@ -2054,46 +2065,26 @@ PARENT-BUFFERLEVEL-P describe its position in the instruction tree."
              "FAILED: ")))
          (setq color
                (mevedel--instruction-directive-color instruction))
-         (let ((directive-typename "DIRECTIVE"))
-           (if (and parent (mevedel--directivep parent))
-               (progn
-                 (setq directive-typename
-                       (pcase
-                           (overlay-get
-                            parent 'mevedel-directive-status)
-                         ((or 'processing 'failed)
-                          (or
-                           (overlay-get
-                            instruction
-                            'mevedel-subdirective-typename)
-                           "HINT"))
-                         ('succeeded "CORRECTION")
-                         (_ "HINT")))
-                 (overlay-put
-                  instruction 'mevedel-subdirective-typename
-                  directive-typename))
-             (overlay-put
-              instruction 'mevedel-subdirective-typename nil))
-           (let* ((directive
-                   (string-trim
-                    (or
-                     (if (eq
-                          (overlay-get
-                           instruction 'mevedel-instruction-collapse-p)
-                          'collapse)
-                         (mevedel--directive-truncated-text instruction)
-                       (mevedel--directive-text instruction))
-                     "")))
-                  (prefix
-                   (format "%s %s"
-                           directive-typename
-                           (stylized-id
-                            (mevedel--instruction-id instruction)))))
-             (append-label
-              directive
-              (if (string-empty-p directive)
-                  (concat "EMPTY " prefix)
-                (concat prefix ": ")))))
+         (let* ((directive
+                 (string-trim
+                  (or
+                   (if (eq
+                        (overlay-get
+                         instruction 'mevedel-instruction-collapse-p)
+                        'collapse)
+                       (mevedel--directive-truncated-text instruction)
+                     (mevedel--directive-text instruction))
+                   "")))
+                (prefix
+                 (format "%s %s"
+                         directive-typename
+                         (stylized-id
+                          (mevedel--instruction-id instruction)))))
+           (append-label
+            directive
+            (if (string-empty-p directive)
+                (concat "EMPTY " prefix)
+              (concat prefix ": "))))
          (when-let* ((provider
                       (overlay-get
                        instruction
@@ -2125,17 +2116,13 @@ PARENT-BUFFERLEVEL-P describe its position in the instruction tree."
       (cons label color))))
 
 (defun mevedel--instruction-style
-    (instruction instruction-type label color padding priority parent)
+    (instruction instruction-type label color padding priority parent
+                 bufferlevel-p parent-bufferlevel-p)
   "Apply visual style to INSTRUCTION.
-INSTRUCTION-TYPE, LABEL, COLOR, PADDING, PRIORITY, and PARENT describe
-the presentation computed for the instruction tree node."
+INSTRUCTION-TYPE, LABEL, COLOR, PADDING, PRIORITY, PARENT,
+BUFFERLEVEL-P, and PARENT-BUFFERLEVEL-P describe the presentation."
   (let* ((default-fg (face-foreground 'default))
          (default-bg (face-background 'default))
-         (bufferlevel-p
-          (mevedel--instruction-bufferlevel-p instruction))
-         (parent-bufferlevel-p
-          (and parent
-               (mevedel--instruction-bufferlevel-p parent)))
          (bg-tint-intensity
           (if (and parent (not parent-bufferlevel-p))
               (* mevedel-subinstruction-tint-coefficient
@@ -2260,16 +2247,23 @@ PRIORITY is the inherited priority and PARENT is the tree parent."
                (mevedel--instruction-bufferlevel-p parent)))
          (priority
           (if bufferlevel-p (1- priority) priority))
+         (directive-typename
+          (and (eq instruction-type 'directive)
+               (mevedel--instruction-directive-typename
+                instruction parent)))
          (presentation
           (mevedel--instruction-label
-           instruction instruction-type padding bufferlevel-p
+           instruction instruction-type directive-typename
+           padding bufferlevel-p
            parent parent-bufferlevel-p)))
+    (overlay-put instruction 'mevedel-subdirective-typename
+                 (and parent directive-typename))
     (mevedel--instruction-action-setup
      instruction instruction-type)
     (mevedel--instruction-style
      instruction instruction-type
      (car presentation) (cdr presentation)
-     padding priority parent)
+     padding priority parent bufferlevel-p parent-bufferlevel-p)
     (when update-children
       (dolist (child
                (mevedel--child-instructions instruction))
