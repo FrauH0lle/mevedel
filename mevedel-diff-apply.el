@@ -401,7 +401,7 @@ current line if none above."
 
 (defun mevedel-diff-apply--analyze-overlays (buffer changes)
   "Return overlay adjustments and ordered deltas for CHANGES in BUFFER."
-  (let (saved-overlays all-changes)
+  (let (saved-overlays ordered-deltas)
     (dolist (change changes)
       (let* ((hunk-start (plist-get change :hunk-start))
              (hunk-end (plist-get change :hunk-end))
@@ -412,7 +412,7 @@ current line if none above."
              (line-changes
               (mevedel--parse-hunk-lines
                old-middle new-middle change-start)))
-        (push (list change-start (plist-get change :delta)) all-changes)
+        (push (list change-start (plist-get change :delta)) ordered-deltas)
         (dolist (overlay
                  (seq-filter
                   (lambda (candidate)
@@ -456,11 +456,11 @@ current line if none above."
               (push (list overlay (car adjustment) (cadr adjustment)
                           change-start line-based-p start end)
                     saved-overlays))))))
-    (list saved-overlays all-changes)))
+    (list saved-overlays ordered-deltas)))
 
 (defun mevedel-diff-apply--restore-overlays
-    (buffer saved-overlays all-changes)
-  "Restore SAVED-OVERLAYS in BUFFER after ALL-CHANGES were applied.
+    (buffer saved-overlays ordered-deltas)
+  "Restore SAVED-OVERLAYS in BUFFER after ORDERED-DELTAS were applied.
 Return a hash table of the final live overlays."
   (cl-labels
       ((stub-bounds (position line-based-p)
@@ -484,7 +484,7 @@ Return a hash table of the final live overlays."
                (original-start (nth 5 record))
                (original-end (nth 6 record))
                (cumulative-delta
-                (cl-loop for (position delta) in all-changes
+                (cl-loop for (position delta) in ordered-deltas
                          when (< position hunk-position)
                          sum delta))
                (final-start (+ calculated-start cumulative-delta))
@@ -497,7 +497,7 @@ Return a hash table of the final live overlays."
                      (and (<= position original-start)
                           (>= (+ position (abs delta)) original-end)
                           (> delta 0))))
-                 all-changes)))
+                 ordered-deltas)))
           (when (or (>= final-start final-end)
                     (< final-start (point-min))
                     (> final-end (point-max)))
@@ -540,7 +540,7 @@ Return a hash table of the final live overlays."
            (when (plist-get state :duplicate)
              (setq final-start original-start
                    final-end original-end)
-             (dolist (change all-changes)
+             (dolist (change ordered-deltas)
                (when (< (car change) original-start)
                  (cl-incf final-start (cadr change)))
                (when (< (car change) original-end)
@@ -563,6 +563,15 @@ Return a hash table of the final live overlays."
        final-overlays)
       final-overlays)))
 
+(defun mevedel-diff-apply--apply-changes (changes)
+  "Apply canonical CHANGES to the current buffer."
+  (let ((inhibit-read-only t))
+    (dolist (change changes)
+      (mevedel--replace-text
+       (plist-get change :start)
+       (plist-get change :end)
+       (plist-get change :new)))))
+
 (defun mevedel-diff-apply--apply-buffer (buffer edits)
   "Apply EDITS and preserve instruction overlays in BUFFER."
   (with-current-buffer buffer
@@ -571,19 +580,14 @@ Return a hash table of the final live overlays."
            (analysis
             (mevedel-diff-apply--analyze-overlays buffer changes))
            (saved-overlays (car analysis))
-           (all-changes (cadr analysis)))
+           (ordered-deltas (cadr analysis)))
       (atomic-change-group
         (dolist (record saved-overlays)
           (delete-overlay (car record)))
-        (let ((inhibit-read-only t))
-          (dolist (change changes)
-            (mevedel--replace-text
-             (plist-get change :start)
-             (plist-get change :end)
-             (plist-get change :new))))
+        (mevedel-diff-apply--apply-changes changes)
         (let ((final-overlays
                (mevedel-diff-apply--restore-overlays
-                buffer saved-overlays all-changes)))
+                buffer saved-overlays ordered-deltas)))
           (save-buffer)
           (mevedel--instruction-activate-buffer buffer)
           (let ((instruction-alist (mevedel--instruction-alist-value)))

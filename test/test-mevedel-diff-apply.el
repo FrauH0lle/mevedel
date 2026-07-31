@@ -285,6 +285,17 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
           (should (= 1 (overlay-start overlay)))
           (should (= 4 (overlay-end overlay))))))))
 
+(mevedel-deftest mevedel-diff-apply--apply-changes ()
+  ,test
+  (test)
+  :doc "applies canonical changes in their supplied order"
+  (with-temp-buffer
+    (insert "one two")
+    (mevedel-diff-apply--apply-changes
+     '((:start 5 :end 8 :new "three")
+       (:start 1 :end 4 :new "ONE")))
+    (should (equal "ONE three" (buffer-string)))))
+
 (mevedel-deftest mevedel-diff-apply--restore-overlays ()
   ,test
   (test)

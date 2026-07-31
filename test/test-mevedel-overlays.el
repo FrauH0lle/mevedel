@@ -84,26 +84,41 @@
                "Request failed"
                (overlay-get instruction 'help-echo))))))
 
+(mevedel-deftest mevedel--instruction-directive-typename ()
+  ,test
+  (test)
+  :doc "derives child directive names without mutating overlays"
+  (with-temp-buffer
+    (insert "abc")
+    (let ((parent (make-overlay 1 3))
+          (child (make-overlay 1 2)))
+      (overlay-put parent 'mevedel-instruction-type 'directive)
+      (overlay-put parent 'mevedel-directive-status 'succeeded)
+      (should (equal "CORRECTION"
+                     (mevedel--instruction-directive-typename
+                      child parent)))
+      (should-not (overlay-get child 'mevedel-subdirective-typename)))))
+
 (mevedel-deftest mevedel--instruction-label ()
   ,test
   (test)
-  :doc "labels cross-type reference links as reference links"
+  :doc "labels same-type reference links as reference links"
   (with-temp-buffer
     (insert "reference")
     (let ((reference (make-overlay 1 5))
-          (directive (make-overlay 2 4))
+          (target (make-overlay 2 4))
           (mevedel-reference-color "reference-color"))
       (overlay-put reference 'mevedel-id 1)
       (overlay-put reference 'mevedel-links '(:to (2)))
-      (overlay-put directive 'mevedel-id 2)
-      (overlay-put directive 'mevedel-instruction-type 'directive)
+      (overlay-put target 'mevedel-id 2)
+      (overlay-put target 'mevedel-instruction-type 'reference)
       (cl-letf (((symbol-function 'mevedel--instruction-with-id)
-                 (lambda (id) (and (= id 2) directive)))
+                 (lambda (id) (and (= id 2) target)))
                 ((symbol-function 'mevedel--parent-instruction)
                  (lambda (&rest _) nil)))
         (let ((presentation
                (mevedel--instruction-label
-                reference 'reference "" nil nil nil)))
+                reference 'reference nil "" nil nil nil)))
           (should (equal (cdr presentation) "reference-color"))
           (should (string-match-p
                    "REFERENCE LINKS: TO: #2"
@@ -126,7 +141,7 @@
                  (lambda (&rest _) nil)))
         (mevedel--instruction-style
          instruction 'reference "REFERENCE #1" "reference"
-         "" mevedel--default-instruction-priority nil))
+         "" mevedel--default-instruction-priority nil nil nil))
       (should (= (overlay-get instruction 'priority)
                  mevedel--default-instruction-priority))
       (should (string-match-p
@@ -155,7 +170,8 @@
                  #'ignore)
                 ((symbol-function 'mevedel--instruction-style)
                  (lambda (instruction _type _label _color _padding
-                                      priority _parent)
+                                      priority _parent _bufferlevel
+                                      _parent-bufferlevel)
                    (push (cons instruction priority) rendered)))
                 ((symbol-function 'mevedel--child-instructions)
                  (lambda (instruction)
