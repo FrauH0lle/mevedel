@@ -572,8 +572,9 @@ Return a hash table of the final live overlays."
        (plist-get change :end)
        (plist-get change :new)))))
 
-(defun mevedel-diff-apply--apply-buffer (buffer edits)
-  "Apply EDITS and preserve instruction overlays in BUFFER."
+(defun mevedel-diff-apply--apply-buffer (buffer edits &optional created-p)
+  "Apply EDITS and preserve instruction overlays in BUFFER.
+CREATED-P means remove BUFFER's newly created file if saving fails."
   (with-current-buffer buffer
     (let* ((changes
             (mapcar #'mevedel-diff-apply--change (reverse edits)))
@@ -582,25 +583,46 @@ Return a hash table of the final live overlays."
            (saved-overlays (car analysis))
            (ordered-deltas (cadr analysis))
            (change-group (prepare-change-group))
+           (file (buffer-file-name buffer))
+           (was-modified-p (buffer-modified-p))
+           (original-modtime (visited-file-modtime))
+           (snapshot
+            (and file (not created-p) (file-exists-p file)
+                 (make-temp-file "mevedel-diff-snapshot-")))
            final-overlays
            accepted)
+      (when snapshot
+        (copy-file file snapshot t t t t))
       (unwind-protect
-          (progn
-            (activate-change-group change-group)
-            (dolist (record saved-overlays)
-              (delete-overlay (car record)))
-            (mevedel-diff-apply--apply-changes changes)
-            (setq final-overlays
-                  (mevedel-diff-apply--restore-overlays
-                   buffer saved-overlays ordered-deltas))
-            (save-buffer)
-            (accept-change-group change-group)
-            (setq accepted t))
-        (unless accepted
-          (cancel-change-group change-group)
-          (dolist (record saved-overlays)
-            (move-overlay (nth 0 record) (nth 5 record) (nth 6 record)
-                          buffer))))
+          (unwind-protect
+              (progn
+                (activate-change-group change-group)
+                (dolist (record saved-overlays)
+                  (delete-overlay (car record)))
+                (mevedel-diff-apply--apply-changes changes)
+                (setq final-overlays
+                      (mevedel-diff-apply--restore-overlays
+                       buffer saved-overlays ordered-deltas))
+                (save-buffer)
+                (accept-change-group change-group)
+                (setq accepted t))
+            (unless accepted
+              (cancel-change-group change-group)
+              (dolist (record saved-overlays)
+                (move-overlay (nth 0 record) (nth 5 record) (nth 6 record)
+                              buffer))
+              (cond
+               (created-p
+                (when (and file (file-exists-p file))
+                  (delete-file file)))
+               (snapshot
+                (copy-file snapshot file t t t t)))
+              (if created-p
+                  (set-visited-file-modtime original-modtime)
+                (set-visited-file-modtime))
+              (set-buffer-modified-p was-modified-p)))
+        (when snapshot
+          (delete-file snapshot)))
       (mevedel--instruction-activate-buffer buffer)
       (let ((instruction-alist (mevedel--instruction-alist-value)))
         (maphash
@@ -656,12 +678,14 @@ the overlays."
                      (match-beginning 0)))))))
   (pcase-let ((buffer-edits nil)
               (failures 0)
+              (created-files nil)
               (diff-refine nil)
               (`(,files-to-create ,files-to-remove) (mevedel--diff-find-file-operations)))
     (when files-to-create
       (dolist (file files-to-create)
         (unless (file-exists-p file)
-          (make-empty-file file 'parents))))
+          (make-empty-file file 'parents)
+          (push file created-files))))
     (save-excursion
       (goto-char (point-min))
       (diff-beginning-of-hunk t)
@@ -681,7 +705,12 @@ the overlays."
                (let ((buf (plist-get edit :buf)))
                  (push edit (gethash buf edits-by-buffer))))
 
-             (maphash #'mevedel-diff-apply--apply-buffer edits-by-buffer)
+             (maphash
+              (lambda (buffer edits)
+                (mevedel-diff-apply--apply-buffer
+                 buffer edits
+                 (member (buffer-file-name buffer) created-files)))
+              edits-by-buffer)
 
              (when files-to-remove
                (dolist (file files-to-remove)

@@ -343,7 +343,29 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
                            (buffer-string)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
-      (delete-file file))))
+      (delete-file file)))
+  :doc "removes a newly created file when a post-write hook fails"
+  (let* ((file (make-temp-name
+                (expand-file-name "mevedel-diff-created-"
+                                  temporary-file-directory)))
+         (buffer (find-file-noselect file)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (add-hook 'after-save-hook
+                      (lambda () (error "Post-write failure")) nil t))
+          (should-error
+           (mevedel-diff-apply--apply-buffer
+            buffer
+            (list (list :pos '(1 . 1) :src nil :dst '("new")))
+            t))
+          (should-not (file-exists-p file))
+          (should (string-empty-p
+                   (with-current-buffer buffer (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
 
 
 ;;
@@ -715,10 +737,10 @@ Regression: failed buffer save does not persist moved instruction state"
                  (mevedel-workspace-get-or-create
                   'file (buffer-file-name test-buffer)
                   (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer)))))
-              ((symbol-function #'save-buffer)
-               (lambda (&rest _)
-                 (error "Forced save failure"))))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
+      (with-current-buffer test-buffer
+        (add-hook 'after-save-hook
+                  (lambda () (error "Post-write failure")) nil t))
       (setq err
             (condition-case error
                 (with-current-buffer diff-buffer
