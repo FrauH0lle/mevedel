@@ -3106,6 +3106,67 @@ found.  Returns nil; signals `user-error' to abort the restore."
    (t
     (user-error "Session segment file %s missing" segment-path))))
 
+(defun mevedel-session-persistence--hydrate-restored-buffer
+    (buf session workspace segment-path acquired additional-roots
+         lifecycle-source)
+  "Hydrate fresh restore buffer BUF and return its agent repair count.
+SESSION and WORKSPACE are planted before gptel restores persisted state.
+SEGMENT-PATH is reconciled when ACQUIRED owns the session lock.  Additional
+workspace roots and LIFECYCLE-SOURCE restore the saved session environment."
+  (with-current-buffer buf
+    (unless (derived-mode-p 'org-mode)
+      (let ((org-agenda-file-menu-enabled nil))
+        (org-mode)))
+    (setq-local mevedel--session session)
+    (setq-local mevedel--workspace workspace)
+    (setq-local default-directory
+                (mevedel-session-working-directory session))
+    (when additional-roots
+      (setq-local mevedel-workspace-additional-roots additional-roots))
+    (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
+      (mevedel--chat-buffer-disable-org-element-cache))
+    (require 'mevedel-transcript-restore)
+    (mevedel-transcript-restore-gptel-state)
+    (when acquired
+      (require 'mevedel-pipeline)
+      (when (> (mevedel-pipeline-reconcile-lost-executions buf) 0)
+        (mevedel-session-persistence--write-current-buffer-atomically
+         segment-path)
+        (set-buffer-modified-p nil)
+        (set-visited-file-modtime)))
+    (unless acquired
+      (mevedel-session-persistence--apply-read-only-mode buf))
+    (mevedel--chat-buffer-init-common
+     buf workspace (or lifecycle-source "resume"))
+    (require 'mevedel-agent-persistence)
+    (prog1
+        (mevedel-agent-persistence-restore-tree
+         session buf (bound-and-true-p mevedel-session--read-only-mode))
+      (mevedel-session-persistence--load-instructions session buf))))
+
+(defun mevedel-session-persistence--finish-restored-buffer
+    (buf session live persist-repairs-p)
+  "Finish restoring BUF for SESSION and return BUF.
+LIVE means BUF was already initialized.  When PERSIST-REPAIRS-P is non-nil,
+write repaired sidecar state before rendering the companion view."
+  (with-current-buffer buf
+    (when persist-repairs-p
+      (condition-case _
+          (mevedel-session-persistence-write
+           (mevedel-session-persistence--sidecar-path
+            (mevedel-session-save-path session))
+           (mevedel-session-persistence--build-sidecar session buf))
+        (error nil)))
+    (when-let* ((view-buffer
+                 (buffer-local-value 'mevedel--view-buffer buf))
+                ((buffer-live-p view-buffer)))
+      (with-current-buffer view-buffer
+        (unless live
+          (require 'mevedel-view-history)
+          (mevedel-view-history-load session))
+        (mevedel-view--full-rerender))))
+  buf)
+
 (defun mevedel-session-persistence-restore
     (session-dir &optional lifecycle-source session-override)
   "Restore the chat buffer for the session at SESSION-DIR.
@@ -3200,7 +3261,6 @@ mentions-shown reset to empty hash tables on load."
               (mevedel-session-persistence--reconcile-lost-execution-segments
                session segment-path))
             (with-current-buffer buf
-              ;; Ensure canonical name and file backing.
               (unless (equal (buffer-name) buf-name)
                 (rename-buffer buf-name t))
               (unless (equal (expand-file-name buffer-file-name)
@@ -3208,70 +3268,21 @@ mentions-shown reset to empty hash tables on load."
                 (setq buffer-file-name segment-path))
               (when (and (derived-mode-p 'org-mode)
                          (fboundp 'mevedel--chat-buffer-disable-org-element-cache))
-                (mevedel--chat-buffer-disable-org-element-cache))
-              (unless live
-                ;; Plant the hydrated session struct BEFORE enabling
-                ;; `gptel-mode' so any restore-protocol hook that reads
-                ;; `mevedel--session' sees the correct value.
-                (setq-local mevedel--session session)
-                (setq-local mevedel--workspace workspace)
-                (setq-local default-directory
-                            (mevedel-session-working-directory session))
-                (when additional-roots
-                  (setq-local mevedel-workspace-additional-roots additional-roots))
-                ;; Mode + gptel restore for freshly opened files only;
-                ;; live buffers are already initialized.
-                (unless (derived-mode-p 'org-mode)
-                  (let ((org-agenda-file-menu-enabled nil))
-                    (org-mode)))
-                (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
-                  (mevedel--chat-buffer-disable-org-element-cache))
-                (require 'mevedel-transcript-restore)
-                (mevedel-transcript-restore-gptel-state)
-                (when acquired
-                  (require 'mevedel-pipeline)
-                  (when (> (mevedel-pipeline-reconcile-lost-executions buf) 0)
-                    (mevedel-session-persistence--write-current-buffer-atomically
-                     buffer-file-name)
-                    (set-buffer-modified-p nil)
-                    (set-visited-file-modtime)))
-                (unless acquired
-                  (mevedel-session-persistence--apply-read-only-mode buf))
-                (mevedel--chat-buffer-init-common
-                 buf workspace (or lifecycle-source "resume"))
-                (require 'mevedel-agent-persistence)
-                (setq agent-repairs
-                      (mevedel-agent-persistence-restore-tree
-                       session buf
-                       (bound-and-true-p
-                        mevedel-session--read-only-mode))))
-              (unless live
-                (mevedel-session-persistence--load-instructions session buf))
-              ;; Persist restore-time repairs so subsequent resumes don't
-              ;; repeat them.
-              (when (and acquired
-                         had-sidecar-p
-                         (or cwd-retargeted-p
-                             agent-registry-repaired-p
-                             (> agent-repairs 0)
-                             (and sidecar-current-n
-                                  (not (= sidecar-current-n segment-n)))))
-                (condition-case _
-                    (mevedel-session-persistence-write
-                     (mevedel-session-persistence--sidecar-path session-dir)
-                     (mevedel-session-persistence--build-sidecar session buf))
-                  (error nil)))
-              ;; Re-render the companion view buffer from the restored
-              ;; segment.  `init-common' ensures the view buffer exists but
-              ;; does not populate it; without this the user sees an empty
-              ;; view after resume.
-              (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buf))
-                          ((buffer-live-p vb)))
-                (with-current-buffer vb
-                  (unless live
-                    (require 'mevedel-view-history)
-                    (mevedel-view-history-load session))
-                  (mevedel-view--full-rerender))))
+                (mevedel--chat-buffer-disable-org-element-cache)))
+            (unless live
+              (setq agent-repairs
+                    (mevedel-session-persistence--hydrate-restored-buffer
+                     buf session workspace segment-path acquired additional-roots
+                     lifecycle-source)))
+            (mevedel-session-persistence--finish-restored-buffer
+             buf session live
+             (and acquired
+                  had-sidecar-p
+                  (or cwd-retargeted-p
+                      agent-registry-repaired-p
+                      (> agent-repairs 0)
+                      (and sidecar-current-n
+                           (not (= sidecar-current-n segment-n))))))
             (setq setup-done t)
             buf)
         ;; If any of the setup above failed non-locally, don't leak the
