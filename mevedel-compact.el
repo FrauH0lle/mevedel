@@ -1695,7 +1695,6 @@ AUTO is non-nil for automatic compaction."
   chat-buffer
   instructions
   invocation
-  max-attempts
   old-content
   pending-text
   policy
@@ -1748,8 +1747,7 @@ AUTO is non-nil for automatic compaction."
 Retry when RETRYABLE and attempts remain.  IGNORE-FAILURE-COUNT leaves
 the persistent failure counter unchanged."
   (if (and retryable
-           (< (mevedel--compact-run-state-attempt state)
-              (mevedel--compact-run-state-max-attempts state)))
+           (< (mevedel--compact-run-state-attempt state) 3))
       (let* ((attempt (mevedel--compact-run-state-attempt state))
              (delay (expt 2 (1- attempt)))
              (chat-buffer (mevedel--compact-run-state-chat-buffer state)))
@@ -2149,7 +2147,6 @@ before it is applied."
            :auto auto
            :callback callback
            :chat-buffer chat-buffer
-           :max-attempts 3
            :session session
            :stream gptel-stream
            :target target

@@ -2540,11 +2540,10 @@ missing or zero prompt-side usage cannot become the active baseline"
            result
            (state
             (mevedel--compact-run-state-create
-             :attempt 1
+             :attempt 3
              :auto t
              :callback (lambda (err) (setq result err))
-             :chat-buffer (current-buffer)
-             :max-attempts 1)))
+             :chat-buffer (current-buffer))))
       (cl-letf (((symbol-function 'display-warning) #'ignore))
         (mevedel--compact-run-fail state "failed" t))
       (should (equal result "failed"))
@@ -2586,7 +2585,6 @@ missing or zero prompt-side usage cannot become the active baseline"
             :aggressive t
             :callback (lambda (err) (setq result err))
             :chat-buffer (current-buffer)
-            :max-attempts 1
             :summary-ready (lambda (summary) (concat summary " ready"))
             :target
             (list :apply
@@ -2697,7 +2695,6 @@ missing or zero prompt-side usage cannot become the active baseline"
     (let ((state
            (mevedel--compact-run-state-create
             :base-system-prompt "system"
-            :max-attempts 3
             :old-content "body"
             :policy nil
             :target
