@@ -3654,6 +3654,24 @@ the execution boundary owns the session's single unavailable warning"
       '(("Eval" :pattern "(+ 1 2)" :action allow)
         ("Eval" :pattern "(delete-file x)" :action deny))
       (mevedel-session-permission-rules session))))
+  :doc "persists always-allow Eval rules to real workspace storage"
+  (let* ((root (make-temp-file "mevedel-eval-prompt-" t))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id "eval-prompt" :root root :name "eval-prompt"))
+         (session
+          (mevedel-session--create
+           :name "eval-prompt" :workspace workspace)))
+    (unwind-protect
+        (progn
+          (should
+           (eq 'allow
+               (mevedel-tool-exec--eval-prompt-result
+                'always-allow session workspace "(message x)" nil)))
+          (should
+           (member '("Eval" :pattern "(message x)" :action allow)
+                   (mevedel-permission--load-persistent-rules workspace))))
+      (delete-directory root t)))
   :doc "returns structured Eval metadata when requested"
   (let ((result (mevedel-tool-exec--eval-prompt-result
                  '(deny . "reason") nil nil "(+ 1 2)" t)))
@@ -3770,16 +3788,30 @@ the execution boundary owns the session's single unavailable warning"
                 (mevedel-tool-exec--bash-prompt-result
                  'allow-session session nil "make test"
                  '("make *") nil)))
+    (should (eq 'deny
+                (mevedel-tool-exec--bash-prompt-result
+                 'deny-session session nil "rm build" nil nil)))
     (should
-     (equal '(("Bash" :pattern "make *" :action allow))
+     (equal '(("Bash" :pattern "make *" :action allow)
+              ("Bash" :pattern "rm build" :action deny))
             (mevedel-session-permission-rules session))))
   :doc "contains Bash rule-write failures in the permission result"
-  (cl-letf (((symbol-function 'mevedel-tool-exec--apply-bash-prompt-result)
-             (lambda (&rest _) (error "write failed"))))
-    (should (string-prefix-p
-             "Error: Bash rule write failed:"
-             (mevedel-tool-exec--bash-prompt-result
-              'allow-session nil nil "make test" nil nil))))
+  (let* ((root (make-temp-file "mevedel-bash-prompt-" t))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id "bash-prompt" :root root :name "bash-prompt"))
+         (file (mevedel-permission--persistent-file workspace)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (insert "invalid"))
+          (should
+           (string-prefix-p
+            "Error: Bash rule write failed:"
+            (mevedel-tool-exec--bash-prompt-result
+             'always-allow nil workspace "make test" nil nil))))
+      (delete-directory root t)))
   :doc "returns structured Bash metadata with the canonical specifier"
   (let ((result (mevedel-tool-exec--bash-prompt-result
                  '(deny . "reason") nil nil "make test" nil t)))
