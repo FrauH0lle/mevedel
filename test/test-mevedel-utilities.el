@@ -479,6 +479,15 @@
 `mevedel--tag-query-prefix-from-infix' converts '((alice and bob) or (charlie and dave))'"
   (should (equal '(or (and alice bob) (and charlie dave))
                  (mevedel--tag-query-prefix-from-infix '((alice and bob) or (charlie and dave)))))
+  :doc "Valid infix to prefix conversions:
+mixed implicit and explicit conjunctions retain precedence"
+  (should (equal '(or (and foo bar baz) (and qux quux))
+                 (mevedel--tag-query-prefix-from-infix
+                  '(foo bar and baz or qux quux))))
+  :doc "Valid infix to prefix conversions:
+explicit grouping permits nested negation"
+  (should (equal '(not (not foo))
+                 (mevedel--tag-query-prefix-from-infix '(not (not foo)))))
   :doc "Invalid infix queries:
 `mevedel--tag-query-prefix-from-infix' rejects '(and)'"
   (should-error (mevedel--tag-query-prefix-from-infix '(and)))
@@ -532,7 +541,17 @@
   (should-error (mevedel--tag-query-prefix-from-infix '(and (and foo bar))))
   :doc "Invalid infix queries:
 `mevedel--tag-query-prefix-from-infix' rejects '(or (or(foo and bar)))'"
-  (should-error (mevedel--tag-query-prefix-from-infix '(or (or(foo and bar))))))
+  (should-error (mevedel--tag-query-prefix-from-infix '(or (or(foo and bar)))))
+  :doc "Invalid infix queries:
+rejects a nested empty operand"
+  (should-error (mevedel--tag-query-prefix-from-infix '(foo and (()))))
+  :doc "Invalid infix queries:
+rejects consecutive negation without an explicit group"
+  (should-error (mevedel--tag-query-prefix-from-infix '(not not foo)))
+  :doc "Invalid infix queries:
+rejects trailing binary operators"
+  (should-error (mevedel--tag-query-prefix-from-infix '(foo and)))
+  (should-error (mevedel--tag-query-prefix-from-infix '(foo or))))
 
 (provide 'test-mevedel-utilities)
 ;;; test-mevedel-utilities.el ends here
