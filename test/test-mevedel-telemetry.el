@@ -474,7 +474,37 @@
             (should (eq 'debug gptel-log-level))
             (should mevedel-view-render-debug)
             (with-current-buffer log-buffer
-              (insert "captured gptel trace"))
+              (insert
+               "{\n"
+               "  \"gptel\": \"request headers\",\n"
+               "  \"timestamp\": \"test\"\n"
+               "}\n"
+               "{\n"
+               "  \"Authorization\": \"Bearer auth-secret\",\n"
+               "  \"ChatGPT-Account-Id\": \"account-secret\",\n"
+               "  \"Session-Id\": \"session-secret\",\n"
+               "  \"X-Unrelated\": \"preserved\"\n"
+               "}\n"
+               "{\n"
+               "  \"gptel\": \"request config\",\n"
+               "  \"timestamp\": \"test\"\n"
+               "}\n"
+               "header = \"Authorization: Bearer config-auth-secret\"\n"
+               "header = \"ChatGPT-Account-Id: config-account-secret\"\n"
+               "header = \"session-id: config-session-secret\"\n"
+               "{\n"
+               "  \"gptel\": \"request body\",\n"
+               "  \"timestamp\": \"test\"\n"
+               "}\n"
+               "{\n"
+               "  \"Authorization\": \"body-auth-preserved\",\n"
+               "  \"Session-Id\": \"body-session-preserved\"\n"
+               "}\n"
+               "{\n"
+               "  \"gptel\": \"response body\",\n"
+               "  \"timestamp\": \"test\"\n"
+               "}\n"
+               "header = \"Authorization: response-auth-preserved\""))
             (with-current-buffer view-buffer
               (insert "captured view trace"))
             (mevedel-session-debug)
@@ -482,6 +512,8 @@
             (should (eq 'info gptel-log-level))
             (should-not mevedel-view-render-debug)
             (should-not mevedel-telemetry--session-debug-marker)
+            (with-current-buffer log-buffer
+              (should (string-match-p "auth-secret" (buffer-string))))
             (let ((gptel-file
                    (file-name-concat
                     root "diagnostics" "run-test" "gptel-debug.log"))
@@ -492,7 +524,38 @@
               (should (= #o600 (logand #o777 (file-modes view-file))))
               (with-temp-buffer
                 (insert-file-contents gptel-file)
-                (should (equal "captured gptel trace" (buffer-string))))
+                (let ((contents (buffer-string)))
+                  (dolist (secret
+                           '("auth-secret" "account-secret" "session-secret"
+                             "config-auth-secret" "config-account-secret"
+                             "config-session-secret"))
+                    (should-not (string-match-p secret contents)))
+                  (should (string-match-p
+                           "\"Authorization\": \"<redacted>\"" contents))
+                  (should (string-match-p
+                           "\"ChatGPT-Account-Id\": \"<redacted>\""
+                           contents))
+                  (should (string-match-p
+                           "\"Session-Id\": \"<redacted>\"" contents))
+                  (should (string-match-p
+                           "header = \"Authorization: <redacted>\""
+                           contents))
+                  (should (string-match-p
+                           "header = \"ChatGPT-Account-Id: <redacted>\""
+                           contents))
+                  (should (string-match-p
+                           "header = \"session-id: <redacted>\"" contents))
+                  (should (string-match-p
+                           "\"X-Unrelated\": \"preserved\"" contents))
+                  (should (string-match-p
+                           "\"Authorization\": \"body-auth-preserved\""
+                           contents))
+                  (should (string-match-p
+                           "\"Session-Id\": \"body-session-preserved\""
+                           contents))
+                  (should (string-match-p
+                           "header = \"Authorization: response-auth-preserved\""
+                           contents))))
               (with-temp-buffer
                 (insert-file-contents view-file)
                 (should (equal "captured view trace" (buffer-string)))))

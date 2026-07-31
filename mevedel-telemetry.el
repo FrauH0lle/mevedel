@@ -620,6 +620,37 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
       (setq mevedel-telemetry--profiler-session nil
             mevedel-telemetry--profiler-run-id nil))))
 
+(defun mevedel-telemetry--redact-gptel-debug-buffer ()
+  "Redact credential-bearing headers in the current gptel debug buffer."
+  (let ((case-fold-search t)
+        record-type)
+    (goto-char (point-min))
+    (while (not (eobp))
+      (let ((line-end (line-end-position)))
+        (cond
+         ((looking-at
+           (concat
+            "[ \t]*\\(?:{[ \t]*\\)?\"gptel\"[ \t]*:[ \t]*\""
+            "\\([^\"]+\\)\""))
+          (setq record-type (downcase (match-string-no-properties 1))))
+         ((member record-type '("request headers" "response headers"))
+          (when (re-search-forward
+                 (concat
+                  "\\([ \t]*\""
+                  "\\(?:Authorization\\|ChatGPT-Account-Id\\|Session-Id\\)"
+                  "\"[ \t]*:[ \t]*\"\\)[^\"\n\r]*\\(\"[, \t]*\\)$")
+                 line-end t)
+            (replace-match "\\1<redacted>\\2" nil nil)))
+         ((equal record-type "request config")
+          (when (re-search-forward
+                 (concat
+                  "\\([ \t]*header[ \t]*=[ \t]*\""
+                  "\\(?:Authorization\\|ChatGPT-Account-Id\\|Session-Id\\)"
+                  ":[ \t]*\\)[^\"\n\r]*\\(\"[ \t]*\\)$")
+                 line-end t)
+            (replace-match "\\1<redacted>\\2" nil nil)))))
+      (forward-line 1))))
+
 ;;;###autoload
 (defun mevedel-session-debug ()
   "Toggle profiler and gptel debug-log capture for the current session.
@@ -643,8 +674,11 @@ connection settings."
               (unless (marker-buffer marker)
                 (user-error "The active gptel debug log buffer was killed"))
               (make-directory directory t)
-              (with-current-buffer (marker-buffer marker)
-                (write-region marker (point-max) gptel-file nil 'silent))
+              (with-temp-buffer
+                (insert-buffer-substring (marker-buffer marker) marker)
+                (mevedel-telemetry--redact-gptel-debug-buffer)
+                (write-region (point-min) (point-max)
+                              gptel-file nil 'silent))
               (set-file-modes gptel-file #o600)
               (when (and (markerp view-marker)
                          (marker-buffer view-marker))
