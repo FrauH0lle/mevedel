@@ -2339,7 +2339,8 @@ direct non-workspace uses."
     milliseconds))
 
 (defun mevedel-tool-exec--write-wait-time-ms (input chars)
-  "Return the validated observation wait from INPUT and CHARS."
+  "Return the validated observation wait from INPUT and CHARS.
+Clamp positive short polls to the poll minimum."
   (let* ((input-p (and (stringp chars) (not (string-empty-p chars))))
          (milliseconds
           (if (plist-member input :yield-time_ms)
@@ -2347,6 +2348,10 @@ direct non-workspace uses."
             (if input-p 250 5000)))
          (minimum (if input-p 250 5000))
          (maximum (if input-p 30000 300000)))
+    (when (and (not input-p)
+               (integerp milliseconds)
+               (< 0 milliseconds minimum))
+      (setq milliseconds minimum))
     (unless (and (integerp milliseconds)
                  (<= minimum milliseconds)
                  (<= milliseconds maximum))
@@ -3067,7 +3072,7 @@ Header shows a truncated first line of the command; body fontifies as
            (chars string :optional
                   "Input to send. Omit or use an empty string to poll. Ordinary input requires a PTY; a single Ctrl-C character interrupts either mode.")
            (yield-time_ms integer :optional
-                          "Wait before returning: polls default to 5000ms (5000-300000); input defaults to 250ms (250-30000)."))
+                          "Wait before returning: polls default to 5000ms and clamp positive shorter waits to 5000ms (maximum 300000); input defaults to 250ms (250-30000)."))
     :async-p t
     :max-result-size 30000
     :groups (eval)
