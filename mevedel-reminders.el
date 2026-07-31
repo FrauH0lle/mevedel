@@ -32,6 +32,7 @@
 (declare-function flymake-diagnostic-text "flymake" (diag))
 (declare-function flymake-diagnostic-type "flymake" (diag))
 (declare-function flymake-diagnostics "flymake" (&optional beg end))
+(declare-function flymake-disabled-backends "flymake" ())
 (declare-function flymake-start "flymake" (&optional defer force))
 
 ;; `gptel'
@@ -1210,6 +1211,7 @@ identifies the turn.  FLYMAKE-P and FLYCHECK-P select the active checkers."
         (settled nil)
         (started-p nil)
         (flymake-left 0)
+        flymake-completions
         (flymake-starting nil)
         flycheck-hook timer)
     (cl-labels
@@ -1224,19 +1226,20 @@ identifies the turn.  FLYMAKE-P and FLYCHECK-P select the active checkers."
               (with-current-buffer source
                 (remove-hook 'flycheck-after-syntax-check-hook
                              flycheck-hook t)))
-            (let* ((current-p
-                    (and (buffer-live-p source)
-                         (buffer-live-p buffer)
+            (let* ((owner-current-p
+                    (and (buffer-live-p buffer)
                          (eq owner (mevedel-reminders--turn-owner buffer))))
+                   (source-live-p (buffer-live-p source))
                    (report
-                    (when (and current-p collect-p)
+                    (when (and owner-current-p source-live-p collect-p)
                       (mevedel-reminders--diagnostics-record-current
                        buffer path
                        (with-current-buffer source
                          (mevedel-reminders--collect-diagnostics-in-buffer))))))
               (mevedel-reminders--record-diagnostic-telemetry
-               buffer (if current-p outcome 'stale) report)
-              (when current-p
+               buffer (if (and owner-current-p source-live-p) outcome 'stale)
+               report)
+              (when owner-current-p
                 (funcall continuation)))))
          (ready
           (checker)
@@ -1245,17 +1248,23 @@ identifies the turn.  FLYMAKE-P and FLYCHECK-P select the active checkers."
             (finish 'ready t)))
          (make-report-advice
           (make-report &rest args)
-          (let ((report (apply make-report args))
-                (reported nil))
+          (let ((backend (car args))
+                (report (apply make-report args))
+                (reported nil)
+                complete)
             (cl-incf flymake-left)
+            (setq complete
+                  (lambda ()
+                    (unless reported
+                      (setq reported t)
+                      (cl-decf flymake-left)
+                      (when (and (not flymake-starting)
+                                 (zerop flymake-left))
+                        (ready 'flymake)))))
+            (push (cons backend complete) flymake-completions)
             (lambda (&rest report-args)
               (prog1 (apply report report-args)
-                (unless reported
-                  (setq reported t)
-                  (cl-decf flymake-left)
-                  (when (and (not flymake-starting)
-                             (zerop flymake-left))
-                    (ready 'flymake))))))))
+                (funcall complete))))))
       (with-current-buffer source
         (when flymake-p
           (setq flymake-starting t)
@@ -1264,6 +1273,9 @@ identifies the turn.  FLYMAKE-P and FLYCHECK-P select the active checkers."
               (condition-case nil
                   (progn
                     (flymake-start nil t)
+                    (dolist (backend (flymake-disabled-backends))
+                      (when-let* ((entry (assq backend flymake-completions)))
+                        (funcall (cdr entry))))
                     (setq started-p t))
                 (error (setq pending (delq 'flymake pending))))
             (advice-remove 'flymake-make-report-fn #'make-report-advice)

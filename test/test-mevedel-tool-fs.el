@@ -1045,8 +1045,13 @@
   (with-temp-buffer
     (insert (make-string 20 ?x))
     (mevedel-tool-fs--truncate-output-buffer 10 "Narrow it.")
-    (should (equal "\n... Output truncated at 0K byte limit. Narrow it."
-                   (buffer-string)))))
+    (should (equal "\n... Outpu" (buffer-string)))
+    (should (<= (string-bytes (buffer-string)) 10)))
+  (with-temp-buffer
+    (insert "keep\n" (make-string 200 ?x))
+    (mevedel-tool-fs--truncate-output-buffer 80 "Narrow it.")
+    (should (string-suffix-p "Narrow it." (buffer-string)))
+    (should (<= (string-bytes (buffer-string)) 80))))
 
 (mevedel-deftest mevedel-tool-fs--settle-rg-result ()
   ,test
