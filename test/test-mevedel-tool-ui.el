@@ -930,7 +930,7 @@
           (rendering
            (mevedel-tool-ui--render-agent-interaction
             "FollowupAgent"
-            '(:target "/root/spec_review")
+            '(:target "/root/spec_review" :message "Verify documentation")
             ""
             '(:kind collaboration-event
               :event interacted
@@ -939,7 +939,9 @@
                      (plist-get rendering :header)))
       (should (equal "/root/spec_review"
                      (plist-get rendering :agent-path)))
-      (should-not (plist-get rendering :expandable-p))
+      (should (equal "Verify documentation"
+                     (plist-get rendering :body)))
+      (should (plist-get rendering :initially-collapsed-p))
       (should-not
        (mevedel-tool-ui--render-agent-interaction
         "FollowupAgent" '(:target "/root/missing")
@@ -954,11 +956,13 @@
               (set-marker-insertion-type mevedel-view--input-marker nil)))
         (should (string= draft (mevedel-view--input-text))))))
 
-  :doc "interaction paths activate transcripts and sent messages expand"
+  :doc "interaction paths activate transcripts; follow-ups and sent messages expand"
   (mevedel-view-test--with-buffers
     (let* ((followup
             (mevedel-tool-ui--render-agent-interaction
-             "FollowupAgent" '(:target "/root/spec_review") ""
+             "FollowupAgent"
+             '(:target "/root/spec_review" :message "Verify documentation")
+             ""
              '(:kind collaboration-event
                :event interacted
                :path "/root/spec_review")))
@@ -973,6 +977,8 @@
            opened)
       (should (equal "Message sent to /root/spec_review"
                      (plist-get message :header)))
+      (should (equal "Verify documentation" (plist-get followup :body)))
+      (should (plist-get followup :initially-collapsed-p))
       (should (equal "Detailed finding" (plist-get message :body)))
       (should (plist-get message :initially-collapsed-p))
       (with-current-buffer view-buf
@@ -989,6 +995,14 @@
                    (lambda (path) (setq opened path))))
           (mevedel-view-activate-at-point))
         (should (equal "/root/spec_review" opened))
+        (goto-char (point-min))
+        (search-forward "Interacted with /root/spec_review")
+        (goto-char (match-beginning 0))
+        (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                   (lambda (&rest _) followup)))
+          (mevedel-view-toggle-section))
+        (should (search-forward "Verify documentation"
+                                mevedel-view--input-marker t))
         (goto-char (point-min))
         (search-forward "Message sent to /root/spec_review")
         (goto-char (match-beginning 0))

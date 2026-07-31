@@ -2938,9 +2938,23 @@ default Bash keeps bare dot inspection automatic"
   :doc "uses distinct poll and input defaults"
   (should (= 5000 (mevedel-tool-exec--write-wait-time-ms nil "")))
   (should (= 250 (mevedel-tool-exec--write-wait-time-ms nil "x")))
+  :doc "clamps positive short poll waits to five seconds"
+  (dolist (value '(1 250 1000 4999))
+    (should (= 5000
+               (mevedel-tool-exec--write-wait-time-ms
+                (list :yield-time_ms value) ""))))
+  :doc "accepts the inclusive poll and input bounds"
+  (dolist (case '((5000 "") (300000 "") (250 "x") (30000 "x")))
+    (should (= (car case)
+               (mevedel-tool-exec--write-wait-time-ms
+                (list :yield-time_ms (car case)) (cadr case)))))
   :doc "validates the distinct poll and input ranges"
+  (dolist (value '(-1 0 300001 1.5 "5000"))
+    (should-error
+     (mevedel-tool-exec--write-wait-time-ms
+      (list :yield-time_ms value) "")))
   (should-error
-   (mevedel-tool-exec--write-wait-time-ms '(:yield-time_ms 4999) ""))
+   (mevedel-tool-exec--write-wait-time-ms '(:yield-time_ms 249) "x"))
   (should-error
    (mevedel-tool-exec--write-wait-time-ms '(:yield-time_ms 30001) "x")))
 

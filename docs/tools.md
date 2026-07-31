@@ -374,7 +374,8 @@ transcript handle; the registry-backed aggregate status uses distinct
 are the only sources for `Started PATH`, `Interacted with PATH`, `Message sent
 to PATH`, `Interrupted PATH`, and `Waiting for agents`. Settled `WaitAgent`
 calls render `Waited for agents (OUTCOME)`; consecutive waits coalesce into
-the final row with a count.
+the final row with a count. `Interacted with PATH` and `Message sent to PATH`
+start collapsed and expand to their exact follow-up or mail text.
 Render-data lookup/patching scans literal open/close delimiters rather
 than matching the whole hidden block with one regexp; live agent metadata
 and multiline payloads can be large enough to overflow Emacs regexp
@@ -465,7 +466,9 @@ from spawn. Explicit `tty=true` instead allocates a PTY and retains writable
 stdin without changing the captured owner, workdir, confinement, or resource
 grants. Native Windows Emacs exposes only pipe subprocesses, so mevedel rejects
 PTY and Interrupt requests there; Stop remains available for the direct child.
-`WriteStdin` sends ordinary input only to PTYs. Unconfined Ctrl-C is
+Empty `WriteStdin` polls default to 5000ms and clamp positive shorter waits to
+5000ms; the maximum is 300000ms. `WriteStdin` sends ordinary input only to
+PTYs. Unconfined Ctrl-C is
 written through PTYs or signals pipe-mode process groups; confined Ctrl-C
 instead signals the foreground process group once across Bubblewrap's session
 boundary.

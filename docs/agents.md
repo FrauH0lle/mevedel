@@ -38,7 +38,9 @@ transcript location after the turn settles. `ListAgents` returns the full
 path-sorted retained roster without storage IDs or transcript content.
 `FollowupAgent` continues an idle retained conversation or steers a running
 invocation at its next safe request boundary; later terminal results still go
-to the original spawn parent. `SendMessage`
+to the original spawn parent. A successful follow-up renders a collapsed
+`Interacted with PATH` disclosure containing the exact follow-up text.
+`SendMessage`
 queues interim plain-text mail for `/root` or any retained path without
 activating a turn. `WaitAgent` suspends its ordinary asynchronous tool callback
 until mail, user steering, follow-up steering, or its bounded successful

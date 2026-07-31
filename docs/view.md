@@ -630,7 +630,8 @@ storage identities or runtime tables.
 Agent handles use `TAB` to expand or collapse their details.  `RET` on the
 visible agent path, or a mouse click, opens the transcript.  Agent handles
 and activity-row paths are clickable when a transcript entry is available.
-`Message sent to PATH` starts collapsed and expands to the sent message.
+`Interacted with PATH` and `Message sent to PATH` start collapsed and expand
+to the exact follow-up or sent message.
 Running agents show status/activity in the main view
 and may open a rendered read-only transcript view over the live agent
 buffer while that buffer is available. Terminal agents open a rendered
