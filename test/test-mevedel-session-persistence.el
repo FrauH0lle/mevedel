@@ -7646,6 +7646,91 @@ The result is a plist whose :tempdir owns every created file."
 ;;
 ;;; View rerender on resume / rewind
 
+(mevedel-deftest mevedel-session-persistence--hydrate-restored-buffer ()
+  ,test
+  (test)
+  :doc "plants session state after Org setup and before transcript restoration"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-restore-hydrate-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (buffer (generate-new-buffer " *mevedel-restore-hydrate*"))
+         (segment-path (file-name-concat root "segment-0001.chat.org"))
+         events)
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-transcript-restore-gptel-state)
+                   (lambda ()
+                     (should (derived-mode-p 'org-mode))
+                     (should (eq mevedel--session session))
+                     (should (eq mevedel--workspace workspace))
+                     (push 'transcript events)))
+                  ((symbol-function
+                    'mevedel-pipeline-reconcile-lost-executions)
+                   (lambda (_buffer) 0))
+                  ((symbol-function 'mevedel--chat-buffer-init-common)
+                   (lambda (_buffer _workspace source)
+                     (should (equal source "resume"))
+                     (push 'chat events)))
+                  ((symbol-function
+                    'mevedel-agent-persistence-restore-tree)
+                   (lambda (_session _buffer read-only-p)
+                     (should-not read-only-p)
+                     (push 'agents events)
+                     2))
+                  ((symbol-function
+                    'mevedel-session-persistence--load-instructions)
+                   (lambda (_session _buffer)
+                     (push 'instructions events))))
+          (should
+           (= 2
+              (mevedel-session-persistence--hydrate-restored-buffer
+               buffer session workspace segment-path t nil nil)))
+          (should (equal '(transcript chat agents instructions)
+                         (nreverse events)))
+          (with-current-buffer buffer
+            (should (equal root default-directory))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence--finish-restored-buffer ()
+  ,test
+  (test)
+  :doc "persists repairs and loads history before rendering a fresh buffer"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-restore-finish-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (buffer (generate-new-buffer " *mevedel-restore-finish-data*"))
+         (view (generate-new-buffer " *mevedel-restore-finish-view*"))
+         events)
+    (setf (mevedel-session-save-path session) root)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local mevedel--view-buffer view))
+          (cl-letf (((symbol-function
+                      'mevedel-session-persistence--build-sidecar)
+                     (lambda (_session _buffer) '(:sidecar t)))
+                    ((symbol-function 'mevedel-session-persistence-write)
+                     (lambda (_path _sidecar) (push 'write events)))
+                    ((symbol-function 'mevedel-view-history-load)
+                     (lambda (_session) (push 'history events)))
+                    ((symbol-function 'mevedel-view--full-rerender)
+                     (lambda () (push 'render events))))
+            (should
+             (eq buffer
+                 (mevedel-session-persistence--finish-restored-buffer
+                  buffer session nil t))))
+          (should (equal '(write history render) (nreverse events))))
+      (dolist (item (list view buffer))
+        (when (buffer-live-p item)
+          (kill-buffer item)))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
 (mevedel-deftest mevedel-session-persistence--find-live-buffer ()
   ,test
   (test)
