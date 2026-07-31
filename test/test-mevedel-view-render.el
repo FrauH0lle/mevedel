@@ -959,6 +959,79 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                          (marker-position
                           mevedel-view--input-marker))))))))))
 
+(mevedel-deftest mevedel-view--full-rerender-reset ()
+  ,test
+  (test)
+  :doc "clears stale display text and restores ordered zone markers"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (insert "stale display\n")
+        (mevedel-view--full-rerender-reset
+         data-buf data-buf nil nil))
+      (should-not (string-match-p "stale display" (buffer-string)))
+      (should (= (marker-position mevedel-view--status-marker)
+                 (marker-position mevedel-view--input-marker)))
+      (should (= (marker-position mevedel-view--interaction-marker)
+                 (marker-position mevedel-view--input-marker))))))
+
+(mevedel-deftest mevedel-view--full-rerender-project ()
+  ,test
+  (test)
+  :doc "projects transcript turns and reports the last assistant turn"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Response\n" 'response)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (mevedel-view--full-rerender-reset data-buf data-buf nil nil)
+        (let ((rendering
+               (mevedel-view--full-rerender-project
+                data-buf data-buf view-buf nil nil nil)))
+          (should (eq (plist-get rendering :view-buffer) view-buf))
+          (should (eq (plist-get rendering :last-turn-role) 'assistant))
+          (should (markerp
+                   (plist-get rendering :last-assistant-turn-start)))))
+      (should (string-match-p "Response" (buffer-string))))))
+
+(mevedel-deftest mevedel-view--full-rerender-reanchor ()
+  ,test
+  (test)
+  :doc "prefers the projected current assistant as the live anchor"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((assistant-start (copy-marker (point-min) nil)))
+        (mevedel-view--full-rerender-reanchor
+         data-buf
+         (list :view-buffer view-buf
+               :last-current-assistant-turn-start assistant-start
+               :last-turn-role 'assistant)
+         t 1 nil)
+        (should (= (marker-position mevedel-view--in-flight-turn-start)
+                   (marker-position assistant-start)))))))
+
+(mevedel-deftest mevedel-view--full-rerender-finish ()
+  ,test
+  (test)
+  :doc "rebuilds the input, status, interaction, and progress chrome"
+  (mevedel-view-test--with-buffers
+    (let (calls)
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view-refresh-input-prompt)
+                   (lambda () (push 'input calls)))
+                  ((symbol-function 'mevedel-view--render-status)
+                   (lambda (_buffer) (push 'status calls)))
+                  ((symbol-function 'mevedel-view--interaction-rebuild)
+                   (lambda () (push 'interaction calls)))
+                  ((symbol-function 'mevedel-view--ensure-request-progress)
+                   (lambda (_buffer) (push 'progress calls))))
+          (mevedel-view--full-rerender-finish
+           data-buf data-buf (list :view-buffer view-buf) nil
+           (float-time))))
+      (should (equal (nreverse calls)
+                     '(input status interaction progress))))))
+
 (mevedel-deftest mevedel-view--full-rerender ()
   ,test
   (test)
