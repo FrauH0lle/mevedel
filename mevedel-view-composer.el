@@ -619,6 +619,7 @@ composer body.")
     (mevedel-view--interaction-register
      (list :kind 'preview
            :id 'armed-session-fork
+           :active-work-paused nil
            :body
            (format "Fork %s from Assistant turn %d  [Cancel]"
                    label (plist-get target :cum-turn))

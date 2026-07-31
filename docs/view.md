@@ -183,7 +183,11 @@ Terminology:
   pending input and controls that require user response.
 - **Request progress row**: the fragment-backed foreground spinner directly
   above the input prompt. It is not part of the history, status, or
-  interaction zones.
+  interaction zones. Its elapsed value measures active request work, excluding
+  time spent awaiting an Ask answer, permission decision, Plan approval,
+  Write/Edit preview decision, or direct request input. During those waits it
+  reads `Waiting for input` while its spinner frame keeps animating. Queued
+  Pending Inputs and an armed session fork do not pause active elapsed time.
 - **Input zone**: the read-only prompt prefix plus the editable composer.
   **Composer** refers only to the editable unsent input body.
 
@@ -462,7 +466,7 @@ I'll work on the changes.
 Allow Bash?
   npx @emacs-eask/cli test ert test/test-mevedel-view.el
 
-Working... · 1m 08s · 1 agent running
+Waiting for input · 1m 08s · 1 agent running
 
 [plan]  >
 ```
@@ -505,7 +509,7 @@ Follow-ups
   1. Also include a full mockup with agents and permissions.
   RET or C-c C-e manage pending inputs
 
-Working... · 2m 14s · 1 agent blocked · 1 agent running
+Waiting for input · 2m 14s · 1 agent blocked · 1 agent running
 
 [auto] > I am drafting a follow-up while the request runs.
 ```

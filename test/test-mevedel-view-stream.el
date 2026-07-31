@@ -2213,7 +2213,7 @@
         (should-not (string-match-p "Thinking" text)))
       (mevedel-view--stop-spinner)))
 
-  :doc "default spinner shows working elapsed time and active agents"
+  :doc "spinner freezes elapsed time while input is pending and keeps animating"
   (mevedel-view-stream-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
                        :type 'project
@@ -2221,7 +2221,12 @@
                        :root temporary-file-directory
                        :name "spinner-agents"))
            (session (mevedel-session-create "main" workspace))
-           (started (time-subtract (current-time) (seconds-to-time 12))))
+           (request
+            (mevedel-request--create
+             :session session
+             :started-at
+             (time-subtract (current-time) (seconds-to-time 12))))
+           (mevedel-view-spinner-frames '("-" "+")))
       (setf (mevedel-session-agent-registry session)
             (list (cons "/root/spin"
                         (mevedel-agent-record--create
@@ -2229,20 +2234,40 @@
                          :parent-path "/root" :activity 'running))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (setq-local mevedel--current-request
-                    (mevedel-request--create
-                     :session session
-                     :started-at started)))
+        (setq-local mevedel--current-request request))
       (with-current-buffer view-buf
         (mevedel-view--start-spinner "Thinking...")
-        (let ((text (buffer-substring-no-properties
-                     (overlay-start
-                      (mevedel-view-zone-region 'progress))
-                     (overlay-end
-                      (mevedel-view-zone-region 'progress)))))
-          (should (string-match-p "Working\\.\\.\\." text))
+        (mevedel-view--interaction-register
+         '(:kind ask :id ask :origin "/root" :body "ask"))
+        (let* ((pause-started
+                (mevedel-request-active-work-pause-started-at request))
+               (region (mevedel-view-zone-region 'progress))
+               (frame-position
+                (text-property-any
+                 (overlay-start region) (overlay-end region)
+                 'mevedel-view-spinner-frame t))
+               (frame (get-text-property frame-position 'display))
+               (text (buffer-substring-no-properties
+                      (overlay-start region) (overlay-end region))))
+          (should (string-match-p "Waiting for input" text))
           (should (string-match-p "[0-9]+s" text))
-          (should (string-match-p "1 agent running" text)))
+          (should (string-match-p "1 agent running" text))
+          (should
+           (< (abs
+               (- (mevedel-request-active-elapsed-seconds
+                   request pause-started)
+                  (mevedel-request-active-elapsed-seconds
+                   request
+                   (time-add pause-started (seconds-to-time 5)))))
+              0.001))
+          (mevedel-view--spinner-tick)
+          (should-not
+           (equal frame (get-text-property frame-position 'display))))
+        (mevedel-view--interaction-unregister 'ask)
+        (let ((text (buffer-substring-no-properties
+                     (overlay-start (mevedel-view-zone-region 'progress))
+                     (overlay-end (mevedel-view-zone-region 'progress)))))
+          (should (string-match-p "Working\\.\\.\\." text)))
         (mevedel-view--stop-spinner))))
 
   :doc "spinner ticks replace dynamic metadata instead of appending it"

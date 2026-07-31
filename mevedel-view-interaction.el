@@ -36,8 +36,8 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
-(declare-function mevedel-request-set-approval-waiting
-                  "mevedel-structs" (request waiting &optional now))
+(declare-function mevedel-request-set-active-work-paused
+                  "mevedel-structs" (request paused &optional now))
 (declare-function mevedel-session-pending-plan-approval
 		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs"
@@ -164,6 +164,28 @@ VIEW-BUFFER defaults to the current buffer."
                         mevedel-view--interaction-descriptors)
                        0)))))))
 
+(defun mevedel-view--interaction-pauses-active-work-p (descriptor)
+  "Return non-nil when interaction DESCRIPTOR pauses active work."
+  (if (plist-member descriptor :active-work-paused)
+      (plist-get descriptor :active-work-paused)
+    (memq (plist-get descriptor :kind)
+          '(ask permission plan preview request))))
+
+(defun mevedel-view--interaction-active-work-paused-p ()
+  "Return non-nil when the current view awaits actionable user input."
+  (or
+   (and (hash-table-p mevedel-view--interaction-descriptors)
+        (catch 'paused
+          (maphash
+           (lambda (_id descriptor)
+             (when (mevedel-view--interaction-pauses-active-work-p descriptor)
+               (throw 'paused t)))
+           mevedel-view--interaction-descriptors)
+          nil))
+   (when-let* ((session (mevedel-view--session))
+               (entry (mevedel-session-pending-plan-approval session)))
+     (plist-get entry :hidden))))
+
 (defun mevedel-view-interaction-blocking-p (&optional view-buffer)
   "Return non-nil when VIEW-BUFFER awaits input outside pending-input UI."
   (let ((view (or view-buffer (current-buffer))))
@@ -172,15 +194,7 @@ VIEW-BUFFER defaults to the current buffer."
      (with-current-buffer view
        (or
         (bound-and-true-p mevedel-view--prompt-hook-pending)
-        (and
-         (hash-table-p mevedel-view--interaction-descriptors)
-         (catch 'blocking
-           (maphash
-            (lambda (_id descriptor)
-              (unless (eq (plist-get descriptor :kind) 'pending-input)
-                (throw 'blocking t)))
-            mevedel-view--interaction-descriptors)
-           nil)))))))
+        (mevedel-view--interaction-active-work-paused-p))))))
 
 
 ;;
@@ -232,23 +246,15 @@ silently placing controls in a data buffer."
 ;;
 ;;; Rendering and lifecycle
 
-(defun mevedel-view--interaction-sync-approval-wait ()
-  "Synchronize request timing with visible permission interactions."
+(defun mevedel-view--interaction-sync-active-work-pause ()
+  "Synchronize request timing with visible blocking interactions."
   (when-let* (((buffer-live-p mevedel--data-buffer))
               (request
                (buffer-local-value 'mevedel--current-request
                                    mevedel--data-buffer))
               ((mevedel-request-p request)))
-    (let ((waiting
-           (and (hash-table-p mevedel-view--interaction-descriptors)
-                (catch 'waiting
-                  (maphash
-                   (lambda (_id descriptor)
-                     (when (eq (plist-get descriptor :kind) 'permission)
-                       (throw 'waiting t)))
-                   mevedel-view--interaction-descriptors)
-                  nil))))
-      (mevedel-request-set-approval-waiting request waiting)
+    (let ((paused (mevedel-view--interaction-active-work-paused-p)))
+      (mevedel-request-set-active-work-paused request paused)
       (when (fboundp 'mevedel-view--render-request-progress)
         (mevedel-view--render-request-progress)))))
 
@@ -431,7 +437,7 @@ OVERLAY is stored on the text as the descriptor's callback handle."
     overlay))
 
 (defun mevedel-view--show-pending-plan (&optional event)
-  "Show and focus the current session's pending Plan approval."
+  "Show and focus the current session's pending Plan approval from EVENT."
   (interactive (list last-nonmenu-event))
   (when (mouse-event-p event)
     (mouse-set-point event))
@@ -556,29 +562,34 @@ OVERLAY is stored on the text as the descriptor's callback handle."
   "Rebuild interaction-zone descriptors from live preview and queue state.
 This deletes only interaction UI overlays and never settles callbacks."
   (unless mevedel-view--agent-transcript-p
-    (mevedel-view--interaction-clear-for-rebuild)
-    (when-let* ((session (mevedel-view--session)))
-      (when (mevedel-session-pending-plan-approval session)
-        (require 'mevedel-plan-mode)
-        (mevedel-plan-approval-render session))
-      (when (mevedel-session-permission-queue session)
-        (require 'mevedel-permission-queue)
-        (mevedel-permission-queue--render-head session))
-      (when (or (mevedel-session-pending-steering session)
-                (mevedel-session-pending-follow-ups session)
-                (mevedel-session-pending-input-failure-paused session))
-        (mevedel-view--pending-inputs-render session)))
-    (when (hash-table-p mevedel-view--interaction-telemetry-opened)
-      (let (closed)
-        (maphash
-         (lambda (id _metadata)
-           (unless (and (hash-table-p mevedel-view--interaction-descriptors)
-                        (gethash id mevedel-view--interaction-descriptors))
-             (push id closed)))
-         mevedel-view--interaction-telemetry-opened)
-        (dolist (id closed)
-          (mevedel-view--interaction-telemetry-close id))))
-    (mevedel-view--interaction-render)))
+    (unwind-protect
+        (progn
+          (mevedel-view--interaction-clear-for-rebuild)
+          (when-let* ((session (mevedel-view--session)))
+            (when (mevedel-session-pending-plan-approval session)
+              (require 'mevedel-plan-mode)
+              (mevedel-plan-approval-render session))
+            (when (mevedel-session-permission-queue session)
+              (require 'mevedel-permission-queue)
+              (mevedel-permission-queue--render-head session))
+            (when (or (mevedel-session-pending-steering session)
+                      (mevedel-session-pending-follow-ups session)
+                      (mevedel-session-pending-input-failure-paused session))
+              (mevedel-view--pending-inputs-render session)))
+          (when (hash-table-p mevedel-view--interaction-telemetry-opened)
+            (let (closed)
+              (maphash
+               (lambda (id _metadata)
+                 (unless
+                     (and (hash-table-p
+                           mevedel-view--interaction-descriptors)
+                          (gethash id mevedel-view--interaction-descriptors))
+                   (push id closed)))
+               mevedel-view--interaction-telemetry-opened)
+              (dolist (id closed)
+                (mevedel-view--interaction-telemetry-close id))))
+          (mevedel-view--interaction-render))
+      (mevedel-view--interaction-sync-active-work-pause))))
 
 (defun mevedel-view--interaction-register (descriptor)
   "Register DESCRIPTOR in the interaction zone and return its overlay."
@@ -622,9 +633,7 @@ This deletes only interaction UI overlays and never settles callbacks."
               (mevedel-permission-mode-effective
                session mevedel--data-buffer (current-buffer)))
          :active-work-paused
-         (and (memq (plist-get descriptor :kind)
-                    '(ask permission plan preview request))
-              t)
+         (and (mevedel-view--interaction-pauses-active-work-p descriptor) t)
          :pending-count
          (and (hash-table-p mevedel-view--interaction-descriptors)
               (1+ (hash-table-count
@@ -644,7 +653,7 @@ This deletes only interaction UI overlays and never settles callbacks."
     (puthash id descriptor mevedel-view--interaction-descriptors)
     (puthash id overlay mevedel-view--interaction-overlays)
     (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
-    (mevedel-view--interaction-sync-approval-wait)
+    (mevedel-view--interaction-sync-active-work-pause)
     (mevedel-view--interaction-render)
     (mevedel-view--debug-log
      'interaction-register-end
@@ -658,7 +667,7 @@ This deletes only interaction UI overlays and never settles callbacks."
   (mevedel-view--interaction-telemetry-close id)
   (when (hash-table-p mevedel-view--interaction-descriptors)
     (remhash id mevedel-view--interaction-descriptors))
-  (mevedel-view--interaction-sync-approval-wait)
+  (mevedel-view--interaction-sync-active-work-pause)
   (when (hash-table-p mevedel-view--interaction-overlays)
     (when-let* ((overlay (gethash id mevedel-view--interaction-overlays)))
       (mevedel-view--interaction-delete-overlay overlay)
@@ -686,7 +695,6 @@ This deletes only interaction UI overlays and never settles callbacks."
         (remhash id mevedel-view--interaction-overlays))
       (when (hash-table-p mevedel-view--interaction-descriptors)
         (remhash id mevedel-view--interaction-descriptors))))
-  (mevedel-view--interaction-sync-approval-wait)
   (when (and (boundp 'mevedel--prompt-overlays)
              (listp mevedel--prompt-overlays))
     (let (live)
@@ -713,7 +721,7 @@ This deletes only interaction UI overlays and never settles callbacks."
   "Delete all interaction-zone overlays without firing callbacks."
   (when (hash-table-p mevedel-view--interaction-descriptors)
     (clrhash mevedel-view--interaction-descriptors))
-  (mevedel-view--interaction-sync-approval-wait)
+  (mevedel-view--interaction-sync-active-work-pause)
   (mevedel-view--interaction-render)
   (when (hash-table-p mevedel-view--interaction-overlays)
     (maphash (lambda (_id overlay)
