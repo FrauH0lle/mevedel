@@ -589,8 +589,8 @@ Created at request start, cleared in the termination handler."
   pending-plan      ; pending plan action plist
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
   started-at        ; wall-clock time when the request began
-  approval-wait-started-at ; wall-clock time when the current approval wait began
-  (approval-wait-duration 0) ; accumulated completed approval wait seconds
+  active-work-pause-started-at ; wall-clock time when the current pause began
+  (active-work-pause-duration 0) ; accumulated completed pause seconds
   origin            ; canonical requesting agent path
   ;; Exact read-only accepted-plan authority derived for an active Goal turn.
   goal-plan-read-path
@@ -600,30 +600,30 @@ Created at request start, cleared in the termination handler."
   attached-skill-records
   hook-rules)
 
-(defun mevedel-request-set-approval-waiting (request waiting &optional now)
-  "Set whether REQUEST is waiting for approval at NOW."
+(defun mevedel-request-set-active-work-paused (request paused &optional now)
+  "Set whether REQUEST active-work timing is PAUSED at NOW."
   (let ((now (or now (current-time))))
-    (if waiting
-        (unless (mevedel-request-approval-wait-started-at request)
-          (setf (mevedel-request-approval-wait-started-at request) now))
+    (if paused
+        (unless (mevedel-request-active-work-pause-started-at request)
+          (setf (mevedel-request-active-work-pause-started-at request) now))
       (when-let* ((started
-                   (mevedel-request-approval-wait-started-at request)))
-        (cl-incf (mevedel-request-approval-wait-duration request)
+                   (mevedel-request-active-work-pause-started-at request)))
+        (cl-incf (mevedel-request-active-work-pause-duration request)
                  (float-time (time-subtract now started)))
-        (setf (mevedel-request-approval-wait-started-at request) nil))))
+        (setf (mevedel-request-active-work-pause-started-at request) nil))))
   request)
 
 (defun mevedel-request-active-elapsed-seconds (request &optional now)
-  "Return REQUEST active-work seconds at NOW, excluding approval waits."
+  "Return REQUEST active-work seconds at NOW, excluding pauses."
   (when-let* ((started-at (mevedel-request-started-at request)))
     (let ((now (or now (current-time))))
       (max
        0
        (- (float-time (time-subtract now started-at))
-          (or (mevedel-request-approval-wait-duration request) 0)
-          (if-let* ((approval-started
-                     (mevedel-request-approval-wait-started-at request)))
-              (float-time (time-subtract now approval-started))
+          (or (mevedel-request-active-work-pause-duration request) 0)
+          (if-let* ((pause-started
+                     (mevedel-request-active-work-pause-started-at request)))
+              (float-time (time-subtract now pause-started))
             0))))))
 
 

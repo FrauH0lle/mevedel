@@ -51,7 +51,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-request-active-elapsed-seconds
                   "mevedel-structs" (request &optional now))
-(declare-function mevedel-request-approval-wait-started-at
+(declare-function mevedel-request-active-work-pause-started-at
                   "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
@@ -731,8 +731,8 @@ falls back to \"Working...\"."
   "Return STATUS decorated with elapsed time and active-agent counts."
   (let* ((base
           (if-let* ((request (mevedel-view--spinner-request))
-                    ((mevedel-request-approval-wait-started-at request)))
-              "Waiting for approval"
+                    ((mevedel-request-active-work-pause-started-at request)))
+              "Waiting for input"
             (mevedel-view--spinner-base-status status)))
          (elapsed (mevedel-view--spinner-elapsed-label))
          (agents (mevedel-view--spinner-agent-count-label)))

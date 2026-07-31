@@ -42,8 +42,8 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   token/time/turn accounting, optional budget and accepted-plan reference,
   and timestamps.
 - **`mevedel-request`**: per-turn state: process-unique request identity,
-  owning session and agent origin, request start time, accumulated approval
-  wait time, file-snapshots, directive UUID, pending plan, cancellers,
+  owning session and agent origin, request start time, accumulated active-work
+  pause time, file-snapshots, directive UUID, pending plan, cancellers,
   skill-scoped permission rules, user-attached skill records, and hook rules.
   Skill model and effort policy is consumed before
   gptel realizes an owning request rather than stored for late mutation.

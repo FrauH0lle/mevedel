@@ -43,6 +43,11 @@ span identifiers.
 
 The event stream covers:
 
+Request settlement `:duration-ms` remains end-to-end wall-clock latency,
+including user waits. Interaction events separately identify whether active
+work was paused. The request-progress display and persisted request summary use
+active elapsed time instead and exclude actionable user-input waits.
+
 - Goal start, continuation dispatch, root-turn settlement, accounting, retries,
   and terminal status changes;
 - request queueing, provider dispatch, first response, stream end, callback

@@ -515,7 +515,9 @@
                    "Fork conversation from Assistant turn 2"
                    (plist-get descriptor :body)))
           (should (string-match-p "\\[Cancel\\]"
-                                  (plist-get descriptor :body))))
+                                  (plist-get descriptor :body)))
+          (should (plist-member descriptor :active-work-paused))
+          (should-not (plist-get descriptor :active-work-paused)))
         (mevedel-view-cancel-composer-state)
         (should-not mevedel-view--armed-session-fork)
         (should (mevedel-view-historical-segment-p))

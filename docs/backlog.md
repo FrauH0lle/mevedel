@@ -75,9 +75,6 @@ recommends those elements while leaving Codex room to choose the next action.
 - Find a better folder for the tool description markdown files
 - Ensure all tools have the examples and their descriptions in markdown files
 
--  ✓ Interacted with /root/check_working_timer_todo
-  "/root/check_working_timer_todo" should still be clickable.
-
 ## Entry format
 
 Each entry records its source, owed change, reason for deferral, current

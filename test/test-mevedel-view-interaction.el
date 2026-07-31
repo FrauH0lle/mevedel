@@ -135,10 +135,45 @@
     (kill-buffer view)
     (should-not (mevedel-view-interaction-pending-p view))))
 
+(mevedel-deftest mevedel-view--interaction-pauses-active-work-p ()
+  ,test
+  (test)
+  :doc "classifies actionable kinds and honors explicit overrides"
+  (dolist (kind '(ask permission plan preview request))
+    (should (mevedel-view--interaction-pauses-active-work-p
+             (list :kind kind))))
+  (should-not
+   (mevedel-view--interaction-pauses-active-work-p
+    '(:kind pending-input)))
+  (should-not
+   (mevedel-view--interaction-pauses-active-work-p
+    '(:kind preview :active-work-paused nil))))
+
+(mevedel-deftest mevedel-view--interaction-active-work-paused-p ()
+  ,test
+  (test)
+  :doc "detects visible actionable descriptors"
+  (with-temp-buffer
+    (mevedel-view-interaction-initialize)
+    (should-not (mevedel-view--interaction-active-work-paused-p))
+    (puthash 'ask '(:kind ask) mevedel-view--interaction-descriptors)
+    (should (mevedel-view--interaction-active-work-paused-p)))
+
+  :doc "detects hidden pending Plan approval"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "active-work")))
+      (setf (mevedel-session-pending-plan-approval session)
+            '(:hidden t))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (should (mevedel-view--interaction-active-work-paused-p))))))
+
 (mevedel-deftest mevedel-view-interaction-blocking-p ()
   ,test
   (test)
-  :doc "distinguishes user decisions from pending-input management"
+  :doc "distinguishes user decisions from non-blocking interaction UI"
   (with-temp-buffer
     (mevedel-view-interaction-initialize)
     (should-not (mevedel-view-interaction-blocking-p))
@@ -181,42 +216,72 @@
            :body "permission"))
         (should (= 1 (length (mevedel-agent-record-blockers record)))))))
 
-  :doc "permission registration pauses active time and updates progress without changing the draft"
-  (let ((mevedel-view-spinner-animate nil))
-    (mevedel-view-test--with-buffers
-      (let* ((session (mevedel-session--create :name "approval-wait"))
-             (request
-              (mevedel-request--create
-               :session session
-               :started-at (time-subtract
-                            (current-time) (seconds-to-time 20))))
-             (draft "> quoted\nsecond line"))
-        (with-current-buffer data-buf
-          (setq-local mevedel--session session)
-          (setq-local mevedel--current-request request))
-        (with-current-buffer view-buf
-          (setq-local mevedel--session session)
-          (mevedel-view-test--insert-composer-draft draft 4)
-          (mevedel-view--start-spinner "Working...")
+  :doc "actionable interactions pause active time without changing the draft"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "active-work-pause"))
+           (request
+            (mevedel-request--create
+             :session session
+             :started-at (time-subtract
+                          (current-time) (seconds-to-time 20))))
+           (draft "> quoted\nsecond line"))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request request))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view-test--insert-composer-draft draft 4)
+        (dolist (kind '(ask permission plan preview request))
           (mevedel-view--interaction-register
-           '(:kind permission :id permission :origin "/root"
-             :body "permission"))
-          (should (mevedel-request-approval-wait-started-at request))
-          (should (string-match-p
-                   "Waiting for approval"
-                   (buffer-substring-no-properties
-                    (overlay-start (mevedel-view-zone-region 'progress))
-                    (overlay-end (mevedel-view-zone-region 'progress)))))
+           (list :kind kind :id kind :origin "/root" :body "prompt"))
+          (should (mevedel-request-active-work-pause-started-at request))
           (should (equal draft (mevedel-view--input-text)))
-          (mevedel-view--interaction-unregister 'permission)
-          (should-not (mevedel-request-approval-wait-started-at request))
-          (should (string-match-p
-                   "Working\\.\\.\\."
-                   (buffer-substring-no-properties
-                    (overlay-start (mevedel-view-zone-region 'progress))
-                    (overlay-end (mevedel-view-zone-region 'progress)))))
-          (should (equal draft (mevedel-view--input-text)))
-          (mevedel-view--stop-spinner))))))
+          (when (memq kind '(ask preview request))
+            (let ((started
+                   (mevedel-request-active-work-pause-started-at request)))
+              (mevedel-view--interaction-rebuild)
+              (should
+               (equal started
+                      (mevedel-request-active-work-pause-started-at request)))))
+          (mevedel-view--interaction-unregister kind)
+          (should-not
+           (mevedel-request-active-work-pause-started-at request)))
+        (mevedel-view--interaction-register
+         '(:kind pending-input :id pending-input :body "queued"))
+        (should-not (mevedel-request-active-work-pause-started-at request))
+        (mevedel-view--interaction-unregister 'pending-input)
+        (mevedel-view--interaction-register
+         '(:kind preview :id fork :active-work-paused nil :body "fork"))
+        (should-not (mevedel-request-active-work-pause-started-at request))
+        (mevedel-view--interaction-unregister 'fork)
+        (mevedel-view--interaction-register
+         '(:kind ask :id ask :origin "/root" :body "ask"))
+        (let ((started
+               (mevedel-request-active-work-pause-started-at request)))
+          (mevedel-view--interaction-register
+           '(:kind preview :id preview :origin "/root" :body "preview"))
+          (mevedel-view--interaction-unregister 'ask)
+          (should (equal
+                   started
+                   (mevedel-request-active-work-pause-started-at request))))
+        (mevedel-view--interaction-unregister 'preview)
+        (should-not (mevedel-request-active-work-pause-started-at request))
+        (mevedel-view--interaction-register
+         '(:kind plan :id clear :origin "/root" :body "plan"))
+        (should (mevedel-request-active-work-pause-started-at request))
+        (mevedel-view--interaction-clear)
+        (should-not (mevedel-request-active-work-pause-started-at request))
+        (mevedel-view--interaction-register
+         '(:kind request :id teardown :origin "/root" :body "request"))
+        (mevedel-request-push-canceller
+         request
+         (lambda ()
+           (with-current-buffer view-buf
+             (mevedel-view--interaction-unregister 'teardown))))
+        (with-current-buffer data-buf
+          (mevedel-request-end))
+        (should-not (mevedel-request-active-work-pause-started-at request))
+        (should (equal draft (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-view--interaction-unregister ()
   ,test
@@ -264,13 +329,25 @@
                      (push (cons event props) events))))
           (mevedel-view--interaction-register
            '(:kind permission :id permission :origin "/root" :body "allow"))
-          (mevedel-view--interaction-unregister 'permission))
-        (dolist (event events)
-          (should (eq 'full-auto
-                      (plist-get (cdr event) :permission-mode-base)))
-          (should (eq 'full-auto
-                      (plist-get (cdr event) :permission-mode-effective))))
-        (should (assq 'interaction-opened events))
+          (mevedel-view--interaction-unregister 'permission)
+          (mevedel-view--interaction-register
+           '(:kind preview :id fork :active-work-paused nil :body "fork"))
+          (mevedel-view--interaction-unregister 'fork))
+        (let ((opened 0))
+          (dolist (event events)
+            (should (eq 'full-auto
+                        (plist-get (cdr event) :permission-mode-base)))
+            (should (eq 'full-auto
+                        (plist-get (cdr event) :permission-mode-effective)))
+            (when (eq (car event) 'interaction-opened)
+              (cl-incf opened)
+              (pcase (plist-get (cdr event) :kind)
+                ('permission
+                 (should (plist-get (cdr event) :active-work-paused)))
+                ('preview
+                 (should-not
+                  (plist-get (cdr event) :active-work-paused))))))
+          (should (= 2 opened)))
         (should (assq 'interaction-closed events))))))
 
 (mevedel-deftest mevedel-view--interaction-delete-overlay ()
@@ -969,10 +1046,15 @@
                        :permission-mode 'ask
                        :permission-queue nil
                        :pending-plan-approval nil))
+             (request
+              (mevedel-request--create
+               :session session
+               :started-at (current-time)))
              (plan-outcomes nil)
              (permission-outcomes nil))
         (with-current-buffer data-buf
-          (setq-local mevedel--session session))
+          (setq-local mevedel--session session)
+          (setq-local mevedel--current-request request))
         (with-current-buffer view-buf
           (setq-local mevedel--session session)
           (setf (mevedel-session-pending-plan-approval session)
@@ -998,6 +1080,13 @@
                             (lambda (outcome)
                               (push outcome permission-outcomes)))))
           (mevedel-view--interaction-rebuild)
+          (let ((pause-started
+                 (mevedel-request-active-work-pause-started-at request)))
+            (should pause-started)
+            (mevedel-view--interaction-rebuild)
+            (should (equal
+                     pause-started
+                     (mevedel-request-active-work-pause-started-at request))))
           (should-not plan-outcomes)
           (should-not permission-outcomes)
           (should (equal "1 plan · 1 permission pending"

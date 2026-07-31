@@ -522,29 +522,29 @@
     (setq-local mevedel--current-request t)
     (should (equal "running" (mevedel-request-state-label)))))
 
-(mevedel-deftest mevedel-request-set-approval-waiting ()
+(mevedel-deftest mevedel-request-set-active-work-paused ()
   ,test
   (test)
-  :doc "starts idempotently and accumulates completed approval time"
+  :doc "starts idempotently and accumulates completed active-work pauses"
   (let* ((start (seconds-to-time 100))
          (request (mevedel-request--create :started-at start)))
-    (mevedel-request-set-approval-waiting request t (seconds-to-time 110))
-    (mevedel-request-set-approval-waiting request t (seconds-to-time 115))
+    (mevedel-request-set-active-work-paused request t (seconds-to-time 110))
+    (mevedel-request-set-active-work-paused request t (seconds-to-time 115))
     (should (equal (seconds-to-time 110)
-                   (mevedel-request-approval-wait-started-at request)))
-    (mevedel-request-set-approval-waiting request nil (seconds-to-time 125))
-    (should-not (mevedel-request-approval-wait-started-at request))
-    (should (= 15 (mevedel-request-approval-wait-duration request)))))
+                   (mevedel-request-active-work-pause-started-at request)))
+    (mevedel-request-set-active-work-paused request nil (seconds-to-time 125))
+    (should-not (mevedel-request-active-work-pause-started-at request))
+    (should (= 15 (mevedel-request-active-work-pause-duration request)))))
 
 (mevedel-deftest mevedel-request-active-elapsed-seconds ()
   ,test
   (test)
-  :doc "excludes completed and current approval waits from active work"
+  :doc "excludes completed and current pauses from active work"
   (let ((request
          (mevedel-request--create
           :started-at (seconds-to-time 100)
-          :approval-wait-started-at (seconds-to-time 125)
-          :approval-wait-duration 5)))
+          :active-work-pause-started-at (seconds-to-time 125)
+          :active-work-pause-duration 5)))
     (should (= 20
                (mevedel-request-active-elapsed-seconds
                 request (seconds-to-time 130))))))
