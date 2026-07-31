@@ -580,27 +580,39 @@ Return a hash table of the final live overlays."
            (analysis
             (mevedel-diff-apply--analyze-overlays buffer changes))
            (saved-overlays (car analysis))
-           (ordered-deltas (cadr analysis)))
-      (atomic-change-group
-        (dolist (record saved-overlays)
-          (delete-overlay (car record)))
-        (mevedel-diff-apply--apply-changes changes)
-        (let ((final-overlays
-               (mevedel-diff-apply--restore-overlays
-                buffer saved-overlays ordered-deltas)))
-          (save-buffer)
-          (mevedel--instruction-activate-buffer buffer)
-          (let ((instruction-alist (mevedel--instruction-alist-value)))
-            (maphash
-             (lambda (overlay _state)
-               (cl-pushnew overlay (alist-get buffer instruction-alist)
-                           :test #'eq))
-             final-overlays)
-            (setf (alist-get buffer instruction-alist)
-                  (cl-remove-if
-                   (lambda (overlay) (null (overlay-buffer overlay)))
-                   (alist-get buffer instruction-alist)))
-            (mevedel--set-instruction-alist-value instruction-alist)))))))
+           (ordered-deltas (cadr analysis))
+           (change-group (prepare-change-group))
+           final-overlays
+           accepted)
+      (unwind-protect
+          (progn
+            (activate-change-group change-group)
+            (dolist (record saved-overlays)
+              (delete-overlay (car record)))
+            (mevedel-diff-apply--apply-changes changes)
+            (setq final-overlays
+                  (mevedel-diff-apply--restore-overlays
+                   buffer saved-overlays ordered-deltas))
+            (save-buffer)
+            (accept-change-group change-group)
+            (setq accepted t))
+        (unless accepted
+          (cancel-change-group change-group)
+          (dolist (record saved-overlays)
+            (move-overlay (nth 0 record) (nth 5 record) (nth 6 record)
+                          buffer))))
+      (mevedel--instruction-activate-buffer buffer)
+      (let ((instruction-alist (mevedel--instruction-alist-value)))
+        (maphash
+         (lambda (overlay _state)
+           (cl-pushnew overlay (alist-get buffer instruction-alist)
+                       :test #'eq))
+         final-overlays)
+        (setf (alist-get buffer instruction-alist)
+              (cl-remove-if
+               (lambda (overlay) (null (overlay-buffer overlay)))
+               (alist-get buffer instruction-alist)))
+        (mevedel--set-instruction-alist-value instruction-alist)))))
 
 (defun mevedel-diff-apply-buffer (&optional no-prompt)
   "Apply diff using delete-and-recreate approach for overlay preservation.

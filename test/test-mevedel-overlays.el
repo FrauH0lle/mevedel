@@ -118,19 +118,25 @@
                  (lambda (&rest _) nil)))
         (let ((presentation
                (mevedel--instruction-label
-                reference 'reference nil "" nil nil nil)))
-          (should (equal (cdr presentation) "reference-color"))
+                (list :instruction reference :type 'reference
+                      :padding ""))))
+          (should (equal (plist-get presentation :color)
+                         "reference-color"))
           (should (string-match-p
                    "REFERENCE LINKS: TO: #2"
-                   (substring-no-properties (car presentation)))))))))
+                   (substring-no-properties
+                    (plist-get presentation :label)))))))))
 
 (mevedel-deftest mevedel--instruction-style ()
   ,test
   (test)
-  :doc "stores priority, colors, label, and body face on the overlay"
+  :doc "stores presentation and uses the supplied parent for indentation"
   (with-temp-buffer
     (insert "abc")
-    (let ((instruction (make-overlay 1 2)))
+    (let ((instruction (make-overlay 1 2))
+          (parent (make-overlay 1 3)))
+      (overlay-put parent 'mevedel-label-color "parent-label")
+      (overlay-put parent 'mevedel-bg-color "parent-bg")
       (cl-letf (((symbol-function 'face-foreground)
                  (lambda (&rest _) "foreground"))
                 ((symbol-function 'face-background)
@@ -138,10 +144,16 @@
                 ((symbol-function 'mevedel--tint)
                  (lambda (_source tint &optional _intensity) tint))
                 ((symbol-function 'mevedel--parent-instruction)
-                 (lambda (&rest _) nil)))
+                 (lambda (&rest _)
+                   (ert-fail "Style recomputed the parent"))))
         (mevedel--instruction-style
-         instruction 'reference "REFERENCE #1" "reference"
-         "" mevedel--default-instruction-priority nil nil nil))
+         (list :instruction instruction
+               :type 'reference
+               :label "REFERENCE #1\n child"
+               :color "reference"
+               :padding " "
+               :priority mevedel--default-instruction-priority
+               :parent parent)))
       (should (= (overlay-get instruction 'priority)
                  mevedel--default-instruction-priority))
       (should (string-match-p
@@ -154,25 +166,29 @@
 (mevedel-deftest mevedel--update-instruction-overlay-tree ()
   ,test
   (test)
-  :doc "renders a requested child tree with increasing priorities"
+  :doc "renders priorities and clears stale names under mixed-type parents"
   (with-temp-buffer
     (insert "abcdef")
     (let ((parent (make-overlay 1 6))
           (child (make-overlay 2 4))
           rendered)
-      (dolist (instruction (list parent child))
-        (overlay-put instruction 'mevedel-instruction-type 'reference))
+      (overlay-put parent 'mevedel-instruction-type 'reference)
+      (overlay-put child 'mevedel-instruction-type 'directive)
+      (overlay-put child 'mevedel-subdirective-typename "STALE")
       (cl-letf (((symbol-function 'mevedel--instruction-bufferlevel-p)
                  (lambda (_instruction) nil))
                 ((symbol-function 'mevedel--instruction-label)
-                 (lambda (&rest _) '("label" . "color")))
+                 (lambda (presentation)
+                   (append presentation
+                           '(:label "label" :color "color"))))
                 ((symbol-function 'mevedel--instruction-action-setup)
                  #'ignore)
                 ((symbol-function 'mevedel--instruction-style)
-                 (lambda (instruction _type _label _color _padding
-                                      priority _parent _bufferlevel
-                                      _parent-bufferlevel)
-                   (push (cons instruction priority) rendered)))
+                 (lambda (presentation)
+                   (push
+                    (cons (plist-get presentation :instruction)
+                          (plist-get presentation :priority))
+                    rendered)))
                 ((symbol-function 'mevedel--child-instructions)
                  (lambda (instruction)
                    (and (eq instruction parent) (list child)))))
@@ -181,7 +197,9 @@
       (should
        (equal (mapcar #'cdr (nreverse rendered))
               (list mevedel--default-instruction-priority
-                    (1+ mevedel--default-instruction-priority)))))))
+                    (1+ mevedel--default-instruction-priority))))
+      (should-not
+       (overlay-get child 'mevedel-subdirective-typename)))))
 
 (mevedel-deftest mevedel--update-instruction-overlay ()
   ,test
