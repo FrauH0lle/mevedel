@@ -64,27 +64,19 @@ recommends those elements while leaving Codex room to choose the next action.
 - Add a memory-verification slash command or skill that consolidates project
   memories and checks whether they are still accurate; explore whether a
   weekly automated check is useful.
-- Rename permission modes: `default` -> `ask`, `accept-edits` -> `edits`, and
-  `trust-all` -> `auto`. Thus, UI and internal naming conventions are the same.
-  - Or find better names, also fine.
-- Pause the \"working...\" timer while user input is pending.
+
 - Warnings in Emacs are quite intrusive. Consider making warnings in mevedel target
   the messages buffer ([mevedel] Something happened, can be colored, see corfu)
   and display the warning also in the view buffer (but not permanent via the data
   buffer).
-- Check what we can steal from https://github.com/karthink/gptel-agent/commit/5eb9fac975b65df04cf62e2eeffaa79273fbf965
+
 - Consider making mevedel's data buffers hidden
+
 - Find a better folder for the tool description markdown files
 - Ensure all tools have the examples and their descriptions in markdown files
-- Revisit provider prompt-cache optimization after ordered prompt profiles have
-  usage data; avoid hard-coding unstable pricing assumptions.
-- Guardian UX: The guardian should not have hard-denied these commands. For an ordinary repository test, uncertainty about npx downloading a package warrants ask, not deny. In
-  full-auto, that recommendation currently means “continue confined”; network isolation prevents downloading anyway. A specific network permission prompt should
-  appear only if execution later requires network access.
 
-- How do you go back in the view buffer to a previous segment just for viewing it? 
-  - Should be added to transient menu navigation
-  - Do we have a fork command? If so, it should be available in the transient menu as well and fork the conversation from the message at point
+-  ✓ Interacted with /root/check_working_timer_todo
+  "/root/check_working_timer_todo" should still be clickable.
 
 ## Entry format
 
@@ -156,6 +148,31 @@ become implemented, obsolete, or unjustified.
   block explicit suspend after mevedel becomes idle.
 
 ## Tools
+
+### Support TRAMP-backed workspaces across tools and execution
+
+- **Source:** gptel-agent commit `5eb9fac`; `mevedel-tool-fs.el`,
+  `mevedel-execution.el`, `mevedel-sandbox.el`, hooks, and environment
+  discovery.
+- **What's owed:** Define coherent TRAMP behavior for path normalization before
+  permission checks, native filesystem tools, external helpers, managed Bash,
+  hooks, process termination, confinement disclosure, and session-owned
+  artifacts. Reuse Emacs's `:file-handler`, `process-file`, `file-local-name`,
+  remote `executable-find`, and nearby temporary-file support where
+  appropriate.
+- **Why deferred:** This is an execution-boundary redesign rather than a small
+  upstream code steal. Mevedel currently assumes local helper scratch
+  directories, locally mountable Bubblewrap paths, and local PID/process-group
+  control. Remote absolute-path semantics, cross-host authority, confinement
+  policy, and deterministic integration testing require explicit design.
+- **Status check:** Relative and explicit TRAMP paths already benefit from
+  Emacs file handlers for some direct reads and writes. Glob/Grep helpers,
+  Bash, project hooks, environment detection, media subprocesses, and process
+  lifecycle are not coherently remote-aware. No TRAMP test surface exists.
+- **Blast radius:** Partial support could interpret remote absolute paths as
+  local paths, authorize a different resource than the handler uses, misreport
+  confinement, invoke tools on the wrong host, or leave remote processes and
+  artifacts unmanaged.
 
 ### Bedrock backend support for deferred tool loading
 
