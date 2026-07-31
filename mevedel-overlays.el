@@ -1937,13 +1937,17 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
         (_ "HINT"))
     "DIRECTIVE"))
 
-(defun mevedel--instruction-label
-    (instruction instruction-type directive-typename padding bufferlevel-p
-                 parent parent-bufferlevel-p)
-  "Return (LABEL . COLOR) for INSTRUCTION.
-INSTRUCTION-TYPE, DIRECTIVE-TYPENAME, PADDING, BUFFERLEVEL-P, PARENT,
-and PARENT-BUFFERLEVEL-P describe its position in the instruction tree."
-  (let ((label "")
+(defun mevedel--instruction-label (presentation)
+  "Return PRESENTATION with its instruction label and color computed."
+  (let* ((instruction (plist-get presentation :instruction))
+         (instruction-type (plist-get presentation :type))
+         (directive-typename (plist-get presentation :directive-typename))
+         (padding (plist-get presentation :padding))
+         (bufferlevel-p (plist-get presentation :bufferlevel-p))
+         (parent (plist-get presentation :parent))
+         (parent-bufferlevel-p
+          (plist-get presentation :parent-bufferlevel-p))
+         (label "")
         color)
     (cl-labels
         ((append-label (content &optional prefix)
@@ -2113,15 +2117,21 @@ and PARENT-BUFFERLEVEL-P describe its position in the instruction tree."
                 "REFERENCES UNTAGGED ONLY")
                (t "REFERENCES NOTHING"))))
            (append-links))))
-      (cons label color))))
+      (append presentation (list :label label :color color)))))
 
-(defun mevedel--instruction-style
-    (instruction instruction-type label color padding priority parent
-                 bufferlevel-p parent-bufferlevel-p)
-  "Apply visual style to INSTRUCTION.
-INSTRUCTION-TYPE, LABEL, COLOR, PADDING, PRIORITY, PARENT,
-BUFFERLEVEL-P, and PARENT-BUFFERLEVEL-P describe the presentation."
-  (let* ((default-fg (face-foreground 'default))
+(defun mevedel--instruction-style (presentation)
+  "Apply the computed instruction PRESENTATION."
+  (let* ((instruction (plist-get presentation :instruction))
+         (instruction-type (plist-get presentation :type))
+         (label (plist-get presentation :label))
+         (color (plist-get presentation :color))
+         (padding (plist-get presentation :padding))
+         (priority (plist-get presentation :priority))
+         (parent (plist-get presentation :parent))
+         (bufferlevel-p (plist-get presentation :bufferlevel-p))
+         (parent-bufferlevel-p
+          (plist-get presentation :parent-bufferlevel-p))
+         (default-fg (face-foreground 'default))
          (default-bg (face-background 'default))
          (bg-tint-intensity
           (if (and parent (not parent-bufferlevel-p))
@@ -2185,13 +2195,11 @@ BUFFERLEVEL-P, and PARENT-BUFFERLEVEL-P describe the presentation."
                       :background (or bg bg-color))
                 t)))
            (colorize-as-parent (beg end)
-             (when-let* ((actual-parent
-                          (mevedel--parent-instruction instruction)))
+             (when parent
                (colorize
                 beg end
-                (overlay-get
-                 actual-parent 'mevedel-label-color)
-                (overlay-get actual-parent 'mevedel-bg-color)))))
+                (overlay-get parent 'mevedel-label-color)
+                (overlay-get parent 'mevedel-bg-color)))))
         (overlay-put
          instruction 'before-string
          (with-temp-buffer
@@ -2253,17 +2261,21 @@ PRIORITY is the inherited priority and PARENT is the tree parent."
                 instruction parent)))
          (presentation
           (mevedel--instruction-label
-           instruction instruction-type directive-typename
-           padding bufferlevel-p
-           parent parent-bufferlevel-p)))
+           (list :instruction instruction
+                 :type instruction-type
+                 :directive-typename directive-typename
+                 :padding padding
+                 :bufferlevel-p bufferlevel-p
+                 :parent parent
+                 :parent-bufferlevel-p parent-bufferlevel-p
+                 :priority priority))))
     (overlay-put instruction 'mevedel-subdirective-typename
-                 (and parent directive-typename))
+                 (and parent
+                      (mevedel--directivep parent)
+                      directive-typename))
     (mevedel--instruction-action-setup
      instruction instruction-type)
-    (mevedel--instruction-style
-     instruction instruction-type
-     (car presentation) (cdr presentation)
-     padding priority parent bufferlevel-p parent-bufferlevel-p)
+    (mevedel--instruction-style presentation)
     (when update-children
       (dolist (child
                (mevedel--child-instructions instruction))

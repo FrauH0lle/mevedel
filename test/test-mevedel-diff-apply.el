@@ -698,12 +698,16 @@ Regression: one directive overlay touched by multiple hunks is moved once and sa
 Regression: failed buffer save does not persist moved instruction state"
   (let* ((buffer-text "header\nstart\nold-one\nend\nfooter\n")
          (directive-text "start\nold-one\nend\n")
-         (new-text "header\nstart\nnew-one\nend\nfooter\n")
+         (new-text "header\nstart\nnew-one-much-longer\nend\nfooter\n")
          (buf-setup (mevedel-test--create-buffer-with-overlay
                      buffer-text nil nil directive-text 'directive))
          (test-buffer (car buf-setup))
          (directive-ov (cdr buf-setup))
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer))
+         (original-start (overlay-start directive-ov))
+         (original-end (overlay-end directive-ov))
+         (original-alist
+          (copy-tree (mevedel--instruction-alist-value)))
          err)
 
     (cl-letf (((symbol-function #'mevedel-workspace)
@@ -724,15 +728,24 @@ Regression: failed buffer save does not persist moved instruction state"
               (error error))))
 
     (should err)
-    (should (overlay-buffer directive-ov))
+    (should (eq test-buffer (overlay-buffer directive-ov)))
+    (should (= original-start (overlay-start directive-ov)))
+    (should (= original-end (overlay-end directive-ov)))
+    (should (equal original-alist
+                   (mevedel--instruction-alist-value)))
     (with-current-buffer test-buffer
       (should (equal buffer-text
                      (buffer-substring-no-properties
                       (point-min) (point-max))))
+      (should-not (buffer-modified-p))
       (should (equal directive-text
                      (buffer-substring-no-properties
                       (overlay-start directive-ov)
-                      (overlay-end directive-ov))))))
+                      (overlay-end directive-ov)))))
+    (should (equal buffer-text
+                   (with-temp-buffer
+                     (insert-file-contents (buffer-file-name test-buffer))
+                     (buffer-string)))))
   :doc "`mevedel-diff-apply-buffer':
 Core Geometry Tests:
 Case 1: Change completely BEFORE overlay
