@@ -1348,6 +1348,20 @@ content, not a read failure.\n</system-reminder>" filename))
   "Return the Read result for ARGS in a canonical handler envelope."
   (mevedel-tool-fs--handler-result (mevedel-tool-fs--read-file args)))
 
+(defun mevedel-tool-fs--truncate-output-buffer
+    (maximum-size &optional guidance)
+  "Truncate the current buffer at a complete line before MAXIMUM-SIZE bytes.
+When GUIDANCE is non-nil, append a byte-limit message after truncation."
+  (when (> (1- (position-bytes (point-max))) maximum-size)
+    (goto-char (byte-to-position (1+ maximum-size)))
+    (beginning-of-line)
+    (delete-region (point) (point-max))
+    (when guidance
+      (goto-char (point-max))
+      (insert
+       (format "\n... Output truncated at %dK byte limit. %s"
+               (/ maximum-size 1024) guidance)))))
+
 (defun mevedel-tool-fs--finalize-glob-buffer ()
   "Bound current buffer and return the model-visible Glob result."
   (unless (save-excursion
@@ -1362,15 +1376,9 @@ content, not a read failure.\n</system-reminder>" filename))
         (insert
          (format "\n... Results truncated (limit: %d). Narrow your search with :path or a more specific :pattern."
                  mevedel-tool-fs--glob-default-head-limit)))))
-  (when (> (buffer-size) mevedel-tool-fs--glob-max-output-bytes)
-    (goto-char (point-min))
-    (forward-char mevedel-tool-fs--glob-max-output-bytes)
-    (beginning-of-line)
-    (delete-region (point) (point-max))
-    (goto-char (point-max))
-    (insert
-     (format "\n... Output truncated at %dK byte limit. Narrow your search with :path or a more specific :pattern."
-             (/ mevedel-tool-fs--glob-max-output-bytes 1024))))
+  (mevedel-tool-fs--truncate-output-buffer
+   mevedel-tool-fs--glob-max-output-bytes
+   "Narrow your search with :path or a more specific :pattern.")
   (buffer-string))
 
 (defun mevedel-tool-fs--normalize-rg-glob (root pattern)
@@ -1420,11 +1428,46 @@ Return RESULT unchanged when WARNING is nil."
       result
     (with-temp-buffer
       (insert warning result)
-      (when (> (buffer-size) maximum-size)
-        (goto-char (+ (point-min) maximum-size))
-        (beginning-of-line)
-        (delete-region (point) (point-max)))
+      (mevedel-tool-fs--truncate-output-buffer maximum-size)
       (buffer-string))))
+
+(defun mevedel-tool-fs--settle-rg-result
+    (child-result operation no-match failure-guidance)
+  "Insert CHILD-RESULT output and return its settlement metadata.
+OPERATION names the user-facing operation.  NO-MATCH is its empty result,
+and FAILURE-GUIDANCE tells the caller how to narrow a failed invocation."
+  (let* ((output (or (plist-get child-result :output) ""))
+         (outcome (mevedel-tool-fs--rg-outcome child-result))
+         partial-warning pageable-p)
+    (insert (replace-regexp-in-string "\r\n?" "\n" output))
+    (pcase outcome
+      ('error
+       (erase-buffer)
+       (insert (format "Error: %s failed to start: %s"
+                       operation
+                       (error-message-string
+                        (plist-get child-result :error)))))
+      ((or 'timeout 'output-limit)
+       (let ((problem (if (eq outcome 'timeout)
+                          "timed out"
+                        "reached its output limit")))
+         (if (string-empty-p output)
+             (insert (format "Error: %s %s; narrow the search"
+                             operation problem))
+           (setq partial-warning
+                 (format "Warning: %s %s; results are partial. Narrow the search.\n\n"
+                         operation problem)
+                 pageable-p t))))
+      ('success (setq pageable-p t))
+      ('no-match
+       (erase-buffer)
+       (insert no-match))
+      ('failure
+       (goto-char (point-min))
+       (insert (format "Error: %s failed (exit code %d). %s\n\n"
+                       operation (plist-get child-result :exit-code)
+                       failure-guidance))))
+    (list :partial-warning partial-warning :pageable-p pageable-p)))
 
 (defun mevedel-tool-fs--glob (callback args)
   "Find files matching a glob pattern using ripgrep.
@@ -1454,34 +1497,12 @@ and optional :path."
           (mevedel-execution-start-helper
            (lambda (child-result)
              (with-temp-buffer
-               (let ((output (or (plist-get child-result :output) ""))
-                     (exit-code (plist-get child-result :exit-code))
-                     (error-data (plist-get child-result :error))
-                     partial-warning)
-                 (insert output)
-                 (pcase (mevedel-tool-fs--rg-outcome child-result)
-                  ('error
-                   (erase-buffer)
-                   (insert (format "Error: glob failed to start: %s"
-                                   (error-message-string error-data))))
-                  ('timeout
-                   (if (string-empty-p output)
-                       (insert "Error: glob timed out; narrow the search")
-                     (setq partial-warning
-                           "Warning: glob timed out; results are partial. Narrow the search.\n\n")))
-                  ('output-limit
-                   (if (string-empty-p output)
-                       (insert "Error: glob reached its output limit; narrow the search")
-                     (setq partial-warning
-                           "Warning: glob reached its output limit; results are partial. Narrow the search.\n\n")))
-                  ('success nil)
-                  ('no-match
-                   (erase-buffer)
-                   (insert "No files found matching pattern"))
-                  ('failure
-                   (goto-char (point-min))
-                   (insert (format "Error: glob failed (exit code %d). Narrow :path or :pattern.\n\n"
-                                   exit-code))))
+               (let* ((settlement
+                       (mevedel-tool-fs--settle-rg-result
+                        child-result "glob" "No files found matching pattern"
+                        "Narrow :path or :pattern."))
+                      (partial-warning
+                       (plist-get settlement :partial-warning)))
                  (let ((result (mevedel-tool-fs--finalize-glob-buffer)))
                    (funcall callback
                             (mevedel-tool-fs--handler-result
@@ -1578,39 +1599,14 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
           (mevedel-execution-start-helper
            (lambda (child-result)
              (with-temp-buffer
-               (let ((output (or (plist-get child-result :output) ""))
-                     (exit-code (plist-get child-result :exit-code))
-                     (error-data (plist-get child-result :error))
-                     partial-warning
-                     pageable-output-p)
-                 (insert output)
-                 (pcase (mevedel-tool-fs--rg-outcome child-result)
-                  ('error
-                   (erase-buffer)
-                   (insert (format "Error: search failed to start: %s"
-                                   (error-message-string error-data))))
-                  ('timeout
-                   (if (string-empty-p output)
-                       (insert "Error: search timed out; narrow the search")
-                     (setq partial-warning
-                           "Warning: search timed out; results are partial. Narrow the search.\n\n"
-                           pageable-output-p t)))
-                  ('output-limit
-                   (if (string-empty-p output)
-                       (insert "Error: search reached its output limit; narrow the search")
-                     (setq partial-warning
-                           "Warning: search reached its output limit; results are partial. Narrow the search.\n\n"
-                           pageable-output-p t)))
-                  ('success
-                   (setq pageable-output-p t))
-                  ('no-match
-                   (erase-buffer)
-                   (insert "No matches found"))
-                  ('failure
-                   (goto-char (point-min))
-                   (insert
-                    (format "Error: search failed (exit code %d). Narrow :path, :glob, :type, or :pattern.\n\n"
-                            exit-code))))
+               (let* ((settlement
+                       (mevedel-tool-fs--settle-rg-result
+                        child-result "search" "No matches found"
+                        "Narrow :path, :glob, :type, or :pattern."))
+                      (partial-warning
+                       (plist-get settlement :partial-warning))
+                      (pageable-output-p
+                       (plist-get settlement :pageable-p)))
                  ;; Apply offset and head_limit.
                  (when (and pageable-output-p
                             (or (> offset 0) head-limit))
@@ -1629,23 +1625,15 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                         (format "\n... Results truncated (limit: %d, offset: %d)"
                                 head-limit offset)))))
                  ;; Bound total output even after line-count truncation.
-                 (when (> (buffer-size) mevedel-tool-fs--grep-max-output-bytes)
-                   (goto-char (point-min))
-                   (forward-char mevedel-tool-fs--grep-max-output-bytes)
-                   (beginning-of-line)
-                   (delete-region (point) (point-max))
-                   (goto-char (point-max))
-                   (insert
-                    (format "\n... Output truncated at %dK byte limit. \
-Narrow your search with :glob, :type, or a more specific :pattern."
-                            (/ mevedel-tool-fs--grep-max-output-bytes 1024))))
+                 (mevedel-tool-fs--truncate-output-buffer
+                  mevedel-tool-fs--grep-max-output-bytes
+                  "Narrow your search with :glob, :type, or a more specific :pattern.")
                  (funcall
                   callback
                   (mevedel-tool-fs--handler-result
                    (mevedel-tool-fs--prepend-partial-warning
                     partial-warning
-                    (replace-regexp-in-string "\r\n?" "\n"
-                                              (buffer-string))
+                    (buffer-string)
                     mevedel-tool-fs--grep-max-output-bytes))))))
            "mevedel-grep" (cons "rg" rg-args) (list search-root) nil
            :session session :owner (mevedel-current-origin)
