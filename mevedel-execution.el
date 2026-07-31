@@ -594,7 +594,9 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
                        (mevedel-execution--process-ended record process))))
     (setf (mevedel-execution--record-group-id record)
           (process-id (mevedel-execution--record-process record)))
-    (unless (mevedel-execution--record-tty-p record)
+    (when (and (not (mevedel-execution--record-tty-p record))
+               (process-live-p
+                (mevedel-execution--record-process record)))
       (process-send-eof (mevedel-execution--record-process record)))
     ;; A terminal status can be visible while sentinels are inhibited.
     (setf (mevedel-execution--record-watch-timer record)
