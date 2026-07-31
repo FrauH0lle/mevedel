@@ -270,7 +270,7 @@ reproducing a view-rendering bug."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-view-mailbox-collapse-line-threshold 5
+(defcustom mevedel-view-mailbox-collapse-line-threshold 0
   "Mailbox delivery bodies longer than this many lines start collapsed.
 Shorter bodies render fully expanded."
   :type 'integer
@@ -1254,6 +1254,7 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
 ;;    :status SYMBOL            ; optional visual status, e.g. success/error
 ;;    :expandable-p BOOL        ; nil means render as a compact event line
 ;;    :hidden-p BOOL            ; non-nil means insert nothing
+;;    :coalesce-key STRING      ; adjacent equal keys keep only the last row
 ;;    :initially-collapsed-p BOOL)
 ;;
 ;; The interpreter below parses the tool segment in the data buffer, invokes the
@@ -1342,6 +1343,7 @@ Requires:
   `:status' (if present) -- must be a symbol.
   `:expandable-p' (if present) -- must be a boolean.
   `:hidden-p' (if present) -- must be a boolean.
+  `:coalesce-key' (if present) -- must be a string.
 Malformed plists are rejected here so the interpreter never tries to
 insert a non-string or `funcall' a non-symbol."
   (and (listp p)
@@ -1350,14 +1352,17 @@ insert a non-string or `funcall' a non-symbol."
              (mode (plist-get p :body-mode))
              (status (plist-get p :status))
              (expandable (plist-get p :expandable-p))
-             (hidden (plist-get p :hidden-p)))
+             (hidden (plist-get p :hidden-p))
+             (coalesce-key (plist-get p :coalesce-key)))
          (and (or (null body) (stringp body))
               (or (null mode) (symbolp mode))
               (or (not (plist-member p :status)) (symbolp status))
               (or (not (plist-member p :expandable-p))
                   (memq expandable '(nil t)))
               (or (not (plist-member p :hidden-p))
-                  (memq hidden '(nil t)))))))
+                  (memq hidden '(nil t)))
+              (or (not (plist-member p :coalesce-key))
+                  (stringp coalesce-key))))))
 
 (defun mevedel-view--tool-render-status (result &optional render-data)
   "Return the renderer dispatch status for RESULT and RENDER-DATA."
@@ -1659,20 +1664,19 @@ Return nil when HEADER is not a `Tool: argument' style line."
                (mevedel-view--split-rendering-tool-header header))))
     (if (eq vtype 'system-reminder-summary)
         header
-      (if tool-split
-          (mevedel-view--tool-call-line
-           marker marker-face
-           (nth 0 tool-split)
-           (nth 1 tool-split)
-           (nth 2 tool-split))
-        (let ((line
+      (let ((line
+             (if tool-split
+                 (mevedel-view--tool-call-line
+                  marker marker-face
+                  (nth 0 tool-split)
+                  (nth 1 tool-split)
+                  (nth 2 tool-split))
                (mevedel-view--operation-line
                 marker marker-face header nil nil
-                (mevedel-view--rendering-header-face rendering))))
-          (if agent-p
-              (mevedel-view--buttonize-agent-header-label
-               line (plist-get rendering :agent-path))
-            line))))))
+                (mevedel-view--rendering-header-face rendering)))))
+        (if-let* ((agent-path (plist-get rendering :agent-path)))
+            (mevedel-view--buttonize-agent-header-label line agent-path)
+          line)))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return a durable warning line for material sandbox SUMMARY."
@@ -2022,13 +2026,16 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
            (end (nth 1 region))
            (source (nth 2 region))
            (collapsed (get-text-property start 'mevedel-view-collapsed))
+           (previously-forced-p
+            (get-text-property start 'mevedel-view-force-expanded))
            (turn-id (get-text-property start 'mevedel-view-turn-id)))
       (when (hash-table-p mevedel-view--tool-rendering-cache)
         (clrhash mevedel-view--tool-rendering-cache))
       (when-let ((rendering
                   (mevedel-view--segment-rendering
                    data-buffer (car source) (cdr source))))
-        (unless (plist-get rendering :force-expanded-p)
+        (unless (or (plist-get rendering :force-expanded-p)
+                    previously-forced-p)
           (setq rendering
                 (plist-put (copy-sequence rendering)
                            :initially-collapsed-p collapsed)))
@@ -4327,29 +4334,71 @@ inserted beside the header."
   "Render consecutive TOOL-SEGMENTS from DATA-BUF.
 Each tool call gets its own collapsible entry.  A registered
 `:renderer' is invoked when the segment carries a render-data
-side-channel, falling back to the default one-liner otherwise."
-  (let ((tool-segments
-         (mevedel-view--merge-tool-hook-audit-segments
-          tool-segments data-buf))
+side-channel, falling back to the default one-liner otherwise.
+Adjacent visible renderings with equal `:coalesce-key' values keep
+only the final row and show the number of combined calls."
+  (let* ((tool-segments
+          (mevedel-view--merge-tool-hook-audit-segments
+           tool-segments data-buf))
+         (entries
+          (let (out)
+            (dolist (seg tool-segments (nreverse out))
+              (let* ((seg-start (cadr seg))
+                     (seg-end (caddr seg))
+                     (source (cons seg-start seg-end))
+                     (rendering (mevedel-view--segment-rendering
+                                 data-buf seg-start seg-end t))
+                     (vtype (or (plist-get rendering :vtype)
+                                'tool-summary))
+                     (state
+                      (and rendering
+                           (mevedel-view--source-collapse-state-entry
+                            source vtype))))
+                (when (and state (not (cdr state)))
+                  (setq rendering
+                        (or (mevedel-view--segment-rendering
+                             data-buf seg-start seg-end)
+                            rendering)))
+                (unless (plist-get rendering :hidden-p)
+                  (let* ((entry
+                          (list :start seg-start :end seg-end
+                                :source source :rendering rendering
+                                :count 1))
+                         (key (plist-get rendering :coalesce-key))
+                         (previous (car out)))
+                    (if (and key
+                             previous
+                             (equal
+                              key
+                              (plist-get
+                               (plist-get previous :rendering)
+                               :coalesce-key)))
+                        (progn
+                          (setq entry
+                                (plist-put
+                                 entry :count
+                                 (1+ (plist-get previous :count))))
+                          (setcar out entry))
+                      (push entry out))))))))
         (start-time (float-time))
         (inserted-rule nil)
         (rendered 0)
         (fallbacks 0))
     (unwind-protect
-        (dolist (seg tool-segments)
-          (let* ((seg-start (cadr seg))
-                 (seg-end (caddr seg))
-                 (source (cons seg-start seg-end))
-                 (rendering (mevedel-view--segment-rendering
-                             data-buf seg-start seg-end t))
-                 (vtype (or (plist-get rendering :vtype) 'tool-summary))
-                 (state (and rendering
-                             (mevedel-view--source-collapse-state-entry
-                              source vtype))))
-            (when (and state (not (cdr state)))
-              (setq rendering (or (mevedel-view--segment-rendering
-                                   data-buf seg-start seg-end)
-                                  rendering)))
+        (dolist (entry entries)
+          (let* ((seg-start (plist-get entry :start))
+                 (seg-end (plist-get entry :end))
+                 (source (plist-get entry :source))
+                 (count (plist-get entry :count))
+                 (rendering (plist-get entry :rendering)))
+            (when (and rendering (> count 1))
+              (setq rendering
+                    (plist-put
+                     (copy-sequence rendering)
+                     :header
+                     (format "%s ×%d"
+                             (plist-get rendering :header)
+                             count))))
             (if rendering
                 (progn
                   (unless inserted-rule

@@ -975,6 +975,25 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
         (let ((text2 (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
           (should (string-match-p "What is 2\\+2" text2))
           (should (string-match-p "answer is 4" text2))))))
+
+  :doc "preserves an active transcript selection"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf "Response with selected text.\n" 'response)
+    (with-current-buffer view-buf
+      (setq-local transient-mark-mode t)
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "selected text")
+      (set-mark (match-beginning 0))
+      (activate-mark)
+      (mevedel-view--full-rerender)
+      (should mark-active)
+      (should (equal "selected text"
+                     (buffer-substring-no-properties
+                      (region-beginning) (region-end))))))
+
   :doc "records elapsed timing when render debug is enabled"
   (let ((mevedel-view-render-debug t)
         (mevedel-view-render-debug-buffer-name
@@ -2888,6 +2907,36 @@ state of its inner sections"
         (should (string-match-p "Thinking\\.\\.\\." text))
         (should (string-match-p "Visible response text" text))))))
 
+(mevedel-deftest mevedel-view--render-incremental ()
+  ,test
+  (test)
+  :doc "preserves an active selection while rebuilding the assistant turn"
+  (mevedel-view-test--with-buffers
+    (let (assistant-start)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq assistant-start (copy-marker (point) nil)))
+      (mevedel-view-test--insert-data
+       data-buf "Response with selected text.\n" 'response)
+      (with-current-buffer view-buf
+        (setq-local transient-mark-mode t)
+        (mevedel-view--full-rerender)
+        (setq mevedel-view--data-turn-start assistant-start)
+        (goto-char (point-min))
+        (search-forward "Assistant")
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker (match-beginning 0) nil))
+        (search-forward "selected text")
+        (set-mark (match-beginning 0))
+        (activate-mark))
+      (mevedel-view-test--insert-data data-buf "Stream tail.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--render-incremental data-buf)
+        (should mark-active)
+        (should (equal "selected text"
+                       (buffer-substring-no-properties
+                        (region-beginning) (region-end))))))))
+
 (mevedel-deftest mevedel-view-collapse-state-survives-streaming ()
   ,test
   (test)
@@ -3316,7 +3365,7 @@ state of its inner sections"
       (should-not (mevedel-view--live-tail-lines-rendered-position
                    lines (point-max))))))
 
-(mevedel-deftest mevedel-view--render-tool-group/fallback-linkifies-paths ()
+(mevedel-deftest mevedel-view--render-tool-group ()
   ,test
   (test)
   :doc "fallback one-liner buttonizes existing file paths"
@@ -3379,11 +3428,8 @@ state of its inner sections"
             (goto-char (point-min))
             (search-forward "missing-file.el")
             (should-not (button-at (match-beginning 0)))))
-      (delete-directory root t))))
+      (delete-directory root t)))
 
-(mevedel-deftest mevedel-view--render-tool-group/source-collapse-state ()
-  ,test
-  (test)
   :doc "expanded saved state renders full body instead of collapsed cache"
   (mevedel-view-test--with-buffers
     (let (source)
@@ -3425,7 +3471,85 @@ state of its inner sections"
         (should-not (get-text-property (match-beginning 0)
                                        'mevedel-view-collapsed))
         (should (search-forward "body must survive cache"
-                                mevedel-view--input-marker t))))))
+                                mevedel-view--input-marker t)))))
+
+  :doc "adjacent visible rows with one key render only the final row and count"
+  (mevedel-view-test--with-buffers
+    (let (segments)
+      (mevedel-tool-register
+       (mevedel-tool--create
+        :name "PollingTool"
+        :category "mevedel"
+        :renderer
+        (lambda (_name args _result _data)
+          (list :header (format "Polled %s" (plist-get args :value))
+                :expandable-p nil
+                :coalesce-key "polling-tool"))))
+      (with-current-buffer data-buf
+        (dolist (value '("first" "second"))
+          (let ((start (point)))
+            (insert (format
+                     "(:name \"PollingTool\" :args (:value \"%s\"))\n\nok\n"
+                     value))
+            (put-text-property
+             start (point) 'gptel
+             (cons 'tool (format "call-%s" value)))
+            (push (list 'tool start (point)) segments))))
+      (setq segments (nreverse segments))
+      (let ((data-before (with-current-buffer data-buf (buffer-string))))
+        (with-current-buffer view-buf
+          (let ((inhibit-read-only t))
+            (goto-char mevedel-view--input-marker)
+            (mevedel-view--render-tool-group segments data-buf))
+          (let ((visible (buffer-substring-no-properties
+                          (point-min) mevedel-view--input-marker)))
+            (should-not (string-match-p "Polled first" visible))
+            (should (string-match-p "Polled second ×2" visible))))
+        (with-current-buffer data-buf
+          (should (equal data-before (buffer-string)))))))
+
+  :doc "an intervening visible tool ends the coalescing run"
+  (mevedel-view-test--with-buffers
+    (let (segments)
+      (mevedel-tool-register
+       (mevedel-tool--create
+        :name "PollingTool"
+        :category "mevedel"
+        :renderer
+        (lambda (_name args _result _data)
+          (list :header (format "Polled %s" (plist-get args :value))
+                :expandable-p nil
+                :coalesce-key "polling-tool"))))
+      (mevedel-tool-register
+       (mevedel-tool--create
+        :name "VisibleTool"
+        :category "mevedel"
+        :renderer
+        (lambda (&rest _)
+          '(:header "Visible separator" :expandable-p nil))))
+      (with-current-buffer data-buf
+        (dolist (spec '(("PollingTool" "first")
+                        ("VisibleTool" "separator")
+                        ("PollingTool" "second")))
+          (let ((start (point)))
+            (insert (format
+                     "(:name \"%s\" :args (:value \"%s\"))\n\nok\n"
+                     (car spec) (cadr spec)))
+            (put-text-property
+             start (point) 'gptel
+             (cons 'tool (format "call-%s" (cadr spec))))
+            (push (list 'tool start (point)) segments))))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (mevedel-view--render-tool-group
+           (nreverse segments) data-buf))
+        (let ((visible (buffer-substring-no-properties
+                        (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Polled first" visible))
+          (should (string-match-p "Visible separator" visible))
+          (should (string-match-p "Polled second" visible))
+          (should-not (string-match-p "×2" visible)))))))
 
 (mevedel-deftest mevedel-view--rendering-header-face
   (:doc "selects distinct faces for agent handle header states")
@@ -3557,6 +3681,9 @@ state of its inner sections"
   :doc "accepts a hidden rendering"
   (should (mevedel-view--rendering-plist-p
            '(:header "h" :hidden-p t)))
+  :doc "accepts a string coalescing key"
+  (should (mevedel-view--rendering-plist-p
+           '(:header "h" :coalesce-key "poll:exec-1")))
   :doc "rejects missing :header"
   (should-not (mevedel-view--rendering-plist-p '(:body "b")))
   :doc "rejects non-string :header"
@@ -3574,7 +3701,10 @@ state of its inner sections"
                '(:header "h" :expandable-p maybe)))
   :doc "rejects non-boolean :hidden-p"
   (should-not (mevedel-view--rendering-plist-p
-               '(:header "h" :hidden-p maybe))))
+               '(:header "h" :hidden-p maybe)))
+  :doc "rejects non-string :coalesce-key"
+  (should-not (mevedel-view--rendering-plist-p
+               '(:header "h" :coalesce-key poll))))
 
 
 ;;
@@ -4886,6 +5016,9 @@ state of its inner sections"
   ,test
   (test)
 
+  :doc "all non-empty mailbox bodies collapse by default"
+  (should (= 0 mevedel-view-mailbox-collapse-line-threshold))
+
   :doc "pure agent-message turn renders without a You header"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -5066,19 +5199,20 @@ state of its inner sections"
           (should-not (string-match-p "</agent-result>" text))))))
 
   :doc "expanded agent-result keeps gutter on blank body lines"
-  (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data
-     data-buf
-     "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nfirst\n\nsecond\n</agent-result>\n"
-     nil)
-    (with-current-buffer view-buf
-      (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-match-p
-                 "✓ Finished /root/worker\n\n    │ first"
-                 text))
-        (should (string-match-p "│ first\n    │ \n    │ second" text)))))
+  (let ((mevedel-view-mailbox-collapse-line-threshold 200))
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data
+       data-buf
+       "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nfirst\n\nsecond\n</agent-result>\n"
+       nil)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p
+                   "✓ Finished /root/worker\n\n    │ first"
+                   text))
+          (should (string-match-p "│ first\n    │ \n    │ second" text))))))
 
   :doc "long agent-result delivery expands to the final response body"
   (mevedel-view-test--with-buffers

@@ -3001,32 +3001,61 @@ NAME is \"Bash\".  ARGS carries `:command'.  RESULT is stdout/stderr.
 Header shows a truncated first line of the command; body fontifies as
 `sh-mode'."
   (when (stringp result)
-    (let* ((cmd (or (plist-get args :command) ""))
+    (let* ((write-stdin-p (equal name "WriteStdin"))
+           (cmd (or (plist-get args :command) ""))
            (first-line (car (split-string cmd "\n")))
            (body
             (replace-regexp-in-string
              "\n*<bash-execution [^\n]*/>[ \t\r\n]*\\'" "" result))
            (status (plist-get render-data :status))
            (state (plist-get render-data :state))
+           (execution-id
+            (or (plist-get render-data :execution-id)
+                (plist-get args :execution_id)))
+           (control
+            (or (plist-get render-data :execution-control)
+                (and write-stdin-p
+                     (if (string-empty-p
+                          (or (plist-get args :chars) ""))
+                         'poll
+                       'input))))
+           (coalesce-key
+            (and write-stdin-p
+                 (eq status 'success)
+                 (eq control 'poll)
+                 (not (plist-get render-data :observation-output-p))
+                 (stringp execution-id)
+                 (format "WriteStdin:%s" execution-id)))
            (metadata
             (and state
                  (mevedel-tool-exec-format-execution-metadata
                   render-data))))
-      (list :header (concat (format "%s: %s" (or name "Bash") first-line)
-                            (and metadata (format " (%s)" metadata)))
-            :body body
-            :body-mode 'sh-mode
-            :status status
-            :hidden-p
-            (and (equal name "WriteStdin")
-                 (eq status 'success)
-                 (eq state 'running)
-                 (eq (plist-get render-data :execution-control) 'poll)
-                 (not (plist-get render-data :observation-output-p)))
-            :force-expanded-p
-            (and (plist-get render-data :live-execution-p) t)
-            :initially-collapsed-p
-            (not (plist-get render-data :live-execution-p))))))
+      (let ((rendering
+             (list
+              :header
+              (concat
+               (if write-stdin-p
+                   (if (eq control 'poll)
+                       "Polled background process"
+                     "Interacted with background process")
+                 (format "%s: %s" (or name "Bash") first-line))
+               (and metadata (format " (%s)" metadata)))
+              :body body
+              :body-mode 'sh-mode
+              :status status
+              :hidden-p
+              (and write-stdin-p
+                   (eq status 'success)
+                   (eq state 'running)
+                   (eq control 'poll)
+                   (not (plist-get render-data :observation-output-p)))
+              :force-expanded-p
+              (and (plist-get render-data :live-execution-p) t)
+              :initially-collapsed-p
+              (not (plist-get render-data :live-execution-p)))))
+        (if coalesce-key
+            (plist-put rendering :coalesce-key coalesce-key)
+          rendering)))))
 
 (defun mevedel-tool-exec--render-eval (name args result _render-data)
   "Return rendering plist for Eval NAME with ARGS and RESULT."

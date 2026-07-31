@@ -136,6 +136,9 @@ may indent further to express their hierarchy. Ordinary response prose and
 whole-turn headers or folds remain flush-left. Body insets are display-only,
 including on wrapped continuation lines, so copied disclosure content retains
 its authoritative text without presentation padding.
+Non-empty agent-message and agent-result mailbox bodies start collapsed by
+default; `mevedel-view-mailbox-collapse-line-threshold` can raise that
+threshold.
 
 ## Zones
 
@@ -619,14 +622,16 @@ in `mevedel-view-render.el`.
 
 Agent activity rows are projections of canonical tool and lifecycle events:
 `Started PATH`, `Interacted with PATH`, `Message sent to PATH`, `Interrupted
-PATH`, and `Waiting for agents`. Settled `WaitAgent` calls add no redundant
-completion row. The view does not infer a second activity state from internal
+PATH`, and `Waiting for agents`. Settled waits render `Waited for agents
+(OUTCOME)`; consecutive wait rows retain only the final outcome and show the
+combined count. The view does not infer a second activity state from internal
 storage identities or runtime tables.
 
 Agent handles use `TAB` to expand or collapse their details.  `RET` on the
 visible agent path, or a mouse click, opens the transcript.  Agent handles
-and attribution fragments are clickable when a transcript
-entry is available. Running agents show status/activity in the main view
+and activity-row paths are clickable when a transcript entry is available.
+`Message sent to PATH` starts collapsed and expands to the sent message.
+Running agents show status/activity in the main view
 and may open a rendered read-only transcript view over the live agent
 buffer while that buffer is available. Terminal agents open a rendered
 read-only transcript view from the saved transcript file through

@@ -773,15 +773,26 @@ Used to wrap delete-and-re-render operations so the user's scroll
 position and caret do not jump back to the edit site on every
 progress tick.  Positions that are no longer valid after BODY (e.g.
 point was inside the deleted region) are quietly clamped to the
-buffer.  When point is in the editable composer, preserve it by
-offset from `mevedel-view--input-start' so streaming text inserted
-above the composer does not strand point in rendered transcript text."
+buffer.  The buffer mark, active-region state, and selection direction
+are preserved with point.  When either endpoint is in the editable
+composer, preserve it by offset from `mevedel-view--input-start' so
+streaming text inserted above the composer does not strand it in
+rendered transcript text."
   (let* ((mevedel-view--pww-selected-window (selected-window))
           (mevedel-view--pww-current-buffer (current-buffer))
           (mevedel-view--pww-current-point (point))
+          (mevedel-view--pww-current-mark (mark t))
+          (mevedel-view--pww-mark-active mark-active)
+          (mevedel-view--pww-deactivate-mark deactivate-mark)
           (mevedel-view--pww-current-input-offset
            (and (mevedel-view--point-in-input-region-p)
                 (- (point) (mevedel-view--input-start))))
+          (mevedel-view--pww-mark-input-offset
+           (and mevedel-view--pww-current-mark
+                (mevedel-view--position-in-input-region-p
+                 mevedel-view--pww-current-mark)
+                (- mevedel-view--pww-current-mark
+                   (mevedel-view--input-start))))
           (mevedel-view--pww-saved
            (mapcar (lambda (w)
                      (with-current-buffer mevedel-view--pww-current-buffer
@@ -823,7 +834,19 @@ above the composer does not strand point in rendered transcript text."
                (save-selected-window
                  (select-window w)
                  (goto-char (point-max))
-                 (recenter -1)))))))))
+                 (recenter -1))))))
+       (when mevedel-view--pww-current-mark
+         (set-mark
+          (min
+           (point-max)
+           (if (and mevedel-view--pww-mark-input-offset
+                    (markerp mevedel-view--input-marker)
+                    (marker-buffer mevedel-view--input-marker))
+               (+ (mevedel-view--input-start)
+                  (max 0 mevedel-view--pww-mark-input-offset))
+             mevedel-view--pww-current-mark)))
+         (setq mark-active mevedel-view--pww-mark-active
+               deactivate-mark mevedel-view--pww-deactivate-mark)))))
 
 (defmacro mevedel-view--preserving-window-state (&rest body)
   "Execute BODY while preserving point and window positions."

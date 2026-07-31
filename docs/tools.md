@@ -290,11 +290,14 @@ plist controls only the visual marker and does not participate in dispatch.
 
 Rendering plist: `(:header STRING :body STRING :body-mode SYMBOL
 :status SYMBOL :expandable-p BOOL :hidden-p BOOL
+:coalesce-key STRING
 :initially-collapsed-p BOOL)`.
-`:status`, `:expandable-p`, and `:hidden-p` are optional. When
+`:status`, `:expandable-p`, `:hidden-p`, and `:coalesce-key` are optional. When
 `:expandable-p` is nil, the view inserts a compact non-toggleable event line
 and ignores `:body` and `:initially-collapsed-p`. When `:hidden-p` is
-non-nil, the view inserts nothing. Validated by
+non-nil, the view inserts nothing. Consecutive visible renderings with equal
+coalescing keys retain only the final row and append their call count; any
+other visible rendering ends the run. Validated by
 `mevedel-view--rendering-plist-p`.
 
 Well-formed tool segments always render through a registered renderer
@@ -370,7 +373,8 @@ transcript handle; the registry-backed aggregate status uses distinct
 `Running`, `Waiting`, and `Blocked` rows. Canonical tool and lifecycle events
 are the only sources for `Started PATH`, `Interacted with PATH`, `Message sent
 to PATH`, `Interrupted PATH`, and `Waiting for agents`. Settled `WaitAgent`
-calls add no redundant completion row.
+calls render `Waited for agents (OUTCOME)`; consecutive waits coalesce into
+the final row with a count.
 Render-data lookup/patching scans literal open/close delimiters rather
 than matching the whole hidden block with one regexp; live agent metadata
 and multiline payloads can be large enough to overflow Emacs regexp
@@ -472,7 +476,10 @@ without another prompt, while explicit deny rules and permission hooks still
 apply. A successful empty `WriteStdin` poll while the execution remains
 running is model-visible but omitted as a separate view row; progress continues
 to update the original Bash row. Polls with output, input writes, terminal
-observations, and failures remain visible. Each `WriteStdin` attempt records
+observations, and failures remain visible. Adjacent successful output-free
+poll rows for one execution coalesce into the final `Polled background
+process` row; input writes render `Interacted with background process`.
+Each `WriteStdin` attempt records
 its requested `yield_time_ms` and the
 effective wait, making omitted or stale tool arguments visible without storing
 stdin or process output. Terminal facts record PTY mode and preserve the raw
@@ -483,6 +490,8 @@ observation advances one private unread cursor and returns canonical execution
 facts separately from the raw output. Unread ranges beyond 2000 characters use
 the shared newline-aware,
 equal head-and-tail preview while the retained artifact remains complete.
+The initiating Bash disclosure remains force-expanded with a five-line tail
+while live and returns to its normal collapsed state when it settles.
 
 Managed executions publish transient progress after two seconds, at most four
 times per second. The existing Bash row shows the last five output lines, elapsed
