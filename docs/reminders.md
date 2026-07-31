@@ -161,8 +161,9 @@ Diagnostics are observed only after a successful `Write` or approved `Edit`.
 Before the first edit of a visited file in a request, mevedel captures that
 file's current Flymake and Flycheck diagnostics as its baseline. After the
 edit, an unmodified stale buffer is safely reverted, active checkers are
-started, and the tool callback waits for fresh results or a fixed 30-second
-timeout. Modified stale buffers are never reverted, and rejected or failed
+started, and the tool callback waits on Flymake report callbacks and Flycheck's
+completion hook, with a fixed 30-second timeout. Modified stale buffers are
+never reverted, and rejected or failed
 edits produce no diagnostic observation.
 
 The first fresh result is compared with the baseline: new or changed
