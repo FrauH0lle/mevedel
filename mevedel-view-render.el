@@ -1071,8 +1071,11 @@ real user message."
               (and data-buf
                    (memq type '(user render-data ignored))
                    (not (and (memq type '(render-data ignored))
-                             (mevedel-view--collaboration-event-segment-p
-                              data-buf seg-start (caddr seg))))
+                             (or
+                              (mevedel-view--collaboration-event-segment-p
+                               data-buf seg-start (caddr seg))
+                              (mevedel-view--directive-event-segment-p
+                               data-buf seg-start (caddr seg)))))
                    (mevedel-view--render-data-only-segment-p
                     data-buf seg-start (caddr seg)))))
         (cond
@@ -2252,6 +2255,13 @@ turn shows one bogus thinking summary per tool boundary."
          (eq (plist-get data :event) 'started)
          data)))
 
+(defun mevedel-view--directive-event-from-text (text)
+  "Return a compact directive event from TEXT, or nil."
+  (let ((data (cdr (mevedel-pipeline-extract-render-data text))))
+    (and (consp data)
+         (eq (plist-get data :kind) 'directive-event)
+         data)))
+
 (defun mevedel-view--request-summary-render-data-from-text (text)
   "Return request-summary render-data from TEXT, or nil."
   (let ((data (cdr (mevedel-pipeline-extract-render-data text))))
@@ -2271,6 +2281,12 @@ turn shows one bogus thinking summary per tool boundary."
   "Return non-nil when DATA-BUF's span carries a started collaboration event."
   (with-current-buffer data-buf
     (mevedel-view--collaboration-event-from-text
+     (buffer-substring-no-properties seg-start seg-end))))
+
+(defun mevedel-view--directive-event-segment-p (data-buf seg-start seg-end)
+  "Return non-nil when DATA-BUF's span carries a directive event."
+  (with-current-buffer data-buf
+    (mevedel-view--directive-event-from-text
      (buffer-substring-no-properties seg-start seg-end))))
 
 (defun mevedel-view--request-summary-render-segment-p
@@ -4281,8 +4297,17 @@ inserted beside the header."
              (when tool-group
                (mevedel-view--render-tool-group
                 (nreverse tool-group) data-buf)
-               (setq tool-group nil))
+             (setq tool-group nil))
              (mevedel-view--render-collaboration-event-segment data-buf seg))
+            ((mevedel-view--directive-event-segment-p
+              data-buf (cadr seg) (caddr seg))
+             (mevedel-view--flush-thinking-group thinking-group data-buf)
+             (setq thinking-group nil)
+             (when tool-group
+               (mevedel-view--render-tool-group
+                (nreverse tool-group) data-buf)
+               (setq tool-group nil))
+             (mevedel-view--render-directive-event-segment data-buf seg))
             ((and tool-group
                   (mevedel-view--hook-audit-only-segment-p
                    data-buf (cadr seg) (caddr seg)))
@@ -4328,6 +4353,29 @@ inserted beside the header."
                        (or (plist-get render-data :body) "")
                        render-data))))
       (mevedel-view--insert-rendered-tool rendering source))))
+
+(defun mevedel-view--render-directive-event-segment (data-buf seg)
+  "Render compact directive event SEG from DATA-BUF."
+  (let* ((seg-start (cadr seg))
+         (seg-end (caddr seg))
+         (data
+          (with-current-buffer data-buf
+            (mevedel-view--directive-event-from-text
+             (buffer-substring-no-properties seg-start seg-end))))
+         (outcome (plist-get data :outcome))
+         (label (pcase outcome
+                  ('success "implemented")
+                  ('aborted "aborted")
+                  (_ "failed"))))
+    (when data
+      (mevedel-view--insert-rendered-tool
+       (list :header
+             (format "Directive %s %s · turn %s"
+                     (plist-get data :directive-id)
+                     label
+                     (plist-get data :turn))
+             :expandable-p nil)
+       nil))))
 
 (defun mevedel-view--same-tool-call-segment-p (left right data-buf)
   "Return non-nil when LEFT and RIGHT belong to the same tool call."

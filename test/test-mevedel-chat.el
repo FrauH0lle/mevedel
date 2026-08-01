@@ -640,6 +640,26 @@
 ;;
 ;;; Directive processing
 
+(mevedel-deftest mevedel--revise-directive-prompt ()
+  ,test
+  (test)
+  :doc "uses directive-owned attempt patches instead of patch-viewer contents"
+  (with-temp-buffer
+    (insert "viewer-only")
+    (let ((directive (make-overlay (point-min) (point-max))))
+      (cl-letf (((symbol-function 'mevedel-get-directive-patch)
+                 (lambda (_) "attempt-owned")))
+        (let ((prompt (mevedel--revise-directive-prompt
+                       "Fix it" (current-buffer) directive)))
+          (should (string-search "attempt-owned" prompt))
+          (should-not (string-search "viewer-only" prompt))))
+      (cl-letf (((symbol-function 'mevedel-get-directive-patch)
+                 (lambda (_) nil)))
+        (should-error
+         (mevedel--revise-directive-prompt
+          "Fix it" (current-buffer) directive)
+         :type 'user-error)))))
+
 (mevedel-deftest mevedel--directive-save-buffer-p ()
   ,test
   (test)
@@ -741,7 +761,7 @@
 		 ,test
 		 (test)
 
-		 :doc "writes directive transcript, starts view turn, and sends full prompt directly"
+		 :doc "isolates the prompt, binds the session, and settles a durable attempt"
 		 (let* ((tmpdir (file-name-as-directory
 				 (make-temp-file "mevedel-directive-" t)))
 			(file (file-name-concat tmpdir "sample.txt"))
@@ -836,7 +856,7 @@
                                   (eq gptel-reasoning-effort
                                       session-effort))))
 			     (with-current-buffer captured-chat
-			       (should (eq 'processing
+			       (should (eq 'implementing
 					   (mevedel--directive-status directive)))
 			       (should (equal (overlay-get directive 'mevedel-uuid)
 					      mevedel--current-directive-uuid))
@@ -878,13 +898,47 @@
 								   captured-chat)))
 				 (with-current-buffer view-buf
 				   (should (looking-at-p "Answer text")))))
+			     (setf (gptel-fsm-info captured-fsm)
+				   (append
+				    (gptel-fsm-info captured-fsm)
+				    '(:mevedel-directive-patch "diff --git a/sample.txt b/sample.txt\n"
+				      :mevedel-directive-capture complete
+				      :mevedel-directive-covered-files ("/tmp/sample.txt")
+				      :mevedel-directive-gaps nil)))
 			     (funcall (plist-get (gptel-fsm-info captured-fsm)
 						 :mevedel-request-callback)
 				      nil captured-fsm)
 			     (should (equal '(nil t) callback-result))
-			     (should (eq 'succeeded
+			     (should (eq 'implemented
 					 (mevedel--directive-status directive)))
+			     (let* ((record (mevedel--directive-record directive))
+				    (attempt (car (mevedel-directive-attempts record)))
+				    (checkpoint
+				     (mevedel-directive-attempt-checkpoint attempt)))
+			       (should (equal (mevedel-directive-session-id record)
+					      (plist-get checkpoint :session-id)))
+			       (should (= 1 (plist-get checkpoint :turn)))
+			       (should (equal captured-prompt
+					      (mevedel-directive-attempt-request attempt)))
+			       (should (equal "Answer text.\n"
+					      (mevedel-directive-attempt-result attempt)))
+			       (should (eq 'success
+					   (mevedel-directive-attempt-outcome attempt)))
+			       (should (eq 'complete
+					   (mevedel-directive-attempt-capture attempt))))
 			     (with-current-buffer captured-chat
+			       (should-not (string-search ":PROMPT:" (buffer-string)))
+			       (should-not (string-search "Answer text" (buffer-string)))
+			       (should (string-search "directive-event" (buffer-string)))
+			       (mevedel-session-persistence-save
+				mevedel--session captured-chat)
+			       (let ((segment buffer-file-name))
+				 (with-temp-buffer
+				   (insert-file-contents segment)
+				   (should (string-search "directive-event"
+						  (buffer-string)))
+				   (should-not (string-search "Answer text"
+						       (buffer-string)))))
 			       (should-not mevedel--current-directive-uuid)))))
 		     (when (buffer-live-p buf)
 		       (kill-buffer buf))
@@ -894,7 +948,85 @@
 			 (when (buffer-live-p view-buf)
 			   (kill-buffer view-buf)))
 		       (kill-buffer captured-chat))
-		     (delete-directory tmpdir t))))
+			     (delete-directory tmpdir t)))
+
+		 :doc "records failure and abort outcomes without retaining full turns"
+		 (dolist (case '((error failed error "transport failed")
+				 (abort aborted aborted "Request aborted")))
+		   (pcase-let* ((`(,kind ,state ,outcome ,result) case)
+				(tmpdir (file-name-as-directory
+					 (make-temp-file "mevedel-directive-terminal-" t)))
+				(file (file-name-concat tmpdir "sample.txt"))
+				(buf (find-file-noselect file))
+				(captured-fsm nil)
+				(captured-chat nil))
+		     (unwind-protect
+			 (with-current-buffer buf
+			   (insert "source\n")
+			   (write-region (point-min) (point-max) file nil 'silent)
+			   (set-buffer-modified-p nil)
+			   (let ((directive
+				  (mevedel--create-directive-in
+				   buf (point-min) (1- (point-max)) nil "Change it")))
+			     (overlay-put directive 'mevedel-directive-action 'implement)
+			     (cl-letf (((symbol-function 'save-some-buffers)
+					(lambda (&rest _) nil))
+				       ((symbol-function 'display-buffer)
+					(lambda (&rest _) nil))
+				       ((symbol-function 'gptel--apply-preset)
+					(lambda (&rest _) nil))
+				       ((symbol-function 'gptel-request)
+					(lambda (_prompt &rest args)
+					  (setq captured-chat (plist-get args :buffer))
+					  (let ((fsm (plist-get args :fsm)))
+					    (setf (gptel-fsm-info fsm)
+						  (list :buffer captured-chat
+							:position (plist-get args :position)
+							:callback (lambda (&rest _) nil)))
+					    (setq captured-fsm fsm)
+					    fsm))))
+			       (mevedel--process-directive
+				directive '(:system "test")
+				#'mevedel--implement-directive-prompt nil)
+			       (if (eq kind 'abort)
+				   (funcall
+				    (plist-get (gptel-fsm-info captured-fsm)
+					       :mevedel-request-callback)
+				    'abort captured-fsm)
+				 (setf (gptel-fsm-state captured-fsm) 'ERRS
+				       (gptel-fsm-info captured-fsm)
+				       (plist-put
+					(gptel-fsm-info captured-fsm)
+					:error '(:message "transport failed")))
+				 (funcall
+				  (plist-get (gptel-fsm-info captured-fsm)
+					     :mevedel-request-callback)
+				  nil captured-fsm))
+			       (let* ((record (mevedel--directive-record directive))
+				      (attempt
+				       (car (mevedel-directive-attempts record))))
+				 (should (eq state (mevedel-directive-state record)))
+				 (should
+				  (eq outcome
+				      (mevedel-directive-attempt-outcome attempt)))
+				 (should
+				  (equal result
+					 (mevedel-directive-attempt-result attempt))))
+			       (with-current-buffer captured-chat
+				 (should (string-search "directive-event"
+							(buffer-string)))
+				 (should-not (string-search ":PROMPT:"
+							    (buffer-string)))))))
+		       (when (buffer-live-p buf)
+			 (kill-buffer buf))
+		       (when (buffer-live-p captured-chat)
+			 (let ((view-buf
+				(buffer-local-value 'mevedel--view-buffer
+						    captured-chat)))
+			   (when (buffer-live-p view-buf)
+			     (kill-buffer view-buf)))
+			 (kill-buffer captured-chat))
+		       (delete-directory tmpdir t)))))
 
 (mevedel-deftest mevedel--process-directive-detached-callback
   (:before-each (mevedel-workspace-clear-registry)
@@ -902,7 +1034,7 @@
   ,test
   (test)
 
-  :doc "successful terminal callback does not fail when directive overlay is detached"
+  :doc "detached source still settles a successful inspectable attempt"
   (let* ((tmpdir (file-name-as-directory
                   (make-temp-file "mevedel-directive-detached-" t)))
          (file (file-name-concat tmpdir "sample.txt"))
@@ -945,6 +1077,13 @@
                                   :mevedel-request-callback)
                        nil captured-fsm)
               (should (equal '(nil t) callback-result))
+              (let* ((record (car (mevedel-workspace-directives
+                                   (with-current-buffer buf
+                                     (mevedel-workspace)))))
+                     (attempt (car (mevedel-directive-attempts record))))
+                (should (eq 'implemented (mevedel-directive-state record)))
+                (should (eq 'success
+                            (mevedel-directive-attempt-outcome attempt))))
               (with-current-buffer captured-chat
                 (should-not mevedel--current-directive-uuid)))))
       (when (buffer-live-p buf)
@@ -1198,6 +1337,27 @@
             (should (< a-pos z-pos))
             (should (string-match-p "new file mode 100644" patch))))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel--directive-capture ()
+  ,test
+  (test)
+  :doc "reports deterministic complete and incomplete request coverage"
+  (let ((snapshots (make-hash-table :test #'equal)))
+    (puthash "/tmp/z" "old" snapshots)
+    (puthash "/tmp/a" nil snapshots)
+    (should
+     (equal '(:capture complete
+              :covered-files ("/tmp/a" "/tmp/z")
+              :gaps nil)
+            (mevedel--directive-capture
+             (mevedel-request--create :file-snapshots snapshots))))
+    (puthash "/tmp/missing" '(:gap not-observed) snapshots)
+    (should
+     (equal '(:capture incomplete
+              :covered-files ("/tmp/a" "/tmp/z")
+              :gaps (("/tmp/missing" . not-observed)))
+            (mevedel--directive-capture
+             (mevedel-request--create :file-snapshots snapshots))))))
 
 
 (provide 'test-mevedel-chat)

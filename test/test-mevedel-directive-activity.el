@@ -116,6 +116,57 @@
             (should-not (string-match-p "Before" (buffer-string)))))
       (mevedel-directive-activity-test--discard fixture))))
 
+(mevedel-deftest mevedel-directive-activity-view-patch
+  ()
+  ,test
+  (test)
+  :doc "projects the selected attempt patch into the reusable patch viewer"
+  (let ((attempt
+         (mevedel-directive-attempt--create
+          :request "Request" :result "Answer" :outcome 'success
+          :patch "diff --git a/a b/a\n" :capture 'complete
+          :covered-files '("/tmp/a") :gaps nil
+          :checkpoint '(:session-id "session-1" :turn 1)))
+        projected)
+    (with-temp-buffer
+      (insert (propertize "Attempt" 'mevedel-directive-attempt attempt))
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'mevedel--replace-patch-buffer)
+                 (lambda (patch) (setq projected patch))))
+        (mevedel-directive-activity-view-patch)
+        (should (equal "diff --git a/a b/a\n" projected)))))
+
+  :doc "renders immutable attempt details and complete no-change capture"
+  (let* ((fixture (mevedel-directive-activity-test--make-directive "Current"))
+         (workspace (car fixture))
+         (record (car (mevedel-workspace-directives workspace)))
+         activity)
+    (unwind-protect
+        (progn
+          (setf (mevedel-directive-state record) 'implemented
+                (mevedel-directive-session-id record) "session-1"
+                (mevedel-directive-attempts record)
+                (list
+                 (mevedel-directive-attempt--create
+                  :request "Exact submitted request"
+                  :result "Exact answer"
+                  :outcome 'success :patch "" :capture 'complete
+                  :covered-files '("/tmp/a") :gaps nil
+                  :checkpoint '(:session-id "session-1" :turn 2))))
+          (cl-letf (((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer)))
+            (setq activity
+                  (mevedel-open-directive-activity (caddr fixture))))
+          (with-current-buffer activity
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (string-match-p "Implemented" text))
+              (should (string-match-p "Exact submitted request" text))
+              (should (string-match-p "Exact answer" text))
+              (should (string-match-p "Complete capture; no changes" text))
+              (should (string-match-p "session-1, turn 2" text)))))
+      (mevedel-directive-activity-test--discard fixture))))
+
 (mevedel-deftest mevedel-list-directives
   (:doc "opens the selected workspace record without a source point")
   (let* ((workspace (mevedel-workspace--create

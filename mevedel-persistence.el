@@ -24,8 +24,28 @@
 ;; `mevedel-structs'
 (declare-function mevedel-directive--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt--create
+                  "mevedel-structs" (&rest slots))
+(declare-function mevedel-directive-attempt-capture
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-checkpoint
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-covered-files
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-gaps
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-outcome
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-patch
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-request
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-result
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-set-directives "mevedel-structs"
@@ -99,7 +119,37 @@ not saved."
            :anchor (mevedel--serialize-directive-anchor
                     (mevedel-directive-anchor directive)
                     base-directory)
-           :state (mevedel-directive-state directive)))
+           :state (mevedel-directive-state directive)
+           :session-id (mevedel-directive-session-id directive)
+           :attempts
+           (mapcar
+            (lambda (attempt)
+              (list
+               :request (substring-no-properties
+                         (mevedel-directive-attempt-request attempt))
+               :result (substring-no-properties
+                        (mevedel-directive-attempt-result attempt))
+               :outcome (mevedel-directive-attempt-outcome attempt)
+               :patch (substring-no-properties
+                       (mevedel-directive-attempt-patch attempt))
+               :capture (mevedel-directive-attempt-capture attempt)
+               :covered-files
+               (mapcar
+                (lambda (file)
+                  (mevedel--instruction-relative-file-name
+                   file base-directory))
+                (mevedel-directive-attempt-covered-files attempt))
+               :gaps
+               (mapcar
+                (lambda (gap)
+                  (cons
+                   (mevedel--instruction-relative-file-name
+                    (car gap) base-directory)
+                   (cdr gap)))
+                (mevedel-directive-attempt-gaps attempt))
+               :checkpoint
+               (copy-tree (mevedel-directive-attempt-checkpoint attempt))))
+            (mevedel-directive-attempts directive))))
    (mevedel-workspace-directives workspace)))
 
 (defun mevedel--serialize-instructions
@@ -172,8 +222,14 @@ contents for position patching if the file changes before restore."
    (lambda (entry)
      (let ((id (plist-get entry :id))
            (request (plist-get entry :request))
-           (anchor (copy-tree (plist-get entry :anchor))))
+           (anchor (copy-tree (plist-get entry :anchor)))
+           (session-id (plist-get entry :session-id))
+           (attempts (plist-get entry :attempts)))
        (unless (and (stringp id) (stringp request)
+                    (plist-member entry :session-id)
+                    (or (null session-id) (stringp session-id))
+                    (plist-member entry :attempts)
+                    (listp attempts)
                     (eq (plist-get anchor :state) 'attached))
          (user-error "Malformed mevedel directive list"))
        (when-let* ((file (plist-get anchor :file)))
@@ -182,7 +238,49 @@ contents for position patching if the file changes before restore."
                           (expand-file-name file base-directory))))
        (mevedel-directive--create
         :id id :request request :anchor anchor
-        :state (plist-get entry :state))))
+        :state (plist-get entry :state)
+        :session-id session-id
+        :attempts
+        (mapcar
+         (lambda (attempt)
+           (let ((attempt-request (plist-get attempt :request))
+                 (result (plist-get attempt :result))
+                 (outcome (plist-get attempt :outcome))
+                 (patch (plist-get attempt :patch))
+                 (capture (plist-get attempt :capture))
+                 (covered-files (plist-get attempt :covered-files))
+                 (gaps (plist-get attempt :gaps))
+                 (checkpoint (plist-get attempt :checkpoint)))
+             (unless
+                 (and (stringp attempt-request)
+                      (stringp result)
+                      (memq outcome '(success error aborted))
+                      (stringp patch)
+                      (memq capture '(complete incomplete))
+                      (listp covered-files)
+                      (cl-every #'stringp covered-files)
+                      (listp gaps)
+                      (cl-every
+                       (lambda (gap)
+                         (and (consp gap) (stringp (car gap))))
+                       gaps)
+                      (stringp (plist-get checkpoint :session-id))
+                      (natnump (plist-get checkpoint :turn)))
+               (user-error "Malformed mevedel directive list"))
+             (mevedel-directive-attempt--create
+              :request attempt-request :result result
+              :outcome outcome :patch patch :capture capture
+              :covered-files
+              (mapcar (lambda (file)
+                        (expand-file-name file base-directory))
+                      covered-files)
+              :gaps
+              (mapcar (lambda (gap)
+                        (cons (expand-file-name (car gap) base-directory)
+                              (cdr gap)))
+                      gaps)
+              :checkpoint (copy-tree checkpoint))))
+         attempts))))
    serialized))
 
 (defun mevedel--write-instructions-file

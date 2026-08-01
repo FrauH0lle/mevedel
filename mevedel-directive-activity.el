@@ -25,12 +25,32 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-capture
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-checkpoint
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-covered-files
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-gaps
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-outcome
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-patch
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-request
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-result
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-p "mevedel-structs" (cl-x))
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
+
+;; `mevedel-chat'
+(declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-activate-at-point "mevedel-view"
@@ -71,6 +91,51 @@
 ;;
 ;;; Rendering
 
+(defun mevedel-directive-activity--attempt-fragments (directive)
+  "Return chronological activity fragments for DIRECTIVE."
+  (let ((index 0))
+    (or
+     (mapcar
+      (lambda (attempt)
+        (setq index (1+ index))
+        (let* ((outcome (mevedel-directive-attempt-outcome attempt))
+               (patch (mevedel-directive-attempt-patch attempt))
+               (capture (mevedel-directive-attempt-capture attempt))
+               (covered (mevedel-directive-attempt-covered-files attempt))
+               (gaps (mevedel-directive-attempt-gaps attempt))
+               (checkpoint (mevedel-directive-attempt-checkpoint attempt))
+               (patch-p (not (string-empty-p patch)))
+               (capture-line
+                (cond
+                 ((eq capture 'incomplete)
+                  (format "Incomplete capture; %d covered; %d gaps"
+                          (length covered) (length gaps)))
+                 (patch-p "Complete capture; changes captured")
+                 (t "Complete capture; no changes"))))
+          `(:namespace directive-activity :id ,(list 'attempt index)
+            :label-left
+            ,(propertize
+              (format "ATTEMPT %d · %s" index
+                      (upcase (symbol-name outcome)))
+              'face 'bold)
+            :body
+            ,(format "%s\nCheckpoint: %s, turn %s\n\nRequest:\n%s\n\nResult:\n%s"
+                     capture-line
+                     (plist-get checkpoint :session-id)
+                     (plist-get checkpoint :turn)
+                     (mevedel-directive-attempt-request attempt)
+                     (mevedel-directive-attempt-result attempt))
+            :entry ,attempt
+            :navigatable t
+            ,@(when patch-p
+                '(:activate mevedel-directive-activity-view-patch
+                  :help-echo "RET: view captured patch")))))
+      (mevedel-directive-attempts directive))
+     `((:namespace directive-activity :id activity
+        :label-left ,(propertize "ACTIVITY" 'face 'bold)
+        :body "No activity yet."
+        :navigatable t)))))
+
 (defun mevedel-directive-activity-refresh ()
   "Refresh the current directive activity view from its workspace record."
   (interactive)
@@ -84,7 +149,8 @@
               'source-missing)))
     (mevedel-view-zone-reconcile
      'directive-activity (point-min) (point-max)
-     `((:namespace directive-activity :id request
+     (append
+      `((:namespace directive-activity :id request
         :label-left ,(propertize "REQUEST" 'face 'bold)
         :body ,(mevedel-directive-request directive)
         :navigatable t)
@@ -103,13 +169,22 @@
         :navigatable t
         ,@(when (eq anchor-state 'attached)
             '(:activate mevedel-directive-activity-goto-source
-              :help-echo "RET: visit source anchor")))
-       (:namespace directive-activity :id activity
-        :label-left ,(propertize "ACTIVITY" 'face 'bold)
-        :body "No activity yet."
-        :navigatable t))))
+              :help-echo "RET: visit source anchor"))))
+      (mevedel-directive-activity--attempt-fragments directive))))
   (set-buffer-modified-p nil)
   mevedel-directive-activity--directive)
+
+(defun mevedel-directive-activity-view-patch ()
+  "Project the implementation attempt at point into the patch viewer."
+  (interactive)
+  (let* ((attempt
+          (or (get-text-property (point) 'mevedel-directive-attempt)
+              (get-text-property (point) 'mevedel-view-zone-entry)))
+         (patch (and attempt (mevedel-directive-attempt-patch attempt))))
+    (unless (and patch (not (string-empty-p patch)))
+      (user-error "Attempt has no captured patch"))
+    (require 'mevedel-chat)
+    (mevedel--replace-patch-buffer patch)))
 
 
 ;;

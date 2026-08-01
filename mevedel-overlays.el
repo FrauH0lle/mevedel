@@ -61,6 +61,9 @@
 ;; `mevedel-structs'
 (declare-function mevedel-directive--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-patch
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-set-anchor "mevedel-structs"
@@ -265,7 +268,6 @@ Each value is a plist with keys `:instructions', `:id-counter',
     mevedel-commentary-truncated
     mevedel-directive-fail-reason
     mevedel-directive-action
-    mevedel-directive-patch
     mevedel-directive-model-provider
     mevedel-directive-reasoning-effort
     mevedel-directive-prefix-tag-query
@@ -637,7 +639,7 @@ available."
   (interactive)
   (when-let* ((directive (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'directive)
                                                                 t)))
-    (when (eq (mevedel--directive-status directive) 'processing)
+    (when (eq (mevedel--directive-status directive) 'implementing)
       (mevedel--set-directive-status directive nil))
     (let ((topmost-directive (mevedel--topmost-instruction directive 'directive)))
       (when (eq (mevedel--directive-status topmost-directive) 'failed)
@@ -1470,7 +1472,9 @@ Returns the overlay, or nil if not found."
 (defun mevedel-get-directive-patch (directive)
   "Get the stored patch for DIRECTIVE, if any.
 Returns the unified diff string, or nil if no patch is stored."
-  (overlay-get directive 'mevedel-directive-patch))
+  (when-let* ((record (mevedel--directive-record directive))
+              (attempt (car (last (mevedel-directive-attempts record)))))
+    (mevedel-directive-attempt-patch attempt)))
 
 (defun mevedel--parent-instruction (instruction &optional of-type)
   "Return the parent of the given INSTRUCTION overlay.
@@ -1656,7 +1660,7 @@ directly.  Return nil if no overlays exist at point."
   (interactive (list (mevedel--ov-actions-getov)))
   (let ((directive
          (mevedel--topmost-instruction instruction 'directive)))
-    (when (eq (mevedel--directive-status directive) 'processing)
+    (when (eq (mevedel--directive-status directive) 'implementing)
       (user-error "Cannot change the model while the directive is processing"))
     (pcase-let ((`(,provider ,effort ,inherited)
                  (mevedel--directive-model-values directive)))
@@ -1700,7 +1704,7 @@ interactive calls."
                            (not
                             (eq (mevedel--directive-status
                                  request-owner)
-                                'processing))
+                                'implementing))
                            '(?M "model")))
                      (choices
                      (pcase instruction-type
@@ -1709,10 +1713,10 @@ interactive calls."
                                           '(?e "expand") '(?e "collapse"))))
                        (`directive
                         (pcase (mevedel--directive-status instruction)
-                          ('processing `((?a "abort") (?o "activity") (?k "clear")
+                          ('implementing `((?a "abort") (?o "activity") (?k "clear")
                                          ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
                                               '(?e "expand") '(?e "collapse"))))
-                          ('succeeded `((?o "activity") (?v "view") (?w "show-answer") (?r "revise") (?p "preview") (?m "modify") (?k "clear")
+                          ('implemented `((?o "activity") (?v "view") (?w "show-answer") (?r "revise") (?p "preview") (?m "modify") (?k "clear")
                                         ,@(and model-choice
                                                (list model-choice))
                                         ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
@@ -1901,7 +1905,7 @@ Falls back to the authoritative chat buffer if the compact view is not live."
 (defun mevedel--ov-actions-view (&optional instructions)
   "Display the patch buffer for INSTRUCTIONS."
   (interactive (list (mevedel--ov-actions-getov)))
-  (when-let* ((patch (overlay-get instructions 'mevedel-directive-patch)))
+  (when-let* ((patch (mevedel-get-directive-patch instructions)))
     (mevedel--replace-patch-buffer patch)
     (let ((patch-buffer (mevedel--patch-buffer)))
       (if-let* ((patch-buffer-window (get-buffer-window patch-buffer)))
@@ -1933,7 +1937,7 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
                                       (mevedel--instructions-at
                                        (point) 'directive))))
                           (mevedel--directive-status directive))
-                   ('processing
+                   ('implementing
                     (substitute-command-keys "%s Options: abort \\[mevedel--ov-actions-abort] or show menu \\[mevedel--ov-actions-dispatch]"))
                    (_
                     (substitute-command-keys
@@ -1972,14 +1976,15 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
   "Return the status color for directive INSTRUCTION."
   (let ((own-color
          (pcase (mevedel--directive-status instruction)
-           ('processing mevedel-directive-processing-color)
-           ('succeeded mevedel-directive-success-color)
+           ('implementing mevedel-directive-processing-color)
+           ('implemented mevedel-directive-success-color)
+           ('aborted mevedel-directive-fail-color)
            ('failed mevedel-directive-fail-color)
            (_ mevedel-directive-color))))
     (if-let* ((parent
                (mevedel--topmost-instruction instruction 'directive)))
         (pcase (mevedel--directive-status parent)
-          ('processing mevedel-directive-processing-color)
+          ('implementing mevedel-directive-processing-color)
           ('failed mevedel-directive-fail-color)
           (_ own-color))
       own-color)))
@@ -1995,8 +2000,9 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
      (if (eq instruction-type 'reference)
          mevedel-reference-actions-map
        (pcase status
-         ('processing mevedel-directive-processing-actions-map)
-         ('succeeded mevedel-directive-succeeded-actions-map)
+         ('implementing mevedel-directive-processing-actions-map)
+         ('implemented mevedel-directive-succeeded-actions-map)
+         ('aborted mevedel-directive-failed-actions-map)
          ('failed mevedel-directive-failed-actions-map)
          (_ mevedel-directive-actions-map))))
     (overlay-put
@@ -2006,8 +2012,9 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
       (if (eq instruction-type 'reference)
           "Press"
         (pcase status
-          ('processing "Request in progress, press")
-          ('succeeded "Request succeeded, press")
+          ('implementing "Implementation in progress, press")
+          ('implemented "Request implemented, press")
+          ('aborted "Request aborted, press")
           ('failed "Request failed, press")
           (_ "Press")))))))
 
@@ -2015,10 +2022,10 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
   "Return the display type name for directive INSTRUCTION under PARENT."
   (if (and parent (mevedel--directivep parent))
       (pcase (mevedel--directive-status parent)
-        ((or 'processing 'failed)
+        ((or 'implementing 'failed 'aborted)
          (or (overlay-get instruction 'mevedel-subdirective-typename)
              "HINT"))
-        ('succeeded "CORRECTION")
+        ('implemented "CORRECTION")
         (_ "HINT"))
     "DIRECTIVE"))
 
@@ -2146,8 +2153,9 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
              (append-label commentary "COMMENTARY: "))))
         ('directive
          (pcase (mevedel--directive-status instruction)
-           ('processing (append-label "PROCESSING"))
-           ('succeeded (append-label "SUCCEEDED"))
+           ('implementing (append-label "IMPLEMENTING"))
+           ('implemented (append-label "IMPLEMENTED"))
+           ('aborted (append-label "ABORTED"))
            ('failed
             (append-label
              (overlay-get instruction 'mevedel-directive-fail-reason)
@@ -2736,7 +2744,7 @@ specified DIRECTIVE and tag QUERY."
                                        (overlay-start directive)
                                        (overlay-end directive))))
                    (sd-typename (if (not (eq (mevedel--directive-status directive)
-                                             'succeeded))
+                                             'implemented))
                                     "hint"
                                   "correction")))
                (concat

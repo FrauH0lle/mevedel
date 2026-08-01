@@ -41,6 +41,7 @@
 ;; `mevedel-chat'
 (declare-function mevedel--generate-final-patch
                   "mevedel-chat" (&optional workspace))
+(declare-function mevedel--directive-capture "mevedel-chat" (request))
 (declare-function mevedel--replace-patch-buffer
                   "mevedel-chat" (patch-content))
 (defvar mevedel--current-directive-uuid)
@@ -530,15 +531,25 @@ Has no effect when no extras are registered for PRESET-NAME."
               ((buffer-live-p chat-buffer))
               (workspace (with-current-buffer chat-buffer
                            (mevedel-workspace))))
-    (let* ((directive-uuid (with-current-buffer chat-buffer
-                             mevedel--current-directive-uuid))
+    (let* ((request (or (plist-get info :mevedel-request)
+                        (with-current-buffer chat-buffer
+                          mevedel--current-request)))
            (final-patch (with-current-buffer chat-buffer
-                          (mevedel--generate-final-patch workspace))))
+                          (mevedel--generate-final-patch workspace)))
+           (capture (with-current-buffer chat-buffer
+                      (mevedel--directive-capture request))))
+      (setq info (plist-put info :mevedel-directive-patch final-patch))
+      (setq info
+            (plist-put info :mevedel-directive-capture
+                       (plist-get capture :capture)))
+      (setq info
+            (plist-put info :mevedel-directive-covered-files
+                       (plist-get capture :covered-files)))
+      (setq info
+            (plist-put info :mevedel-directive-gaps
+                       (plist-get capture :gaps)))
+      (setf (gptel-fsm-info fsm) info)
       (when (and final-patch (> (length final-patch) 0))
-        (when directive-uuid
-          (when-let* ((directive (mevedel--find-directive-by-uuid
-                                  directive-uuid)))
-            (overlay-put directive 'mevedel-directive-patch final-patch)))
         (mevedel--replace-patch-buffer final-patch)))))
 
 (defun mevedel-preset--build-handlers (handlers)

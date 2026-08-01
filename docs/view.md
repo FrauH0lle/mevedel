@@ -215,11 +215,20 @@ composer.
 
 `mevedel-open-directive-activity` opens a workspace-owned directive outside
 the main chat. The ephemeral buffer renders the current request, lifecycle
-state, anchor state, and chronological activity through the managed
+state (`Implementing`, `Implemented`, `Failed`, or `Aborted`), anchor state,
+and chronological immutable attempts through the managed
 `directive-activity` view zone. Refreshing the buffer reads the shared
 workspace record directly and never adds content to a transcript or model
 request. `mevedel-list-directives` provides workspace-level selection, and an
 Attached anchor can be visited from the activity view with `o` or `RET`.
+Each attempt exposes its exact request and answer/error, capture completeness,
+covered-file and gap counts, and session/turn checkpoint. Pressing `RET` on an
+attempt with changes projects its owned patch into the reusable patch viewer;
+the viewer never becomes patch history.
+
+The main chat renders a settled directive as one compact event linking the
+directive id, outcome, and turn. Its full request, response, and patch remain
+outside chat context in the workspace attempt record.
 
 ## Status Strip And Cockpit Routing
 

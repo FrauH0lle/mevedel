@@ -17,7 +17,7 @@
     (mevedel--instruction-current-state-key :global)))
   ,test
   (test)
-  :doc "round-trips durable directive identity, request, anchor, and overlay"
+  :doc "round-trips directive identity, execution binding, attempts, and overlay"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-directive-persistence-" t)))
          (source (file-name-concat root "source.el"))
@@ -38,6 +38,21 @@
                    nil "Keep this request"))
             (setq id (mevedel-directive-id
                       (mevedel--directive-record directive)))
+            (let ((record (mevedel--directive-record directive)))
+              (setf (mevedel-directive-session-id record) "session-1"
+                    (mevedel-directive-attempts record)
+                    (list
+                     (mevedel-directive-attempt--create
+                      :request "Exact submitted request"
+                      :result "Exact answer"
+                      :outcome 'success
+                      :patch "diff --git a/source.el b/source.el\n"
+                      :capture 'incomplete
+                      :covered-files (list source)
+                      :gaps (list (cons (file-name-concat root "missing.el")
+                                        'not-observed))
+                      :checkpoint '(:session-id "session-1" :turn 3)))
+                    (mevedel-directive-state record) 'implemented))
             (mevedel--write-instructions-file snapshot root t t t)
             (mevedel--clear-instruction-state workspace)
             (mevedel--load-instructions-file
@@ -50,9 +65,28 @@
             (should (equal source
                            (plist-get (mevedel-directive-anchor record)
                                       :file)))
+            (should (equal "session-1" (mevedel-directive-session-id record)))
+            (should (eq 'implemented (mevedel-directive-state record)))
+            (let ((attempt (car (mevedel-directive-attempts record))))
+              (should (equal "Exact submitted request"
+                             (mevedel-directive-attempt-request attempt)))
+              (should (equal "Exact answer"
+                             (mevedel-directive-attempt-result attempt)))
+              (should (eq 'success
+                          (mevedel-directive-attempt-outcome attempt)))
+              (should (eq 'incomplete
+                          (mevedel-directive-attempt-capture attempt)))
+              (should (equal (list source)
+                             (mevedel-directive-attempt-covered-files attempt)))
+              (should
+               (equal (list (cons (file-name-concat root "missing.el")
+                                  'not-observed))
+                      (mevedel-directive-attempt-gaps attempt)))
+              (should (equal '(:session-id "session-1" :turn 3)
+                             (mevedel-directive-attempt-checkpoint attempt))))
             (should (overlayp restored))
             (should (eq record (mevedel--directive-record restored)))
-            (should (eq 'ready (mevedel--directive-state restored)))))
+            (should (eq 'implemented (mevedel--directive-state restored)))))
       (when (buffer-live-p source-buffer)
         (with-current-buffer source-buffer
           (setq-local kill-buffer-hook nil)

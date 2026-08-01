@@ -56,12 +56,27 @@ check project dir first, then global."
 ;;
 ;;; Directive and workspace structs
 
+(cl-defstruct (mevedel-directive-attempt
+               (:constructor mevedel-directive-attempt--create)
+               (:copier nil))
+  "One immutable terminal implementation attempt."
+  request
+  result
+  outcome
+  patch
+  capture
+  covered-files
+  gaps
+  checkpoint)
+
 (cl-defstruct (mevedel-directive (:constructor mevedel-directive--create))
   "Workspace-owned directive identity and current authored state."
   id
   request
   anchor
-  state)
+  state
+  session-id
+  attempts)
 
 (cl-defstruct (mevedel-workspace (:constructor mevedel-workspace--create))
   "Project-level shared state.

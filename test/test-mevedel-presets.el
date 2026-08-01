@@ -165,11 +165,11 @@
           (should (= 0 generated)))
       (kill-buffer chat-buf)))
 
-  :doc "generates and displays a patch when a workspace is available"
+  :doc "captures patch coverage on the FSM and displays a non-empty patch"
   (let* ((ws (mevedel-workspace-get-or-create
               'project "/tmp/p/" "/tmp/p/" "p"))
          (chat-buf (generate-new-buffer " *mevedel-workspace*"))
-         generated
+         generated capture-request
          replaced)
     (unwind-protect
         (progn
@@ -181,12 +181,30 @@
                      (lambda (workspace)
                        (setq generated workspace)
                        "diff --git a/file b/file\n"))
+                    ((symbol-function 'mevedel--directive-capture)
+                     (lambda (request)
+                       (setq capture-request request)
+                       '(:capture complete
+                         :covered-files ("/tmp/p/file")
+                         :gaps nil)))
                     ((symbol-function 'mevedel--replace-patch-buffer)
                      (lambda (patch)
                        (setq replaced patch))))
-            (let ((fsm (gptel-make-fsm
-                        :info (list :buffer chat-buf))))
-              (mevedel-preset--final-patch-handler fsm)))
+            (let* ((request (mevedel-request--create))
+                   (fsm (gptel-make-fsm
+                         :info (list :buffer chat-buf
+                                     :mevedel-request request))))
+              (mevedel-preset--final-patch-handler fsm)
+              (should (equal "diff --git a/file b/file\n"
+                             (plist-get (gptel-fsm-info fsm)
+                                        :mevedel-directive-patch)))
+              (should (eq 'complete
+                          (plist-get (gptel-fsm-info fsm)
+                                     :mevedel-directive-capture)))
+              (should (equal '("/tmp/p/file")
+                             (plist-get (gptel-fsm-info fsm)
+                                        :mevedel-directive-covered-files)))
+              (should (eq request capture-request))))
           (should (eq ws generated))
           (should (equal "diff --git a/file b/file\n" replaced)))
       (kill-buffer chat-buf))))

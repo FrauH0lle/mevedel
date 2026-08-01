@@ -75,12 +75,12 @@
 (mevedel-deftest mevedel--instruction-directive-color ()
   ,test
   (test)
-  :doc "inherits processing and failure colors from the top directive"
+  :doc "inherits implementing and failure colors from the top directive"
   (with-temp-buffer
     (insert "directive")
     (let ((parent (make-overlay 1 5))
           (child (make-overlay 2 4))
-          (parent-status 'processing)
+          (parent-status 'implementing)
           (mevedel-directive-processing-color "processing")
           (mevedel-directive-fail-color "failed")
           (mevedel-directive-success-color "succeeded"))
@@ -90,7 +90,7 @@
                  (lambda (instruction)
                    (if (eq instruction parent)
                        parent-status
-                     'succeeded))))
+                     'implemented))))
         (should (equal "processing"
                        (mevedel--instruction-directive-color child)))
         (setq parent-status 'failed)
@@ -123,7 +123,7 @@
           (child (make-overlay 1 2)))
       (overlay-put parent 'mevedel-instruction-type 'directive)
       (cl-letf (((symbol-function 'mevedel--directive-status)
-                 (lambda (_) 'succeeded)))
+                 (lambda (_) 'implemented)))
         (should (equal "CORRECTION"
                        (mevedel--instruction-directive-typename
                         child parent))))
@@ -391,7 +391,7 @@
                (overlay-get parent 'mevedel-directive-reasoning-effort)))))
       (kill-buffer session-buffer)))
 
-  :doc "shows the effective pair except while the directive is processing"
+  :doc "shows the effective pair except while the directive is implementing"
   (let ((session-buffer (generate-new-buffer " *directive-actions-session*"))
         (workspace (mevedel-workspace--create
                     :type 'test :id "action-owner" :root "/tmp"
@@ -431,7 +431,7 @@
                (string-match-p
                 "Session:model · effort default · session"
                 action-row))
-              (mevedel--set-directive-status directive 'processing)
+              (mevedel--set-directive-status directive 'implementing)
               (catch 'captured
                 (mevedel--ov-actions-dispatch directive))
               (should-not (assoc ?M choices))
@@ -448,6 +448,32 @@
 
 ;;
 ;;; Lookup
+
+(mevedel-deftest mevedel-get-directive-patch ()
+  ,test
+  (test)
+  :doc "reads patch history from the latest workspace-owned attempt"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "patch" :root "/tmp" :name "patch"))
+         (record (mevedel-directive--create
+                  :id "directive" :request "Request"
+                  :anchor '(:state attached) :state 'implemented
+                  :attempts
+                  (list
+                   (mevedel-directive-attempt--create :patch "first")
+                   (mevedel-directive-attempt--create :patch "latest"))))
+         (buffer (generate-new-buffer " *directive-patch-owner*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (insert "source")
+          (setq-local mevedel--workspace workspace)
+          (mevedel-workspace-add-directive workspace record)
+          (let ((directive (make-overlay (point-min) (point-max))))
+            (overlay-put directive 'mevedel-uuid "directive")
+            (overlay-put directive 'mevedel-instruction-type 'directive)
+            (should (equal "latest"
+                           (mevedel-get-directive-patch directive)))))
+      (kill-buffer buffer))))
 
 (mevedel-deftest mevedel--create-directive-in
   (:vars

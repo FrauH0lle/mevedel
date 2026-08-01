@@ -98,6 +98,7 @@
 		  (instruction))
 (declare-function mevedel--directive-llm-prompt "mevedel-overlays"
 		  (directive))
+(declare-function mevedel--directive-record "mevedel-overlays" (directive))
 (declare-function mevedel--directive-text "mevedel-overlays"
 		  (directive))
 (declare-function mevedel--directivep "mevedel-overlays" (instruction))
@@ -106,6 +107,7 @@
 (declare-function mevedel--highest-priority-instruction
 		  "mevedel-overlays"
 		  (instructions &optional non-processing))
+(declare-function mevedel-get-directive-patch "mevedel-overlays" (directive))
 (declare-function mevedel--instructions-at "mevedel-overlays"
 		  (position &optional type))
 (declare-function mevedel--set-directive-status "mevedel-overlays"
@@ -173,6 +175,8 @@
 		  "mevedel-session-persistence" nil)
 (declare-function mevedel-session-persistence-save
 		  "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence-ensure-files
+                  "mevedel-session-persistence" (session buffer))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills--release-on-kill
@@ -195,6 +199,10 @@
 ;; `mevedel-structs'
 (declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt--create
+                  "mevedel-structs" (&rest slots))
+(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-drain-cancellers "mevedel-structs"
 		  (request))
 (declare-function mevedel-request-end "mevedel-structs" nil)
@@ -207,6 +215,8 @@
 		  (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs"
 		  (cl-x) t)
+(declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
@@ -816,6 +826,21 @@ with current file contents in WORKSPACE."
                               "\n")))))
     diffs))
 
+(defun mevedel--directive-capture (request)
+  "Return file coverage metadata captured by REQUEST."
+  (let (covered gaps)
+    (when request
+      (maphash
+       (lambda (path original)
+         (if (and (listp original) (plist-get original :gap))
+             (push (cons path (plist-get original :gap)) gaps)
+           (push path covered)))
+       (mevedel-request-file-snapshots request)))
+    (list :capture (if gaps 'incomplete 'complete)
+          :covered-files (sort covered #'string<)
+          :gaps (sort gaps (lambda (left right)
+                             (string< (car left) (car right)))))))
+
 (defun mevedel--replace-patch-buffer (patch-content)
   "Replace patch buffer contents with PATCH-CONTENT.
 If PATCH-CONTENT is empty, does nothing."
@@ -869,17 +894,20 @@ If PATCH-CONTENT is empty, does nothing."
 (defun mevedel--revise-directive-prompt (content &optional patch-buffer directive)
   "Generate a prompt for revising based on CONTENT (revision instructions).
 
-The patch comes from either:
-1. DIRECTIVE's stored patch (if provided and has one)
-2. PATCH-BUFFER contents (defaulting to the mevedel patch buffer)
+When DIRECTIVE is provided, its latest implementation attempt owns the patch.
+Otherwise PATCH-BUFFER defaults to the reusable patch viewer.
 
 DIRECTIVE is the instruction overlay being revised."
   (let* ((directive-patch (when directive
-                            (overlay-get directive 'mevedel-directive-patch)))
+                            (mevedel-get-directive-patch directive)))
          (patch-buffer (or patch-buffer (mevedel--patch-buffer)))
          (patch-content
           (cond
-           (directive-patch directive-patch)
+           (directive
+            (or (and directive-patch
+                     (not (string-empty-p directive-patch))
+                     directive-patch)
+                (user-error "Directive has no captured patch")))
            (patch-buffer
             (with-current-buffer patch-buffer
               (buffer-substring-no-properties (point-min) (point-max))))
@@ -1056,18 +1084,96 @@ Updates directive status and overlay, handles success/failure states."
          ;; Get chat buffer for the directive's buffer workspace
          (workspace (with-current-buffer (overlay-buffer directive)
                       (mevedel-workspace)))
-         (chat-buffer (mevedel--chat-buffer "main" t workspace))
+         (record (mevedel--directive-record directive))
+         (bound-session-id (mevedel-directive-session-id record))
+         (chat-buffer
+          (if bound-session-id
+              (or
+               (cl-loop
+                for (_name . buffer) in (mevedel--workspace-sessions workspace)
+                when (equal
+                      bound-session-id
+                      (with-current-buffer buffer
+                        (mevedel-session-session-id mevedel--session)))
+                return buffer)
+               (user-error "Directive session is unavailable: %s"
+                           bound-session-id))
+            (mevedel--chat-buffer "main" t workspace)))
          (directive-uuid (overlay-get directive 'mevedel-uuid))
          (directive-text (mevedel--directive-text directive))
          (content (mevedel--directive-llm-prompt directive))
          (prompt (funcall prompt-fn content))
+         execution-session-id
+         turn-start
          response-start
+         settled-p
          (callback-fn (lambda (err fsm)
-                        (let ((live-directive
+                        (unless settled-p
+                          (setq settled-p t)
+                          (let* ((info (gptel-fsm-info fsm))
+                               (outcome (cond ((eq err 'abort) 'aborted)
+                                              (err 'error)
+                                              (t 'success)))
+                               (result
+                                (if err
+                                    (if (eq err 'abort)
+                                        "Request aborted"
+                                      (format "%s" err))
+                                  (with-current-buffer chat-buffer
+                                    (buffer-substring-no-properties
+                                     response-start (point-max)))))
+                               (patch
+                                (or (plist-get info
+                                               :mevedel-directive-patch)
+                                    ""))
+                               (capture
+                                (or (plist-get info
+                                               :mevedel-directive-capture)
+                                    'incomplete))
+                               (turn
+                                (1+ (with-current-buffer chat-buffer
+                                      (mevedel-session-turn-count
+                                       mevedel--session))))
+                               (attempt
+                                (mevedel-directive-attempt--create
+                                 :request prompt :result result
+                                 :outcome outcome :patch patch
+                                 :capture capture
+                                 :covered-files
+                                 (plist-get
+                                  info :mevedel-directive-covered-files)
+                                 :gaps
+                                 (plist-get info :mevedel-directive-gaps)
+                                 :checkpoint
+                                 (list :session-id execution-session-id
+                                       :turn turn)))
+                               (live-directive
                                (or (and (overlay-buffer directive)
                                         directive)
                                    (mevedel--find-directive-by-uuid
                                     directive-uuid))))
+                          (setf (mevedel-directive-attempts record)
+                                (append (mevedel-directive-attempts record)
+                                        (list attempt))
+                                (mevedel-directive-state record)
+                                (pcase outcome
+                                  ('success 'implemented)
+                                  ('aborted 'aborted)
+                                  (_ 'failed)))
+                          (with-current-buffer chat-buffer
+                            (let ((inhibit-read-only t))
+                              (delete-region turn-start (point-max))
+                              (unless (bobp)
+                                (insert (propertize gptel-response-separator
+                                                    'gptel 'ignore)))
+                              (insert
+                               (propertize
+                                (mevedel-pipeline--format-render-data-block
+                                 (list :kind 'directive-event
+                                       :directive-id directive-uuid
+                                       :outcome outcome
+                                       :turn turn))
+                                'gptel 'ignore))))
                           (if err
                               (let ((reason (if (eq err 'abort)
                                                 "aborted"
@@ -1076,7 +1182,8 @@ Updates directive status and overlay, handles success/failure states."
                                             (directive-buffer
                                              (overlay-buffer live-directive)))
                                   (mevedel--set-directive-status
-                                   live-directive 'failed)
+                                   live-directive
+                                   (if (eq err 'abort) 'aborted 'failed))
                                   (overlay-put live-directive
                                                'mevedel-directive-fail-reason
                                                reason)
@@ -1096,7 +1203,7 @@ Updates directive status and overlay, handles success/failure states."
                                         (directive-buffer
                                          (overlay-buffer live-directive)))
                               (mevedel--set-directive-status
-                               live-directive 'succeeded)
+                               live-directive 'implemented)
                               (with-current-buffer directive-buffer
                                 ;; Delete any child directives of the top-level
                                 ;; directive.
@@ -1120,16 +1227,20 @@ Updates directive status and overlay, handles success/failure states."
                               (with-current-buffer chat-buffer
                                 (setq mevedel--current-directive-uuid nil)))
                             (when callback
-                              (funcall callback err fsm)))))))
+                              (funcall callback err fsm))))))))
 
     (with-current-buffer chat-buffer
       (when mevedel--current-request
         (user-error "A request is already active -- wait or abort first"))
-      (setq mevedel--current-directive-uuid (overlay-get directive 'mevedel-uuid)))
+      (setq mevedel--current-directive-uuid (overlay-get directive 'mevedel-uuid))
+      (require 'mevedel-session-persistence)
+      (mevedel-session-persistence-ensure-files mevedel--session chat-buffer)
+      (setq execution-session-id
+            (mevedel-session-session-id mevedel--session)))
 
     (save-some-buffers nil #'mevedel--directive-save-buffer-p)
 
-    (mevedel--set-directive-status directive 'processing)
+    (mevedel--set-directive-status directive 'implementing)
     (mevedel--update-instruction-overlay directive t)
     (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
 
@@ -1142,6 +1253,7 @@ Updates directive status and overlay, handles success/failure states."
     (with-current-buffer chat-buffer
       (mevedel-preset-apply
        (alist-get mevedel-default-chat-preset mevedel-action-preset-alist))
+      (setq turn-start (copy-marker (point-max)))
       (setq response-start
             (mevedel--insert-directive-turn
              directive-text prompt
@@ -1223,6 +1335,9 @@ the original callback."
                   (apply fsm-callback response rest))))
           (setf (gptel-fsm-info fsm) (plist-put info :callback wrapped-callback))
           (setf (gptel-fsm-info fsm) (plist-put info :mevedel-request-callback request-callback))
+          (unless bound-session-id
+            (setf (mevedel-directive-session-id record)
+                  execution-session-id))
           fsm)))))
 
 (defun mevedel-abort (&optional buf)
