@@ -17,6 +17,10 @@
                byte-compile-current-file))
           "helpers"))
 
+;; `project'
+(defvar project-files-relative-names)
+(defvar project-list-file)
+
 (defvar mevedel-tool-code-test-open-state nil
   "State captured while opening a test xref location.")
 (defvar mevedel-tool-code-test-xref-backend-state nil
@@ -299,6 +303,46 @@
 (mevedel-deftest mevedel-tool-code--xref-references ()
   ,test
   (test)
+  :doc "searches project files without entering ignored generated state"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-xref-project-" t)))
+         (source (file-name-concat root "source.el"))
+         (ignored-dir
+          (file-name-concat root ".mevedel" "sessions" "run"))
+         (ignored (file-name-concat ignored-dir "profiler-memory-profile.el"))
+         (identifier "mevedel-xref-project-filter-target")
+         result)
+    (unwind-protect
+        (let ((default-directory root)
+              (project-files-relative-names t)
+              (project-list-file (file-name-concat root "projects")))
+          (should (zerop (call-process "git" nil nil nil "init" "--quiet")))
+          (write-region
+           (concat "!/.mevedel/\n"
+                   ".mevedel/*\n"
+                   "!.mevedel/hooks.json\n")
+           nil (file-name-concat root ".gitignore") nil 'silent)
+          (write-region
+           (format "(defun %s () nil)\n(%s)\n" identifier identifier)
+           nil source nil 'silent)
+          (make-directory ignored-dir t)
+          (write-region (format "(%s)\n" identifier)
+                        nil ignored nil 'silent)
+          (should (zerop
+                   (call-process "git" nil nil nil
+                                 "add" ".gitignore" "source.el")))
+          (mevedel-tool-code--xref-references
+           (lambda (envelope)
+             (setq result
+                   (test-mevedel-tool-code--handler-result envelope)))
+           (list :identifier identifier :file_path source))
+          (should (string-match-p
+                   (regexp-quote (format "%s:1:" source)) result))
+          (should-not (string-match-p
+                       (regexp-quote "profiler-memory-profile.el") result)))
+      (when-let* ((buffer (find-buffer-visiting source)))
+        (kill-buffer buffer))
+      (delete-directory root t)))
   :doc "finds references to an elisp symbol"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
          (result nil))

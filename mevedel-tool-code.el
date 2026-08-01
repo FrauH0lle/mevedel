@@ -13,10 +13,17 @@
   (require 'mevedel-tool-registry))
 
 ;; `imenu'
-(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
-
 (declare-function imenu--make-index-alist "imenu" (&optional noerror))
 (defvar imenu--index-alist)
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+
+;; `project'
+(declare-function project-current "project" (&optional maybe-prompt dir))
+(declare-function project-files "project" (project &optional dirs))
+(defvar project-current-directory-override)
+(defvar project-files-relative-names)
 
 ;; `treesit'
 (declare-function treesit-available-p "treesit" ())
@@ -42,9 +49,7 @@
 (declare-function xref-location-group "xref" (cl-x) t)
 (declare-function xref-location-line "xref" (cl-x) t)
 (declare-function xref-location-marker "xref" (cl-x) t)
-
-;; `project'
-(defvar project-current-directory-override)
+(declare-function xref-matches-in-files "xref" (regexp files))
 
 
 ;;
@@ -138,8 +143,22 @@ and :file_path."
                     (file-name-directory full-path)))
                (unless backend
                  (error "No xref backend available for %s" file-path))
-               (let ((xref-items (mevedel-tool-code--with-quiet-file-visit
-                                    (xref-backend-references backend identifier))))
+               (let ((xref-items
+                      (mevedel-tool-code--with-quiet-file-visit
+                        (if (eq backend 'elisp)
+                            (let ((project-files-relative-names nil))
+                              (when-let* ((project (project-current t))
+                                          (files (project-files project)))
+                                (let ((symbol-regexp
+                                       (format "\\_<%s\\_>"
+                                               (regexp-quote identifier))))
+                                  (cl-remove-if-not
+                                   (lambda (item)
+                                     (string-match-p
+                                      symbol-regexp (xref-item-summary item)))
+                                   (xref-matches-in-files
+                                    (regexp-quote identifier) files)))))
+                          (xref-backend-references backend identifier)))))
                  (funcall callback
                           (list :result
                                 (if xref-items

@@ -5199,50 +5199,79 @@ Works from a chat buffer or a view buffer."
 ;;
 ;;; Session listing & resume command
 
+(defvar mevedel-session-persistence--summary-cache
+  (make-hash-table :test #'equal)
+  "Parsed session summaries keyed by sidecar path and file fingerprint.")
+
 (defun mevedel-session-persistence--read-summary (sidecar-path)
   "Read picker-relevant fields from SIDECAR-PATH; nil on failure.
 
 Cheap by design: only fields displayed in the picker (annotations,
 sort key) are extracted.  The full sidecar plist is left on disk
-until restore actually reads it."
-  (condition-case _
-      (let* ((plist (mevedel-session-persistence-read sidecar-path))
-             (_version
-              (unless (equal (plist-get plist :version) (mevedel-version))
-                (error "Unsupported session version")))
-             (_shape
-              (mevedel-session-persistence--validate-current-sidecar plist)))
-        (list :session-id         (plist-get plist :session-id)
-              :session-name       (plist-get plist :session-name)
-              :workspace          (plist-get plist :workspace)
-              :created-at         (plist-get plist :created-at)
-              :updated-at         (plist-get plist :updated-at)
-              :current-segment    (plist-get plist :current-segment)
-              :total-turn-count   (plist-get plist :total-turn-count)
-              :first-user-message (plist-get plist :first-user-message)
-              :latest-user-message (plist-get plist :latest-user-message)
-              :fork-point-ids
-              (cl-loop
-               for segment in (plist-get plist :prompt-index)
-               append
-               (cl-loop
-                for prompt in (cdr segment)
-                for id = (plist-get prompt :fork-point-id)
-                when (stringp id)
-                collect id))
-              :working-directory (plist-get plist :working-directory)
-              :forked-from-session-id
-              (plist-get plist :forked-from-session-id)
-              :fork-type (plist-get plist :fork-type)
-              :forked-from-fork-point-id
-              (plist-get plist :forked-from-fork-point-id)
-              :worktree-source-root
-              (plist-get plist :worktree-source-root)
-              :worktree-directory (plist-get plist :worktree-directory)
-              :worktree-branch (plist-get plist :worktree-branch)
-              :worktree-base-commit
-              (plist-get plist :worktree-base-commit)))
-    (error nil)))
+until restore actually reads it.  An unchanged file fingerprint reuses
+its previously parsed summary."
+  (let* ((path (expand-file-name sidecar-path))
+         (attributes (file-attributes path))
+         (fingerprint
+          (and attributes
+               (list (file-attribute-file-identifier attributes)
+                     (file-attribute-modification-time attributes)
+                     (file-attribute-size attributes))))
+         (cached
+          (and fingerprint
+               (gethash path mevedel-session-persistence--summary-cache))))
+    (if (and cached (equal fingerprint (car cached)))
+        (cdr cached)
+      (let ((summary
+             (condition-case _
+                 (let* ((plist (mevedel-session-persistence-read path))
+                        (_version
+                         (unless
+                             (equal (plist-get plist :version)
+                                    (mevedel-version))
+                           (error "Unsupported session version")))
+                        (_shape
+                         (mevedel-session-persistence--validate-current-sidecar
+                          plist)))
+                   (list :session-id         (plist-get plist :session-id)
+                         :session-name       (plist-get plist :session-name)
+                         :workspace          (plist-get plist :workspace)
+                         :created-at         (plist-get plist :created-at)
+                         :updated-at         (plist-get plist :updated-at)
+                         :current-segment    (plist-get plist :current-segment)
+                         :total-turn-count   (plist-get plist :total-turn-count)
+                         :first-user-message
+                         (plist-get plist :first-user-message)
+                         :latest-user-message
+                         (plist-get plist :latest-user-message)
+                         :fork-point-ids
+                         (cl-loop
+                          for segment in (plist-get plist :prompt-index)
+                          append
+                          (cl-loop
+                           for prompt in (cdr segment)
+                           for id = (plist-get prompt :fork-point-id)
+                           when (stringp id)
+                           collect id))
+                         :working-directory
+                         (plist-get plist :working-directory)
+                         :forked-from-session-id
+                         (plist-get plist :forked-from-session-id)
+                         :fork-type (plist-get plist :fork-type)
+                         :forked-from-fork-point-id
+                         (plist-get plist :forked-from-fork-point-id)
+                         :worktree-source-root
+                         (plist-get plist :worktree-source-root)
+                         :worktree-directory
+                         (plist-get plist :worktree-directory)
+                         :worktree-branch (plist-get plist :worktree-branch)
+                         :worktree-base-commit
+                         (plist-get plist :worktree-base-commit)))
+               (error nil))))
+        (when fingerprint
+          (puthash path (cons fingerprint summary)
+                   mevedel-session-persistence--summary-cache))
+        summary))))
 
 (defun mevedel-session-persistence-list-sessions (workspace)
   "Return a list of `(:save-path :summary)' plists for WORKSPACE's sessions.

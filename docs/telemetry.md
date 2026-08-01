@@ -142,6 +142,17 @@ file content hashes), loaded gptel and gptel-agent file hashes and repository
 commits, Emacs and system versions, configured sandbox mode, and Bubblewrap
 availability. Paths and file contents are not written to telemetry.
 
+## Comparing session instrumentation modes
+
+The maintained
+[controlled session performance workload](../benchmark/session-performance-workload.md)
+exercises native Write/Edit tools, a child-agent permission request, retained
+agent coordination, focused Bash tests, and an ignored-file-safe Elisp Xref
+search.  It defines normal, profiler-only, and full-debug runs from equivalent
+repository state.  Use profiler-only results for performance comparisons;
+full-debug capture deliberately pays the cost of gptel request logging and the
+view-render trace.
+
 ## Prompt guard
 
 Profiler runs temporarily advise `ask-user-about-supersession-threat`,
