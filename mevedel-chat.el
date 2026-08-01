@@ -108,6 +108,8 @@
 		  (instructions &optional non-processing))
 (declare-function mevedel--instructions-at "mevedel-overlays"
 		  (position &optional type))
+(declare-function mevedel--set-directive-status "mevedel-overlays"
+		  (directive status))
 (declare-function mevedel--topmost-instruction "mevedel-overlays"
 		  (instruction type))
 (declare-function mevedel--update-instruction-overlay
@@ -1071,9 +1073,8 @@ Updates directive status and overlay, handles success/failure states."
                                 (when-let* ((live-directive live-directive)
                                             (directive-buffer
                                              (overlay-buffer live-directive)))
-                                  (overlay-put live-directive
-                                               'mevedel-directive-status
-                                               'failed)
+                                  (mevedel--set-directive-status
+                                   live-directive 'failed)
                                   (overlay-put live-directive
                                                'mevedel-directive-fail-reason
                                                reason)
@@ -1092,9 +1093,8 @@ Updates directive status and overlay, handles success/failure states."
                             (when-let* ((live-directive live-directive)
                                         (directive-buffer
                                          (overlay-buffer live-directive)))
-                              (overlay-put live-directive
-                                           'mevedel-directive-status
-                                           'succeeded)
+                              (mevedel--set-directive-status
+                               live-directive 'succeeded)
                               (with-current-buffer directive-buffer
                                 ;; Delete any child directives of the top-level
                                 ;; directive.
@@ -1127,7 +1127,7 @@ Updates directive status and overlay, handles success/failure states."
 
     (save-some-buffers nil #'mevedel--directive-save-buffer-p)
 
-    (overlay-put directive 'mevedel-directive-status 'processing)
+    (mevedel--set-directive-status directive 'processing)
     (mevedel--update-instruction-overlay directive t)
     (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
 

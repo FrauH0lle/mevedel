@@ -19,10 +19,15 @@ flowchart TD
 
 Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 
-- **`mevedel-workspace`**: type, id, root, name, file-cache.
+- **`mevedel-workspace`**: type, id, root, name, file-cache, and the durable
+  directive records shared by every session in the workspace.
   Additional roots live in `mevedel-workspace-additional-roots`.
   `.mevedel/` is derived by
   `mevedel-workspace-state-dir`, not stored as a slot.
+- **`mevedel-directive`**: stable directive id, current authored request,
+  source-anchor description, and lifecycle state. Source overlays retain the
+  id needed to resolve this record; they do not own another request or status
+  copy.
 - **`mevedel-session`**: per-chat state: workspace, working
   directory, tasks, touched-files, permission rules/mode, exact resource grants,
   reminders,
@@ -54,10 +59,11 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   `get-domain`, `get-name`), groups, max-result-size, display argument,
   render transform, renderer, and its provider-facing gptel tool.
 - `mevedel--instruction-states`: workspace-keyed instruction alists and ID state
-- Instruction types: **References** (context) and **Directives** (prompts)
+- Instruction types: **References** (source-bound context) and **Directives**
+  (workspace-owned prompts with source presentations)
 
-Top-level directives may persist an exact provider and reasoning-effort
-override on their overlay. Nested directives edit the top-level request owner.
+Top-level directive presentations may persist an exact provider and
+reasoning-effort override. Nested directives edit the top-level request owner.
 Without an override, the directive inherits the main session model at dispatch.
 
 Directive request callbacks must not assume the original overlay object is

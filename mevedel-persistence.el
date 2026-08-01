@@ -2,12 +2,12 @@
 
 ;;; Commentary:
 
-;; Saves and restores instruction overlays across Emacs sessions.
-;; Instructions are file-specific; the save format records buffer
-;; associations, positions, and overlay properties.  When a save file
-;; is loaded against a buffer whose contents have changed, ediff is
-;; used to reconcile overlay positions.  Save files must match the
-;; current mevedel version.
+;; Saves and restores source-bound references and workspace-owned directives
+;; across Emacs sessions.  The save format records directive identity and
+;; authored state separately from file-specific overlay presentations.  When a
+;; save file is loaded against a buffer whose contents have changed, ediff is
+;; used to reconcile overlay positions.  Save files must match the current
+;; mevedel version and directive schema.
 
 ;;; Code:
 
@@ -20,6 +20,16 @@
 
 ;; `mevedel'
 (declare-function mevedel-version "mevedel" (&optional here message))
+
+;; `mevedel-structs'
+(declare-function mevedel-directive--create "mevedel-structs" (&rest slots))
+(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-set-directives "mevedel-structs"
+                  (workspace directives))
 
 (defcustom mevedel-patch-outdated-instructions t
   "Automatically patch instructions when the save file is outdated if non-nil."
@@ -68,6 +78,30 @@ not saved."
   "Return FILE relative to BASE-DIRECTORY, tolerating alias spellings."
   (mevedel--file-relative-name-or-absolute file base-directory))
 
+(defun mevedel--serialize-directive-anchor (anchor base-directory)
+  "Return serializable ANCHOR relative to BASE-DIRECTORY."
+  (let ((copy (copy-tree anchor)))
+    (when-let* ((file (plist-get copy :file))
+                ((stringp base-directory)))
+      (setq copy
+            (plist-put copy :file
+                       (mevedel--instruction-relative-file-name
+                        file base-directory))))
+    copy))
+
+(defun mevedel--serialize-directives (workspace base-directory)
+  "Return WORKSPACE directive records relative to BASE-DIRECTORY."
+  (mapcar
+   (lambda (directive)
+     (list :id (mevedel-directive-id directive)
+           :request (substring-no-properties
+                     (mevedel-directive-request directive))
+           :anchor (mevedel--serialize-directive-anchor
+                    (mevedel-directive-anchor directive)
+                    base-directory)
+           :state (mevedel-directive-state directive)))
+   (mevedel-workspace-directives workspace)))
+
 (defun mevedel--serialize-instructions
     (&optional base-directory include-original-content)
   "Return a plist snapshot of the current workspace instructions.
@@ -78,6 +112,7 @@ used.  When INCLUDE-ORIGINAL-CONTENT is non-nil, include full buffer
 contents for position patching if the file changes before restore."
   (mevedel--instruction-activate-buffer)
   (let ((file-alist ())
+        (workspace (mevedel--instruction-buffer-workspace (current-buffer)))
         (base-directory (and base-directory
                              (file-name-as-directory
                               (expand-file-name base-directory)))))
@@ -126,7 +161,29 @@ contents for position patching if the file changes before restore."
                      file-alist)))
     (list :version (mevedel-version)
           :ids (mevedel--instruction-id-state-plist)
+          :directives (and workspace
+                           (mevedel--serialize-directives
+                            workspace base-directory))
           :files file-alist)))
+
+(defun mevedel--deserialize-directives (serialized base-directory)
+  "Return directive records from SERIALIZED relative to BASE-DIRECTORY."
+  (mapcar
+   (lambda (entry)
+     (let ((id (plist-get entry :id))
+           (request (plist-get entry :request))
+           (anchor (copy-tree (plist-get entry :anchor))))
+       (unless (and (stringp id) (stringp request)
+                    (eq (plist-get anchor :state) 'attached))
+         (user-error "Malformed mevedel directive list"))
+       (when-let* ((file (plist-get anchor :file)))
+         (setq anchor
+               (plist-put anchor :file
+                          (expand-file-name file base-directory))))
+       (mevedel-directive--create
+        :id id :request request :anchor anchor
+        :state (plist-get entry :state))))
+   serialized))
 
 (defun mevedel--write-instructions-file
     (path &optional base-directory write-empty quiet include-original-content)
@@ -193,13 +250,22 @@ before replacing existing instructions.  QUIET suppresses messages."
       (user-error "Aborted")))
   (let* ((save-file (mevedel--read-instructions-file path))
          (file-alist (plist-get save-file :files))
+         (serialized-directives (plist-get save-file :directives))
          (id-counter-plist (plist-get save-file :ids)))
     (unless (equal (plist-get save-file :version) (mevedel-version))
       (user-error "Unsupported instruction file version: %s"
                   (or (plist-get save-file :version) "missing")))
     (unless (listp file-alist)
       (user-error "Malformed mevedel instruction list"))
+    (unless (and (plist-member save-file :directives)
+                 (listp serialized-directives))
+      (user-error "Malformed mevedel directive list"))
     (mevedel--clear-instruction-state workspace)
+    (mevedel-workspace-set-directives
+     workspace
+     (mevedel--deserialize-directives
+      serialized-directives
+      (or base-directory (file-name-parent-directory path))))
     (cl-destructuring-bind (&key id-counter used-ids retired-ids) id-counter-plist
       (let ((hm (make-hash-table)))
         (cl-loop for used-id in used-ids

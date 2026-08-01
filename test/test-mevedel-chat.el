@@ -837,8 +837,7 @@
                                       session-effort))))
 			     (with-current-buffer captured-chat
 			       (should (eq 'processing
-					   (overlay-get directive
-							'mevedel-directive-status)))
+					   (mevedel--directive-status directive)))
 			       (should (equal (overlay-get directive 'mevedel-uuid)
 					      mevedel--current-directive-uuid))
 			       (save-excursion
@@ -884,8 +883,7 @@
 				      nil captured-fsm)
 			     (should (equal '(nil t) callback-result))
 			     (should (eq 'succeeded
-					 (overlay-get directive
-						      'mevedel-directive-status)))
+					 (mevedel--directive-status directive)))
 			     (with-current-buffer captured-chat
 			       (should-not mevedel--current-directive-uuid)))))
 		     (when (buffer-live-p buf)

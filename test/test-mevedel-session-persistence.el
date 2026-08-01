@@ -2581,22 +2581,19 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                    (save-file (with-temp-buffer
                                 (insert-file-contents current-path)
                                 (read (current-buffer))))
-                   (file-plist (cdr (assoc "source.el"
-                                           (plist-get save-file :files))))
-                   (instruction
-                    (car (plist-get file-plist :instructions)))
-                   (properties (plist-get instruction :properties))
-                   (directive (plist-get properties 'mevedel-directive)))
-              (should (equal "Fix beta" directive))
-              (should-not (text-properties-at 0 directive)))
+                   (directive
+                    (car (plist-get save-file :directives)))
+                   (request (plist-get directive :request)))
+              (should (equal "Fix beta" request))
+              (should-not (text-properties-at 0 request)))
             (with-current-buffer data-buf
               (mevedel--clear-instruction-state workspace)
               (mevedel-session-persistence--load-instructions session data-buf))
             (mevedel--instruction-activate-workspace workspace)
             (let* ((ov (car (alist-get source-buf (mevedel--instruction-alist))))
-                   (directive (overlay-get ov 'mevedel-directive)))
-              (should (equal "Fix beta" directive))
-              (should-not (text-properties-at 0 directive))))
+                   (request (mevedel--directive-text ov)))
+              (should (equal "Fix beta" request))
+              (should-not (text-properties-at 0 request))))
         (when (and data-buf (buffer-live-p data-buf))
           (test-mevedel-session-persistence--release-and-kill data-buf session))
         (when (buffer-live-p source-buf)

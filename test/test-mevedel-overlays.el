@@ -44,6 +44,30 @@
       (when (file-exists-p file)
         (delete-file file)))))
 
+(defun mevedel-overlays-test--make-directive (content request workspace)
+  "Create a file buffer containing CONTENT and one directive in WORKSPACE."
+  (let* ((file (make-temp-file "mevedel-directive-" nil ".txt" content))
+         (buffer (find-file-noselect file)))
+    (with-current-buffer buffer
+      (fundamental-mode)
+      (setq-local mevedel--workspace workspace)
+      (set-buffer-modified-p nil)
+      (cons buffer
+            (mevedel--create-directive-in
+             buffer (point-min) (1- (point-max)) nil request)))))
+
+(defun mevedel-overlays-test--discard-directive (cell)
+  "Kill and delete the file belonging to directive CELL."
+  (when-let* ((buffer (car cell))
+              ((buffer-live-p buffer)))
+    (let ((file (buffer-file-name buffer)))
+      (with-current-buffer buffer
+        (setq-local kill-buffer-hook nil)
+        (set-buffer-modified-p nil))
+      (kill-buffer buffer)
+      (when (file-exists-p file)
+        (delete-file file)))))
+
 
 ;;
 ;;; Instruction presentation
@@ -56,16 +80,20 @@
     (insert "directive")
     (let ((parent (make-overlay 1 5))
           (child (make-overlay 2 4))
+          (parent-status 'processing)
           (mevedel-directive-processing-color "processing")
           (mevedel-directive-fail-color "failed")
           (mevedel-directive-success-color "succeeded"))
-      (overlay-put parent 'mevedel-directive-status 'processing)
-      (overlay-put child 'mevedel-directive-status 'succeeded)
       (cl-letf (((symbol-function 'mevedel--topmost-instruction)
-                 (lambda (&rest _) parent)))
+                 (lambda (&rest _) parent))
+                ((symbol-function 'mevedel--directive-status)
+                 (lambda (instruction)
+                   (if (eq instruction parent)
+                       parent-status
+                     'succeeded))))
         (should (equal "processing"
                        (mevedel--instruction-directive-color child)))
-        (overlay-put parent 'mevedel-directive-status 'failed)
+        (setq parent-status 'failed)
         (should (equal "failed"
                        (mevedel--instruction-directive-color child)))))))
 
@@ -76,8 +104,9 @@
   (with-temp-buffer
     (insert "directive")
     (let ((instruction (make-overlay 1 5)))
-      (overlay-put instruction 'mevedel-directive-status 'failed)
-      (mevedel--instruction-action-setup instruction 'directive)
+      (cl-letf (((symbol-function 'mevedel--directive-status)
+                 (lambda (_) 'failed)))
+        (mevedel--instruction-action-setup instruction 'directive))
       (should (eq (overlay-get instruction 'keymap)
                   mevedel-directive-failed-actions-map))
       (should (string-match-p
@@ -93,10 +122,11 @@
     (let ((parent (make-overlay 1 3))
           (child (make-overlay 1 2)))
       (overlay-put parent 'mevedel-instruction-type 'directive)
-      (overlay-put parent 'mevedel-directive-status 'succeeded)
-      (should (equal "CORRECTION"
-                     (mevedel--instruction-directive-typename
-                      child parent)))
+      (cl-letf (((symbol-function 'mevedel--directive-status)
+                 (lambda (_) 'succeeded)))
+        (should (equal "CORRECTION"
+                       (mevedel--instruction-directive-typename
+                        child parent))))
       (should-not (overlay-get child 'mevedel-subdirective-typename)))))
 
 (mevedel-deftest mevedel--instruction-label ()
@@ -286,6 +316,9 @@
   (test)
   :doc "pins and resets the request-owning top-level directive"
   (let ((session-buffer (generate-new-buffer " *directive-model-session*"))
+        (workspace (mevedel-workspace--create
+                    :type 'test :id "model-owner" :root "/tmp"
+                    :name "model-owner"))
         options)
     (unwind-protect
         (progn
@@ -293,6 +326,7 @@
             (setq-local gptel-reasoning-effort 'medium))
           (with-temp-buffer
             (insert "abcdef")
+            (setq-local mevedel--workspace workspace)
             (let ((parent (mevedel--create-directive-in
                            (current-buffer) 1 7 nil "Parent"))
                   child)
@@ -302,7 +336,7 @@
               (cl-letf (((symbol-function 'mevedel--chat-buffer)
                          (lambda (&rest _) session-buffer))
                         ((symbol-function 'mevedel-workspace)
-                         (lambda (&optional _) 'workspace))
+                         (lambda (&optional _) workspace))
                         ((symbol-function
                           'mevedel-model-current-provider-label)
                          (lambda (&optional _) "Session:session-model"))
@@ -345,7 +379,7 @@
                 (cl-letf (((symbol-function 'mevedel--chat-buffer)
                            (lambda (&rest _) session-buffer))
                           ((symbol-function 'mevedel-workspace)
-                           (lambda (&optional _) 'workspace))
+                           (lambda (&optional _) workspace))
                           ((symbol-function
                             'mevedel-model-current-provider-label)
                            (lambda (&optional _)
@@ -359,10 +393,14 @@
 
   :doc "shows the effective pair except while the directive is processing"
   (let ((session-buffer (generate-new-buffer " *directive-actions-session*"))
+        (workspace (mevedel-workspace--create
+                    :type 'test :id "action-owner" :root "/tmp"
+                    :name "action-owner"))
         choices action-row target)
     (unwind-protect
         (with-temp-buffer
           (insert "directive")
+          (setq-local mevedel--workspace workspace)
           (let* ((directive
                   (mevedel--create-directive-in
                    (current-buffer) (point-min) (point-max)
@@ -374,7 +412,7 @@
             (cl-letf (((symbol-function 'mevedel--chat-buffer)
                        (lambda (&rest _) session-buffer))
                       ((symbol-function 'mevedel-workspace)
-                       (lambda (&optional _) 'workspace))
+                       (lambda (&optional _) workspace))
                       ((symbol-function
                         'mevedel-model-current-provider-label)
                        (lambda (&optional _) "Session:model"))
@@ -392,7 +430,7 @@
                (string-match-p
                 "Session:model · effort default · session"
                 action-row))
-              (overlay-put directive 'mevedel-directive-status 'processing)
+              (mevedel--set-directive-status directive 'processing)
               (catch 'captured
                 (mevedel--ov-actions-dispatch directive))
               (should-not (assoc ?M choices))
@@ -408,6 +446,93 @@
 
 ;;
 ;;; Lookup
+
+(mevedel-deftest mevedel--create-directive-in
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global)))
+  ,test
+  (test)
+  :doc "creates one workspace-owned record resolved by the source overlay"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "create-directive" :root "/tmp"
+                     :name "create-directive"))
+         (cell (mevedel-overlays-test--make-directive
+                "directive body\n" "Initial request" workspace))
+         (directive (cdr cell))
+         (record (mevedel--directive-record directive)))
+    (unwind-protect
+        (progn
+          (should (eq record (car (mevedel-workspace-directives workspace))))
+          (should (equal (overlay-get directive 'mevedel-uuid)
+                         (mevedel-directive-id record)))
+          (should (equal "Initial request"
+                         (mevedel-directive-request record)))
+          (should (equal 'attached
+                         (plist-get (mevedel-directive-anchor record)
+                                    :state)))
+          (should-not (overlay-get directive 'mevedel-directive)))
+      (mevedel-overlays-test--discard-directive cell))))
+
+(mevedel-deftest mevedel--create-reference-in
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global)))
+  ,test
+  (test)
+  :doc "keeps references source-bound and outside durable directive records"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "create-reference" :root "/tmp"
+                     :name "create-reference"))
+         (cell (mevedel-overlays-test--make-reference
+                "reference body\n" workspace)))
+    (unwind-protect
+        (progn
+          (should (overlay-get (cdr cell) 'evaporate))
+          (should-not (mevedel-workspace-directives workspace)))
+      (mevedel-overlays-test--discard-reference cell))))
+
+(mevedel-deftest mevedel--set-directive-request
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global)))
+  ,test
+  (test)
+  :doc "updates the durable request without replacing directive identity"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "edit-directive" :root "/tmp"
+                     :name "edit-directive"))
+         (cell (mevedel-overlays-test--make-directive
+                "directive body\n" "Initial request" workspace))
+         (directive (cdr cell))
+         (record (mevedel--directive-record directive)))
+    (unwind-protect
+        (progn
+          (mevedel--set-directive-request directive "Changed request")
+          (should (eq record (mevedel--directive-record directive)))
+          (should (equal "Changed request"
+                         (mevedel-directive-request record))))
+      (mevedel-overlays-test--discard-directive cell))))
+
+(mevedel-deftest mevedel--delete-instruction
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global)))
+  ,test
+  (test)
+  :doc "removes a Ready directive record with its presentation overlay"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "delete-directive" :root "/tmp"
+                     :name "delete-directive"))
+         (cell (mevedel-overlays-test--make-directive
+                "directive body\n" "Unused request" workspace))
+         (directive (cdr cell)))
+    (unwind-protect
+        (progn
+          (should (mevedel-workspace-directives workspace))
+          (mevedel--delete-instruction directive)
+          (should-not (mevedel-workspace-directives workspace)))
+      (mevedel-overlays-test--discard-directive cell))))
 
 (mevedel-deftest mevedel--filter-references
   (:vars

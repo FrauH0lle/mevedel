@@ -2,9 +2,9 @@
 
 ;;; Commentary:
 
-;; Workspace, session, request, and task structs that form the foundation for
-;; mevedel's state management, plus canonical task data invariants.  All other
-;; modules reference these definitions.
+;; Workspace, directive, session, request, and task structs that form the
+;; foundation for mevedel's state management, plus canonical task data
+;; invariants.  All other modules reference these definitions.
 
 ;;; Code:
 
@@ -54,7 +54,14 @@ check project dir first, then global."
 
 
 ;;
-;;; Workspace struct
+;;; Directive and workspace structs
+
+(cl-defstruct (mevedel-directive (:constructor mevedel-directive--create))
+  "Workspace-owned directive identity and current authored state."
+  id
+  request
+  anchor
+  state)
 
 (cl-defstruct (mevedel-workspace (:constructor mevedel-workspace--create))
   "Project-level shared state.
@@ -63,7 +70,36 @@ One workspace per project, shared by all sessions for that project."
   id                ; opaque identifier
   root              ; cached absolute path
   name              ; display name
-  file-cache)       ; mevedel-file-cache struct: LRU workspace file cache
+  file-cache        ; mevedel-file-cache struct: LRU workspace file cache
+  directives)       ; list of workspace-owned mevedel-directive structs
+
+(defun mevedel-directive-set-anchor (directive anchor)
+  "Set DIRECTIVE's current ANCHOR."
+  (setf (mevedel-directive-anchor directive) anchor))
+
+(defun mevedel-directive-set-request (directive request)
+  "Set DIRECTIVE's current REQUEST and return it to Ready."
+  (setf (mevedel-directive-request directive) request
+        (mevedel-directive-state directive) nil)
+  request)
+
+(defun mevedel-directive-set-state (directive state)
+  "Set DIRECTIVE's transient lifecycle STATE."
+  (setf (mevedel-directive-state directive) state))
+
+(defun mevedel-workspace-add-directive (workspace directive)
+  "Add DIRECTIVE to WORKSPACE."
+  (push directive (mevedel-workspace-directives workspace))
+  directive)
+
+(defun mevedel-workspace-remove-directive (workspace directive)
+  "Remove DIRECTIVE from WORKSPACE."
+  (setf (mevedel-workspace-directives workspace)
+        (delq directive (mevedel-workspace-directives workspace))))
+
+(defun mevedel-workspace-set-directives (workspace directives)
+  "Replace WORKSPACE's directive records with DIRECTIVES."
+  (setf (mevedel-workspace-directives workspace) directives))
 
 
 ;;
@@ -153,7 +189,8 @@ and NAME arguments)."
                   :file-cache (mevedel-file-cache--create
                                :table (make-hash-table :test #'equal)
                                :order nil
-                               :total-bytes 0))
+                               :total-bytes 0)
+                  :directives nil)
                  mevedel-workspace--registry))))
 
 (defun mevedel-workspace-clear-registry ()
