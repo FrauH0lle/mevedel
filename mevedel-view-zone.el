@@ -7,9 +7,10 @@
 
 ;;; Commentary:
 
-;; Owns the four fixed fragment-backed regions of view chrome: history-live,
-;; status, interaction, and progress.  Producers supply complete fragment
-;; sets; this module owns region identity, overlay lifetime, marker behavior,
+;; Owns the fixed fragment-backed regions of view chrome: history-live,
+;; status, interaction, progress, and directive activity.  Producers supply
+;; complete fragment sets; this module owns region identity, overlay lifetime,
+;; marker behavior,
 ;; preservation, reconciliation, recovery, collapse, and navigation.
 ;; Fragment text is a disposable cache.  Durable conversation state remains
 ;; in the data buffer and session structures.
@@ -44,7 +45,7 @@
   "Managed region overlays keyed by fixed zone name.")
 
 (defconst mevedel-view-zone--names
-  '(history-live status interaction progress)
+  '(history-live status interaction progress directive-activity)
   "Fixed names of fragment-backed view zones.")
 
 
@@ -494,9 +495,9 @@ priorities."
 
 (defun mevedel-view-zone--call-with-marker-types (zone thunk)
   "Call THUNK with lower view markers advancing appropriately for ZONE."
-  (let* ((markers (list mevedel-view--status-marker
-                        mevedel-view--interaction-marker
-                        mevedel-view--input-marker))
+  (let* ((markers (list (bound-and-true-p mevedel-view--status-marker)
+                        (bound-and-true-p mevedel-view--interaction-marker)
+                        (bound-and-true-p mevedel-view--input-marker)))
          (old-types (mapcar (lambda (marker)
                               (and (markerp marker)
                                    (marker-insertion-type marker)))
@@ -517,6 +518,7 @@ priorities."
 (defun mevedel-view-zone--composer-live-p ()
   "Return non-nil when the current view has an editable composer."
   (and (not (bound-and-true-p mevedel-view--agent-transcript-p))
+       (boundp 'mevedel-view--input-marker)
        (markerp mevedel-view--input-marker)
        (eq (marker-buffer mevedel-view--input-marker) (current-buffer))))
 

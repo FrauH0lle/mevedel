@@ -429,6 +429,8 @@ Currently, linking is only relevant for references.
 | `mevedel-discuss-directive`        | Discuss directive in read-only mode without making changes.                  |
 | `mevedel-tutor-directive`          | Tutoring mode that guides without providing direct solutions (experimental). |
 | `mevedel-preview-directive-prompt` | Preview directive prompt at the current point.                               |
+| `mevedel-open-directive-activity`  | Open the current directive's workspace activity surface.                     |
+| `mevedel-list-directives`          | Choose a workspace directive and open its activity surface.                  |
 | `mevedel-diff-apply-buffer`        | Apply the diff in the patch buffer with overlay preservation.                |
 | `mevedel-ediff-patch`              | Launch an ediff session on the patch buffer for manual editing.              |
 | `mevedel-clear-patch-buffer`       | Clear the contents of the patch buffer for the current workspace.            |

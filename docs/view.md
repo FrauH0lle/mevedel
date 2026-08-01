@@ -211,6 +211,16 @@ prompt starts with a read-only blank separator line so status,
 interaction, and request-progress rows stay visually distinct from the
 composer.
 
+## Directive Activity
+
+`mevedel-open-directive-activity` opens a workspace-owned directive outside
+the main chat. The ephemeral buffer renders the current request, lifecycle
+state, anchor state, and chronological activity through the managed
+`directive-activity` view zone. Refreshing the buffer reads the shared
+workspace record directly and never adds content to a transcript or model
+request. `mevedel-list-directives` provides workspace-level selection, and an
+Attached anchor can be visited from the activity view with `o` or `RET`.
+
 ## Status Strip And Cockpit Routing
 
 The view buffer header line is mevedel-owned chrome. It shows session

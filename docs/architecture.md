@@ -27,7 +27,8 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 - **`mevedel-directive`**: stable directive id, current authored request,
   source-anchor description, and lifecycle state. Source overlays retain the
   id needed to resolve this record; they do not own another request or status
-  copy.
+  copy. Ephemeral directive activity buffers render this shared record outside
+  the model-visible chat transcript.
 - **`mevedel-session`**: per-chat state: workspace, working
   directory, tasks, touched-files, permission rules/mode, exact resource grants,
   reminders,

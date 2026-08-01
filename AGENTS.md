@@ -128,6 +128,7 @@ Data model
 
 Chat / view
   mevedel-chat.el             session lifecycle
+  mevedel-directive-activity.el  workspace directive activity surfaces
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing
   mevedel-transcript-restore.el  transcript property restoration via the canonical grammar

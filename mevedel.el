@@ -74,6 +74,7 @@
 (require 'mevedel-view-composer)
 (require 'mevedel-view-stream)
 (require 'mevedel-view-zone)
+(require 'mevedel-directive-activity)
 (require 'mevedel-reminders)
 (require 'mevedel-skills-core)
 (require 'mevedel-mention-bindings)

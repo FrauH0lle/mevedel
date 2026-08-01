@@ -426,6 +426,7 @@
               (catch 'captured
                 (mevedel--ov-actions-dispatch directive))
               (should (member '(?M "model") choices))
+              (should (member '(?o "activity") choices))
               (should
                (string-match-p
                 "Session:model · effort default · session"
@@ -434,6 +435,7 @@
               (catch 'captured
                 (mevedel--ov-actions-dispatch directive))
               (should-not (assoc ?M choices))
+              (should (member '(?o "activity") choices))
               (setq target child)
               (catch 'captured
                 (mevedel--ov-actions-dispatch child))
