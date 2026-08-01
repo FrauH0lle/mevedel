@@ -284,7 +284,7 @@
                    (rendering
                     (mevedel-view--compute-segment-rendering
                      data-buf (car bounds) (cdr bounds))))
-              (should (equal "line 3\nline 4\nline 5\nline 6\nline 7"
+              (should (equal "$ printf run\n\nline 3\nline 4\nline 5\nline 6\nline 7"
                              (plist-get rendering :body)))
               (should (plist-get rendering :force-expanded-p)))
             (let ((cached (gethash "call-live"
@@ -3519,7 +3519,7 @@
         (let ((source (get-text-property (point) 'mevedel-view-source))
               (line (buffer-substring-no-properties
                      (line-beginning-position) (line-end-position))))
-          (should (equal (car source) reasoning-start))
+          (should (= (marker-position (car source)) reasoning-start))
           (should (string-match-p "Thinking\\.\\.\\. (1 lines)" line)))
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties

@@ -325,6 +325,19 @@
                  (regexp-quote "ask · idle · model none · 0 tools")
                  line)))))
 
+  :doc "status strip reuses unchanged output and rebuilds after state changes"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((first (mevedel-view--status-strip))
+            second changed)
+        (setq second (mevedel-view--status-strip))
+        (should (eq first second))
+        (with-current-buffer data-buf
+          (setq-local gptel-tools '(read)))
+        (setq changed (mevedel-view--status-strip))
+        (should-not (eq second changed))
+        (should (string-match-p "1 tool" changed)))))
+
   :doc "status strip shows Plan together with its permission policy"
   (mevedel-view-test--with-buffers
     (let ((session (mevedel-session--create

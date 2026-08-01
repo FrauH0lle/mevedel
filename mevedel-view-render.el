@@ -2577,6 +2577,13 @@ the input boundary cannot be recovered."
 
 (defvar mevedel-view--collapsible-vtypes)
 
+(defun mevedel-view--source-range (data-buffer start end)
+  "Return marker-backed START..END coordinates in DATA-BUFFER."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (cons (copy-marker start nil)
+            (copy-marker end nil)))))
+
 (defun mevedel-view--source-collapse-vtype-p (vtype)
   "Return non-nil when VTYPE can be restored from source coordinates."
   (or (memq vtype mevedel-view--collapsible-vtypes)
@@ -2778,6 +2785,10 @@ rendered kind, agent id, body hash, and ordinal."
                 (mevedel-view--source-collapse-state-key source vtype))
                ((mevedel-view--source-collapse-in-flight-key-p source-key)
                 (mevedel-view--source-collapse-state-key source vtype))
+               ((and (markerp (car-safe source))
+                     (not (equal (nth 2 source-key)
+                                 (mevedel-view--source-start-position source))))
+                (mevedel-view--source-collapse-state-key source vtype))
                (source-key)
                ((mevedel-view--source-collapse-state-key source vtype))
                (mailbox-bounds
@@ -2826,6 +2837,12 @@ a marker so toggles that change buffer length do not invalidate the walk."
                             (mevedel-view--source-collapse-state-key source vtype))
                            ((mevedel-view--source-collapse-in-flight-key-p source-key)
                             (mevedel-view--source-collapse-state-key source vtype))
+                           ((and (markerp (car-safe source))
+                                 (not (equal
+                                       (nth 2 source-key)
+                                       (mevedel-view--source-start-position
+                                        source))))
+                            (mevedel-view--source-collapse-state-key source vtype))
                            (source-key)
                            ((mevedel-view--source-collapse-state-key source vtype))
                            (mailbox-bounds
@@ -2862,8 +2879,9 @@ DATA-FROM is the first data-buffer position for the in-flight turn."
       (while (and (< pos history-end) (not first-source))
         (let ((source (get-text-property pos 'mevedel-view-source)))
           (when (and (consp source)
-                     (integerp (car source))
-                     (>= (car source) data-from))
+                     (integer-or-marker-p (car source))
+                     (>= (mevedel-view--source-start-position source)
+                         data-from))
             (setq first-source pos)))
         (setq pos (1+ pos)))
       (when first-source
@@ -3157,7 +3175,10 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
   (let ((role (plist-get turn :role))
         (segments (plist-get turn :segments))
         (turn-start (plist-get turn :start))
-        (turn-end (plist-get turn :end)))
+        (turn-end (plist-get turn :end))
+        (turn-source nil))
+    (setq turn-source
+          (mevedel-view--source-range data-buf turn-start turn-end))
     ;; Skip user turns that are empty after cleaning (e.g., turns
     ;; containing only org reasoning markers or response separators).
     (unless (and (eq role 'user)
@@ -3231,7 +3252,7 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
                     (setq pos next))
                    (t
                     (put-text-property pos next 'mevedel-view-source
-                                       (cons turn-start turn-end))
+                                       turn-source)
                     (setq pos next))))))
             ;; Tag every character in this turn with a unique id so
             ;; turn-level fold/unfold can find the whole span even after
@@ -3586,8 +3607,10 @@ EXPANDED means insert the disclosure body expanded."
                            (mevedel-view--inline-skill-render-data-from-text
                             text)))
                 (setq info
-                      (plist-put data :source
-                                 (cons (cadr seg) (caddr seg))))))
+                      (plist-put
+                       data :source
+                       (mevedel-view--source-range
+                        data-buf (cadr seg) (caddr seg))))))
             (setq hook-audits
                   (append hook-audits
                           (mevedel-view--hook-audit-records-from-text text))))))
@@ -3922,8 +3945,8 @@ buffer for gptel, but the view must not render them as `You' turns."
       (dolist (ctx hook-contexts)
         (mevedel-view--insert-hook-context-block
          (plist-get ctx :events)
-         (cons (plist-get ctx :start)
-               (plist-get ctx :end))))
+         (mevedel-view--source-range
+          data-buf (plist-get ctx :start) (plist-get ctx :end))))
       (dolist (audit hook-audits)
         (mevedel-view--insert-hook-audit-block
          audit
@@ -3935,8 +3958,8 @@ buffer for gptel, but the view must not render them as `You' turns."
                :body-mode 'markdown-mode
                :vtype 'prompt-summary
                :initially-collapsed-p t)
-         (cons (plist-get drawer :start)
-               (plist-get drawer :end))))
+         (mevedel-view--source-range
+          data-buf (plist-get drawer :start) (plist-get drawer :end))))
       (when (and inline-skill inline-source-seg)
         (mevedel-view--insert-rendered-tool
          (list :header "Prompt"
@@ -4029,6 +4052,8 @@ Merges adjacent thinking/reasoning segments into a single summary."
                     data-buf first-start last-end))
            (first-start (or (car-safe bounds) first-start))
            (last-end (or (cdr-safe bounds) last-end))
+           (source (mevedel-view--source-range
+                    data-buf first-start last-end))
            (summary (mevedel-view--thinking-summary
                      data-buf first-start last-end)))
       (unless (string-empty-p summary)
@@ -4038,16 +4063,16 @@ Merges adjacent thinking/reasoning segments into a single summary."
           summary 'mevedel-view-thinking-summary)
          `(mevedel-view-type thinking-summary
            mevedel-view-collapsed t
-           mevedel-view-source ,(cons first-start last-end)
+           mevedel-view-source ,source
            mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
-                                     (cons first-start last-end)
+                                     source
                                      'thinking-summary)))))))
 
 (defun mevedel-view--render-system-reminder-segment (seg data-buf)
   "Render system-reminder SEG from DATA-BUF as a control row."
   (let* ((seg-start (cadr seg))
          (seg-end (caddr seg))
-         (source (cons seg-start seg-end))
+         (source (mevedel-view--source-range data-buf seg-start seg-end))
          (body
           (with-current-buffer data-buf
             (mevedel-view--system-reminder-body-from-text
@@ -4084,7 +4109,7 @@ Merges adjacent thinking/reasoning segments into a single summary."
                     (mevedel-view--request-summary-line render-data)))
          (failure-rendering
           (mevedel-view--segment-rendering data-buf seg-start seg-end))
-         (source (cons seg-start seg-end)))
+         (source (mevedel-view--source-range data-buf seg-start seg-end)))
     (when failure-rendering
       (mevedel-view--insert-rendered-tool failure-rendering source))
     (when line
@@ -4159,7 +4184,10 @@ inserted beside the header."
              (setq tool-group nil))
            ;; Insert response text with source tracking
            (let ((seg-start (cadr seg))
-                 (seg-end (caddr seg)))
+                 (seg-end (caddr seg))
+                 (source nil))
+             (setq source
+                   (mevedel-view--source-range data-buf seg-start seg-end))
              (with-current-buffer data-buf
                (let ((text (string-trim
                              (buffer-substring-no-properties seg-start seg-end))))
@@ -4172,9 +4200,9 @@ inserted beside the header."
                        (let ((response-end (copy-marker (point) t)))
                          (add-text-properties
                           start response-end
-                          `(mevedel-view-source ,(cons seg-start seg-end)
+                          `(mevedel-view-source ,source
                             mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
-                                                      (cons seg-start seg-end)
+                                                      source
                                                       'response)
                             mevedel-view-type response
                             mevedel-view-collapsed nil))
@@ -4238,7 +4266,8 @@ inserted beside the header."
                   (not tool-group))
              (mevedel-view--flush-thinking-group thinking-group data-buf)
              (setq thinking-group nil)
-             (let* ((source (cons (cadr seg) (caddr seg)))
+             (let* ((source (mevedel-view--source-range
+                             data-buf (cadr seg) (caddr seg)))
                     (text (with-current-buffer data-buf
                             (buffer-substring-no-properties
                              (cadr seg) (caddr seg)))))
@@ -4282,7 +4311,7 @@ inserted beside the header."
   "Render a canonical started collaboration event SEG from DATA-BUF."
   (let* ((seg-start (cadr seg))
          (seg-end (caddr seg))
-         (source (cons seg-start seg-end))
+         (source (mevedel-view--source-range data-buf seg-start seg-end))
          (render-data
           (with-current-buffer data-buf
             (mevedel-view--collaboration-event-from-text
@@ -4345,7 +4374,8 @@ only the final row and show the number of combined calls."
             (dolist (seg tool-segments (nreverse out))
               (let* ((seg-start (cadr seg))
                      (seg-end (caddr seg))
-                     (source (cons seg-start seg-end))
+                     (source (mevedel-view--source-range
+                              data-buf seg-start seg-end))
                      (rendering (mevedel-view--segment-rendering
                                  data-buf seg-start seg-end t))
                      (vtype (or (plist-get rendering :vtype)

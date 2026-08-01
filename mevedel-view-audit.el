@@ -39,6 +39,8 @@
 (declare-function mevedel-view--section-bounds "mevedel-view-render" ())
 (declare-function mevedel-view--source-collapse-state-key
                   "mevedel-view-render" (source kind))
+(declare-function mevedel-view--source-range
+                  "mevedel-view-render" (data-buffer start end))
 (defvar mevedel--data-buffer)
 
 (defun mevedel-view--hook-audit-records-from-text (text &optional type)
@@ -159,8 +161,10 @@ When EXPANDED is non-nil, include ordered handler details."
               (push (append
                      (plist-get span :record)
                      (list :source
-                           (cons (+ start (plist-get span :start))
-                                 (+ start (plist-get span :end)))))
+                           (mevedel-view--source-range
+                            data-buf
+                            (+ start (plist-get span :start))
+                            (+ start (plist-get span :end)))))
                     records)))))
       (nreverse records))))
 

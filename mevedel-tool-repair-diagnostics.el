@@ -32,6 +32,7 @@
 (defvar mevedel-tool-repair-persist-log)
 
 ;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
@@ -228,7 +229,7 @@
           (with-temp-buffer
             (prin1 event (current-buffer))
             (insert "\n")
-            (append-to-file (point-min) (point-max) file)))
+            (write-region (point-min) (point-max) file t 'silent)))
       (error
        (display-warning 'mevedel "Repair telemetry persistence failed"
                         :warning)))))
@@ -243,7 +244,12 @@
             (setq log (last log mevedel-tool-repair-log-limit)))
           (setf (mevedel-session-repair-log session) log)
           (mevedel-tool-repair--persist-event session event)
-          (when (fboundp 'mevedel-telemetry-record)
+          (when (and (fboundp 'mevedel-telemetry-record)
+                     (or (and (fboundp 'mevedel-telemetry-detailed-p)
+                              (mevedel-telemetry-detailed-p session))
+                         (not (eq (plist-get event :outcome) 'valid))
+                         (plist-get event :rules)
+                         (plist-get event :issue-kinds)))
             (apply #'mevedel-telemetry-record
                    session 'tool-input-repair
                    :stage 'settled

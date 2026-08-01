@@ -98,7 +98,9 @@
          (session (mevedel-hooks-test--session root))
          starts finishes result)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-telemetry-start)
+        (cl-letf (((symbol-function 'mevedel-telemetry-detailed-p)
+                   (lambda (_session) t))
+                  ((symbol-function 'mevedel-telemetry-start)
                    (lambda (_session event &rest props)
                      (push (cons event props) starts)
                      '(:span handler)))
@@ -1663,7 +1665,7 @@
             (should-not hook-result)))
       (delete-directory root t)))
 
-  :doc "events without handlers keep telemetry but create no progress timer"
+  :doc "normal events without handlers create neither telemetry nor progress"
   (let* ((root (make-temp-file "mevedel-hooks-no-progress" t))
          (session (mevedel-hooks-test--session root))
          (mevedel-hooks-slow-threshold 1)
@@ -1684,6 +1686,26 @@
            'PreToolUse '(:tool-name "Read")
            (lambda (decision) (setq result decision)) session)
           (should-not result)
+          (should-not telemetry))
+      (delete-directory root t)))
+
+  :doc "profiler events retain aggregate spans without handlers"
+  (let* ((root (make-temp-file "mevedel-hooks-profiled-empty" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hook-rules nil)
+         telemetry)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-telemetry-detailed-p)
+                   (lambda (_session) t))
+                  ((symbol-function 'mevedel-telemetry-start)
+                   (lambda (_session event &rest props)
+                     (push (cons event props) telemetry)
+                     'span))
+                  ((symbol-function 'mevedel-telemetry-finish)
+                   (lambda (_span &rest props)
+                     (push (cons 'finish props) telemetry))))
+          (mevedel-hooks-run-event
+           'PreToolUse '(:tool-name "Read") #'ignore session)
           (should (equal 0
                          (plist-get (cdr (assq 'hook-event telemetry))
                                     :handler-count)))

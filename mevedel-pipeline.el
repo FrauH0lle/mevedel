@@ -87,6 +87,7 @@
 (defvar mevedel--session)
 
 ;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
@@ -416,6 +417,9 @@ to CALLBACK."
            (telemetry-settled nil)
            (telemetry-span
             (when (and (plist-get context :session)
+                       (fboundp 'mevedel-telemetry-detailed-p)
+                       (mevedel-telemetry-detailed-p
+                        (plist-get context :session))
                        (fboundp 'mevedel-telemetry-start))
               (mevedel-telemetry-start
                (plist-get context :session) 'tool-pipeline-step
