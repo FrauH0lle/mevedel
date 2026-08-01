@@ -494,7 +494,9 @@ facts separately from the raw output. Unread ranges beyond 2000 characters use
 the shared newline-aware,
 equal head-and-tail preview while the retained artifact remains complete.
 The initiating Bash disclosure remains force-expanded with a five-line tail
-while live and returns to its normal collapsed state when it settles.
+while live and returns to its normal collapsed state when it settles. Its
+collapsed header truncates the first command line to 60 columns; expanding the
+disclosure shows the exact full command above its output.
 
 Managed executions publish transient progress after two seconds, at most four
 times per second. The existing Bash row shows the last five output lines, elapsed

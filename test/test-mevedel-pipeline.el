@@ -2395,6 +2395,26 @@
 		   (mevedel-pipeline-run-tool
 		    tool (lambda (r) (setq result r)) '(:msg "hello"))
 		   (should (equal result "hello")))
+		 :doc "normal sessions omit per-step telemetry spans"
+		 (let* ((session (mevedel-session--create
+				  :name "normal-telemetry"
+				  :permission-mode 'full-auto))
+			(tool (mevedel-tool--create
+			       :name "QuietEcho"
+			       :handler (lambda (_args) '(:result "done"))
+			       :read-only-p t
+			       :async-p nil))
+			started result)
+		   (with-temp-buffer
+		     (setq-local mevedel--session session)
+		     (cl-letf (((symbol-function 'mevedel-telemetry-start)
+				(lambda (&rest _) (setq started t)))
+			       ((symbol-function 'mevedel-telemetry-record)
+				#'ignore))
+		       (mevedel-pipeline-run-tool
+			tool (lambda (value) (setq result value)) nil)))
+		   (should (equal "done" result))
+		   (should-not started))
 		 :doc "direct native-edit allow reaches the handler as auto-apply authority"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-direct-edit-" t)))
@@ -2468,7 +2488,9 @@
 		   (with-temp-buffer
 		     (setq-local mevedel--session session)
 		     (setq request (mevedel-request-begin session))
-		     (cl-letf (((symbol-function 'mevedel-telemetry-start)
+		     (cl-letf (((symbol-function 'mevedel-telemetry-detailed-p)
+				(lambda (_session) t))
+			       ((symbol-function 'mevedel-telemetry-start)
 				(lambda (_session event &rest props)
 				  (list :event event :props props)))
 			       ((symbol-function 'mevedel-telemetry-finish)

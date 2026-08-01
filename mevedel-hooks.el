@@ -42,6 +42,7 @@
                   "mevedel-reminders" (buffer key body))
 
 ;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
@@ -1156,7 +1157,7 @@ EVENT labels each generated hook event block."
           (with-temp-buffer
             (prin1 (mevedel-hooks--printable-value entry) (current-buffer))
             (insert "\n")
-            (append-to-file (point-min) (point-max) file)))
+            (write-region (point-min) (point-max) file t 'silent)))
       (error
        (message "mevedel: hook log persistence failed: %s"
                 (error-message-string err))))))
@@ -1665,6 +1666,8 @@ stable public event payload."
       (let* ((handler (car handlers))
              (handler-span
               (and session
+                   (fboundp 'mevedel-telemetry-detailed-p)
+                   (mevedel-telemetry-detailed-p session)
                    (fboundp 'mevedel-telemetry-start)
                    (mevedel-telemetry-start
                     session 'hook-handler-lifecycle
@@ -1739,7 +1742,11 @@ decision plist."
              (handlers (mevedel-hooks--handlers-for-event
                         event payload rules))
              (telemetry-span
-              (when (and session (fboundp 'mevedel-telemetry-start))
+              (when (and session
+                         (or handlers
+                             (and (fboundp 'mevedel-telemetry-detailed-p)
+                                  (mevedel-telemetry-detailed-p session)))
+                         (fboundp 'mevedel-telemetry-start))
                 (mevedel-telemetry-start
                  session 'hook-event
                  :hook-event event

@@ -4436,13 +4436,26 @@ the execution boundary owns the session's single unavailable warning"
   (should (null (mevedel-tool-exec--render-bash
                  "Bash" '(:command "ls") nil nil)))
 
-  :doc "header shows first line of the command; body-mode is sh-mode"
+  :doc "header shows first command line and expanded body keeps the full command"
   (let* ((body "file1\nfile2\n")
          (plist (mevedel-tool-exec--render-bash
                  "Bash" '(:command "ls -la\n# more") body nil)))
     (should (equal "Bash: ls -la" (plist-get plist :header)))
-    (should (equal body (plist-get plist :body)))
+    (should (equal (concat "$ ls -la\n# more\n\n" body)
+                   (plist-get plist :body)))
     (should (eq 'sh-mode (plist-get plist :body-mode))))
+
+  :doc "truncates long headers without truncating the expanded command"
+  (let* ((command (concat "git add -- " (make-string 90 ?x)))
+         (plist (mevedel-tool-exec--render-bash
+                 "Bash" (list :command command) "done\n" nil)))
+    (should (string-prefix-p "Bash: git add -- " (plist-get plist :header)))
+    (should (string-suffix-p "..." (plist-get plist :header)))
+    (should (<= (string-width (string-remove-prefix
+                               "Bash: " (plist-get plist :header)))
+                60))
+    (should (equal (concat "$ " command "\n\ndone\n")
+                   (plist-get plist :body))))
 
   :doc "hides the model-only execution envelope from expanded bodies"
   (let ((plist

@@ -815,7 +815,9 @@
     (mevedel-tool-register tool)
     (with-temp-buffer
       (setq-local mevedel--session session)
-      (cl-letf (((symbol-function 'mevedel-telemetry-start)
+      (cl-letf (((symbol-function 'mevedel-telemetry-detailed-p)
+                 (lambda (_session) t))
+                ((symbol-function 'mevedel-telemetry-start)
                  (lambda (_session event &rest props)
                    (setq started (cons event props))
                    '(:span repair)))
@@ -827,6 +829,21 @@
     (should (eq 'valid (plist-get finished :outcome)))
     (should (= 0 (plist-get finished :repair-count)))
     (should (= 0 (plist-get finished :issue-count))))
+
+  :doc "omits validation spans for normal sessions"
+  (let ((session (mevedel-session--create :name "main"))
+        (tool (mevedel-tool--create
+               :name "NormalValidation" :category "mevedel"
+               :args '((name string :required "Name"))))
+        started)
+    (mevedel-tool-register tool)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-telemetry-start)
+                 (lambda (&rest _) (setq started t))))
+        (mevedel-tool-repair-pre-tool-call
+         '(:name "NormalValidation" :args (:name "ok")))))
+    (should-not started))
 
   :doc "consumes identical final args in original call order"
   (let ((tool
@@ -919,13 +936,26 @@
     (should (= 1 (plist-get (cdr captured) :repair-count)))
     (should (= 1 (plist-get (cdr captured) :issue-count))))
 
+  :doc "keeps routine valid outcomes out of normal unified telemetry"
+  (let ((session (mevedel-session--create :name "main"))
+        captured)
+    (cl-letf (((symbol-function 'mevedel-telemetry-record)
+               (lambda (&rest _) (setq captured t))))
+      (mevedel-tool-repair-log-event
+       session
+       '(:time "now" :origin "/root" :backend backend
+               :model model :tool "Read" :outcome valid
+               :repair-enabled t :rules nil :paths nil
+               :issue-kinds nil :execution executed :result success)))
+    (should-not captured))
+
   :doc "logging failures never escape into validated execution"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-repair-log-fail-" t)))
          (session (mevedel-session--create :name "main" :save-path dir))
          warned)
     (unwind-protect
-        (cl-letf (((symbol-function 'append-to-file)
+        (cl-letf (((symbol-function 'write-region)
                    (lambda (&rest _) (error "private persistence path")))
                   ((symbol-function 'display-warning)
                    (lambda (_type message &rest _)

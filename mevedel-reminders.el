@@ -23,6 +23,7 @@
 (declare-function flycheck-error-level "ext:flycheck" (err) t)
 (declare-function flycheck-error-line "ext:flycheck" (err) t)
 (declare-function flycheck-error-message "ext:flycheck" (err) t)
+(declare-function flycheck-get-checker-for-buffer "ext:flycheck" ())
 (declare-function flycheck-overlay-errors-in "ext:flycheck" (beg end))
 (declare-function flycheck-stop "ext:flycheck" ())
 (defvar flycheck-after-syntax-check-hook)
@@ -1283,18 +1284,22 @@ identifies the turn.  FLYMAKE-P and FLYCHECK-P select the active checkers."
           (when (zerop flymake-left)
             (ready 'flymake)))
         (when flycheck-p
-          (setq flycheck-hook (lambda () (ready 'flycheck)))
-          (condition-case nil
-              (progn
-                (flycheck-stop)
-                (add-hook 'flycheck-after-syntax-check-hook
-                          flycheck-hook nil t)
-                (flycheck-buffer)
-                (setq started-p t))
-            (error
-             (remove-hook 'flycheck-after-syntax-check-hook
-                          flycheck-hook t)
-             (setq pending (delq 'flycheck pending))))))
+          (if (condition-case nil
+                  (not (flycheck-get-checker-for-buffer))
+                (error t))
+              (ready 'flycheck)
+            (setq flycheck-hook (lambda () (ready 'flycheck)))
+            (condition-case nil
+                (progn
+                  (flycheck-stop)
+                  (add-hook 'flycheck-after-syntax-check-hook
+                            flycheck-hook nil t)
+                  (flycheck-buffer)
+                  (setq started-p t))
+              (error
+               (remove-hook 'flycheck-after-syntax-check-hook
+                            flycheck-hook t)
+               (setq pending (delq 'flycheck pending)))))))
       (setq initializing nil)
       (if (null pending)
           (if started-p
@@ -1340,6 +1345,7 @@ checkers get up to 30 seconds to finish."
                 (fboundp 'flymake-start))
            (and (bound-and-true-p flycheck-mode)
                 (fboundp 'flycheck-buffer)
+                (fboundp 'flycheck-get-checker-for-buffer)
                 (fboundp 'flycheck-stop))))))))
 
 

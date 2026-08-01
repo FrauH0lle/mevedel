@@ -578,7 +578,8 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
   "Persist and redraw INVOCATION's live conversation presentation."
   (let ((parent (mevedel-agent-invocation-parent-data-buffer invocation))
         (agent-id (mevedel-agent-invocation-agent-id invocation))
-        patched-summary-p)
+        patched-summary-p
+        patched-render-data-p)
     (mevedel-agent-conversation--sync-entry invocation)
     (when (and (buffer-live-p parent) agent-id)
       (condition-case err
@@ -650,11 +651,12 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                   (let ((inhibit-read-only t)
                         (inhibit-modification-hooks t))
                     (mevedel-pipeline--patch-render-data-block
-                     beg end updated)))))
+                     beg end updated)
+                    (setq patched-render-data-p t)))))
             (when-let* ((view (and (boundp 'mevedel--view-buffer)
                                     mevedel--view-buffer))
                         ((buffer-live-p view)))
-              (if patched-summary-p
+              (if (or patched-summary-p patched-render-data-p)
                   (mevedel-view-rerender view)
                 (mevedel-view-refresh-agent-rendering
                  view (mevedel-agent-invocation-path invocation)))))

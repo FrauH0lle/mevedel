@@ -39,6 +39,19 @@ their subsystem-specific details. Telemetry connects their lifetimes through
 shared session, request, tool-use, execution, interaction, agent, Goal, and
 span identifiers.
 
+## Detail tiers
+
+Normal sessions keep tool-, request-, interaction-, execution-, agent-, Goal-,
+and other outcome-level events. They omit routine per-pipeline-step spans,
+per-hook-handler lifecycle spans, hook-event spans with no matching handlers,
+valid input-validation spans, and no-op valid repair events. Hook events that
+actually run handlers and nontrivial repair outcomes remain visible.
+
+An active `mevedel-telemetry-profiler-start` run records the full detailed
+stream for its owning session. `mevedel-session-debug` starts that same
+profiler, so it also enables full telemetry. Other concurrently live sessions
+remain on the normal tier.
+
 ## Covered lifecycle boundaries
 
 The event stream covers:
@@ -52,10 +65,12 @@ active elapsed time instead and exclude actionable user-input waits.
   and terminal status changes;
 - request queueing, provider dispatch, first response, stream end, callback
   settlement, cancellation, and teardown;
-- every tool pipeline step, permission queue transition, interaction lifetime,
+- every tool pipeline step during profiler/debug runs, plus every permission
+  queue transition, interaction lifetime,
   sandbox preparation/fallback, scheduler dwell, child start/first output/end,
   `WriteStdin` requested/effective wait, and result return;
-- every hook handler and aggregate hook event, including handler identity,
+- aggregate hook events with matching handlers, plus every hook handler and
+  empty aggregate event during profiler/debug runs, including handler identity,
   process outcome, contributed-context size, and acquisition/release of
   slow-hook status ownership;
 - agent dispatch, provider send, first response, settlement, waits, and UI

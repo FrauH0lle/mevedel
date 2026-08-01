@@ -411,6 +411,12 @@ Insertion-type t so status content above advances it; interaction-zone
 overlays anchor here.  Permission queue head, plan confirmation, and
 preview overlays render against this marker.")
 
+(defvar-local mevedel-view--status-strip-cache-key nil
+  "Semantic state used to build the cached header-line status strip.")
+
+(defvar-local mevedel-view--status-strip-cache-value nil
+  "Cached header-line status strip for the current view buffer.")
+
 (defconst mevedel-view--status-task-collapse-key '(status tasks)
   "Stable fragment collapse key for the task status block.")
 
@@ -781,42 +787,53 @@ Kills the associated view buffer."
            (tools (format "%d tool%s"
                           tool-count
                           (if (= tool-count 1) "" "s")))
-           (rhs
-            (mapconcat
-             #'identity
-             (delq nil
-                   (list
-              (mevedel-view--status-strip-button
-               mode 'mode "Open mode cockpit")
-              (propertize state 'face (cond ((string= state "running") 'success)
-                                            (t 'shadow)))
-              (mevedel-view--status-strip-button
-               phase-model (if goal 'goal 'model)
-               (if goal "Open Goal cockpit" "Open model cockpit"))
-              (and preset-name
-                   (mevedel-view--status-strip-button
-                    (format "preset %s" preset-name)
-                    'preset "Open Preset cockpit"))
-              (mevedel-view--status-strip-button
-               tools 'tools "Open tools cockpit")))
-             " · "))
-           (root-max
-            (- (mevedel-view--status-strip-width)
-               (string-width session-name)
-               (string-width rhs)
-               3))
-           (root-label
-            (mevedel-view--status-strip-root-label root root-max))
-           (lhs
-            (if (string-empty-p root-label)
-                session-name
-              (format "%s  %s" session-name root-label))))
-      (concat
-       (mevedel-view--status-strip-button
-        lhs
-        'top "Open session cockpit")
-       (mevedel-view--status-strip-spacer rhs)
-       rhs))))
+           (width (mevedel-view--status-strip-width))
+           (cache-key
+            (list data-buffer session-name root mode state phase-model
+                  (and goal t) preset-name tools width (display-graphic-p))))
+      (if (equal cache-key mevedel-view--status-strip-cache-key)
+          mevedel-view--status-strip-cache-value
+        (let* ((rhs
+                (mapconcat
+                 #'identity
+                 (delq nil
+                       (list
+                        (mevedel-view--status-strip-button
+                         mode 'mode "Open mode cockpit")
+                        (propertize
+                         state 'face (if (string= state "running")
+                                         'success
+                                       'shadow))
+                        (mevedel-view--status-strip-button
+                         phase-model (if goal 'goal 'model)
+                         (if goal "Open Goal cockpit" "Open model cockpit"))
+                        (and preset-name
+                             (mevedel-view--status-strip-button
+                              (format "preset %s" preset-name)
+                              'preset "Open Preset cockpit"))
+                        (mevedel-view--status-strip-button
+                         tools 'tools "Open tools cockpit")))
+                 " · "))
+               (root-max
+                (- width
+                   (string-width session-name)
+                   (string-width rhs)
+                   3))
+               (root-label
+                (mevedel-view--status-strip-root-label root root-max))
+               (lhs
+                (if (string-empty-p root-label)
+                    session-name
+                  (format "%s  %s" session-name root-label)))
+               (value
+                (concat
+                 (mevedel-view--status-strip-button
+                  lhs 'top "Open session cockpit")
+                 (mevedel-view--status-strip-spacer rhs)
+                 rhs)))
+          (setq mevedel-view--status-strip-cache-key cache-key
+                mevedel-view--status-strip-cache-value value)
+          value)))))
 
 
 (defun mevedel-view--tool-status-string (tool-name args)

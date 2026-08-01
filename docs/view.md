@@ -69,9 +69,10 @@ remains visible, mevedel emits a warning, and a later event or terminal
 settlement may retry.
 
 Opening a transcript performs the existing full render. Subsequent live
-events use the main incremental renderer. Missing or stale source anchors fall
-back to the existing full-rerender correctness path rather than introducing a
-second recovery strategy.
+events use the main incremental renderer, except that retained-agent metadata
+replacements fully rerender because delete-and-insert invalidates their source
+endpoints. Missing or stale source anchors use the same full-rerender
+correctness path rather than introducing a second recovery strategy.
 
 Opening a view while a tool is already in flight does not reconstruct a
 transient pending-tool row from activity history. The full render shows the
@@ -81,6 +82,8 @@ pending rows normally, and terminal settlement renders the final state.
 Live updates preserve the main view's source-backed disclosure state. An
 incremental update or full-rerender fallback must not collapse response,
 reasoning, tool, or audit sections that the reader expanded.
+Rendered source ranges use data-buffer markers so a length-changing update to
+one tool's hidden render data cannot retarget an adjacent tool disclosure.
 
 Agent transcript views open only through explicit user action on an agent
 handle or status surface. Agent start, progress, and blocked events never
@@ -219,7 +222,9 @@ right-side state is dropped. Clickable parts route to session cockpit
 surfaces such as top, mode, model, and tools. The request state is
 plain status text. The view must not copy or proxy gptel's clickable
 data-buffer header line; gptel-owned header controls stay in the raw
-data buffer.
+data buffer. Header construction is cached by its semantic fields and display
+width, so spinner redisplay reuses the same propertized strip until one of
+those inputs changes.
 
 The session cockpit is the normal control surface from the view. It resolves
 the live view/data pair once and routes each action to the owner buffer. The
@@ -350,11 +355,11 @@ and point while suppressing modification hooks for view-owned changes.
 
 `mevedel-view-rerender` is the correctness fallback and is debounced for
 bursty updates. Prefer narrower refresh paths when a stable source exists:
-agent activity updates refresh source-backed handles and aggregate status
-rows, then fall back to a full rerender only when the visible handle is
-missing or stale. Managed Bash progress and terminal events identify their
-row by durable tool-use ID and replace only that row. If the row is not visible
-yet, the stream scheduler coalesces one incremental recovery render.
+retained-agent metadata replacements use a full rerender, while activity-only
+status rows can refresh narrowly. Managed Bash progress and terminal events
+identify their row by durable tool-use ID and replace only that row. If the row
+is not visible yet, the stream scheduler coalesces one incremental recovery
+render.
 
 Full rerenders rebuild the zone markers from the header, skip leading
 compaction summaries, and re-anchor the in-flight assistant turn. Without

@@ -167,6 +167,12 @@ they never move backwards within the process."
                  (mevedel-agent-invocation-parent-session
                   mevedel--agent-invocation)))))))
 
+(defun mevedel-telemetry-detailed-p (session)
+  "Return non-nil when SESSION is under active profiler capture."
+  (and session
+       (eq session mevedel-telemetry--profiler-session)
+       mevedel-telemetry--profiler-run-id))
+
 (defun mevedel-telemetry-path (session)
   "Return SESSION's telemetry path, or nil before materialization."
   (let ((save-path (and session
@@ -284,7 +290,7 @@ symbol instead of their printed representation."
           (with-temp-buffer
             (prin1 entry (current-buffer))
             (insert "\n")
-            (append-to-file (point-min) (point-max) file)))
+            (write-region (point-min) (point-max) file t 'silent)))
       (error
        (message "mevedel: telemetry persistence failed: %s"
                 (error-message-string err))))))

@@ -534,7 +534,7 @@ Also kill retained conversation data when KILL-RETAINED is non-nil."
                     (not source))
           (setq source (get-text-property source-pos 'mevedel-view-source))
           (setq source-pos (1+ source-pos)))
-        (when (and (consp source) (integerp (car source)))
+        (when (and (consp source) (integer-or-marker-p (car source)))
           (mevedel-view--set-in-flight-turn-start last-assistant)
           (setq mevedel-view--data-turn-start
                 (with-current-buffer mevedel--data-buffer

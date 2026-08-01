@@ -115,7 +115,7 @@
             (prin1 (mevedel-permission-log--printable-value entry)
                    (current-buffer))
             (insert "\n")
-            (append-to-file (point-min) (point-max) file)))
+            (write-region (point-min) (point-max) file t 'silent)))
       (error
        (message "mevedel: permission log persistence failed: %s"
                 (error-message-string err))))))

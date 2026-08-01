@@ -337,6 +337,8 @@
                   "mevedel-view-render"
                   (text &optional kind hook-context prompt-summary-body
                         prompt-summary-source hook-audits))
+(declare-function mevedel-view--source-range
+                  "mevedel-view-render" (data-buffer start end))
 (declare-function mevedel-view-fork-point-at-point
                   "mevedel-view-render" ())
 (declare-function mevedel-view-historical-segment-p
@@ -2506,6 +2508,7 @@ replaces INPUT only in the temporary request prompt."
          (prompt-summary-body
           (mevedel-view--inline-skill-prompt-summary-body
            (or model-input input)))
+         (data-buffer mevedel--data-buffer)
          (session (mevedel-view--session))
          (dropped-file-grants
           (mevedel-view--pop-dropped-file-grants-for-input
@@ -2538,15 +2541,19 @@ replaces INPUT only in the temporary request prompt."
                        (car (last
                              (mevedel-pipeline--render-data-blocks input)))))
             (setq prompt-summary-source
-                  (cons (+ body-start (car block))
-                        (+ body-start (cadr block)))))
+                  (mevedel-view--source-range
+                   data-buffer
+                   (+ body-start (car block))
+                   (+ body-start (cadr block)))))
           (mevedel--clear-user-turn-gptel-properties
            user-turn-start (point)))
         (dolist (audit hook-audits)
           (let ((audit-start (point)))
             (insert (mevedel--format-hook-audit-record audit))
             (push (append audit
-                          (list :source (cons audit-start (point))))
+                          (list :source
+                                (mevedel-view--source-range
+                                 data-buffer audit-start (point))))
                   hook-audits-with-source)))
         (setq hook-audits-with-source (nreverse hook-audits-with-source))
         ;; Anchor the data-side marker after the forwarded prompt so

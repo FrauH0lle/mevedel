@@ -27,6 +27,7 @@
 (declare-function mevedel-current-origin "mevedel-structs" ())
 
 ;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
@@ -819,6 +820,8 @@ with `Error:' so gptel settles the call without invoking its handler."
          (session (and tool (mevedel-tool-repair--current-session)))
          (telemetry-span
           (and session
+               (fboundp 'mevedel-telemetry-detailed-p)
+               (mevedel-telemetry-detailed-p session)
                (fboundp 'mevedel-telemetry-start)
                (mevedel-telemetry-start
                 session 'tool-input-validation-repair

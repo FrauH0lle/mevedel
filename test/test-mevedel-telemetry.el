@@ -86,7 +86,9 @@
               (insert-file-contents
                (file-name-concat root "telemetry-log.el"))
               (should (= 1 (count-lines (point-min) (point-max))))))
-          (should-not (mevedel-session-telemetry-pending session)))
+          (should-not (mevedel-session-telemetry-pending session))
+          (should-not (string-match-p "Added to"
+                                      (or (current-message) ""))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry-finish
@@ -187,6 +189,18 @@
       (kill-buffer data)
       (kill-buffer view)
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-telemetry-detailed-p
+  (:doc "is session-scoped and active only while a profiler run exists")
+  (let ((session (mevedel-session--create :name "main"))
+        (other (mevedel-session--create :name "other")))
+    (let ((mevedel-telemetry--profiler-session session)
+          (mevedel-telemetry--profiler-run-id "run-1"))
+      (should (mevedel-telemetry-detailed-p session))
+      (should-not (mevedel-telemetry-detailed-p other)))
+    (let ((mevedel-telemetry--profiler-session session)
+          (mevedel-telemetry--profiler-run-id nil))
+      (should-not (mevedel-telemetry-detailed-p session)))))
 
 (mevedel-deftest mevedel-telemetry-path
   (:doc "returns nil before materialization and the configured path after it")

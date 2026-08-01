@@ -2938,9 +2938,15 @@ Header shows a truncated first line of the command; body fontifies as
     (let* ((write-stdin-p (equal name "WriteStdin"))
            (cmd (or (plist-get args :command) ""))
            (first-line (car (split-string cmd "\n")))
-           (body
+           (output
             (replace-regexp-in-string
              "\n*<bash-execution [^\n]*/>[ \t\r\n]*\\'" "" result))
+           (body
+            (if write-stdin-p
+                output
+              (concat "$ " cmd
+                      (unless (string-empty-p output) "\n\n")
+                      output)))
            (status (plist-get render-data :status))
            (state (plist-get render-data :state))
            (execution-id
@@ -2972,7 +2978,10 @@ Header shows a truncated first line of the command; body fontifies as
                    (if (eq control 'poll)
                        "Polled background process"
                      "Interacted with background process")
-                 (format "%s: %s" (or name "Bash") first-line))
+                 (format "%s: %s"
+                         (or name "Bash")
+                         (truncate-string-to-width
+                          first-line 60 nil nil "...")))
                (and metadata (format " (%s)" metadata)))
               :body body
               :body-mode 'sh-mode

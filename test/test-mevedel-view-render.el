@@ -10,6 +10,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'gptel-agent-tools)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-view)
 (require 'mevedel-view-audit)
 (require 'mevedel-view-render)
@@ -3580,6 +3581,116 @@ state of its inner sections"
             (should (string-match-p "Polled second ×2" visible))))
         (with-current-buffer data-buf
           (should (equal data-before (buffer-string)))))))
+
+  :doc "retained-agent growth keeps adjacent collaboration disclosures exact"
+  (mevedel-view-test--with-buffers
+    (mevedel-tool-ui--register)
+    (let* ((draft "> quoted\nsecond line")
+           rerendered-p
+           (invocation
+            (mevedel-agent-invocation--create
+             :agent-id "timer_patch_review--1"
+             :path "/root/timer_patch_review"
+             :parent-data-buffer data-buf
+             :parent-tool-use-id "call-agent"
+             :transcript-status 'running
+             :activity
+             '((:type tool-start :summary "Read a long profiler report")
+               (:type tool-finish
+                      :summary "Compared the adjacent interaction paths")))))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft draft 4))
+      (cl-labels
+          ((insert-tool
+            (id call result &optional render-data)
+            (with-current-buffer data-buf
+              (let ((start (point)))
+                (insert call "\n\n" result)
+                (when render-data
+                  (insert (mevedel-pipeline--format-render-data-block
+                           render-data)))
+                (put-text-property start (point) 'gptel (cons 'tool id))
+                (list 'tool start (point)))))
+           (render-tool
+            (segment)
+            (with-current-buffer view-buf
+              (let ((inhibit-read-only t))
+                (goto-char mevedel-view--input-marker)
+                (set-marker-insertion-type mevedel-view--input-marker t)
+                (unwind-protect
+                    (mevedel-view--render-tool-group (list segment) data-buf)
+                  (set-marker-insertion-type mevedel-view--input-marker nil))))))
+        (render-tool
+         (insert-tool
+          "call-agent"
+          "(:name \"Agent\" :args (:task_name \"timer_patch_review\" :message \"Review timer patch\"))"
+          "{\"path\":\"/root/timer_patch_review\"}"
+          '(:kind collaboration-event :event started
+            :path "/root/timer_patch_review"
+            :agent-id "timer_patch_review--1" :status running)))
+        (render-tool
+         (insert-tool
+          "call-list"
+          "(:name \"ListAgents\" :args nil)"
+          "[{\"path\":\"/root/timer_patch_review\",\"role\":\"explorer\",\"activity\":\"running\"}]"))
+        (render-tool
+         (insert-tool
+          "call-message"
+          "(:name \"SendMessage\" :args (:target \"/root/timer_patch_review\" :message \"Detailed finding\"))"
+          "Message queued"
+          '(:kind collaboration-event :event interacted
+            :path "/root/timer_patch_review"))))
+      (with-current-buffer view-buf
+        (goto-char (+ (mevedel-view--input-start) 4)))
+      (require 'mevedel-transcript-restore)
+      (cl-letf (((symbol-function 'mevedel-transcript-restore-properties)
+                #'ignore)
+                ((symbol-function 'mevedel-view-rerender)
+                 (lambda (buffer)
+                   (setq rerendered-p t)
+                   (with-current-buffer buffer
+                     (mevedel-view--full-rerender)))))
+        (mevedel-agent-conversation-refresh invocation)
+        (should rerendered-p)
+        (let ((size (with-current-buffer data-buf (buffer-size))))
+          (setf (mevedel-agent-invocation-transcript-status invocation)
+                'blocked)
+          (setq rerendered-p nil)
+          (mevedel-agent-conversation-refresh invocation)
+          (should rerendered-p)
+          (should (= size (with-current-buffer data-buf (buffer-size))))))
+      (with-current-buffer data-buf
+        (should
+         (equal '("Read a long profiler report"
+                  "Compared the adjacent interaction paths")
+                (mapcar
+                 (lambda (item) (plist-get item :summary))
+                 (plist-get
+                  (mevedel-pipeline-tool-render-data data-buf "call-agent")
+                  :activity)))))
+      (with-current-buffer view-buf
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (goto-char (point-min))
+        (search-forward "Session agents (1)")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (should (search-forward "/root/timer_patch_review  explorer  running"
+                                mevedel-view--input-marker t))
+        (goto-char (point-min))
+        (search-forward "Message sent to /root/timer_patch_review")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (should (search-forward "Detailed finding"
+                                mevedel-view--input-marker t))
+        (let ((visible (buffer-substring-no-properties
+                        (point-min) mevedel-view--input-marker)))
+          (should (= 1 (mevedel-view-test--count-substring
+                        "Started /root/timer_patch_review" visible)))
+          (should (= 1 (mevedel-view-test--count-substring
+                        "Session agents (1)" visible)))
+          (should (= 1 (mevedel-view-test--count-substring
+                        "Message sent to /root/timer_patch_review" visible)))))))
 
   :doc "an intervening visible tool ends the coalescing run"
   (mevedel-view-test--with-buffers
