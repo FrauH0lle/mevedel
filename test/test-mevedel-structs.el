@@ -19,6 +19,9 @@
                byte-compile-current-file))
           "helpers"))
 
+;; `mevedel-agents'
+(defvar mevedel--agent-invocation)
+
 
 ;;
 ;;; Session transient state
@@ -496,13 +499,16 @@
         (mevedel--agent-invocation
          (mevedel-agent-invocation--create :agent-id "agent-owner" :path "/root/agent_owner")))
     (should (equal "/root/request" (mevedel-current-origin))))
-  (let ((mevedel--current-request nil)
-        (mevedel--agent-invocation
-         (mevedel-agent-invocation--create :agent-id "agent-owner" :path "/root/agent_owner")))
-    (should (equal "/root/agent_owner" (mevedel-current-origin))))
-  (let ((mevedel--current-request nil)
-        (mevedel--agent-invocation nil))
-    (should (equal "/root" (mevedel-current-origin)))))
+  (with-temp-buffer
+    (let ((mevedel--current-request nil))
+      (setq-local
+       mevedel--agent-invocation
+       (mevedel-agent-invocation--create
+        :agent-id "agent-owner" :path "/root/agent_owner"))
+      (should (equal "/root/agent_owner" (mevedel-current-origin)))))
+  (with-temp-buffer
+    (let ((mevedel--current-request nil))
+      (should (equal "/root" (mevedel-current-origin))))))
 
 (mevedel-deftest mevedel-request-active-p ()
   ,test

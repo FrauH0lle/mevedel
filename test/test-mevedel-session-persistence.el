@@ -40,16 +40,19 @@
 (declare-function gptel-get-tool "ext:gptel-request" (path))
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest slots))
 
-;; `mevedel-tools'
-(declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
-
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-add-session-resource-grant
                   "mevedel-permissions" (session path access))
 
+;; `mevedel-session-persistence'
+(defvar mevedel-session-persistence--summary-cache)
+
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills--maybe-activate
                   "mevedel-skills-core" (session path))
+
+;; `mevedel-tools'
+(declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
 
 ;; `org'
 (declare-function org-entry-delete "org" (pom property))
@@ -7102,6 +7105,63 @@ The result is a plist whose :tempdir owns every created file."
 (mevedel-deftest mevedel-session-persistence--read-summary ()
   ,test
   (test)
+  :doc "reuses unchanged sidecars and refreshes atomically replaced files"
+  (let ((tmp (make-temp-file "mevedel-summary-cache-" nil ".el"))
+        (mevedel-session-persistence--summary-cache
+         (make-hash-table :test #'equal))
+        (read-function
+         (symbol-function 'mevedel-session-persistence-read))
+        (read-count 0))
+    (unwind-protect
+        (cl-labels
+            ((write-sidecar
+              (name)
+              (mevedel-session-persistence-write
+               tmp
+               (test-mevedel-session-persistence--complete-sidecar
+                `(:session-name ,name :session-id "cache-test")))))
+          (cl-letf
+              (((symbol-function 'mevedel-session-persistence-read)
+                (lambda (path)
+                  (cl-incf read-count)
+                  (funcall read-function path))))
+            (write-sidecar "first")
+            (should
+             (equal "first"
+                    (plist-get
+                     (mevedel-session-persistence--read-summary tmp)
+                     :session-name)))
+            (mevedel-session-persistence--read-summary tmp)
+            (should (= 1 read-count))
+            (write-sidecar "second")
+            (should
+             (equal "second"
+                    (plist-get
+                     (mevedel-session-persistence--read-summary tmp)
+                     :session-name)))
+            (should (= 2 read-count))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+  :doc "reuses a cached failure for an unchanged invalid sidecar"
+  (let ((tmp (make-temp-file "mevedel-summary-cache-invalid-" nil ".el"))
+        (mevedel-session-persistence--summary-cache
+         (make-hash-table :test #'equal))
+        (read-function
+         (symbol-function 'mevedel-session-persistence-read))
+        (read-count 0))
+    (unwind-protect
+        (progn
+          (write-region "invalid" nil tmp nil 'silent)
+          (cl-letf
+              (((symbol-function 'mevedel-session-persistence-read)
+                (lambda (path)
+                  (cl-incf read-count)
+                  (funcall read-function path))))
+            (should-not
+             (mevedel-session-persistence--read-summary tmp))
+            (should-not
+             (mevedel-session-persistence--read-summary tmp))
+            (should (= 1 read-count))))
+      (when (file-exists-p tmp) (delete-file tmp))))
   :doc "extracts only picker-relevant fields"
   (let ((tmp (make-temp-file "mevedel-summary-test-" nil ".el")))
     (unwind-protect
