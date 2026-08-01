@@ -269,7 +269,6 @@ it read-only instead of corrupting the writer's transcript.
 |------------------------------------------|-------------------------------------------------------|
 | `mevedel-sessions-directory`             | Directory for sessions (default `.mevedel/sessions/`). |
 | `mevedel-session-max-age-days`           | Auto-cleanup age, in days. `nil` disables.             |
-| `mevedel-file-history-max-snapshots`     | Per-session file backup retention.                     |
 | `mevedel-file-history-max-snapshot-bytes` | Maximum size for an individual file snapshot.         |
 | `mevedel-view-input-history-size`        | Size of the workspace input history ring.              |
 

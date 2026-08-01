@@ -791,13 +791,15 @@ with current file contents in WORKSPACE."
              (relpath (file-relative-name filepath workspace-root)))
 
         ;; Generate diff if file changed, was deleted, or was created
-        (when (or
+        (when (and (not (and (listp original)
+                             (plist-get original :gap)))
+                   (or
                ;; Modified
                (and original current (not (string= original current)))
                ;; Deleted
                (and original (not current))
                ;; Created
-               (and (not original) current))
+               (and (not original) current)))
           (setq diffs (concat diffs
                               (format "diff --git a/%s b/%s\n" relpath relpath)
                               (cond

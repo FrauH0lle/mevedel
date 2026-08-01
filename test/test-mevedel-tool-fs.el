@@ -28,6 +28,39 @@
 
 
 ;;
+;;; File checkpoint capture
+
+(mevedel-deftest mevedel--snapshot-file-if-needed ()
+  ,test
+  (test)
+  :doc "captures a regular file once at its pre-turn contents"
+  (let* ((directory (make-temp-file "mevedel-snapshot-" t))
+         (path (file-name-concat directory "tracked.el"))
+         (snapshots (make-hash-table :test #'equal))
+         (mevedel--current-request
+          (mevedel-request--create :file-snapshots snapshots)))
+    (unwind-protect
+        (progn
+          (write-region "before" nil path nil 'silent)
+          (mevedel--snapshot-file-if-needed path)
+          (write-region "after" nil path nil 'silent)
+          (mevedel--snapshot-file-if-needed path)
+          (should (equal "before" (gethash path snapshots))))
+      (delete-directory directory t)))
+  :doc "records a known gap when the pre-turn path cannot be read"
+  (let* ((directory (make-temp-file "mevedel-snapshot-gap-" t))
+         (snapshots (make-hash-table :test #'equal))
+         (mevedel--current-request
+          (mevedel-request--create :file-snapshots snapshots)))
+    (unwind-protect
+        (progn
+          (mevedel--snapshot-file-if-needed directory)
+          (should (stringp
+                   (plist-get (gethash directory snapshots) :gap))))
+      (delete-directory directory t))))
+
+
+;;
 ;;; External helper execution
 
 (mevedel-deftest mevedel-tool-fs--call-process-capturing-output ()

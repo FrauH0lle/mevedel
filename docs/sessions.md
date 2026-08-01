@@ -70,8 +70,10 @@ The data buffer is locked to `org-mode` so `gptel-org--save-state`
 can round-trip text-property bounds via `GPTEL_BOUNDS`. The sidecar
 holds session-wide state that doesn't live in the buffer text:
 permission rules, exact session resource grants, tasks, prompt-index (driving
-the rewind picker and latest resume preview), `:file-snapshots` (per-turn map
-of tracked files to backup names), workspace identity, `:working-directory`,
+the rewind picker and latest resume preview), `:file-snapshots` (per-turn
+pre-turn checkpoints of tracked files, including absent markers and known
+capture gaps; post-turn copies remain alongside them for historical Fork),
+workspace identity, `:working-directory`,
 fork lineage (`:fork-type`, `:forked-from-session-id`,
 `:forked-from-turn`, and `:forked-from-fork-point-id`), and
 Worktree Fork origin (`:worktree-source-root`, `:worktree-directory`,
@@ -258,8 +260,9 @@ while `C-n`/`C-p` move through user queries. These navigation actions change
 neither transcript nor session state; Rewind remains a separate explicit
 operation.
 
-Rewind is an in-place transaction. It discards later transcript and session
-artifacts, restores every captured working-tree file in the plan, and keeps
+Rewind is an in-place transaction. It discards the selected turn and every
+later transcript and session artifact, restores every captured working-tree
+file to immediately before the selected turn, and keeps
 the same session identity, name, directory, working directory, and lineage.
 External working-tree changes to captured files are overwritten. Git HEAD and
 the index are not changed, so the impact identifies staged files whose index
@@ -267,16 +270,18 @@ content will diverge from the restored working tree. Failure rolls back both
 session and file changes, including a live transcript already replaced during
 publication. A failed rollback reports every inconsistent path and retains its
 temporary recovery directory; a successful Rewind removes those rollback
-bytes. Rewind creates neither a child session nor a redo variant. Existing
+bytes. Every settled model turn, including the first, owns a durable pre-turn
+checkpoint. The impact marks coverage as complete or lists known gaps; gaps do
+not disable Rewind and are never presented as restored paths. Rewind creates
+neither a child session nor a redo variant. Existing
 child sessions and worktrees are not removed; children forked after the target
 become detached from the Source's visible history.
 
 Only a committed Rewind emits `SessionStart(rewind)`; it does not emit
 `SessionEnd`. Any context produced by that event belongs to the next accepted
 prompt. Cancellation, rollback, and an empty impact emit no Rewind lifecycle
-event. Selecting the latest response is still useful when captured files or
-live workflow state need undoing; only a target with no transcript, file, or
-state impact reports `Already at this state`.
+event. Selecting the latest response discards that response and its prompt,
+even when it is the first turn in the session.
 
 Current session settings survive. Tasks, Goal, retained agents and mailboxes,
 pending Plan state, permission queues, and execution state are cleared because
@@ -449,7 +454,6 @@ All in `mevedel-session-persistence.el`:
 
 - `mevedel-sessions-directory` (default `.mevedel/sessions/`)
 - `mevedel-session-max-age-days` (default 30)
-- `mevedel-file-history-max-snapshots` (default 100)
 - `mevedel-file-history-max-snapshot-bytes` (default 1 MB)
 - `mevedel-view-input-history-size` (in `mevedel-view-history.el`,
   default 500)

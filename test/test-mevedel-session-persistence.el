@@ -3275,7 +3275,7 @@ workspace tree."
 (mevedel-deftest mevedel-file-history-snapshot-modified ()
   ,test
   (test)
-  :doc "writes a backup for a modified file"
+  :doc "writes a pre-turn checkpoint for a modified file"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
@@ -3286,11 +3286,11 @@ workspace tree."
           (write-region "new content" nil tracked-file nil 'silent)
           (let ((written (mevedel-file-history-snapshot-modified
                           session 1 pre)))
-            (should (= 1 (length written)))
+            (should (= 2 (length written)))
             (let* ((entry (assoc tracked-file
                                  (cdr (assoc 1 (mevedel-session-file-snapshots
                                                 session)))))
-                   (backup-name (plist-get (cdr entry) :backup-name))
+                   (backup-name (plist-get (cdr entry) :pre-backup-name))
                    (backup-path (mevedel-file-history--backup-path
                                  (mevedel-session-save-path session)
                                  backup-name)))
@@ -3298,9 +3298,9 @@ workspace tree."
               (should (file-exists-p backup-path))
               (with-temp-buffer
                 (insert-file-contents-literally backup-path)
-                (should (equal "new content" (buffer-string)))))))
+                (should (equal "old content" (buffer-string)))))))
       (test-mevedel-session-persistence--cleanup tempdir)))
-  :doc "skips unchanged files"
+  :doc "records an empty checkpoint when tracked files are unchanged"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
@@ -3311,9 +3311,11 @@ workspace tree."
           (let ((written (mevedel-file-history-snapshot-modified
                           session 1 pre)))
             (should (null written))
-            (should-not (mevedel-session-file-snapshots session))))
+            (should (assoc 1 (mevedel-session-file-snapshots session)))
+            (should-not
+             (cdr (assoc 1 (mevedel-session-file-snapshots session))))))
       (test-mevedel-session-persistence--cleanup tempdir)))
-  :doc "records absent marker when file deleted during turn"
+  :doc "records prior content when a file is deleted during the turn"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
@@ -3325,9 +3327,17 @@ workspace tree."
                                (cdr (assoc 2 (mevedel-session-file-snapshots
                                               session))))))
             (should entry)
-            (should (null (plist-get (cdr entry) :backup-name)))))
+            (should (plist-get (cdr entry) :pre-backup-name))
+            (should-not (plist-get (cdr entry) :backup-name))
+            (should
+             (equal
+              "had content"
+              (mevedel-session-persistence--file-text
+               (mevedel-file-history--backup-path
+                (mevedel-session-save-path session)
+                (plist-get (cdr entry) :pre-backup-name)))))))
       (test-mevedel-session-persistence--cleanup tempdir)))
-  :doc "snapshots a created file (pre-content nil, current exists)"
+  :doc "records an absent checkpoint for a file created during the turn"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
@@ -3340,79 +3350,32 @@ workspace tree."
                                (cdr (assoc 3 (mevedel-session-file-snapshots
                                               session))))))
             (should entry)
-            (should (plist-get (cdr entry) :backup-name))))
+            (should (plist-get (cdr entry) :backup-name))
+            (should-not (plist-get (cdr entry) :pre-backup-name))))
       (test-mevedel-session-persistence--cleanup tempdir)))
-  :doc "skips files exceeding the size cap"
+  :doc "records files exceeding the size cap as checkpoint gaps"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
         (let* ((tracked-file (file-name-concat tempdir "huge.el"))
                (pre          (make-hash-table :test #'equal))
                (mevedel-file-history-max-snapshot-bytes 10))
-          (write-region (make-string 100 ?x) nil tracked-file nil 'silent)
-          (puthash tracked-file nil pre)
+          (puthash tracked-file (make-string 100 ?x) pre)
+          (write-region "changed" nil tracked-file nil 'silent)
           (let ((written (mevedel-file-history-snapshot-modified
                           session 1 pre)))
-            (should (null written))))
+            (should (null written))
+            (should
+             (string-match-p
+              "exceeds"
+              (plist-get
+               (cdr
+                (assoc tracked-file
+                       (cdr (assoc
+                             1
+                             (mevedel-session-file-snapshots session)))))
+               :gap)))))
       (test-mevedel-session-persistence--cleanup tempdir))))
-
-(mevedel-deftest mevedel-file-history-evict ()
-  ,test
-  (test)
-  :doc "drops oldest entries beyond the cap"
-  (cl-destructuring-bind (session . tempdir)
-      (test-mevedel-session-persistence--make-materialized-session)
-    (unwind-protect
-        (let ((mevedel-file-history-max-snapshots 2))
-          ;; Pre-populate with 3 turns; create dummy backup files.
-          (dotimes (i 3)
-            (let* ((turn (1+ i))
-                   (path (format "/tmp/file-%d.el" turn))
-                   (backup-name (format "%s@v1"
-                                        (mevedel-file-history--path-hash path))))
-              (mevedel-file-history--write-backup
-               (mevedel-session-save-path session) backup-name "x")
-              (push (cons turn (list (cons path
-                                            (list :backup-name backup-name
-                                                  :version 1))))
-                    (mevedel-session-file-snapshots session))))
-          (mevedel-file-history-evict session)
-          (let ((kept (mapcar #'car (mevedel-session-file-snapshots session))))
-            (should (= 2 (length kept)))
-            ;; Oldest dropped: only highest two turn numbers retained.
-            (should (memq 2 kept))
-            (should (memq 3 kept))
-            (should-not (memq 1 kept)))
-          ;; GC should have removed the orphaned v1 file for turn 1's path.
-          (let ((dir (file-name-concat
-                      (mevedel-session-save-path session) "file-history")))
-            (should-not
-             (member
-              (format "%s@v1"
-                      (mevedel-file-history--path-hash "/tmp/file-1.el"))
-              (directory-files dir nil "[^.]")))))
-      (test-mevedel-session-persistence--cleanup tempdir)))
-  :doc "no-op when count is below cap"
-  (cl-destructuring-bind (session . tempdir)
-      (test-mevedel-session-persistence--make-materialized-session)
-    (unwind-protect
-        (let ((mevedel-file-history-max-snapshots 100))
-          (setf (mevedel-session-file-snapshots session)
-                '((1 . (("/x" . (:backup-name "a@v1" :version 1))))))
-          (mevedel-file-history-evict session)
-          (should (= 1 (length (mevedel-session-file-snapshots session)))))
-      (test-mevedel-session-persistence--cleanup tempdir)))
-  :doc "no-op when cap is nil"
-  (cl-destructuring-bind (session . tempdir)
-      (test-mevedel-session-persistence--make-materialized-session)
-    (unwind-protect
-        (let ((mevedel-file-history-max-snapshots nil))
-          (dotimes (i 5)
-            (push (cons (1+ i) nil) (mevedel-session-file-snapshots session)))
-          (mevedel-file-history-evict session)
-          (should (= 5 (length (mevedel-session-file-snapshots session)))))
-      (test-mevedel-session-persistence--cleanup tempdir))))
-
 
 ;;
 ;;; Phase 4: split-on-compact
@@ -5068,7 +5031,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (kill-buffer buf)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
-  :doc "an empty latest-point impact skips confirmation and lifecycle"
+  :doc "selecting the latest turn still confirms discarding that turn"
   (let* ((session
           (mevedel-session--create
            :name "rewind" :turn-count 1
@@ -5099,9 +5062,157 @@ rotation never saves through a rebound temporary visited filename or prompts"
                ((symbol-function 'mevedel--run-session-start-hooks)
                 (lambda (&rest _) (setq started t))))
             (mevedel-session-persistence-rewind buffer target))
-          (should-not confirmed)
-          (should-not committed)
-          (should-not started))
+          (should confirmed)
+          (should committed)
+          (should started))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))))
+  :doc "rewinds first-turn modifications, creations, and deletions to pre-turn state"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buffer (generate-new-buffer "*test-first-turn-rewind*"))
+               (modified (file-name-concat tempdir "modified.el"))
+               (created (file-name-concat tempdir "created.el"))
+               (deleted (file-name-concat tempdir "deleted.el")))
+          (unwind-protect
+              (with-current-buffer buffer
+                (org-mode)
+                (setq-local mevedel--session session)
+                (write-region "before-modify" nil modified nil 'silent)
+                (write-region "before-delete" nil deleted nil 'silent)
+                (mevedel-request-begin session)
+                (let ((checkpoint
+                       (mevedel-request-file-snapshots
+                        mevedel--current-request)))
+                  (puthash modified "before-modify" checkpoint)
+                  (puthash created nil checkpoint)
+                  (puthash deleted "before-delete" checkpoint))
+                (write-region "after-modify" nil modified nil 'silent)
+                (write-region "after-create" nil created nil 'silent)
+                (delete-file deleted)
+                (insert "First prompt\n")
+                (insert (propertize "First reply.\n" 'gptel 'response))
+                (setf (mevedel-session-turn-count session) 1)
+                (mevedel-session-persistence-save session buffer t)
+                (let ((target
+                       (copy-sequence
+                        (cdar
+                         (mevedel-session-persistence--prompt-candidates
+                          session)))))
+                  (mevedel-request-end)
+                  (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                            ((symbol-function 'yes-or-no-p)
+                             (lambda (&rest _) t))
+                            ((symbol-function
+                              'mevedel--run-session-start-hooks)
+                             #'ignore))
+                    (should
+                     (mevedel-session-persistence-rewind buffer target))))
+                (should (= 0 (mevedel-session-turn-count session)))
+                (should-not (string-match-p "First prompt" (buffer-string)))
+                (should
+                 (equal "before-modify"
+                        (mevedel-session-persistence--file-text modified)))
+                (should-not (file-exists-p created))
+                (should
+                 (equal "before-delete"
+                        (mevedel-session-persistence--file-text deleted))))
+            (test-mevedel-session-persistence--release-and-kill
+             buffer session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "rewinds a later turn while preserving the preceding turn"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buffer (generate-new-buffer "*test-later-turn-rewind*"))
+               (path (file-name-concat tempdir "serial.el")))
+          (unwind-protect
+              (with-current-buffer buffer
+                (org-mode)
+                (setq-local mevedel--session session)
+                (write-region "zero" nil path nil 'silent)
+                (mevedel-request-begin session)
+                (puthash path "zero"
+                         (mevedel-request-file-snapshots
+                          mevedel--current-request))
+                (write-region "one" nil path nil 'silent)
+                (insert "First prompt\n")
+                (insert (propertize "First reply.\n" 'gptel 'response))
+                (setf (mevedel-session-turn-count session) 1)
+                (mevedel-session-persistence-save session buffer t)
+                (mevedel-request-end)
+                (mevedel-request-begin session)
+                (puthash path "one"
+                         (mevedel-request-file-snapshots
+                          mevedel--current-request))
+                (write-region "two" nil path nil 'silent)
+                (insert "Second prompt\n")
+                (insert (propertize "Second reply.\n" 'gptel 'response))
+                (setf (mevedel-session-turn-count session) 2)
+                (mevedel-session-persistence-save session buffer t)
+                (let* ((candidates
+                        (mevedel-session-persistence--prompt-candidates
+                         session))
+                       (target (copy-sequence (cdar (last candidates)))))
+                  (mevedel-request-end)
+                  (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                            ((symbol-function 'yes-or-no-p)
+                             (lambda (&rest _) t))
+                            ((symbol-function
+                              'mevedel--run-session-start-hooks)
+                             #'ignore))
+                    (should
+                     (mevedel-session-persistence-rewind buffer target))))
+                (should (= 1 (mevedel-session-turn-count session)))
+                (should (string-match-p "First reply" (buffer-string)))
+                (should-not (string-match-p "Second prompt"
+                                            (buffer-string)))
+                (should
+                 (equal "one"
+                        (mevedel-session-persistence--file-text path))))
+            (test-mevedel-session-persistence--release-and-kill
+             buffer session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "keeps Rewind reachable and discloses known checkpoint gaps"
+  (let* ((session
+          (mevedel-session--create
+           :name "rewind" :turn-count 1
+           :prompt-index
+           '((1 . ((:turn 1 :cum-turn 1 :fork-point-id "point"))))
+           :file-snapshots
+           '((1 . (("/unreadable" . (:gap "capture failed"
+                                      :version 1)))))))
+         (buffer (generate-new-buffer " *gap-rewind*"))
+         (target '(:segment 1 :turn 1 :cum-turn 1
+                   :fork-point-id "point"))
+         confirmed)
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session)
+          (cl-letf
+              (((symbol-function
+                 'mevedel-session-persistence--assert-stable-source)
+                #'ignore)
+               ((symbol-function
+                 'mevedel-session-persistence--detached-child-count)
+                (lambda (&rest _) 0))
+               ((symbol-function 'display-buffer) #'ignore)
+               ((symbol-function 'yes-or-no-p)
+                (lambda (&rest _)
+                  (setq confirmed t)
+                  nil)))
+            (mevedel-session-persistence-rewind buffer target))
+          (should confirmed)
+          (with-current-buffer "*mevedel-rewind-impact*"
+            (should (string-match-p "Checkpoint coverage: incomplete"
+                                    (buffer-string)))
+            (should (string-match-p "/unreadable" (buffer-string)))
+            (should (string-match-p "capture failed" (buffer-string)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))))
   :doc "cancelling the impact confirmation changes no transcript or file state"
@@ -5131,6 +5242,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                    (mevedel-session-save-path session) backup "first")
                   (setf (mevedel-session-file-snapshots session)
                         `((1 . ((,path . (:backup-name ,backup
+                                        :pre-backup-name ,backup
                                         :version 1)))))))
                 (goto-char (point-max))
                 (insert "Second prompt\n")
@@ -5145,6 +5257,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                         (append
                          (mevedel-session-file-snapshots session)
                          `((2 . ((,path . (:backup-name ,backup
+                                         :pre-backup-name ,backup
                                          :version 2))))))))
                 (write-region "second" nil path nil 'silent)
                 (mevedel-session-persistence-write
@@ -5222,8 +5335,9 @@ rotation never saves through a rebound temporary visited filename or prompts"
                                  (mevedel-session-session-id session)))
                   (should (equal save-path
                                  (mevedel-session-save-path session)))
-                  (should (= 1 (mevedel-session-turn-count session)))
-                  (should (string-match-p "First reply" (buffer-string)))
+                  (should (= 0 (mevedel-session-turn-count session)))
+                  (should-not (string-match-p "First prompt"
+                                              (buffer-string)))
                   (should-not (string-match-p "Second prompt"
                                               (buffer-string)))
                   (should
@@ -5235,7 +5349,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                          (mevedel-session-persistence-read
                           (mevedel-session-persistence--sidecar-path
                            save-path))))
-                    (should (= 1 (plist-get sidecar :total-turn-count)))
+                    (should (= 0 (plist-get sidecar :total-turn-count)))
                     (should-not (plist-get sidecar
                                            :forked-from-session-id)))))
             (test-mevedel-session-persistence--release-and-kill
@@ -5403,27 +5517,38 @@ rotation never saves through a rebound temporary visited filename or prompts"
 (mevedel-deftest mevedel-session-persistence--state-at-turn ()
   ,test
   (test)
-  :doc "picks the latest snapshot whose turn is <= cum-turn"
+  :doc "picks each path's earliest pre-turn checkpoint in the discarded suffix"
   (let ((session (mevedel-session-create
                   "x" (mevedel-workspace-get-or-create
                        'project "id" "/tmp" "x"))))
     (setf (mevedel-session-file-snapshots session)
-          '((1 . (("/abs/foo" . (:backup-name "fooA" :version 1))))
-            (3 . (("/abs/foo" . (:backup-name "fooC" :version 3))
-                  ("/abs/bar" . (:backup-name "barB" :version 2))))
-            (5 . (("/abs/foo" . (:backup-name "fooE" :version 5))))))
-    ;; State at turn 4: foo=fooC (turn 3), bar=barB (turn 3).
-    (let ((state (mevedel-session-persistence--state-at-turn session 4)))
+          '((1 . (("/abs/foo" . (:backup-name "fooA-post"
+                                  :pre-backup-name "fooA" :version 1))))
+            (3 . (("/abs/foo" . (:backup-name "fooC-post"
+                                  :pre-backup-name "fooC" :version 3))
+                  ("/abs/bar" . (:backup-name "barB-post"
+                                  :pre-backup-name "barB" :version 2))))
+            (5 . (("/abs/foo" . (:backup-name "fooE-post"
+                                  :pre-backup-name "fooE" :version 5))))))
+    ;; Rewind before turn 2: foo and bar first change at turn 3.
+    (let ((state (mevedel-session-persistence--state-at-turn session 2 t)))
       (should (= 2 (length state)))
       (should (equal "fooC"
-                     (plist-get (cdr (assoc "/abs/foo" state)) :backup-name)))
+                     (plist-get (cdr (assoc "/abs/foo" state))
+                                :pre-backup-name)))
       (should (equal "barB"
-                     (plist-get (cdr (assoc "/abs/bar" state)) :backup-name))))
-    ;; State at turn 1: just foo=fooA.
-    (let ((state (mevedel-session-persistence--state-at-turn session 1)))
-      (should (= 1 (length state)))
+                     (plist-get (cdr (assoc "/abs/bar" state))
+                                :pre-backup-name))))
+    ;; Rewind before turn 1 selects foo's turn-1 checkpoint and bar's turn-3
+    ;; checkpoint because bar was not changed before then.
+    (let ((state (mevedel-session-persistence--state-at-turn session 1 t)))
+      (should (= 2 (length state)))
       (should (equal "fooA"
-                     (plist-get (cdr (assoc "/abs/foo" state)) :backup-name))))
+                     (plist-get (cdr (assoc "/abs/foo" state))
+                                :pre-backup-name)))
+      (should (equal "barB"
+                     (plist-get (cdr (assoc "/abs/bar" state))
+                                :pre-backup-name))))
     (mevedel-workspace-clear-registry)))
 
 (mevedel-deftest mevedel-session-persistence--latest-snapshot-entry ()
@@ -7685,17 +7810,26 @@ The result is a plist whose :tempdir owns every created file."
                          (file-entry (assoc tracked turn-entry))
                          (backup-name (plist-get (cdr file-entry)
                                                  :backup-name))
+                         (pre-backup-name
+                          (plist-get (cdr file-entry) :pre-backup-name))
                          (backup-path (mevedel-file-history--backup-path
                                        (mevedel-session-save-path session)
-                                       backup-name)))
+                                       backup-name))
+                         (pre-backup-path
+                          (mevedel-file-history--backup-path
+                           (mevedel-session-save-path session)
+                           pre-backup-name)))
                     (should snaps)
                     (should backup-name)
+                    (should pre-backup-name)
                     (should (file-exists-p backup-path))
-                    ;; Backup stores the post-edit content (the state
-                    ;; `snapshot-modified' observes at save time).
+                    (should (file-exists-p pre-backup-path))
                     (with-temp-buffer
                       (insert-file-contents-literally backup-path)
-                      (should (equal "MODIFIED\n" (buffer-string))))))
+                      (should (equal "MODIFIED\n" (buffer-string))))
+                    (with-temp-buffer
+                      (insert-file-contents-literally pre-backup-path)
+                      (should (equal "ORIGINAL\n" (buffer-string))))))
               (mevedel-request-end))))
       (test-mevedel-session-persistence--cleanup tempdir))))
 
