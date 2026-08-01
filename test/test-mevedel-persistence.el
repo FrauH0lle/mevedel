@@ -17,7 +17,7 @@
     (mevedel--instruction-current-state-key :global)))
   ,test
   (test)
-  :doc "round-trips directive identity, execution binding, attempts, and overlay"
+  :doc "round-trips directive identity, execution binding, activity, and overlay"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-directive-persistence-" t)))
          (source (file-name-concat root "source.el"))
@@ -52,6 +52,15 @@
                       :gaps (list (cons (file-name-concat root "missing.el")
                                         'not-observed))
                       :checkpoint '(:session-id "session-1" :turn 3)))
+                    (mevedel-directive-discussion record)
+                    (list
+                     (mevedel-directive-discussion-turn--create
+                      :message "Why this change?"
+                      :request "Exact discussion request"
+                      :result "Because it is safer."
+                      :outcome 'success
+                      :attempt-index 1
+                      :checkpoint '(:session-id "session-1" :turn 4)))
                     (mevedel-directive-state record) 'implemented))
             (mevedel--write-instructions-file snapshot root t t t)
             (mevedel--clear-instruction-state workspace)
@@ -84,6 +93,19 @@
                       (mevedel-directive-attempt-gaps attempt)))
               (should (equal '(:session-id "session-1" :turn 3)
                              (mevedel-directive-attempt-checkpoint attempt))))
+            (let ((turn (car (mevedel-directive-discussion record))))
+              (should (equal "Why this change?"
+                             (mevedel-directive-discussion-turn-message turn)))
+              (should (equal "Exact discussion request"
+                             (mevedel-directive-discussion-turn-request turn)))
+              (should (equal "Because it is safer."
+                             (mevedel-directive-discussion-turn-result turn)))
+              (should (eq 'success
+                          (mevedel-directive-discussion-turn-outcome turn)))
+              (should (= 1
+                         (mevedel-directive-discussion-turn-attempt-index turn)))
+              (should (equal '(:session-id "session-1" :turn 4)
+                             (mevedel-directive-discussion-turn-checkpoint turn))))
             (should (overlayp restored))
             (should (eq record (mevedel--directive-record restored)))
             (should (eq 'implemented (mevedel--directive-state restored)))))

@@ -92,6 +92,15 @@ create or focus an inspection window automatically.
 The view is reconstructable from the data buffer. Avoid storing durable
 conversation state only in view overlays or text properties.
 
+Directive activity uses a separate read-only projection with its own multiline
+composer. It renders durable implementation attempts and discussion turns from
+the workspace directive record; discussion never enters the main chat history.
+Refreshing activity replaces only the managed projection above the composer,
+preserving the draft and point exactly, including drafts whose first editable
+character is `>`. A discussion result can target one selected attempt, and
+`Implement this` submits the directive with the complete local discussion as
+additional implementation context.
+
 ## Render flow
 
 ```mermaid

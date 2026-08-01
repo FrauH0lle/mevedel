@@ -263,23 +263,29 @@ the request)."
     (user-error "No directive found at point")))
 
 ;;;###autoload
-(defun mevedel-discuss-directive (&optional callback)
-  "Discuss the directive at point.
-
-If CALLBACK is provided, it will be called when the implementation
-process completes.  The callback will receive two arguments: ERROR (nil
-on success, a string error description on failure, or the symbol
-\\='abort if the request was aborted) and FSM (the gptel-fsm object for
-the request)."
+(defun mevedel-discuss-directive ()
+  "Open the directive at point and focus its local discussion composer."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
                                                       (mevedel--instructions-at (point) 'directive)
                                                       t)
                                                      'directive)))
-      (progn
-        (overlay-put directive 'mevedel-directive-action 'discuss)
-        (mevedel--process-directive directive (alist-get 'discuss mevedel-action-preset-alist)
-                                    #'mevedel--discuss-directive-prompt callback))
+      (let ((buffer (mevedel-open-directive-activity directive)))
+        (with-current-buffer buffer
+          (goto-char (point-max))))
+    (user-error "No directive found at point")))
+
+;;;###autoload
+(defun mevedel-implement-discussion-directive (&optional callback)
+  "Implement the directive at point using its complete local discussion.
+CALLBACK receives the ordinary directive terminal arguments."
+  (interactive)
+  (if-let* ((directive
+             (mevedel--topmost-instruction
+              (mevedel--highest-priority-instruction
+               (mevedel--instructions-at (point) 'directive) t)
+              'directive)))
+      (mevedel--implement-discussion directive callback)
     (user-error "No directive found at point")))
 
 ;;;###autoload

@@ -3115,6 +3115,21 @@ write repaired sidecar state before rendering the companion view."
         (mevedel-view--full-rerender))))
   buf)
 
+(defun mevedel-session-persistence-resume-id (workspace session-id)
+  "Resume WORKSPACE session SESSION-ID, or return nil when unavailable."
+  (unless (and (stringp session-id)
+               (not (string-empty-p session-id))
+               (equal session-id (file-name-nondirectory session-id))
+               (not (member session-id '("." ".."))))
+    (error "Invalid session id: %S" session-id))
+  (let ((session-dir
+         (file-name-as-directory
+          (file-name-concat
+           (mevedel-session-persistence--sessions-dir workspace)
+           session-id))))
+    (when (file-directory-p session-dir)
+      (mevedel-session-persistence-restore session-dir))))
+
 (defun mevedel-session-persistence-restore
     (session-dir &optional lifecycle-source session-override)
   "Restore the chat buffer for the session at SESSION-DIR.

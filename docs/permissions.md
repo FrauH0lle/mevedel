@@ -92,6 +92,10 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
 - Step 2 (deny) is absolute — any bucket's `deny` wins.
 - Step 5 (allow/ask) is innermost-first — the first bucket yielding any
   decision wins.
+- Directive discussion installs request-scoped denies for every registered
+  mutation-capable tool and for mutation-capable delegation. These denies are
+  a hard capability ceiling: broader session, workspace, or global allows
+  cannot enable mutation during that discussion request.
 - Goals use the same tool permission policy as ordinary root conversation
   turns. Goal lifecycle state never raises the session permission mode.
 - Standalone Plan approval applies the selected Ask, Edits, or Full Auto mode to

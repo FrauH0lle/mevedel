@@ -136,7 +136,43 @@
     (dolist (pos (list begin-pos reminder-pos roster-pos message-pos
                        deferred-pos))
       (should pos)
-      (should (< pos gate-pos)))))
+      (should (< pos gate-pos))))
+
+  :doc "installs immutable read-only denial rules on discussion requests"
+  (mevedel-tools-register)
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "read-only" :root "/tmp"
+                     :name "read-only"))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *discussion-request-rules*"))
+         (handlers
+          (mevedel-preset--build-handlers
+           `((WAIT ,#'gptel--handle-wait) (DONE) (ERRS) (ABRT))))
+         (begin-handler (car (cdr (assq 'WAIT handlers))))
+         (fsm (gptel-make-fsm :info (list :buffer buffer))))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session
+                      mevedel--current-directive-uuid nil
+                      mevedel--directive-read-only-request-p t)
+          (cl-letf (((symbol-function 'mevedel-goal-capture-request)
+                     #'ignore)
+                    ((symbol-function 'mevedel-skills--drain-pending-context)
+                     #'ignore))
+            (funcall begin-handler fsm))
+          (let ((rules
+                 (mevedel-request-skill-permission-rules
+                  mevedel--current-request)))
+            (should (eq 'deny
+                        (mevedel-permission--rules-action rules "Edit")))
+            (should (eq 'deny
+                        (mevedel-permission--rules-action rules "Agent")))
+            (should-not
+             (mevedel-permission--rules-action rules "Read"))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (mevedel-request-end))
+        (kill-buffer buffer)))))
 
 
 
@@ -219,12 +255,12 @@
   ,test
   (test)
 
-  :doc "keeps Bash lifecycle controls active in every Bash preset"
+  :doc "keeps Bash lifecycle controls active in implementation presets"
   (let ((mevedel-preset--registry nil)
         (gptel--known-presets nil))
     (mevedel-tools-register)
     (mevedel--define-presets)
-    (dolist (preset '(mevedel-discuss mevedel-implement mevedel-tutor))
+    (dolist (preset '(mevedel-implement mevedel-tutor))
       (let* ((metadata (mevedel-preset--resolved-metadata preset))
              (resolved
               (mevedel-tool-resolve (plist-get metadata :tool-specs)))
@@ -233,6 +269,29 @@
         (dolist (name '("Bash" "WriteStdin" "ListExecutions"
                         "StopExecution"))
           (should (member name active))))))
+
+  :doc "makes directive discussion a hard read-only capability"
+  (let ((mevedel-preset--registry nil)
+        (gptel--known-presets nil))
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (let* ((metadata (mevedel-preset--resolved-metadata 'mevedel-discuss))
+           (resolved
+            (mevedel-tool-resolve (plist-get metadata :tool-specs)))
+           (tools (plist-get resolved :active))
+           (names (mapcar #'mevedel-tool-name tools)))
+      (should (cl-every #'mevedel-tool-read-only-p tools))
+      (dolist (name '("Agent" "FollowupAgent" "SendMessage"
+                      "Bash" "Eval" "Write" "Edit" "MkDir"))
+        (should-not (member name names)))
+      (should-not (plist-get metadata :agents))
+      (let ((rules (mevedel-preset--read-only-rules)))
+        (dolist (name '("Agent" "FollowupAgent" "SendMessage"
+                        "Bash" "Eval" "Write" "Edit" "MkDir"))
+          (should (eq 'deny
+                      (mevedel-permission--rules-action rules name))))
+        (should-not
+         (mevedel-permission--rules-action rules "Read")))))
 
   :doc "makes every built-in role available to model-facing Agent calls"
   (let ((mevedel-preset--registry nil)

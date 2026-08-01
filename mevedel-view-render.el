@@ -4363,10 +4363,13 @@ inserted beside the header."
             (mevedel-view--directive-event-from-text
              (buffer-substring-no-properties seg-start seg-end))))
          (outcome (plist-get data :outcome))
+         (discussion-p (eq (plist-get data :action) 'discuss))
          (label (pcase outcome
-                  ('success "implemented")
-                  ('aborted "aborted")
-                  (_ "failed"))))
+                  ('success (if discussion-p "discussed" "implemented"))
+                  ('aborted (if discussion-p
+                                "discussion aborted"
+                              "aborted"))
+                  (_ (if discussion-p "discussion failed" "failed")))))
     (when data
       (mevedel-view--insert-rendered-tool
        (list :header

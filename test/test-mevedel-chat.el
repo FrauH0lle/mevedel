@@ -1026,7 +1026,130 @@
 			   (when (buffer-live-p view-buf)
 			     (kill-buffer view-buf)))
 			 (kill-buffer captured-chat))
-		       (delete-directory tmpdir t)))))
+		       (delete-directory tmpdir t))))
+
+                 :doc "stores discussion locally and keeps its full turn out of chat"
+                 (let* ((tmpdir (file-name-as-directory
+                                 (make-temp-file "mevedel-discussion-turn-" t)))
+                        (file (file-name-concat tmpdir "sample.txt"))
+                        (buf (find-file-noselect file))
+                        (mevedel-action-preset-alist
+                         '((discuss . (:system "test"))))
+                        captured-fsm captured-chat captured-prompt)
+                   (unwind-protect
+                       (with-current-buffer buf
+                         (insert "source\n")
+                         (write-region (point-min) (point-max) file nil 'silent)
+                         (set-buffer-modified-p nil)
+                         (let ((directive
+                                (mevedel--create-directive-in
+                                 buf (point-min) (1- (point-max)) nil
+                                 "Explain it")))
+                           (overlay-put directive 'mevedel-directive-action 'discuss)
+                           (cl-letf (((symbol-function 'save-some-buffers)
+                                      (lambda (&rest _) nil))
+                                     ((symbol-function 'display-buffer)
+                                      (lambda (&rest _) nil))
+                                     ((symbol-function 'gptel--apply-preset)
+                                      (lambda (&rest _) nil))
+                                     ((symbol-function 'gptel-request)
+                                      (lambda (prompt &rest args)
+                                        (setq captured-prompt prompt
+                                              captured-chat
+                                              (plist-get args :buffer))
+                                        (let ((fsm (plist-get args :fsm)))
+                                          (setf (gptel-fsm-info fsm)
+                                                (list
+                                                 :buffer captured-chat
+                                                 :position
+                                                 (plist-get args :position)
+                                                 :callback
+                                                 (lambda (&rest _) nil)))
+                                          (setq captured-fsm fsm)
+                                          fsm))))
+                             (mevedel--discuss-directive-turn
+                              directive "Why?" nil nil)
+                             (should (eq 'discussing
+                                         (mevedel--directive-status directive)))
+                             (let ((response-start
+                                    (overlay-get
+                                     directive
+                                     'mevedel-directive-response-start)))
+                               (with-current-buffer captured-chat
+                                 (goto-char response-start)
+                                 (insert "Because.\n")))
+                             (funcall
+                              (plist-get (gptel-fsm-info captured-fsm)
+                                         :mevedel-request-callback)
+                              nil captured-fsm)
+                             (let* ((record
+                                     (mevedel--directive-record directive))
+                                    (turn
+                                     (car
+                                      (mevedel-directive-discussion record))))
+                               (should (eq 'discussed
+                                           (mevedel-directive-state record)))
+                               (should-not
+                                (mevedel-directive-attempts record))
+                               (should (equal "Why?"
+                                              (mevedel-directive-discussion-turn-message
+                                               turn)))
+                               (should (equal captured-prompt
+                                              (mevedel-directive-discussion-turn-request
+                                               turn)))
+                               (should (equal "Because.\n"
+                                              (mevedel-directive-discussion-turn-result
+                                               turn))))
+                             (with-current-buffer captured-chat
+                               (should (string-search "directive-event"
+                                                      (buffer-string)))
+                               (should (string-search ":action discuss"
+                                                      (buffer-string)))
+                               (should-not (string-search "Because."
+                                                          (buffer-string))))))
+                     (when (buffer-live-p buf)
+                       (kill-buffer buf))
+                     (when (buffer-live-p captured-chat)
+                       (let ((view-buf
+                              (buffer-local-value 'mevedel--view-buffer
+                                                  captured-chat)))
+                         (when (buffer-live-p view-buf)
+                           (kill-buffer view-buf)))
+                       (kill-buffer captured-chat))
+                     (delete-directory tmpdir t))))
+
+                 :doc "reuses the directive session even when another is current"
+                 (let* ((workspace (mevedel-workspace--create
+                                    :type 'test :id "bound" :root "/tmp"
+                                    :name "bound"))
+                        (bound-session (mevedel-session-create "bound" workspace))
+                        (other-session (mevedel-session-create "other" workspace))
+                        (bound-buffer (generate-new-buffer " *bound-session*"))
+                        (other-buffer (generate-new-buffer " *other-session*"))
+                        (record (mevedel-directive--create
+                                 :id "directive" :request "Request"
+                                 :anchor '(:state attached)
+                                 :session-id "bound-id")))
+                   (unwind-protect
+                       (progn
+                         (setf (mevedel-session-session-id bound-session)
+                               "bound-id"
+                               (mevedel-session-session-id other-session)
+                               "other-id")
+                         (with-current-buffer bound-buffer
+                           (setq-local mevedel--session bound-session))
+                         (with-current-buffer other-buffer
+                           (setq-local mevedel--session other-session))
+                         (cl-letf (((symbol-function 'mevedel--workspace-sessions)
+                                    (lambda (_workspace)
+                                      (list (cons "other" other-buffer)
+                                            (cons "bound" bound-buffer)))))
+                           (should
+                            (equal (cons bound-buffer nil)
+                                   (mevedel--directive-session-buffer
+                                    record workspace)))))
+                     (kill-buffer bound-buffer)
+                     (kill-buffer other-buffer))))
 
 (mevedel-deftest mevedel--process-directive-detached-callback
   (:before-each (mevedel-workspace-clear-registry)
@@ -1307,6 +1430,173 @@
                        (should-not mevedel--implementation-permission-mode-restore)
                        (should (= 2 refreshed))))
                  (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(mevedel-deftest mevedel--directive-session-buffer ()
+  ,test
+  (test)
+  :doc "resumes the bound persisted session on demand"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "resume" :root "/tmp" :name "resume"))
+         (record (mevedel-directive--create
+                  :id "directive" :request "Request"
+                  :anchor '(:state attached) :session-id "saved-id"))
+         (restored (generate-new-buffer " *restored-directive-session*")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel--workspace-sessions)
+                   (lambda (_workspace) nil))
+                  ((symbol-function 'mevedel-session-persistence-resume-id)
+                   (lambda (seen-workspace seen-id)
+                     (should (eq workspace seen-workspace))
+                     (should (equal "saved-id" seen-id))
+                     restored)))
+          (should (equal (cons restored nil)
+                         (mevedel--directive-session-buffer
+                          record workspace))))
+      (kill-buffer restored)))
+
+  :doc "requires explicit rebind and leaves historical links unchanged"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "rebind" :root "/tmp" :name "rebind"))
+         (attempt
+          (mevedel-directive-attempt--create
+           :checkpoint '(:session-id "lost-id" :turn 3)))
+         (record (mevedel-directive--create
+                  :id "directive" :request "Request"
+                  :anchor '(:state attached) :session-id "lost-id"
+                  :attempts (list attempt)))
+         (replacement (generate-new-buffer " *replacement-session*")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel--workspace-sessions)
+                   (lambda (_workspace) nil))
+                  ((symbol-function 'mevedel-session-persistence-resume-id)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                  ((symbol-function 'mevedel--chat-buffer)
+                   (lambda (&rest _) replacement)))
+          (should (equal (cons replacement t)
+                         (mevedel--directive-session-buffer record workspace)))
+          (should (equal "lost-id" (mevedel-directive-session-id record)))
+          (should
+           (equal '(:session-id "lost-id" :turn 3)
+                  (mevedel-directive-attempt-checkpoint attempt))))
+      (kill-buffer replacement)))
+
+  :doc "keeps an unavailable binding when rebind is declined"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "decline" :root "/tmp" :name "decline"))
+         (record (mevedel-directive--create
+                  :id "directive" :request "Request"
+                  :anchor '(:state attached) :session-id "lost-id")))
+    (cl-letf (((symbol-function 'mevedel--workspace-sessions)
+               (lambda (_workspace) nil))
+              ((symbol-function 'mevedel-session-persistence-resume-id)
+               (lambda (&rest _) nil))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
+      (should-error
+       (mevedel--directive-session-buffer record workspace)
+       :type 'user-error))))
+
+(mevedel-deftest mevedel--directive-discussion-transcript
+  (:doc "renders only durable local messages and replies in order")
+  (let ((record
+         (mevedel-directive--create
+          :id "directive" :request "Request" :anchor '(:state attached)
+          :discussion
+          (list
+           (mevedel-directive-discussion-turn--create
+            :message "One" :request "Hidden request one"
+            :result "Answer one" :outcome 'success)
+           (mevedel-directive-discussion-turn--create
+            :message "Two" :request "Hidden request two"
+            :result "Transport failed" :outcome 'error)))))
+    (should
+     (equal "User: One\nAssistant: Answer one\n\nUser: Two\nAssistant (error): Transport failed"
+            (mevedel--directive-discussion-transcript record)))))
+
+(mevedel-deftest mevedel--discuss-directive-prompt
+  (:doc "includes fresh context, complete local discussion, and selected result")
+  (let* ((attempt
+          (mevedel-directive-attempt--create
+           :request "Implement exact" :result "Implementation answer"
+           :outcome 'success :patch "diff --git a/a b/a\n"
+           :capture 'complete :covered-files '("/tmp/a") :gaps nil
+           :checkpoint '(:session-id "session-1" :turn 1)))
+         (record
+          (mevedel-directive--create
+           :id "directive" :request "Request" :anchor '(:state attached)
+           :attempts (list attempt)
+           :discussion
+           (list
+            (mevedel-directive-discussion-turn--create
+             :message "First question" :request "Old exact request"
+             :result "First answer" :outcome 'success
+             :checkpoint '(:session-id "session-1" :turn 2)))))
+         (prompt
+          (mevedel--discuss-directive-prompt
+           "Fresh directive and references" record "Follow up" 1)))
+    (should (string-match-p "Fresh directive and references" prompt))
+    (should (string-match-p "First question" prompt))
+    (should (string-match-p "First answer" prompt))
+    (should (string-match-p "Follow up" prompt))
+    (should (string-match-p "Implementation answer" prompt))
+    (should (string-match-p "diff --git" prompt))
+    (should-not (string-match-p "Old exact request" prompt))))
+
+(mevedel-deftest mevedel--implement-discussion-prompt
+  (:doc "turns the complete local discussion into implementation feedback")
+  (let* ((record
+          (mevedel-directive--create
+           :id "directive" :request "Request" :anchor '(:state attached)
+           :discussion
+           (list
+            (mevedel-directive-discussion-turn--create
+             :message "Prefer a small API" :request "Exact"
+             :result "Use one entry point" :outcome 'success
+             :checkpoint '(:session-id "session-1" :turn 1)))))
+         (prompt
+          (mevedel--implement-discussion-prompt "Fresh references" record)))
+    (should (string-match-p "IMPLEMENTATION REQUEST" prompt))
+    (should (string-match-p "Fresh references" prompt))
+    (should (string-match-p "Prefer a small API" prompt))
+    (should (string-match-p "Use one entry point" prompt))))
+
+(mevedel-deftest mevedel--implement-discussion
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global))
+   :doc "dispatches ordinary implementation with complete discussion feedback")
+  (let ((workspace (mevedel-workspace--create
+                    :type 'test :id "implement-discussion" :root "/tmp"
+                    :name "implement-discussion"))
+        (mevedel-action-preset-alist
+         '((implement . (:system "test"))))
+        captured)
+    (with-temp-buffer
+      (insert "source")
+      (setq-local mevedel--workspace workspace)
+      (let* ((directive
+              (mevedel--create-directive-in
+               (current-buffer) (point-min) (point-max) nil "Request"))
+             (record (mevedel--directive-record directive)))
+        (setf (mevedel-directive-discussion record)
+              (list
+               (mevedel-directive-discussion-turn--create
+                :message "Keep it small" :request "Exact"
+                :result "Agreed" :outcome 'success)))
+        (cl-letf (((symbol-function 'mevedel--process-directive)
+                   (lambda (seen preset prompt-fn callback &optional options)
+                     (setq captured
+                           (list seen preset (funcall prompt-fn "Fresh")
+                                 callback options))
+                     'accepted)))
+          (should (eq 'accepted
+                      (mevedel--implement-discussion directive #'ignore)))
+          (should (eq directive (nth 0 captured)))
+          (should (equal '(:system "test") (nth 1 captured)))
+          (should (string-match-p "Fresh" (nth 2 captured)))
+          (should (string-match-p "Keep it small" (nth 2 captured)))
+          (should (eq #'ignore (nth 3 captured)))
+          (should-not (nth 4 captured)))))))
 
 (mevedel-deftest mevedel--generate-final-patch ()
   ,test

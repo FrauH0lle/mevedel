@@ -436,6 +436,17 @@
                 (mevedel--ov-actions-dispatch directive))
               (should-not (assoc ?M choices))
               (should (member '(?o "activity") choices))
+              (should (member '(?a "abort") choices))
+              (mevedel--set-directive-status directive 'discussed)
+              (catch 'captured
+                (mevedel--ov-actions-dispatch directive))
+              (should (member '(?d "continue-discussion") choices))
+              (should (member '(?i "implement-this") choices))
+              (mevedel--set-directive-status directive 'discussing)
+              (catch 'captured
+                (mevedel--ov-actions-dispatch directive))
+              (should-not (assoc ?M choices))
+              (should (member '(?a "abort") choices))
               (setq target child)
               (catch 'captured
                 (mevedel--ov-actions-dispatch child))

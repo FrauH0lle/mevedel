@@ -26,15 +26,18 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   `mevedel-workspace-state-dir`, not stored as a slot.
 - **`mevedel-directive`**: stable directive id, current authored request,
   source-anchor description, lifecycle state, bound execution-session id, and
-  chronological implementation attempts. Source overlays retain the id needed
-  to resolve this record; they do not own another request, status, patch, or
-  attempt copy.
+  chronological implementation attempts and discussion turns. Source overlays
+  retain the id needed to resolve this record; they do not own another request,
+  status, patch, or attempt copy.
 - **`mevedel-directive-attempt`**: immutable submitted request, terminal answer
   or error, outcome, captured patch, capture completeness, covered files,
   explicit gaps, and the session/turn checkpoint that can restore the file
   state around the attempt. A complete empty patch means the request observed
   its covered files and made no changes; incomplete capture never implies
   complete coverage.
+- **`mevedel-directive-discussion-turn`**: immutable local question, submitted
+  request, terminal answer or error, outcome, optional selected-attempt index,
+  and session/turn checkpoint.
 - **`mevedel-session`**: per-chat state: workspace, working
   directory, tasks, touched-files, permission rules/mode, exact resource grants,
   reminders,
@@ -75,12 +78,14 @@ Without an override, the directive inherits the main session model at dispatch.
 
 Directive requests submit an explicit prompt built from the current authored
 request and freshly resolved references, so gptel realizes the request in an
-isolated prompt buffer without main-chat history. The first accepted request
-binds the directive to its execution session. Terminal settlement writes the
-attempt to the workspace record even if the source overlay detached while the
-request was in flight; overlay updates remain optional presentation work.
-The main session retains only a hidden compact directive event linked to the
-attempt and turn checkpoint, not the full submitted request or response.
+isolated prompt buffer without main-chat history. Discussion continuations add
+only the directive's durable local discussion transcript. The first accepted
+request binds the directive to its execution session. Terminal settlement
+writes the attempt or discussion turn to the workspace record even if the
+source overlay detached while the request was in flight; overlay updates remain
+optional presentation work. The main session retains only a hidden compact
+directive event linked to the durable record and turn checkpoint, not the full
+submitted request or response.
 
 ## Workspace context chain
 

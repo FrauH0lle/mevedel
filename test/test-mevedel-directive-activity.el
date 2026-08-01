@@ -71,7 +71,9 @@
               (should (string-match-p "Initial request" (buffer-string)))
               (should (string-match-p "Ready" (buffer-string)))
               (should (string-match-p "Attached" (buffer-string)))
-              (should (string-match-p "No activity yet" (buffer-string))))
+              (should (string-match-p "No activity yet" (buffer-string)))
+              (should (markerp mevedel-directive-activity--input-marker))
+              (should (string-match-p "C-c RET: discuss" (buffer-string))))
             (should-not
              (string-match-p
               "No activity yet"
@@ -114,6 +116,150 @@
             (mevedel-directive-activity-refresh)
             (should (string-match-p "After" (buffer-string)))
             (should-not (string-match-p "Before" (buffer-string)))))
+      (mevedel-directive-activity-test--discard fixture))))
+
+(mevedel-deftest mevedel-directive-activity--input-text
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global))
+   :doc "preserves a multiline leading-> composer draft and point on redraw")
+  (let* ((fixture (mevedel-directive-activity-test--make-directive "Discuss"))
+         (workspace (car fixture))
+         (record (car (mevedel-workspace-directives workspace)))
+         (draft "> first line\nsecond line")
+         activity)
+    (unwind-protect
+        (cl-letf (((symbol-function 'pop-to-buffer)
+                   (lambda (buffer &rest _) buffer)))
+          (setq activity (mevedel-open-directive-activity (caddr fixture)))
+          (with-current-buffer activity
+            (goto-char mevedel-directive-activity--input-marker)
+            (insert draft)
+            (goto-char (+ mevedel-directive-activity--input-marker 7))
+            (setf (mevedel-directive-state record) 'discussing)
+            (mevedel-directive-activity-refresh)
+            (should (equal draft (mevedel-directive-activity--input-text)))
+            (should (= (point)
+                       (+ mevedel-directive-activity--input-marker 7)))
+            (should (string-match-p "Discussing" (buffer-string)))))
+      (mevedel-directive-activity-test--discard fixture))))
+
+(mevedel-deftest mevedel-directive-activity--discussion-fragments
+  (:doc "renders durable local discussion and its attached attempt")
+  (let ((directive
+         (mevedel-directive--create
+          :id "directive" :request "Request" :anchor '(:state attached)
+          :discussion
+          (list
+           (mevedel-directive-discussion-turn--create
+            :message "What changed?"
+            :request "Exact discussion request"
+            :result "The parser changed."
+            :outcome 'success
+            :attempt-index 1
+            :checkpoint '(:session-id "session-1" :turn 2))))))
+    (let ((fragments
+           (mevedel-directive-activity--discussion-fragments directive)))
+      (should (= 1 (length fragments)))
+      (let ((text (plist-get (car fragments) :body)))
+        (should (string-match-p "What changed?" text))
+        (should (string-match-p "The parser changed" text))
+        (should (string-match-p "Attempt 1" text))
+        (should-not (string-match-p "Exact discussion request" text))))))
+
+(mevedel-deftest mevedel-directive-activity-submit-discussion
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global))
+   :doc "submits the local draft with the selected attempt and clears it")
+  (let* ((fixture (mevedel-directive-activity-test--make-directive "Discuss"))
+         (directive (caddr fixture))
+         captured activity)
+    (unwind-protect
+        (cl-letf (((symbol-function 'pop-to-buffer)
+                   (lambda (buffer &rest _) buffer))
+                  ((symbol-function 'mevedel--discuss-directive-turn)
+                   (lambda (selected message attempt-index callback)
+                     (setq captured (list selected message attempt-index))
+                     (funcall callback nil nil)
+                     'accepted)))
+          (setq activity (mevedel-open-directive-activity directive))
+          (with-current-buffer activity
+            (setq mevedel-directive-activity--selected-attempt-index 2)
+            (goto-char mevedel-directive-activity--input-marker)
+            (insert "> question\nmore")
+            (should (eq 'accepted
+                        (mevedel-directive-activity-submit-discussion)))
+            (should (equal (list directive "> question\nmore" 2) captured))
+            (should (equal "" (mevedel-directive-activity--input-text)))
+            (should-not mevedel-directive-activity--selected-attempt-index)))
+      (mevedel-directive-activity-test--discard fixture))))
+
+(mevedel-deftest mevedel-directive-activity-discuss-result
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global))
+   :doc "selects the implementation attempt at point for the next question")
+  (let* ((fixture (mevedel-directive-activity-test--make-directive "Discuss"))
+         (workspace (car fixture))
+         (record (car (mevedel-workspace-directives workspace)))
+         (attempt
+          (mevedel-directive-attempt--create
+           :request "Request" :result "Answer" :outcome 'success
+           :patch "" :capture 'complete :covered-files nil :gaps nil
+           :checkpoint '(:session-id "session-1" :turn 1)))
+         activity)
+    (unwind-protect
+        (progn
+          (setf (mevedel-directive-attempts record) (list attempt))
+          (cl-letf (((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer)))
+            (setq activity (mevedel-open-directive-activity (caddr fixture))))
+          (with-current-buffer activity
+            (goto-char (point-min))
+            (let ((position
+                   (text-property-any
+                    (point-min) mevedel-directive-activity--composer-marker
+                    'mevedel-view-zone-entry attempt)))
+              (should position)
+              (goto-char position)
+              (mevedel-directive-activity-discuss-result)
+              (should (= 1
+                         mevedel-directive-activity--selected-attempt-index))
+              (should (= (point)
+                         mevedel-directive-activity--input-marker)))))
+      (mevedel-directive-activity-test--discard fixture))))
+
+(mevedel-deftest mevedel-directive-activity-implement-this
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global))
+   :doc "starts implementation from the same directive's complete discussion")
+  (let* ((fixture (mevedel-directive-activity-test--make-directive "Implement"))
+         (workspace (car fixture))
+         (directive (caddr fixture))
+         (record (car (mevedel-workspace-directives workspace)))
+         captured activity)
+    (unwind-protect
+        (progn
+          (setf (mevedel-directive-discussion record)
+                (list
+                 (mevedel-directive-discussion-turn--create
+                  :message "Prefer the smaller API"
+                  :request "Exact" :result "Agreed" :outcome 'success
+                  :checkpoint '(:session-id "session-1" :turn 1))))
+          (cl-letf (((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer))
+                    ((symbol-function 'mevedel--implement-discussion)
+                     (lambda (selected callback)
+                       (setq captured selected)
+                       (funcall callback nil nil)
+                       'accepted)))
+            (setq activity (mevedel-open-directive-activity directive))
+            (with-current-buffer activity
+              (should (eq 'accepted
+                          (mevedel-directive-activity-implement-this)))
+              (should (eq directive captured)))))
       (mevedel-directive-activity-test--discard fixture))))
 
 (mevedel-deftest mevedel-directive-activity-view-patch

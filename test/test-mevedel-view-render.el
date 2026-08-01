@@ -4993,6 +4993,22 @@ state of its inner sections"
                    (point-min) mevedel-view--input-marker)))
         (should (string-search "Directive directive-1 implemented" text))
         (should (string-search "turn 4" text))
+        (should-not (string-search "Thinking" text)))))
+
+  :doc "renders discussion chronology without conversational content"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-pipeline--format-render-data-block
+      '(:kind directive-event :directive-id "directive-1"
+        :action discuss :outcome success :turn 5))
+     'ignore)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-search "Directive directive-1 discussed" text))
+        (should (string-search "turn 5" text))
         (should-not (string-search "Thinking" text))))))
 
 (mevedel-deftest mevedel-view--scaffolding-only-p ()

@@ -69,6 +69,17 @@ check project dir first, then global."
   gaps
   checkpoint)
 
+(cl-defstruct (mevedel-directive-discussion-turn
+               (:constructor mevedel-directive-discussion-turn--create)
+               (:copier nil))
+  "One immutable terminal directive discussion turn."
+  message
+  request
+  result
+  outcome
+  attempt-index
+  checkpoint)
+
 (cl-defstruct (mevedel-directive (:constructor mevedel-directive--create))
   "Workspace-owned directive identity and current authored state."
   id
@@ -76,7 +87,8 @@ check project dir first, then global."
   anchor
   state
   session-id
-  attempts)
+  attempts
+  discussion)
 
 (cl-defstruct (mevedel-workspace (:constructor mevedel-workspace--create))
   "Project-level shared state.

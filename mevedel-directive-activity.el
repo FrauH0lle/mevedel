@@ -13,6 +13,8 @@
 
 ;;; Code:
 
+(eval-when-compile (require 'cl-lib))
+
 ;; `mevedel-overlays'
 (declare-function mevedel--directive-record "mevedel-overlays" (directive))
 (declare-function mevedel--instruction-buffer-workspace
@@ -42,6 +44,17 @@
 (declare-function mevedel-directive-attempt-result
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-attempt-index
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-checkpoint
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-message
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-outcome
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-result
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-p "mevedel-structs" (cl-x))
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
@@ -51,6 +64,11 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
+(declare-function mevedel--discuss-directive-turn
+                  "mevedel-chat"
+                  (directive message &optional attempt-index callback))
+(declare-function mevedel--implement-discussion
+                  "mevedel-chat" (directive &optional callback))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-activate-at-point "mevedel-view"
@@ -72,11 +90,30 @@
 (defvar-local mevedel-directive-activity--directive nil
   "Workspace-owned directive rendered in the current activity view.")
 
+(defvar-local mevedel-directive-activity--composer-marker nil
+  "Marker separating rendered activity from the local composer.")
+
+(defvar-local mevedel-directive-activity--input-marker nil
+  "Marker at the first editable character of the local composer.")
+
+(defvar-local mevedel-directive-activity--composer-overlay nil
+  "Keymap overlay covering the editable local composer.")
+
+(defvar-local mevedel-directive-activity--selected-attempt-index nil
+  "Implementation attempt attached to the next discussion turn.")
+
+(defvar-keymap mevedel-directive-activity--composer-map
+  :doc "Keymap active in the directive discussion composer."
+  :parent text-mode-map
+  "C-c RET" #'mevedel-directive-activity-submit-discussion
+  "C-c C-i" #'mevedel-directive-activity-implement-this)
+
 (defvar-keymap mevedel-directive-activity-mode-map
   :doc "Keymap for `mevedel-directive-activity-mode'."
   :parent special-mode-map
   "g" #'mevedel-directive-activity-refresh
   "o" #'mevedel-directive-activity-goto-source
+  "d" #'mevedel-directive-activity-discuss-result
   "n" #'mevedel-view-zone-next
   "p" #'mevedel-view-zone-previous
   "RET" #'mevedel-view-activate-at-point)
@@ -85,7 +122,25 @@
   "MevDirective"
   "Major mode for a workspace directive's activity view."
   (require 'mevedel-view)
-  (visual-line-mode +1))
+  (visual-line-mode +1)
+  (setq buffer-read-only nil)
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (setq mevedel-directive-activity--composer-marker
+          (copy-marker (point) t))
+    (let ((start (point)))
+      (insert "DISCUSSION  C-c RET: discuss · C-c C-i: implement this\n> ")
+      (add-text-properties
+       start (point)
+       '(read-only t
+         front-sticky (read-only)
+         rear-nonsticky (read-only font-lock-face))))
+    (setq mevedel-directive-activity--input-marker
+          (copy-marker (point) nil))
+    (setq mevedel-directive-activity--composer-overlay
+          (make-overlay (point) (point-max) nil nil t))
+    (overlay-put mevedel-directive-activity--composer-overlay
+                 'keymap mevedel-directive-activity--composer-map)))
 
 
 ;;
@@ -136,6 +191,45 @@
         :body "No activity yet."
         :navigatable t)))))
 
+(defun mevedel-directive-activity--discussion-fragments (directive)
+  "Return chronological local discussion fragments for DIRECTIVE."
+  (let ((index 0))
+    (mapcar
+     (lambda (turn)
+       (setq index (1+ index))
+       (let ((attempt-index
+              (mevedel-directive-discussion-turn-attempt-index turn))
+             (checkpoint
+              (mevedel-directive-discussion-turn-checkpoint turn)))
+         `(:namespace directive-activity :id ,(list 'discussion index)
+           :label-left
+           ,(propertize
+             (format "DISCUSSION %d · %s" index
+                     (upcase
+                      (symbol-name
+                       (mevedel-directive-discussion-turn-outcome turn))))
+             'face 'bold)
+           :body
+           ,(format "%sCheckpoint: %s, turn %s\n\nYou:\n%s\n\nAssistant:\n%s"
+                    (if attempt-index
+                        (format "Attempt %d attached\n" attempt-index)
+                      "")
+                    (plist-get checkpoint :session-id)
+                    (plist-get checkpoint :turn)
+                    (mevedel-directive-discussion-turn-message turn)
+                    (mevedel-directive-discussion-turn-result turn))
+           :entry ,turn
+           :navigatable t)))
+     (mevedel-directive-discussion directive))))
+
+(defun mevedel-directive-activity--input-text ()
+  "Return the exact editable directive discussion draft."
+  (if (and (markerp mevedel-directive-activity--input-marker)
+           (marker-buffer mevedel-directive-activity--input-marker))
+      (buffer-substring-no-properties
+       mevedel-directive-activity--input-marker (point-max))
+    ""))
+
 (defun mevedel-directive-activity-refresh ()
   "Refresh the current directive activity view from its workspace record."
   (interactive)
@@ -143,12 +237,17 @@
                (mevedel-directive-p mevedel-directive-activity--directive))
     (user-error "No directive activity is associated with this buffer"))
   (require 'mevedel-view-zone)
-  (let* ((directive mevedel-directive-activity--directive)
+  (let* ((input-offset
+          (and (markerp mevedel-directive-activity--input-marker)
+               (>= (point) mevedel-directive-activity--input-marker)
+               (- (point) mevedel-directive-activity--input-marker)))
+         (directive mevedel-directive-activity--directive)
          (anchor-state
           (or (plist-get (mevedel-directive-anchor directive) :state)
               'source-missing)))
     (mevedel-view-zone-reconcile
-     'directive-activity (point-min) (point-max)
+     'directive-activity
+     (point-min) mevedel-directive-activity--composer-marker
      (append
       `((:namespace directive-activity :id request
         :label-left ,(propertize "REQUEST" 'face 'bold)
@@ -170,7 +269,13 @@
         ,@(when (eq anchor-state 'attached)
             '(:activate mevedel-directive-activity-goto-source
               :help-echo "RET: visit source anchor"))))
-      (mevedel-directive-activity--attempt-fragments directive))))
+      (mevedel-directive-activity--discussion-fragments directive)
+      (mevedel-directive-activity--attempt-fragments directive)))
+    (when input-offset
+      (goto-char
+       (+ mevedel-directive-activity--input-marker
+          (min input-offset
+               (length (mevedel-directive-activity--input-text)))))))
   (set-buffer-modified-p nil)
   mevedel-directive-activity--directive)
 
@@ -185,6 +290,67 @@
       (user-error "Attempt has no captured patch"))
     (require 'mevedel-chat)
     (mevedel--replace-patch-buffer patch)))
+
+(defun mevedel-directive-activity--source-directive ()
+  "Return the live source overlay for the current activity directive."
+  (or (mevedel--instruction-with-uuid
+       (mevedel-directive-id mevedel-directive-activity--directive)
+       mevedel-directive-activity--workspace)
+      (user-error "Directive has no live source context")))
+
+(defun mevedel-directive-activity-submit-discussion ()
+  "Submit the local composer as the next read-only discussion turn."
+  (interactive)
+  (let* ((buffer (current-buffer))
+         (message (mevedel-directive-activity--input-text))
+         (attempt-index
+          mevedel-directive-activity--selected-attempt-index)
+         (directive (mevedel-directive-activity--source-directive))
+         (fsm
+          (mevedel--discuss-directive-turn
+           directive message attempt-index
+           (lambda (_err _fsm)
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (mevedel-directive-activity-refresh)))))))
+    (let ((inhibit-read-only t))
+      (delete-region mevedel-directive-activity--input-marker (point-max)))
+    (setq mevedel-directive-activity--selected-attempt-index nil)
+    (mevedel-directive-activity-refresh)
+    (goto-char mevedel-directive-activity--input-marker)
+    fsm))
+
+(defun mevedel-directive-activity-discuss-result ()
+  "Attach the implementation attempt at point to the next discussion turn."
+  (interactive)
+  (let* ((attempt (get-text-property (point) 'mevedel-view-zone-entry))
+         (index
+          (and attempt
+               (cl-position
+                attempt
+                (mevedel-directive-attempts
+                 mevedel-directive-activity--directive)
+                :test #'eq))))
+    (unless index
+      (user-error "No implementation attempt at point"))
+    (setq mevedel-directive-activity--selected-attempt-index (1+ index))
+    (goto-char mevedel-directive-activity--input-marker)
+    (message "mevedel: next discussion turn includes attempt %d" (1+ index))))
+
+(defun mevedel-directive-activity-implement-this ()
+  "Implement the current directive using its complete local discussion."
+  (interactive)
+  (unless
+      (string-empty-p
+       (string-trim (mevedel-directive-activity--input-text)))
+    (user-error "Send or clear the discussion draft first"))
+  (let ((buffer (current-buffer)))
+    (mevedel--implement-discussion
+     (mevedel-directive-activity--source-directive)
+     (lambda (_err _fsm)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (mevedel-directive-activity-refresh)))))))
 
 
 ;;

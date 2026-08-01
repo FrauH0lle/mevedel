@@ -113,10 +113,10 @@ using `mevedel`) or by creating and submitting a directive.
 
 **Please note:** Requests sent from a directive **DO NOT** use the context of
 the chat buffer, only the current directive and freshly resolved references.
-The first accepted implementation binds the directive to an execution session.
-Its exact request, answer or error, patch capture, and turn checkpoint are kept
-in the directive activity surface; the chat retains only a compact chronology
-event.
+The first accepted directive request binds the directive to an execution
+session. Its exact implementation attempts and local read-only discussion are
+kept in the directive activity surface; the chat retains only compact
+chronology events.
 
 ### Quick start
 
@@ -430,7 +430,8 @@ Currently, linking is only relevant for references.
 |------------------------------------|------------------------------------------------------------------------------|
 | `mevedel-implement-directive`      | Implement directive with full editing capabilities.                          |
 | `mevedel-revise-directive`         | Revise directive with additional context from existing patches.              |
-| `mevedel-discuss-directive`        | Discuss directive in read-only mode without making changes.                  |
+| `mevedel-discuss-directive`        | Open the directive activity composer for a local read-only discussion.       |
+| `mevedel-implement-discussion-directive` | Implement using the complete local discussion as additional context.  |
 | `mevedel-tutor-directive`          | Tutoring mode that guides without providing direct solutions (experimental). |
 | `mevedel-preview-directive-prompt` | Preview directive prompt at the current point.                               |
 | `mevedel-open-directive-activity`  | Inspect attempts and project captured patches for the current directive.     |
@@ -452,9 +453,11 @@ directive prompt:
 
 [directive-preview.webm](https://github.com/user-attachments/assets/72c77cfa-5a6d-45a1-9fc4-ee6b1ad66034)
 
-The `mevedel-implement-directive`, `mevedel-revise-directive`,
-`mevedel-discuss-directive`, or `mevedel-tutor-directive` commands will process
-the directive.
+The `mevedel-implement-directive`, `mevedel-revise-directive`, and
+`mevedel-tutor-directive` commands process the directive directly.
+`mevedel-discuss-directive` opens its activity composer; discussion turns are
+read-only, persist locally, and can be continued or promoted with `Implement
+this` without adding the exchange to main-chat context.
 
 Note: The tutoring preset is experimental and uses a Socratic questioning
 approach to guide learning rather than providing direct solutions.

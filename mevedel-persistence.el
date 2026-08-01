@@ -43,6 +43,21 @@
 (declare-function mevedel-directive-attempt-result
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn--create
+                  "mevedel-structs" (&rest slots))
+(declare-function mevedel-directive-discussion-turn-attempt-index
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-checkpoint
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-message
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-outcome
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-request
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-result
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-session-id "mevedel-structs" (cl-x) t)
@@ -149,7 +164,28 @@ not saved."
                 (mevedel-directive-attempt-gaps attempt))
                :checkpoint
                (copy-tree (mevedel-directive-attempt-checkpoint attempt))))
-            (mevedel-directive-attempts directive))))
+            (mevedel-directive-attempts directive))
+           :discussion
+           (mapcar
+            (lambda (turn)
+              (list
+               :message
+               (substring-no-properties
+                (mevedel-directive-discussion-turn-message turn))
+               :request
+               (substring-no-properties
+                (mevedel-directive-discussion-turn-request turn))
+               :result
+               (substring-no-properties
+                (mevedel-directive-discussion-turn-result turn))
+               :outcome
+               (mevedel-directive-discussion-turn-outcome turn)
+               :attempt-index
+               (mevedel-directive-discussion-turn-attempt-index turn)
+               :checkpoint
+               (copy-tree
+                (mevedel-directive-discussion-turn-checkpoint turn))))
+            (mevedel-directive-discussion directive))))
    (mevedel-workspace-directives workspace)))
 
 (defun mevedel--serialize-instructions
@@ -224,12 +260,15 @@ contents for position patching if the file changes before restore."
            (request (plist-get entry :request))
            (anchor (copy-tree (plist-get entry :anchor)))
            (session-id (plist-get entry :session-id))
-           (attempts (plist-get entry :attempts)))
+           (attempts (plist-get entry :attempts))
+           (discussion (plist-get entry :discussion)))
        (unless (and (stringp id) (stringp request)
                     (plist-member entry :session-id)
                     (or (null session-id) (stringp session-id))
                     (plist-member entry :attempts)
                     (listp attempts)
+                    (plist-member entry :discussion)
+                    (listp discussion)
                     (eq (plist-get anchor :state) 'attached))
          (user-error "Malformed mevedel directive list"))
        (when-let* ((file (plist-get anchor :file)))
@@ -280,7 +319,32 @@ contents for position patching if the file changes before restore."
                               (cdr gap)))
                       gaps)
               :checkpoint (copy-tree checkpoint))))
-         attempts))))
+         attempts)
+        :discussion
+        (mapcar
+         (lambda (turn)
+           (let ((message (plist-get turn :message))
+                 (turn-request (plist-get turn :request))
+                 (result (plist-get turn :result))
+                 (outcome (plist-get turn :outcome))
+                 (attempt-index (plist-get turn :attempt-index))
+                 (checkpoint (plist-get turn :checkpoint)))
+             (unless
+                 (and (stringp message)
+                      (stringp turn-request)
+                      (stringp result)
+                      (memq outcome '(success error aborted))
+                      (or (null attempt-index)
+                          (and (natnump attempt-index)
+                               (> attempt-index 0)))
+                      (stringp (plist-get checkpoint :session-id))
+                      (natnump (plist-get checkpoint :turn)))
+               (user-error "Malformed mevedel directive list"))
+             (mevedel-directive-discussion-turn--create
+              :message message :request turn-request :result result
+              :outcome outcome :attempt-index attempt-index
+              :checkpoint (copy-tree checkpoint))))
+         discussion))))
    serialized))
 
 (defun mevedel--write-instructions-file

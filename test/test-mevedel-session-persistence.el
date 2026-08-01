@@ -8441,6 +8441,35 @@ The result is a plist whose :tempdir owns every created file."
       (delete-directory tempdir t))))
 
 
+(mevedel-deftest mevedel-session-persistence-resume-id
+  (:doc "resumes an exact persisted session id and reports unavailable ids")
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-resume-id-" t)))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id root :root root :name "resume-id"))
+         (session-id "main-2026-08-02T12-00-abcd")
+         (session-dir
+          (file-name-concat root ".mevedel" "sessions" session-id))
+         restored)
+    (unwind-protect
+        (progn
+          (make-directory session-dir t)
+          (cl-letf (((symbol-function 'mevedel-session-persistence-restore)
+                     (lambda (path &rest _)
+                       (setq restored path)
+                       'restored-buffer)))
+            (should (eq 'restored-buffer
+                        (mevedel-session-persistence-resume-id
+                         workspace session-id)))
+            (should (equal (file-name-as-directory session-dir)
+                           restored))
+            (should-not
+             (mevedel-session-persistence-resume-id workspace "missing"))
+            (should-error
+             (mevedel-session-persistence-resume-id workspace "../escape"))))
+      (delete-directory root t))))
+
 (provide 'test-mevedel-session-persistence)
 
 ;;; test-mevedel-session-persistence.el ends here

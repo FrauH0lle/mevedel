@@ -83,7 +83,10 @@
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-category "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-all "mevedel-tool-registry" ())
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-read-only-p
+                  "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-resolve "mevedel-tool-registry" (specs))
 (declare-function mevedel-tool-resolve-gptel
                   "mevedel-tool-registry" (specs))
@@ -152,6 +155,9 @@ Each value contains the raw parent, agent, tool, and variable settings.")
 
 (defvar mevedel-preset--temporary-p nil
   "Non-nil while a preset is applied for one dynamic request only.")
+
+(defvar-local mevedel--directive-read-only-request-p nil
+  "Non-nil while the current directive turn has read-only capability.")
 
 (defconst mevedel-preset--structural-keys
   '(:description :parents :pre :post :backend :model :system :tools :agents
@@ -373,14 +379,8 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
   ;; Read-only preset for discussion/analysis
   (mevedel-define-preset mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
-    :tools (read util (:tool "Bash")
-            (:tool "WriteStdin") (:tool "ListExecutions")
-            (:tool "StopExecution")
-            (:deferred (:tool "Eval"))
-            (:deferred code)
-            (:deferred web)
-            (:deferred elisp))
-    :agents (worker explorer reviewer verifier)
+    :tools (read (:tool "ToolSearch") (:deferred code) (:deferred web))
+    :agents ()
     :system (lambda ()
               (mevedel-system-build-prompt
                'main
@@ -433,6 +433,17 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
                'tutor
                :session mevedel--session
                :refresh-buffer (current-buffer)))))
+
+(defun mevedel-preset--read-only-rules ()
+  "Return request rules denying mutation and mutation-capable delegation."
+  (mapcar
+   (lambda (name) (list name :action 'deny))
+   (delete-dups
+    (append
+     '("Agent" "FollowupAgent" "SendMessage")
+     (mapcar
+      #'mevedel-tool-name
+      (cl-remove-if #'mevedel-tool-read-only-p (mevedel-tool-all)))))))
 
 ;;
 ;;; Request-time preset setup
@@ -617,6 +628,15 @@ alist with mevedel-specific handlers added:
                                          mevedel--current-request)
                                 (mevedel-skills--drain-pending-context
                                  mevedel--current-request))
+                              (when (and mevedel--current-request
+                                         mevedel--directive-read-only-request-p)
+                                (setf
+                                 (mevedel-request-skill-permission-rules
+                                  mevedel--current-request)
+                                 (append
+                                  (mevedel-request-skill-permission-rules
+                                   mevedel--current-request)
+                                  (mevedel-preset--read-only-rules))))
                               (when (fboundp
                                      'mevedel-view-stream-ensure-progress-for-fsm)
                                 (mevedel-view-stream-ensure-progress-for-fsm
