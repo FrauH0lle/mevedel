@@ -61,6 +61,12 @@ recommends those elements while leaving Codex room to choose the next action.
 
 ## Inbox
 
+- Revamp implement, discuss, revise system and prompts
+
+- improve diff and overlay handling:
+  - what happens when ov region gets deleted?
+  - what happens when file gets deleted?
+
 - Add a memory-verification slash command or skill that consolidates project
   memories and checks whether they are still accurate; explore whether a
   weekly automated check is useful.
