@@ -795,13 +795,63 @@
                 (mevedel--directive-model-policy directive)))
         (should (equal '(model high) validated))))))
 
+(mevedel-deftest mevedel-process-directives
+  (:vars
+   ((gptel-default-mode 'markdown-mode)
+    (mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global)))
+  ,test
+  (test)
+
+  :doc "queues only top-level directives in stable source order"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "batch" :root nil :name "batch"))
+         captured-records captured-workspace captured-current captured-total)
+    (with-temp-buffer
+      (insert "root one detail\nroot two\n")
+      (setq-local mevedel--workspace workspace)
+      (let* ((second
+              (mevedel--create-directive-in
+               (current-buffer) 17 25 nil "Root two"))
+             (first
+              (mevedel--create-directive-in
+               (current-buffer) 1 16 nil "Root one")))
+        (mevedel--create-directive-in
+         (current-buffer) 6 9 nil "Nested detail")
+        (goto-char (point-max))
+        (deactivate-mark)
+        (cl-letf (((symbol-function 'completing-read-multiple)
+                   (lambda (_prompt collection &rest _)
+                     (reverse collection)))
+                  ((symbol-function 'mevedel--process-directives-sequentially)
+                   (lambda (records owner current total)
+                     (setq captured-records records
+                           captured-workspace owner
+                           captured-current current
+                           captured-total total))))
+          (mevedel-process-directives)
+          (should
+           (equal '("Root one" "Root two")
+                  (mapcar #'mevedel-directive-request captured-records)))
+          (should (eq workspace captured-workspace))
+          (should (= 1 captured-current))
+          (should (= 2 captured-total))
+          (should (memq first (mevedel--instructions-in 1 25 'directive)))
+          (should (memq second (mevedel--instructions-in 1 25 'directive))))))))
+
 (mevedel-deftest mevedel--process-directives-sequentially ()
   ,test
   (test)
 
   :doc "defers the next directive until terminal request cleanup can finish"
-  (let ((buf (generate-new-buffer " *mevedel-directives-sequential*"))
-        ov1 ov2 calls scheduled-fn scheduled-args)
+  (let* ((buf (generate-new-buffer " *mevedel-directives-sequential*"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id "batch" :root nil :name "batch"))
+         (record1 (mevedel-directive--create
+                   :id "one" :request "first" :anchor '(:state attached)))
+         (record2 (mevedel-directive--create
+                   :id "two" :request "second" :anchor '(:state attached)))
+         ov1 ov2 calls scheduled-fn scheduled-args)
     (unwind-protect
         (progn
           (with-current-buffer buf
@@ -813,14 +863,11 @@
             (setq ov2 (make-overlay (point) (line-end-position)))
             (overlay-put ov2 'mevedel-id 2)
             (overlay-put ov2 'mevedel-directive-text "second"))
-          (cl-letf (((symbol-function 'mevedel--directive-text)
-                     (lambda (directive)
-                       (overlay-get directive 'mevedel-directive-text)))
-                    ((symbol-function 'mevedel--directive-record)
-                     (lambda (_)
-                       (mevedel-directive--create
-                        :id "batch" :request "Batch"
-                        :anchor '(:state attached) :state nil)))
+          (cl-letf (((symbol-function 'mevedel--directive-action-context)
+                     (lambda (record owner)
+                       (should (eq workspace owner))
+                       (list :directive (if (eq record record1) ov1 ov2)
+                             :prompt "prompt")))
                     ((symbol-function 'mevedel--process-directive)
                      (lambda (directive _preset _prompt-fn callback)
                        (push (overlay-get directive 'mevedel-id) calls)
@@ -830,45 +877,82 @@
                        (setq scheduled-fn function
                              scheduled-args args)
                        'timer)))
-            (mevedel--process-directives-sequentially (list ov1 ov2) 1 2)
+            (mevedel--process-directives-sequentially
+             (list record1 record2) workspace 1 2)
             (should (equal '(1) calls))
             (should (eq scheduled-fn #'mevedel--process-directives-sequentially))
-            (should (equal (list (list ov2) 2 2) scheduled-args))
+            (should (equal (list (list record2) workspace 2 2)
+                           scheduled-args))
             (apply scheduled-fn scheduled-args)
             (should (equal '(2 1) calls))))
       (when (buffer-live-p buf)
         (kill-buffer buf))))
 
-  :doc "skips attempted directives and implements Discussed activity feedback"
-  (let ((buf (generate-new-buffer " *mevedel-directive-batch-state*"))
-        calls)
+  :doc "implements only eligible initial work and reports every skipped item"
+  (let* ((buf (generate-new-buffer " *mevedel-directive-batch-state*"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id "batch" :root nil :name "batch"))
+         (attempted-success
+          (mevedel-directive--create
+           :id "success" :request "Success" :anchor '(:state attached)
+           :state 'implemented
+           :attempts (list (mevedel-directive-attempt--create
+                            :outcome 'success))))
+         (attempted-failure
+          (mevedel-directive--create
+           :id "failure" :request "Failure" :anchor '(:state attached)
+           :state 'failed
+           :attempts (list (mevedel-directive-attempt--create
+                            :outcome 'error))))
+         (attempted-abort
+          (mevedel-directive--create
+           :id "abort" :request "Abort" :anchor '(:state attached)
+           :state 'aborted
+           :attempts (list (mevedel-directive-attempt--create
+                            :outcome 'aborted))))
+         (discussed
+          (mevedel-directive--create
+           :id "discussed" :request "Discussed" :anchor '(:state attached)
+           :state 'discussed
+           :discussion
+           (list (mevedel-directive-discussion-turn--create
+                  :message "Question" :request "Question prompt"
+                  :result "Answer" :outcome 'success))))
+         (ready
+          (mevedel-directive--create
+           :id "ready" :request "Ready" :anchor '(:state attached)))
+         (detached
+          (mevedel-directive--create
+           :id "detached" :request "Detached" :anchor '(:state detached)))
+         (missing
+          (mevedel-directive--create
+           :id "missing" :request "Missing" :anchor '(:state source-missing)))
+         (busy
+          (mevedel-directive--create
+           :id "busy" :request "Busy" :anchor '(:state attached)
+           :state 'implementing))
+         calls validated messages)
     (unwind-protect
         (with-current-buffer buf
           (insert "abcdef")
-          (let* ((attempted (make-overlay 1 2))
-                 (discussed (make-overlay 2 3))
-                 (ready (make-overlay 3 4)))
-            (overlay-put attempted 'mevedel-test-record
-                         (mevedel-directive--create
-                          :id "attempted" :request "Attempted"
-                          :anchor '(:state attached) :state 'failed
-                          :attempts
-                          (list (mevedel-directive-attempt--create
-                                 :outcome 'error))))
-            (overlay-put attempted 'mevedel-id 1)
-            (overlay-put discussed 'mevedel-test-record
-                         (mevedel-directive--create
-                          :id "discussed" :request "Discussed"
-                          :anchor '(:state attached) :state 'discussed))
-            (overlay-put discussed 'mevedel-id 2)
-            (overlay-put ready 'mevedel-test-record
-                         (mevedel-directive--create
-                          :id "ready" :request "Ready"
-                          :anchor '(:state attached) :state nil))
-            (overlay-put ready 'mevedel-id 3)
-            (cl-letf (((symbol-function 'mevedel--directive-record)
-                       (lambda (directive)
-                         (overlay-get directive 'mevedel-test-record)))
+          (let ((discussed-overlay (make-overlay 1 2))
+                (ready-overlay (make-overlay 2 3))
+                (detached-overlay (make-overlay 3 3)))
+            (overlay-put discussed-overlay 'mevedel-id 4)
+            (overlay-put ready-overlay 'mevedel-id 5)
+            (overlay-put detached-overlay 'mevedel-id 6)
+            (cl-letf (((symbol-function 'mevedel--directive-action-context)
+                       (lambda (record owner)
+                         (should (eq workspace owner))
+                         (push (mevedel-directive-id record) validated)
+                         (when (eq record missing)
+                           (user-error "Directive prompt context is unavailable; reattach its source first"))
+                         (list :directive
+                               (cond ((eq record discussed) discussed-overlay)
+                                     ((eq record ready) ready-overlay)
+                                     ((eq record detached) detached-overlay)
+                                     (t (error "Unexpected record")))
+                               :prompt "Base prompt")))
                       ((symbol-function 'mevedel--implement-discussion)
                        (lambda (directive callback)
                          (push (list 'discussion directive) calls)
@@ -879,15 +963,76 @@
                          (funcall callback nil nil)))
                       ((symbol-function 'run-at-time)
                        (lambda (_secs _repeat function &rest args)
-                         (apply function args))))
+                         (apply function args)))
+                      ((symbol-function 'message)
+                       (lambda (format-string &rest args)
+                         (push (apply #'format format-string args) messages))))
               (mevedel--process-directives-sequentially
-               (list attempted discussed ready) 1 3)
+               (list attempted-success attempted-failure attempted-abort
+                     discussed ready detached missing busy)
+               workspace 1 8)
               (should
-               (equal (list (list 'discussion discussed)
-                            (list 'initial ready))
+               (equal (list (list 'discussion discussed-overlay)
+                            (list 'initial ready-overlay)
+                            (list 'initial detached-overlay))
                       (nreverse calls))))))
+      (should (equal '("discussed" "ready" "detached" "missing")
+                     (nreverse validated)))
+      (let ((output (string-join messages "\n")))
+        (should (string-match-p "existing implementation activity" output))
+        (should (string-match-p "reattach its source first" output))
+        (should (string-match-p "lifecycle state Implementing" output)))
       (when (buffer-live-p buf)
-        (kill-buffer buf)))))
+        (kill-buffer buf))))
+
+  :doc "stops after the first failed or aborted implementation"
+  (dolist (terminal '("model failure" abort))
+    (let* ((buf (generate-new-buffer " *mevedel-directive-batch-stop*"))
+           (workspace (mevedel-workspace--create
+                       :type 'test :id "batch" :root nil :name "batch"))
+           (first (mevedel-directive--create
+                   :id "one" :request "One" :anchor '(:state attached)))
+           (second (mevedel-directive--create
+                    :id "two" :request "Two" :anchor '(:state attached)))
+           (third (mevedel-directive--create
+                   :id "three" :request "Three" :anchor '(:state attached)))
+           calls timers messages)
+      (unwind-protect
+          (with-current-buffer buf
+            (insert "abc")
+            (let ((overlays
+                   (mapcar (lambda (position)
+                             (let ((overlay (make-overlay position (1+ position))))
+                               (overlay-put overlay 'mevedel-id position)
+                               overlay))
+                           '(1 2 3))))
+              (cl-letf (((symbol-function 'mevedel--directive-action-context)
+                         (lambda (record _workspace)
+                           (list :directive
+                                 (nth (cl-position record
+                                                   (list first second third))
+                                      overlays)
+                                 :prompt "prompt")))
+                        ((symbol-function 'mevedel--process-directive)
+                         (lambda (directive _preset _prompt callback &optional _)
+                           (push directive calls)
+                           (funcall callback terminal nil)))
+                        ((symbol-function 'run-at-time)
+                         (lambda (&rest _)
+                           (push t timers)))
+                        ((symbol-function 'message)
+                         (lambda (format-string &rest args)
+                           (push (apply #'format format-string args) messages))))
+                (mevedel--process-directives-sequentially
+                 (list first second third) workspace 1 3)
+                (should (= 1 (length calls)))
+                (should-not timers)
+                (should
+                 (string-match-p
+                  (if (eq terminal 'abort) "aborted" "failed")
+                  (string-join messages "\n"))))))
+        (when (buffer-live-p buf)
+          (kill-buffer buf))))))
 
 (mevedel-deftest mevedel--process-directive
 		 (:before-each (mevedel-workspace-clear-registry)

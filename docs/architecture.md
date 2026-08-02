@@ -105,6 +105,16 @@ snapshots of, then consumes, exactly the subdirectives present at dispatch.
 Failure and abort consume none; details authored while a request is in flight
 remain current.
 
+Batch processing queues durable top-level directive records in stable source
+order rather than retaining source overlays. Each item resolves the same live
+prompt context used by an individual action only when its turn begins, so a
+prior implementation may detach or remove later source without corrupting the
+queue. Ready records use Implement and Discussed records without an attempt use
+Implement this. Records with any implementation attempt or without sufficient
+current prompt context are reported and skipped; the first failed or aborted
+request stops the batch. A zero-delay continuation starts the next item only
+after terminal request cleanup.
+
 ## Workspace context chain
 
 ```

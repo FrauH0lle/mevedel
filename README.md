@@ -167,7 +167,10 @@ overlay. The overlay contains an action menu which can be toggled via
 
 Deleting all source text covered by a directive leaves a compact, zero-width
 detached row at that position. Its request, attempts, discussions, state, and
-actions remain available; deleting a complete reference still removes it.
+actions remain available. If the file disappears, the workspace record remains
+available as Source missing until exact automatic or explicit reattachment.
+Deleting a complete reference still removes it. Nested directives remain
+current details of their topmost parent rather than owning separate activity.
 
 ![Directive Overlay](.assets/images/ov-actions-menu.png)
 
@@ -234,7 +237,7 @@ memory roots, the configured plans directory, and manually configured roots.
 | `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
 | `mevedel-tutoring`                | Start a tutoring chat session in the current workspace.               |
 | `mevedel-init`                    | Bootstrap or refresh project instruction files.                       |
-| `mevedel-process-directives`      | Process multiple directives sequentially (region, point, or buffer).  |
+| `mevedel-process-directives`      | Batch initial implementations in source order (region, point, or buffer). |
 | `mevedel-abort`                   | Abort any active request in the current buffer.                       |
 | `mevedel-version`                 | Show (or insert with prefix arg) the current mevedel version.         |
 
@@ -467,6 +470,18 @@ this` without adding the exchange to main-chat context.
 After implementation, the activity surface offers Request changes after
 success or Retry after failure/abort. Both use current repository state, fresh
 references, and only the immediately preceding attempt as model context.
+Captured patches belong to immutable attempts and are display/context artifacts,
+not undo data. Rewind before an implementation is the sole implementation undo:
+it restores the attempt's pre-turn file checkpoint and discards that session's
+complete later turn suffix while retaining authored directive records.
+
+`mevedel-process-directives` performs only initial work in stable source order.
+Ready parents use Implement, Discussed parents without an implementation use
+Implement this with their full local discussion, and any parent with a prior
+implementation attempt is skipped. The batch validates each current source
+context when its turn arrives, never infers Request changes or Retry, and stops
+after the first failure or abort. Nested directives are submitted only as part
+of their parent.
 
 Note: The tutoring preset is experimental and uses a Socratic questioning
 approach to guide learning rather than providing direct solutions.
