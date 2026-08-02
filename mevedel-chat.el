@@ -30,8 +30,6 @@
 ;; `cl-seq'
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-position "cl-seq" (cl-item cl-seq &rest cl-keys))
-(declare-function cl-remove-if-not "cl-seq"
-		  (cl-pred cl-list &rest cl-keys))
 (declare-function cl-sort "cl-seq" (cl-seq cl-pred &rest cl-keys))
 
 ;; `gptel'
@@ -92,8 +90,6 @@
                   "mevedel-models" (model effort))
 
 ;; `mevedel-overlays'
-(declare-function mevedel--child-instructions "mevedel-overlays"
-		  (instruction))
 (declare-function mevedel--delete-instruction "mevedel-overlays"
 		  (instruction))
 (declare-function mevedel--detached-directive-p "mevedel-overlays"
@@ -103,7 +99,6 @@
 (declare-function mevedel--directive-record "mevedel-overlays" (directive))
 (declare-function mevedel--directive-text "mevedel-overlays"
 		  (directive))
-(declare-function mevedel--directivep "mevedel-overlays" (instruction))
 (declare-function mevedel--find-directive-by-uuid "mevedel-overlays"
 		  (uuid))
 (declare-function mevedel--reconcile-directive-sources "mevedel-overlays"
@@ -114,6 +109,10 @@
 (declare-function mevedel-get-directive-patch "mevedel-overlays" (directive))
 (declare-function mevedel--instructions-at "mevedel-overlays"
 		  (position &optional type))
+(declare-function mevedel--instruction-with-uuid "mevedel-overlays"
+                  (uuid &optional workspace))
+(declare-function mevedel--submitted-subdirectives "mevedel-overlays"
+                  (directive))
 (declare-function mevedel--set-directive-status "mevedel-overlays"
 		  (directive status))
 (declare-function mevedel--topmost-instruction "mevedel-overlays"
@@ -203,13 +202,15 @@
 (declare-function mevedel-slash-capf "mevedel-skills-ui" nil)
 
 ;; `mevedel-structs'
-(declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt--create
                   "mevedel-structs" (&rest slots))
 (declare-function mevedel-directive-attempt-capture
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-captured-at
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-checkpoint
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-consumed-subdirectives
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-directive-request
                   "mevedel-structs" (cl-x) t)
@@ -231,10 +232,16 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-discussion-turn-result
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-remove-subdirective
+                  "mevedel-structs" (directive subdirective))
 (declare-function mevedel-directive-request-changed-p
                   "mevedel-structs" (directive))
 (declare-function mevedel-directive-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-subdirectives
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-drain-cancellers "mevedel-structs"
 		  (request))
 (declare-function mevedel-request-end "mevedel-structs" nil)
@@ -245,11 +252,12 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs"
 		  (cl-x) t)
-(declare-function mevedel-session-working-directory "mevedel-structs"
-		  (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs"
+		  (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -1235,6 +1243,9 @@ CALLBACK is called with (err fsm) when processing completes.
 
 Updates directive status and overlay, handles success/failure states.
 OPTIONS carries local discussion metadata for read-only discussion turns."
+  (setq directive
+        (or (mevedel--topmost-instruction directive 'directive)
+            directive))
   (let* ((model-policy (mevedel--directive-model-policy directive))
          ;; Get chat buffer for the directive's buffer workspace
          (workspace (with-current-buffer (overlay-buffer directive)
@@ -1253,6 +1264,9 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
          (discussion-p (eq action 'discuss))
          (discussion-message (plist-get options :message))
          (discussion-attempt-index (plist-get options :attempt-index))
+         (submitted-subdirectives
+          (and (not discussion-p)
+               (mevedel--submitted-subdirectives directive)))
          (prior-state (mevedel-directive-state record))
          execution-session-id
          turn-start
@@ -1314,7 +1328,10 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                       (plist-get info :mevedel-directive-covered-files)
                       :gaps (plist-get info :mevedel-directive-gaps)
                       :captured-at (format-time-string "%FT%T%z")
-                      :checkpoint checkpoint)))
+                      :checkpoint checkpoint
+                      :consumed-subdirectives
+                      (and (eq outcome 'success)
+                           submitted-subdirectives))))
                    (mevedel-directive-state record)
                    (pcase outcome
                      ('success 'implemented)
@@ -1348,12 +1365,21 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                      (if (eq err 'abort) "aborted" (format "%s" err))))
                   (when (and (not discussion-p) (not err))
                     (with-current-buffer directive-buffer
-                      (dolist
-                          (child-directive
-                           (cl-remove-if-not
-                            #'mevedel--directivep
-                            (mevedel--child-instructions live-directive)))
-                        (mevedel--delete-instruction child-directive))
+                      (dolist (submitted submitted-subdirectives)
+                        (let ((id (mevedel-subdirective-id submitted)))
+                          (if-let* ((child-directive
+                                     (mevedel--instruction-with-uuid
+                                      id workspace)))
+                              (mevedel--delete-instruction child-directive)
+                            (when-let* ((current
+                                         (cl-find
+                                          id
+                                          (mevedel-directive-subdirectives
+                                           record)
+                                          :key #'mevedel-subdirective-id
+                                          :test #'equal)))
+                              (mevedel-directive-remove-subdirective
+                               record current)))))
                       (save-excursion
                         (goto-char (overlay-start live-directive))
                         (unless (mevedel--detached-directive-p live-directive)
@@ -1486,6 +1512,9 @@ the original callback."
   "Submit MESSAGE as DIRECTIVE's next read-only discussion turn.
 ATTEMPT-INDEX attaches one implementation result.  CALLBACK receives the
 ordinary directive terminal arguments."
+  (setq directive
+        (or (mevedel--topmost-instruction directive 'directive)
+            directive))
   (unless (and (stringp message) (not (string-empty-p (string-trim message))))
     (user-error "Discussion message must not be empty"))
   (let ((record (mevedel--directive-record directive)))
@@ -1500,6 +1529,9 @@ ordinary directive terminal arguments."
 
 (defun mevedel--implement-discussion (directive &optional callback)
   "Implement DIRECTIVE using its complete local discussion as feedback."
+  (setq directive
+        (or (mevedel--topmost-instruction directive 'directive)
+            directive))
   (let ((record (mevedel--directive-record directive)))
     (overlay-put directive 'mevedel-directive-action 'implement)
     (mevedel--process-directive
@@ -1511,10 +1543,11 @@ ordinary directive terminal arguments."
 (defun mevedel--request-directive-changes
     (directive feedback &optional callback)
   "Implement DIRECTIVE again using focused FEEDBACK and latest activity."
+  (setq directive
+        (or (mevedel--topmost-instruction directive 'directive)
+            directive))
   (let* ((record (mevedel--directive-record directive))
-         (new-context-p
-          (cl-some #'mevedel--directivep
-                   (mevedel--child-instructions directive))))
+         (new-context-p (mevedel-directive-subdirectives record)))
     ;; Validate before changing presentation or starting request setup.
     (mevedel--request-changes-prompt "" record feedback new-context-p)
     (overlay-put directive 'mevedel-directive-action 'request-changes)
@@ -1527,6 +1560,9 @@ ordinary directive terminal arguments."
 
 (defun mevedel--retry-directive (directive guidance &optional callback)
   "Retry DIRECTIVE using its latest failure and optional GUIDANCE."
+  (setq directive
+        (or (mevedel--topmost-instruction directive 'directive)
+            directive))
   (let ((record (mevedel--directive-record directive)))
     ;; Validate before changing presentation or starting request setup.
     (mevedel--retry-directive-prompt "" record guidance)

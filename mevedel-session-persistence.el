@@ -4139,6 +4139,8 @@ Return descriptions of every artifact that could not be restored."
              (list directive
                    :anchor (copy-tree (mevedel-directive-anchor directive))
                    :state (mevedel-directive-state directive)
+                   :subdirectives
+                   (mevedel-directive-subdirectives directive)
                    :attempts (mevedel-directive-attempts directive)
                    :discussion (mevedel-directive-discussion directive)))
            directives))
@@ -4247,6 +4249,8 @@ Return descriptions of every artifact that could not be restored."
                   (copy-tree (plist-get (cdr entry) :anchor))
                   (mevedel-directive-state directive)
                   (plist-get (cdr entry) :state)
+                  (mevedel-directive-subdirectives directive)
+                  (plist-get (cdr entry) :subdirectives)
                   (mevedel-directive-attempts directive)
                   (plist-get (cdr entry) :attempts)
                   (mevedel-directive-discussion directive)

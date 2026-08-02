@@ -26,15 +26,19 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   `mevedel-workspace-state-dir`, not stored as a slot.
 - **`mevedel-directive`**: stable directive id, current authored request,
   source-anchor description, lifecycle state, bound execution-session id, and
-  chronological implementation attempts and discussion turns. Source overlays
-  retain the id needed to resolve this record; they do not own another request,
-  status, patch, or attempt copy.
+  chronological implementation attempts, discussion turns, and current
+  parent-owned subdirectives. Source overlays retain the id needed to resolve
+  this record; they do not own another request, status, patch, or attempt copy.
+- **`mevedel-subdirective`**: stable id, current authored request, and attached
+  source anchor for one nested detail owned by a top-level directive. It never
+  owns a session, lifecycle state, attempt list, discussion, or Rewind action.
 - **`mevedel-directive-attempt`**: immutable submitted request, terminal answer
   or error, authored-request snapshot, outcome, captured patch, capture time and
-  completeness, covered files, explicit gaps, and the session/turn checkpoint
-  that can restore the file state around the attempt. A complete empty patch
-  means the request observed its covered files and made no changes; incomplete
-  capture never implies complete coverage.
+  completeness, covered files, explicit gaps, successful attempt's consumed
+  subdirective snapshots, and the session/turn checkpoint that can restore the
+  file state around the attempt. A complete empty patch means the request
+  observed its covered files and made no changes; incomplete capture never
+  implies complete coverage.
 - **`mevedel-directive-discussion-turn`**: immutable local question, submitted
   request, terminal answer or error, outcome, optional selected-attempt index,
   and session/turn checkpoint.
@@ -81,8 +85,11 @@ by their former source positions. References keep their source-bound
 evaporation behavior.
 
 Top-level directive presentations may persist an exact provider and
-reasoning-effort override. Nested directives edit the top-level request owner.
-Without an override, the directive inherits the main session model at dispatch.
+reasoning-effort override. Nested directives are durable details owned by the
+topmost directive. Acting on any nested presentation resolves that owner, and
+prompt construction includes every current nested detail in stable source
+order. Without an override, the directive inherits the main session model at
+dispatch.
 
 Directive requests submit an explicit prompt built from the current authored
 request and freshly resolved references, so gptel realizes the request in an
@@ -93,7 +100,10 @@ writes the attempt or discussion turn to the workspace record even if the
 source overlay detached while the request was in flight; overlay updates remain
 optional presentation work. The main session retains only a hidden compact
 directive event linked to the durable record and turn checkpoint, not the full
-submitted request or response.
+submitted request or response. A successful implementation records immutable
+snapshots of, then consumes, exactly the subdirectives present at dispatch.
+Failure and abort consume none; details authored while a request is in flight
+remain current.
 
 ## Workspace context chain
 

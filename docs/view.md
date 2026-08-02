@@ -94,7 +94,10 @@ conversation state only in view overlays or text properties.
 
 Directive activity uses a separate read-only projection with its own multiline
 composer. It renders durable implementation attempts and discussion turns from
-the workspace directive record; discussion never enters the main chat history.
+the workspace directive record, including the nested details consumed by each
+successful attempt; discussion never enters the main chat history. Nested
+directive presentations always open and act through their topmost parent's
+single activity history.
 Refreshing activity replaces only the managed projection above the composer,
 preserving the draft and point exactly, including drafts whose first editable
 character is `>`. A discussion result can target one selected attempt, and
@@ -106,7 +109,8 @@ Retry after a failed or aborted attempt. Request changes requires multiline
 feedback unless newly added subdirectives already supply it; Retry guidance is
 optional. The resulting implementation prompt uses fresh directive context and
 only the immediately preceding attempt. Older attempts remain visible but do
-not enter the request automatically.
+not enter the request automatically. Submitted subdirectives disappear only
+after success, while failed and aborted attempts leave them editable in source.
 
 ## Render flow
 

@@ -73,7 +73,10 @@
     (should-not (mevedel-directive-recompute-state directive))))
 
 (mevedel-deftest mevedel-workspace-rewind-directives
-  (:doc "prunes one execution-session suffix while retaining authored records")
+  ()
+  ,test
+  (test)
+  :doc "prunes one execution-session suffix while retaining authored records"
   (let* ((workspace
           (mevedel-workspace--create
            :type 'test :id "rewind" :root "/tmp" :name "rewind"))
@@ -118,7 +121,38 @@
     (should (= 1 (length (mevedel-directive-attempts edited))))
     (should-not (mevedel-directive-state edited))
     (should-not (mevedel-directive-attempts later))
-    (should-not (mevedel-directive-state later))))
+    (should-not (mevedel-directive-state later)))
+
+  :doc "restores consumed children while retaining later authored children"
+  (let* ((consumed
+          (mevedel-subdirective--create
+           :id "consumed" :request "Original detail"
+           :anchor '(:state attached :file "/tmp/source" :start 3 :end 7)))
+         (later
+          (mevedel-subdirective--create
+           :id "later" :request "Later correction"
+           :anchor '(:state attached :file "/tmp/source" :start 9 :end 12)))
+         (directive
+          (mevedel-directive--create
+           :id "parent" :request "Parent" :anchor '(:state attached)
+           :state 'implemented :subdirectives (list later)
+           :attempts
+           (list
+            (mevedel-directive-attempt--create
+             :directive-request "Parent" :outcome 'success
+             :consumed-subdirectives (list consumed)
+             :checkpoint '(:session-id "session" :turn 2)))))
+         (workspace
+          (mevedel-workspace--create
+           :type 'test :id "children" :root "/tmp" :name "children"
+           :directives (list directive))))
+    (mevedel-workspace-rewind-directives workspace "session" 2)
+    (should-not (mevedel-directive-attempts directive))
+    (should-not (mevedel-directive-state directive))
+    (should
+     (equal '("consumed" "later")
+            (mapcar #'mevedel-subdirective-id
+                    (mevedel-directive-subdirectives directive))))))
 
 
 ;;

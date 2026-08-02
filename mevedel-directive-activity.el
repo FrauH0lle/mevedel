@@ -68,6 +68,8 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-checkpoint
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-consumed-subdirectives
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-covered-files
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-gaps
@@ -99,6 +101,7 @@
                   "mevedel-structs" (directive))
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-subdirective-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 
@@ -239,6 +242,8 @@
                (capture (mevedel-directive-attempt-capture attempt))
                (covered (mevedel-directive-attempt-covered-files attempt))
                (gaps (mevedel-directive-attempt-gaps attempt))
+               (consumed
+                (mevedel-directive-attempt-consumed-subdirectives attempt))
                (checkpoint (mevedel-directive-attempt-checkpoint attempt))
                (patch-p (not (string-empty-p patch)))
                (rewind-p
@@ -257,13 +262,22 @@
                       (upcase (symbol-name outcome)))
               'face 'bold)
             :body
-            ,(format "%s\nCaptured: %s\nCheckpoint: %s, turn %s%s\n\nRequest:\n%s\n\nResult:\n%s"
+            ,(format "%s\nCaptured: %s\nCheckpoint: %s, turn %s%s%s\n\nRequest:\n%s\n\nResult:\n%s"
                      capture-line
                      (mevedel-directive-attempt-captured-at attempt)
                      (plist-get checkpoint :session-id)
                      (plist-get checkpoint :turn)
                      (if rewind-p
                          "\nRewind: R restores the complete session suffix"
+                       "")
+                     (if consumed
+                         (format "\nConsumed details:\n%s"
+                                 (mapconcat
+                                  (lambda (subdirective)
+                                    (concat "- "
+                                            (mevedel-subdirective-request
+                                             subdirective)))
+                                  consumed "\n"))
                        "")
                      (mevedel-directive-attempt-request attempt)
                      (mevedel-directive-attempt-result attempt))

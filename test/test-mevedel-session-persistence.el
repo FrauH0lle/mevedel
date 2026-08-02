@@ -5323,6 +5323,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
     (let ((session nil)
           (buffer nil)
           (source-buffer nil)
+          consumed-child-id
+          current-child-id
           (source-file (file-name-concat tempdir "source.el")))
       (unwind-protect
           (progn
@@ -5361,9 +5363,29 @@ rotation never saves through a rebound temporary visited filename or prompts"
               (with-current-buffer source-buffer
                 (goto-char (point-min))
                 (search-forward "LATER")
-                (mevedel--create-directive-in
-                 source-buffer (match-beginning 0) (match-end 0) nil "Later"))
+                (let* ((start (match-beginning 0))
+                       (later-overlay
+                        (mevedel--create-directive-in
+                         source-buffer start (match-end 0) nil "Later"))
+                       (consumed-child
+                        (mevedel--create-directive-in
+                         source-buffer (1+ start) (+ start 3)
+                         nil "Consumed detail")))
+                  (setq consumed-child-id
+                        (overlay-get consumed-child 'mevedel-uuid))
+                  (overlay-put later-overlay
+                               'mevedel-test-consumed-child
+                               consumed-child)))
               (let* ((later (car (mevedel-workspace-directives workspace)))
+                     (later-overlay
+                      (mevedel--instruction-with-uuid
+                       (mevedel-directive-id later) workspace))
+                     (consumed-child
+                      (overlay-get later-overlay
+                                   'mevedel-test-consumed-child))
+                     (consumed-snapshot
+                      (mevedel-subdirective-copy
+                       (mevedel--subdirective-record consumed-child)))
                      (records (copy-sequence
                                (mevedel-workspace-directives workspace)))
                      target)
@@ -5375,11 +5397,22 @@ rotation never saves through a rebound temporary visited filename or prompts"
                         :patch "deleted source.el" :capture 'complete
                         :captured-at "2026-08-02T03:01:00+0200"
                         :covered-files (list source-file)
+                        :consumed-subdirectives (list consumed-snapshot)
                         :checkpoint
                         (list :session-id
                               (mevedel-session-session-id session)
                               :turn 2)))
                       (mevedel-directive-state later) 'implemented)
+                (with-current-buffer source-buffer
+                  (mevedel--delete-instruction consumed-child)
+                  (setq current-child-id
+                        (overlay-get
+                         (mevedel--create-directive-in
+                          source-buffer
+                          (+ 2 (overlay-start later-overlay))
+                          (1- (overlay-end later-overlay))
+                          nil "Current detail")
+                         'mevedel-uuid)))
                 (with-current-buffer buffer
                   (mevedel-request-begin session)
                   (puthash source-file "EARLY\nLATER\n"
@@ -5430,6 +5463,11 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 (should-not (mevedel-directive-attempts later))
                 (should-not (mevedel-directive-state later))
                 (should
+                 (equal
+                  (list consumed-child-id current-child-id)
+                  (mapcar #'mevedel-subdirective-id
+                          (mevedel-directive-subdirectives later))))
+                (should
                  (eq 'attached
                      (plist-get (mevedel-directive-anchor later) :state)))
                 (let ((overlay
@@ -5437,6 +5475,20 @@ rotation never saves through a rebound temporary visited filename or prompts"
                         (mevedel-directive-id later) workspace)))
                   (should overlay)
                   (should (eq later (mevedel--directive-record overlay)))
+                  (let ((consumed-restored
+                         (mevedel--instruction-with-uuid
+                          consumed-child-id workspace))
+                        (current-restored
+                         (mevedel--instruction-with-uuid
+                          current-child-id workspace)))
+                    (should (overlayp consumed-restored))
+                    (should (overlayp current-restored))
+                    (should (eq overlay
+                                (mevedel--topmost-instruction
+                                 consumed-restored 'directive)))
+                    (should (eq overlay
+                                (mevedel--topmost-instruction
+                                 current-restored 'directive))))
                   (should
                    (equal "LATER"
                           (with-current-buffer (overlay-buffer overlay)
@@ -5647,6 +5699,11 @@ rotation never saves through a rebound temporary visited filename or prompts"
                       (mevedel-directive--create
                        :id "rollback-directive" :request "Keep me"
                        :anchor '(:state source-missing) :state 'failed
+                       :subdirectives
+                       (list
+                        (mevedel-subdirective--create
+                         :id "current-child" :request "Current"
+                         :anchor '(:state attached)))
                        :attempts
                        (list
                         (mevedel-directive-attempt--create
@@ -5657,6 +5714,11 @@ rotation never saves through a rebound temporary visited filename or prompts"
                                :turn 1))
                         (mevedel-directive-attempt--create
                          :directive-request "Keep me" :outcome 'error
+                         :consumed-subdirectives
+                         (list
+                          (mevedel-subdirective--create
+                           :id "consumed-child" :request "Consumed"
+                           :anchor '(:state attached)))
                          :checkpoint
                          (list :session-id
                                (mevedel-session-session-id session)
@@ -5667,6 +5729,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                        (before-buffer (buffer-string))
                        (before-attempts
                         (mevedel-directive-attempts record))
+                       (before-subdirectives
+                        (mevedel-directive-subdirectives record))
                        (before-state
                         (mevedel-session-persistence-serialize session))
                        (sidecar-path
@@ -5699,6 +5763,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                                  (mevedel-workspace-directives workspace)))
                   (should (eq before-attempts
                               (mevedel-directive-attempts record)))
+                  (should (eq before-subdirectives
+                              (mevedel-directive-subdirectives record)))
                   (should (eq 'failed (mevedel-directive-state record)))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))

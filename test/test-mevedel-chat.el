@@ -903,7 +903,7 @@
                         (override-backend (list :backend 'directive))
                         (override-model 'directive-model)
 			captured-prompt captured-args captured-fsm captured-chat
-			callback-result override-validated)
+			callback-result override-validated later-child)
 		   (unwind-protect
 		       (with-current-buffer buf
 			 (erase-buffer)
@@ -914,6 +914,12 @@
 			 (let* ((directive (mevedel--create-directive-in
 					    buf (point-min) (line-end-position)
 					    nil "Change alpha."))
+				(submitted-child
+				 (mevedel--create-directive-in
+				  buf (1+ (point-min)) (+ 3 (point-min))
+				  nil "Use the first detail."))
+				(submitted-id
+				 (overlay-get submitted-child 'mevedel-uuid))
 				(older-attempt
 				 (mevedel-directive-attempt--create
 				  :directive-request "Older request"
@@ -965,7 +971,7 @@
 					  (setq captured-fsm fsm)
 					  fsm))))
 			     (mevedel--process-directive
-			      directive '(:system "test")
+			      submitted-child '(:system "test")
 			      #'mevedel--implement-directive-prompt
 			      (lambda (err fsm)
 				(setq callback-result
@@ -973,6 +979,7 @@
 			     (should (string-match-p "IMPLEMENTATION REQUEST"
 						     captured-prompt))
 			     (should (string-match-p "Change alpha" captured-prompt))
+			     (should (string-match-p "Use the first detail" captured-prompt))
 			     (should (eq captured-chat (plist-get captured-args :buffer)))
 			     (should (markerp (plist-get captured-args :position)))
                              (should override-validated)
@@ -1049,6 +1056,11 @@
 				      :mevedel-directive-capture complete
 				      :mevedel-directive-covered-files ("/tmp/sample.txt")
 				      :mevedel-directive-gaps nil)))
+			     (setq later-child
+				   (mevedel--create-directive-in
+				    buf (+ 3 (point-min)) (+ 5 (point-min))
+				    nil "Keep later detail."))
+			     (mevedel--remove-directive-presentation submitted-child)
 			     (funcall (plist-get (gptel-fsm-info captured-fsm)
 						 :mevedel-request-callback)
 				      nil captured-fsm)
@@ -1080,7 +1092,21 @@
 			       (should (eq 'success
 					   (mevedel-directive-attempt-outcome attempt)))
 			       (should (eq 'complete
-					   (mevedel-directive-attempt-capture attempt))))
+					   (mevedel-directive-attempt-capture attempt)))
+			       (should
+				(equal
+				 (list submitted-id)
+				 (mapcar
+				  #'mevedel-subdirective-id
+				  (mevedel-directive-attempt-consumed-subdirectives
+				   attempt))))
+			       (should-not (overlay-buffer submitted-child))
+			       (should (overlay-buffer later-child))
+			       (should
+				(equal
+				 (list (overlay-get later-child 'mevedel-uuid))
+				 (mapcar #'mevedel-subdirective-id
+					 (mevedel-directive-subdirectives record)))))
 			     (with-current-buffer captured-chat
 			       (should-not (string-search ":PROMPT:" (buffer-string)))
 			       (should-not (string-search "Answer text" (buffer-string)))
@@ -1120,9 +1146,13 @@
 			   (insert "source\n")
 			   (write-region (point-min) (point-max) file nil 'silent)
 			   (set-buffer-modified-p nil)
-			   (let ((directive
-				  (mevedel--create-directive-in
-				   buf (point-min) (1- (point-max)) nil "Change it")))
+			   (let* ((directive
+				   (mevedel--create-directive-in
+				    buf (point-min) (1- (point-max)) nil "Change it"))
+				  (child
+				   (mevedel--create-directive-in
+				    buf (1+ (point-min)) (- (point-max) 2)
+				    nil "Keep this detail")))
 			     (overlay-put directive 'mevedel-directive-action 'implement)
 			     (cl-letf (((symbol-function 'save-some-buffers)
 					(lambda (&rest _) nil))
@@ -1166,7 +1196,13 @@
 				      (mevedel-directive-attempt-outcome attempt)))
 				 (should
 				  (equal result
-					 (mevedel-directive-attempt-result attempt))))
+					 (mevedel-directive-attempt-result attempt)))
+				 (should-not
+				  (mevedel-directive-attempt-consumed-subdirectives
+				   attempt))
+				 (should (overlay-buffer child))
+				 (should (= 1 (length
+					       (mevedel-directive-subdirectives record)))))
 			       (with-current-buffer captured-chat
 				 (should (string-search "directive-event"
 							(buffer-string)))
@@ -1779,6 +1815,10 @@
       (let* ((directive
               (mevedel--create-directive-in
                (current-buffer) (point-min) (point-max) nil "Request"))
+             (_child
+              (mevedel--create-directive-in
+               (current-buffer) (1+ (point-min)) (1- (point-max))
+               nil "Child change"))
              (record (mevedel--directive-record directive)))
         (setf (mevedel-directive-state record) 'implemented
               (mevedel-directive-attempts record)
@@ -1788,11 +1828,7 @@
                 :result "Done" :outcome 'success :patch "old patch"
                 :capture 'complete
                 :captured-at "2026-08-02T01:00:00+0200")))
-        (cl-letf (((symbol-function 'mevedel--child-instructions)
-                   (lambda (_) '(child)))
-                  ((symbol-function 'mevedel--directivep)
-                   (lambda (_) t))
-                  ((symbol-function 'mevedel--process-directive)
+        (cl-letf (((symbol-function 'mevedel--process-directive)
                    (lambda (seen preset prompt-fn callback &optional options)
                      (setq captured
                            (list seen preset
@@ -1824,8 +1860,8 @@
       (let ((directive (make-overlay (point-min) (point-max))))
         (cl-letf (((symbol-function 'mevedel--directive-record)
                    (lambda (_) record))
-                  ((symbol-function 'mevedel--child-instructions)
-                   (lambda (_) nil)))
+                  ((symbol-function 'mevedel--topmost-instruction)
+                   (lambda (seen _) seen)))
           (should-error
            (mevedel--request-directive-changes directive "" nil)
            :type 'user-error))))))
@@ -1849,6 +1885,8 @@
       (let ((directive (make-overlay (point-min) (point-max))))
         (cl-letf (((symbol-function 'mevedel--directive-record)
                    (lambda (_) record))
+                  ((symbol-function 'mevedel--topmost-instruction)
+                   (lambda (seen _) seen))
                   ((symbol-function 'mevedel--process-directive)
                    (lambda (seen preset prompt-fn callback &optional options)
                      (setq captured

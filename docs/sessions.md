@@ -295,9 +295,12 @@ Workspace-owned directive identity is not historical session state. Rewind
 retains each authored directive and its current request, removes only model
 activity at or after the target turn in that execution session, and recomputes
 the lifecycle from what survives. A surviving request edit remains Ready with
-a request-changed qualifier. Historical instruction snapshots restore source
-presentation only; a source file restored by Rewind uses the normal safe anchor
-reattachment path. The directive activity view's `R` action resolves an
+a request-changed qualifier. Subdirectives consumed by discarded successful
+attempts return to their parent from immutable attempt snapshots; subdirectives
+authored later remain current, and neither receives independent activity.
+Historical instruction snapshots restore source presentation only; a source
+file restored by Rewind uses the normal safe anchor reattachment path. The
+directive activity view's `R` action resolves an
 effectful attempt's exact execution session and pre-turn checkpoint, then uses
 this same Rewind transaction and impact confirmation.
 

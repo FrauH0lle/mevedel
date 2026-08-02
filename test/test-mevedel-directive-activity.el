@@ -370,6 +370,11 @@
                   :outcome 'success :patch "" :capture 'complete
                   :captured-at "2026-08-02T01:00:00+0200"
                   :covered-files '("/tmp/a") :gaps nil
+                  :consumed-subdirectives
+                  (list
+                   (mevedel-subdirective--create
+                    :id "detail-1" :request "Use the immutable detail"
+                    :anchor '(:state attached)))
                   :checkpoint '(:session-id "session-1" :turn 2))))
           (cl-letf (((symbol-function 'pop-to-buffer)
                      (lambda (buffer &rest _) buffer)))
@@ -383,6 +388,7 @@
               (should (string-match-p "Implemented" text))
               (should (string-match-p "Exact submitted request" text))
               (should (string-match-p "Exact answer" text))
+              (should (string-match-p "Use the immutable detail" text))
               (should (string-match-p "Complete capture; no changes" text))
               (should
                (string-match-p

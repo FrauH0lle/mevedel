@@ -24,7 +24,7 @@
          (snapshot (file-name-concat root "instructions.el"))
          (workspace (mevedel-workspace--create
                      :type 'test :id root :root root :name "test"))
-         source-buffer directive id)
+         source-buffer directive child id)
     (unwind-protect
         (progn
           (with-temp-file source
@@ -38,6 +38,12 @@
                    nil "Keep this request"))
             (setq id (mevedel-directive-id
                       (mevedel--directive-record directive)))
+            (goto-char (point-min))
+            (search-forward "hello")
+            (setq child
+                  (mevedel--create-directive-in
+                   source-buffer (match-beginning 0) (match-end 0)
+                   nil "Current nested detail"))
             (let ((record (mevedel--directive-record directive)))
               (setf (mevedel-directive-session-id record) "session-1"
                     (mevedel-directive-attempts record)
@@ -53,7 +59,14 @@
                       :gaps (list (cons (file-name-concat root "missing.el")
                                         'not-observed))
                       :captured-at "2026-08-02T01:00:00+0200"
-                      :checkpoint '(:session-id "session-1" :turn 3)))
+                      :checkpoint '(:session-id "session-1" :turn 3)
+                      :consumed-subdirectives
+                      (list
+                       (mevedel-subdirective--create
+                        :id "consumed-child" :request "Consumed detail"
+                        :anchor
+                        (list :state 'attached :file source
+                              :start 2 :end 5 :properties nil)))))
                     (mevedel-directive-discussion record)
                     (list
                      (mevedel-directive-discussion-turn--create
@@ -78,6 +91,12 @@
                                       :file)))
             (should (equal "session-1" (mevedel-directive-session-id record)))
             (should (eq 'implemented (mevedel-directive-state record)))
+            (let ((subdirective
+                   (car (mevedel-directive-subdirectives record))))
+              (should (equal "Current nested detail"
+                             (mevedel-subdirective-request subdirective)))
+              (should (equal (overlay-get child 'mevedel-uuid)
+                             (mevedel-subdirective-id subdirective))))
             (let ((attempt (car (mevedel-directive-attempts record))))
               (should (equal "Keep this request"
                              (mevedel-directive-attempt-directive-request
@@ -99,7 +118,13 @@
               (should (equal '(:session-id "session-1" :turn 3)
                              (mevedel-directive-attempt-checkpoint attempt)))
               (should (equal "2026-08-02T01:00:00+0200"
-                             (mevedel-directive-attempt-captured-at attempt))))
+                             (mevedel-directive-attempt-captured-at attempt)))
+              (should
+               (equal "Consumed detail"
+                      (mevedel-subdirective-request
+                       (car
+                        (mevedel-directive-attempt-consumed-subdirectives
+                         attempt))))))
             (let ((turn (car (mevedel-directive-discussion record))))
               (should (equal "Why this change?"
                              (mevedel-directive-discussion-turn-message turn)))

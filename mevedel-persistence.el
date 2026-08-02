@@ -32,6 +32,8 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-checkpoint
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-consumed-subdirectives
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-covered-files
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-directive-request
@@ -66,6 +68,13 @@
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-subdirectives
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-subdirective--create
+                  "mevedel-structs" (&rest slots))
+(declare-function mevedel-subdirective-anchor "mevedel-structs" (cl-x) t)
+(declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-subdirective-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-set-directives "mevedel-structs"
                   (workspace directives))
@@ -75,8 +84,15 @@
                   "mevedel-overlays" (buffer))
 (declare-function mevedel--reattach-directive
                   "mevedel-overlays" (record workspace buffer start end))
+(declare-function mevedel--reattach-subdirective
+                  "mevedel-overlays"
+                  (record owner workspace buffer start end))
 (declare-function mevedel--reconcile-directive-sources
                   "mevedel-overlays" (workspace))
+(declare-function mevedel--refresh-directive-anchor
+                  "mevedel-overlays" (directive))
+(declare-function mevedel--subinstruction-of-p
+                  "mevedel-overlays" (sub parent))
 
 ;; `mevedel-workspace'
 (defvar mevedel--workspace)
@@ -142,6 +158,15 @@ not saved."
                         file base-directory))))
     copy))
 
+(defun mevedel--serialize-subdirective (subdirective base-directory)
+  "Return SUBDIRECTIVE relative to BASE-DIRECTORY."
+  (list :id (mevedel-subdirective-id subdirective)
+        :request (substring-no-properties
+                  (mevedel-subdirective-request subdirective))
+        :anchor (mevedel--serialize-directive-anchor
+                 (mevedel-subdirective-anchor subdirective)
+                 base-directory)))
+
 (defun mevedel--serialize-directives (workspace base-directory)
   "Return WORKSPACE directive records relative to BASE-DIRECTORY."
   (mapcar
@@ -152,6 +177,11 @@ not saved."
            :anchor (mevedel--serialize-directive-anchor
                     (mevedel-directive-anchor directive)
                     base-directory)
+           :subdirectives
+           (mapcar (lambda (subdirective)
+                     (mevedel--serialize-subdirective
+                      subdirective base-directory))
+                   (mevedel-directive-subdirectives directive))
            :state (mevedel-directive-state directive)
            :session-id (mevedel-directive-session-id directive)
            :attempts
@@ -186,7 +216,13 @@ not saved."
                :captured-at
                (mevedel-directive-attempt-captured-at attempt)
                :checkpoint
-               (copy-tree (mevedel-directive-attempt-checkpoint attempt))))
+               (copy-tree (mevedel-directive-attempt-checkpoint attempt))
+               :consumed-subdirectives
+               (mapcar (lambda (subdirective)
+                         (mevedel--serialize-subdirective
+                          subdirective base-directory))
+                       (mevedel-directive-attempt-consumed-subdirectives
+                        attempt))))
             (mevedel-directive-attempts directive))
            :discussion
            (mapcar
@@ -277,6 +313,27 @@ contents for position patching if the file changes before restore."
                             workspace base-directory))
           :files file-alist)))
 
+(defun mevedel--deserialize-subdirective (serialized base-directory)
+  "Return a nested directive from SERIALIZED relative to BASE-DIRECTORY."
+  (let ((id (plist-get serialized :id))
+        (request (plist-get serialized :request))
+        (anchor (copy-tree (plist-get serialized :anchor))))
+    (unless (and (stringp id)
+                 (stringp request)
+                 (eq 'attached (plist-get anchor :state))
+                 (stringp (plist-get anchor :file))
+                 (natnump (plist-get anchor :start))
+                 (natnump (plist-get anchor :end))
+                 (listp (plist-get anchor :evidence))
+                 (listp (plist-get anchor :properties)))
+      (user-error "Malformed mevedel directive list"))
+    (setq anchor
+          (plist-put anchor :file
+                     (expand-file-name (plist-get anchor :file)
+                                       base-directory)))
+    (mevedel-subdirective--create
+     :id id :request request :anchor anchor)))
+
 (defun mevedel--deserialize-directives (serialized base-directory)
   "Return directive records from SERIALIZED relative to BASE-DIRECTORY."
   (mapcar
@@ -284,10 +341,13 @@ contents for position patching if the file changes before restore."
      (let ((id (plist-get entry :id))
            (request (plist-get entry :request))
            (anchor (copy-tree (plist-get entry :anchor)))
+           (subdirectives (plist-get entry :subdirectives))
            (session-id (plist-get entry :session-id))
            (attempts (plist-get entry :attempts))
            (discussion (plist-get entry :discussion)))
        (unless (and (stringp id) (stringp request)
+                    (plist-member entry :subdirectives)
+                    (listp subdirectives)
                     (plist-member entry :session-id)
                     (or (null session-id) (stringp session-id))
                     (plist-member entry :attempts)
@@ -319,6 +379,11 @@ contents for position patching if the file changes before restore."
                           (expand-file-name file base-directory))))
        (mevedel-directive--create
         :id id :request request :anchor anchor
+        :subdirectives
+        (mapcar (lambda (subdirective)
+                  (mevedel--deserialize-subdirective
+                   subdirective base-directory))
+                subdirectives)
         :state (plist-get entry :state)
         :session-id session-id
         :attempts
@@ -334,7 +399,9 @@ contents for position patching if the file changes before restore."
                  (covered-files (plist-get attempt :covered-files))
                  (gaps (plist-get attempt :gaps))
                  (captured-at (plist-get attempt :captured-at))
-                 (checkpoint (plist-get attempt :checkpoint)))
+                 (checkpoint (plist-get attempt :checkpoint))
+                 (consumed-subdirectives
+                  (plist-get attempt :consumed-subdirectives)))
              (unless
                  (and (stringp directive-request)
                       (stringp attempt-request)
@@ -350,6 +417,8 @@ contents for position patching if the file changes before restore."
                          (and (consp gap) (stringp (car gap))))
                        gaps)
                       (stringp captured-at)
+                      (plist-member attempt :consumed-subdirectives)
+                      (listp consumed-subdirectives)
                       (stringp (plist-get checkpoint :session-id))
                       (natnump (plist-get checkpoint :turn)))
                (user-error "Malformed mevedel directive list"))
@@ -367,7 +436,12 @@ contents for position patching if the file changes before restore."
                               (cdr gap)))
                       gaps)
               :captured-at captured-at
-              :checkpoint (copy-tree checkpoint))))
+              :checkpoint (copy-tree checkpoint)
+              :consumed-subdirectives
+              (mapcar (lambda (subdirective)
+                        (mevedel--deserialize-subdirective
+                         subdirective base-directory))
+                      consumed-subdirectives))))
          attempts)
         :discussion
         (mapcar
@@ -462,10 +536,20 @@ Returns the number of saved instructions."
             (cl-loop
              for directive in (mevedel-workspace-directives workspace)
              for anchor = (mevedel-directive-anchor directive)
-             when (and (eq 'source-missing (plist-get anchor :state))
-                       (stringp (plist-get anchor :file))
-                       (file-exists-p (plist-get anchor :file)))
-             collect (plist-get anchor :file))))
+             append
+             (append
+              (when-let* (((eq 'source-missing (plist-get anchor :state)))
+                          (file (plist-get anchor :file))
+                          ((stringp file))
+                          ((file-exists-p file)))
+                (list file))
+              (cl-loop
+               for subdirective in
+               (mevedel-directive-subdirectives directive)
+               for file = (plist-get
+                           (mevedel-subdirective-anchor subdirective) :file)
+               when (and (stringp file) (file-exists-p file))
+               collect file)))))
     (let ((buffer (find-file-noselect file)))
       (with-current-buffer buffer
         (setq-local mevedel--workspace workspace))
@@ -730,6 +814,47 @@ When RANGE is non-nil, it is a cons cell limiting valid bounds."
       (mevedel--instruction-anchor-resolve-text
        overlay-start overlay-end anchor range)))))
 
+(defun mevedel--restore-subdirectives-in-buffer (workspace buffer file)
+  "Restore parent-owned directive details for FILE in BUFFER."
+  (let ((mevedel--instruction-state-key-override
+         (mevedel--instruction-workspace-key workspace)))
+    (mevedel--instruction-activate-workspace workspace)
+    (let ((restored 0)
+          (instructions
+           (cdr (assq buffer (mevedel--instruction-alist)))))
+      (dolist (owner (mevedel-workspace-directives workspace))
+        (when-let* ((parent
+                     (cl-find (mevedel-directive-id owner) instructions
+                              :key (lambda (instruction)
+                                     (overlay-get instruction 'mevedel-uuid))
+                              :test #'equal)))
+          (dolist (record (mevedel-directive-subdirectives owner))
+            (let ((anchor (mevedel-subdirective-anchor record)))
+              (when (and (stringp (plist-get anchor :file))
+                         (file-equal-p file (plist-get anchor :file)))
+                (if-let* ((overlay
+                           (cl-find (mevedel-subdirective-id record)
+                                    instructions
+                                    :key (lambda (instruction)
+                                           (overlay-get instruction
+                                                        'mevedel-uuid))
+                                    :test #'equal)))
+                    (when (mevedel--subinstruction-of-p overlay parent)
+                      (mevedel--refresh-directive-anchor overlay))
+                  (with-current-buffer buffer
+                    (when-let* ((bounds
+                                 (mevedel--instruction-anchor-resolve
+                                  (plist-get anchor :start)
+                                  (plist-get anchor :end)
+                                  (plist-get anchor :evidence)
+                                  (cons (overlay-start parent)
+                                        (overlay-end parent)))))
+                      (mevedel--reattach-subdirective
+                       record owner workspace buffer
+                       (car bounds) (cdr bounds))
+                      (cl-incf restored)))))))))
+      restored)))
+
 (defun mevedel--restore-source-missing-directives (buffer)
   "Reattach exact unambiguous source-missing directives returning in BUFFER."
   (let* ((workspace (mevedel--instruction-buffer-workspace buffer))
@@ -746,7 +871,10 @@ When RANGE is non-nil, it is a cons cell limiting valid bounds."
                             0 0 (plist-get anchor :evidence) nil)))
                 (mevedel--reattach-directive
                  record workspace buffer (car bounds) (cdr bounds))
-                (cl-incf restored)))))))
+                (cl-incf restored))))))
+      (cl-incf restored
+               (mevedel--restore-subdirectives-in-buffer
+                workspace buffer file)))
     restored))
 
 (defun mevedel--instruction-restore-order (instructions)

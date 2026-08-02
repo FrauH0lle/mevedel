@@ -567,6 +567,36 @@
           (should-not (overlay-get directive 'mevedel-directive)))
       (mevedel-overlays-test--discard-directive cell)))
 
+  :doc "stores nested directives as ordered details on the top-level record"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "nested" :root "/tmp" :name "nested"))
+         (cell (mevedel-overlays-test--make-directive
+                "outer child tail\n" "Parent request" workspace))
+         (buffer (car cell))
+         (parent (cdr cell))
+         child)
+    (unwind-protect
+        (with-current-buffer buffer
+          (goto-char (point-min))
+          (search-forward "child")
+          (setq child
+                (mevedel--create-directive-in
+                 buffer (match-beginning 0) (match-end 0) nil "Child detail"))
+          (let* ((records (mevedel-workspace-directives workspace))
+                 (record (car records))
+                 (subdirectives (mevedel-directive-subdirectives record)))
+            (should (= 1 (length records)))
+            (should (eq record (mevedel--directive-record parent)))
+            (should-not (mevedel--directive-record child))
+            (should (= 1 (length subdirectives)))
+            (should (equal (overlay-get child 'mevedel-uuid)
+                           (mevedel-subdirective-id (car subdirectives))))
+            (should (equal "Child detail"
+                           (mevedel-subdirective-request
+                            (car subdirectives))))
+            (should (equal "Child detail" (mevedel--directive-text child)))))
+      (mevedel-overlays-test--discard-directive cell)))
+
   :doc "detaches Ready and attempted directives after real full-region edits"
   (dolist (state '(nil implemented))
     (let* ((request (concat "A request " (make-string 140 ?x)))

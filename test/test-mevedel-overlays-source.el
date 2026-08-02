@@ -17,6 +17,8 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(defvar gptel-default-mode)
+
 (defun mevedel-overlays-source-test--fixture ()
   "Return `(DIRECTORY WORKSPACE FILE BUFFER OVERLAY RECORD)' for a source file."
   (let* ((directory (make-temp-file "mevedel-source-" t))
@@ -167,7 +169,52 @@
             (should (= 0 (mevedel--restore-source-missing-directives buffer))))
           (should (eq 'source-missing
                       (plist-get (mevedel-directive-anchor record) :state))))
-      (mevedel-overlays-source-test--discard fixture))))
+      (mevedel-overlays-source-test--discard fixture)))
+
+  :doc "reattaches parent-owned nested presentations after the source returns"
+  (let* ((directory (make-temp-file "mevedel-nested-source-" t))
+         (file (file-name-concat directory "source.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id directory :root directory
+                     :name "nested-source"))
+         buffer parent child parent-id child-id)
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "before target after\n"))
+          (setq buffer (find-file-noselect file))
+          (with-current-buffer buffer
+            (setq-local mevedel--workspace workspace)
+            (setq parent
+                  (mevedel--create-directive-in
+                   buffer (point-min) (1- (point-max)) nil "Parent"))
+            (goto-char (point-min))
+            (search-forward "target")
+            (setq child
+                  (mevedel--create-directive-in
+                   buffer (match-beginning 0) (match-end 0) nil "Detail"))
+            (setq parent-id (overlay-get parent 'mevedel-uuid)
+                  child-id (overlay-get child 'mevedel-uuid)))
+          (delete-file file)
+          (with-current-buffer buffer
+            (mevedel--mark-buffer-source-missing buffer))
+          (with-temp-file file (insert "before target after\n"))
+          (with-current-buffer buffer
+            (let ((mevedel--inhibit-source-missing-restore t))
+              (revert-buffer t t))
+            (setq-local mevedel--workspace workspace)
+            (should (= 2 (mevedel--restore-source-missing-directives buffer))))
+          (setq parent (mevedel--instruction-with-uuid parent-id workspace)
+                child (mevedel--instruction-with-uuid child-id workspace))
+          (should (overlayp parent))
+          (should (overlayp child))
+          (should (eq parent
+                      (mevedel--topmost-instruction child 'directive))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (setq-local kill-buffer-hook nil)
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-directory directory t))))
 
 (mevedel-deftest mevedel--reattach-directive
   (:vars
@@ -363,7 +410,8 @@
 
 (mevedel-deftest mevedel--directive-action-context/source-missing
   (:vars
-   ((mevedel--instruction-states (make-hash-table :test #'equal))
+   ((gptel-default-mode 'markdown-mode)
+    (mevedel--instruction-states (make-hash-table :test #'equal))
     (mevedel--instruction-current-state-key :global)))
   ,test
   (test)

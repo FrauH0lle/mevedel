@@ -56,6 +56,14 @@ check project dir first, then global."
 ;;
 ;;; Directive and workspace structs
 
+(cl-defstruct (mevedel-subdirective
+               (:constructor mevedel-subdirective--create)
+               (:copier nil))
+  "One current parent-owned nested directive."
+  id
+  request
+  anchor)
+
 (cl-defstruct (mevedel-directive-attempt
                (:constructor mevedel-directive-attempt--create)
                (:copier nil))
@@ -69,7 +77,8 @@ check project dir first, then global."
   covered-files
   gaps
   captured-at
-  checkpoint)
+  checkpoint
+  consumed-subdirectives)
 
 (cl-defstruct (mevedel-directive-discussion-turn
                (:constructor mevedel-directive-discussion-turn--create)
@@ -90,7 +99,8 @@ check project dir first, then global."
   state
   session-id
   attempts
-  discussion)
+  discussion
+  subdirectives)
 
 (cl-defstruct (mevedel-workspace (:constructor mevedel-workspace--create))
   "Project-level shared state.
@@ -157,6 +167,56 @@ One workspace per project, shared by all sessions for that project."
   "Set DIRECTIVE's transient lifecycle STATE."
   (setf (mevedel-directive-state directive) state))
 
+(defun mevedel-subdirective-copy (subdirective)
+  "Return an independent snapshot of SUBDIRECTIVE."
+  (mevedel-subdirective--create
+   :id (substring-no-properties (mevedel-subdirective-id subdirective))
+   :request (substring-no-properties (mevedel-subdirective-request subdirective))
+   :anchor (copy-tree (mevedel-subdirective-anchor subdirective))))
+
+(defun mevedel-subdirective-set-anchor (subdirective anchor)
+  "Set SUBDIRECTIVE's current ANCHOR."
+  (setf (mevedel-subdirective-anchor subdirective) anchor))
+
+(defun mevedel-subdirective-set-request (subdirective request)
+  "Set SUBDIRECTIVE's current REQUEST."
+  (setf (mevedel-subdirective-request subdirective) request))
+
+(defun mevedel-directive-sort-subdirectives (directive)
+  "Sort DIRECTIVE's nested details by their source anchors."
+  (setf
+   (mevedel-directive-subdirectives directive)
+   (sort
+    (copy-sequence (mevedel-directive-subdirectives directive))
+    (lambda (a b)
+      (let* ((a-anchor (mevedel-subdirective-anchor a))
+             (b-anchor (mevedel-subdirective-anchor b))
+             (a-start (or (plist-get a-anchor :start) 0))
+             (b-start (or (plist-get b-anchor :start) 0))
+             (a-end (or (plist-get a-anchor :end) a-start))
+             (b-end (or (plist-get b-anchor :end) b-start)))
+        (or (< a-start b-start)
+            (and (= a-start b-start)
+                 (or (> a-end b-end)
+                     (and (= a-end b-end)
+                          (string-lessp (mevedel-subdirective-id a)
+                                        (mevedel-subdirective-id b)))))))))))
+
+(defun mevedel-directive-add-subdirective (directive subdirective)
+  "Add SUBDIRECTIVE to DIRECTIVE unless its identity is already present."
+  (unless (cl-find (mevedel-subdirective-id subdirective)
+                   (mevedel-directive-subdirectives directive)
+                   :key #'mevedel-subdirective-id :test #'equal)
+    (push subdirective (mevedel-directive-subdirectives directive))
+    (mevedel-directive-sort-subdirectives directive))
+  subdirective)
+
+(defun mevedel-directive-remove-subdirective (directive subdirective)
+  "Remove SUBDIRECTIVE from DIRECTIVE."
+  (setf (mevedel-directive-subdirectives directive)
+        (delq subdirective (mevedel-directive-subdirectives directive)))
+  subdirective)
+
 (defun mevedel-workspace-add-directive (workspace directive)
   "Add DIRECTIVE to WORKSPACE."
   (push directive (mevedel-workspace-directives workspace))
@@ -175,6 +235,14 @@ One workspace per project, shared by all sessions for that project."
     (workspace session-id target-turn)
   "Discard directive activity in WORKSPACE from SESSION-ID TARGET-TURN onward."
   (dolist (directive (mevedel-workspace-directives workspace))
+    (dolist (attempt (mevedel-directive-attempts directive))
+      (let ((checkpoint (mevedel-directive-attempt-checkpoint attempt)))
+        (when (and (equal session-id (plist-get checkpoint :session-id))
+                   (>= (or (plist-get checkpoint :turn) 0) target-turn))
+          (dolist (subdirective
+                   (mevedel-directive-attempt-consumed-subdirectives attempt))
+            (mevedel-directive-add-subdirective
+             directive (mevedel-subdirective-copy subdirective))))))
     (setf
      (mevedel-directive-attempts directive)
      (cl-remove-if
