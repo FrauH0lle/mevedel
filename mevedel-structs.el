@@ -68,6 +68,7 @@ check project dir first, then global."
                (:constructor mevedel-directive-attempt--create)
                (:copier nil))
   "One immutable terminal implementation attempt."
+  sequence
   directive-request
   request
   result
@@ -84,6 +85,8 @@ check project dir first, then global."
                (:constructor mevedel-directive-discussion-turn--create)
                (:copier nil))
   "One immutable terminal directive discussion turn."
+  sequence
+  directive-request
   message
   request
   result
@@ -133,35 +136,40 @@ One workspace per project, shared by all sessions for that project."
   (or (mevedel-directive-attempts directive)
       (mevedel-directive-discussion directive)))
 
+(defun mevedel-directive-next-activity-sequence (directive)
+  "Return the next monotonic activity sequence for DIRECTIVE."
+  (1+ (apply #'max 0
+             (delq nil
+                   (append
+                    (mapcar #'mevedel-directive-attempt-sequence
+                            (mevedel-directive-attempts directive))
+                    (mapcar #'mevedel-directive-discussion-turn-sequence
+                            (mevedel-directive-discussion directive)))))))
+
 (defun mevedel-directive-recompute-state (directive)
   "Recompute DIRECTIVE state from its surviving model activity."
-  (let ((latest-turn -1)
-        state)
-    (dolist (attempt (mevedel-directive-attempts directive))
-      (let ((turn (or (plist-get
-                       (mevedel-directive-attempt-checkpoint attempt) :turn)
-                      -1)))
-        (when (> turn latest-turn)
-          (setq latest-turn turn
-                state
-                (pcase (mevedel-directive-attempt-outcome attempt)
-                  ('success 'implemented)
-                  ('aborted 'aborted)
-                  (_ 'failed))))))
-    (dolist (discussion (mevedel-directive-discussion directive))
-      (let ((turn (or (plist-get
-                       (mevedel-directive-discussion-turn-checkpoint
-                        discussion)
-                       :turn)
-                      -1)))
-        (when (and (eq 'success
-                       (mevedel-directive-discussion-turn-outcome discussion))
-                   (> turn latest-turn))
-          (setq latest-turn turn
-                state 'discussed))))
-    (setf (mevedel-directive-state directive)
-          (unless (mevedel-directive-request-changed-p directive)
-            state))))
+  (let* ((attempt (car (last (mevedel-directive-attempts directive))))
+         (discussed-p
+          (cl-some
+           (lambda (turn)
+             (and (eq 'success (mevedel-directive-discussion-turn-outcome turn))
+                  (equal (mevedel-directive-request directive)
+                         (mevedel-directive-discussion-turn-directive-request
+                          turn))))
+           (mevedel-directive-discussion directive)))
+         (state
+          (cond
+           ((and discussed-p
+                 (or (null attempt)
+                     (mevedel-directive-request-changed-p directive)))
+            'discussed)
+           ((and attempt
+                 (not (mevedel-directive-request-changed-p directive)))
+            (pcase (mevedel-directive-attempt-outcome attempt)
+              ('success 'implemented)
+              ('aborted 'aborted)
+              (_ 'failed))))))
+    (setf (mevedel-directive-state directive) state)))
 
 (defun mevedel-directive-set-state (directive state)
   "Set DIRECTIVE's transient lifecycle STATE."

@@ -1,6 +1,8 @@
-;;; test-mevedel-persistence.el --- Tests for mevedel-persistence.el -*- lexical-binding: t -*-
+;;; test-mevedel-persistence.el -- Tests for mevedel-persistence.el -*- lexical-binding: t -*-
 
 ;;; Commentary:
+
+;; Integration tests for instruction snapshot persistence.
 
 ;;; Code:
 
@@ -49,6 +51,7 @@
                     (mevedel-directive-attempts record)
                     (list
                      (mevedel-directive-attempt--create
+                      :sequence 1
                       :directive-request "Keep this request"
                       :request "Exact submitted request"
                       :result "Exact answer"
@@ -70,6 +73,8 @@
                     (mevedel-directive-discussion record)
                     (list
                      (mevedel-directive-discussion-turn--create
+                      :sequence 2
+                      :directive-request "Keep this request"
                       :message "Why this change?"
                       :request "Exact discussion request"
                       :result "Because it is safer."
@@ -98,6 +103,7 @@
               (should (equal (overlay-get child 'mevedel-uuid)
                              (mevedel-subdirective-id subdirective))))
             (let ((attempt (car (mevedel-directive-attempts record))))
+              (should (= 1 (mevedel-directive-attempt-sequence attempt)))
               (should (equal "Keep this request"
                              (mevedel-directive-attempt-directive-request
                               attempt)))
@@ -126,6 +132,11 @@
                         (mevedel-directive-attempt-consumed-subdirectives
                          attempt))))))
             (let ((turn (car (mevedel-directive-discussion record))))
+              (should (= 2
+                         (mevedel-directive-discussion-turn-sequence turn)))
+              (should (equal "Keep this request"
+                             (mevedel-directive-discussion-turn-directive-request
+                              turn)))
               (should (equal "Why this change?"
                              (mevedel-directive-discussion-turn-message turn)))
               (should (equal "Exact discussion request"
@@ -170,6 +181,7 @@
               (setf (mevedel-directive-state record) 'implemented
                     (mevedel-directive-attempts record)
                     (list (mevedel-directive-attempt--create
+                           :sequence 1
                            :directive-request "Detached request"
                            :request "Exact" :result "Done" :outcome 'success
                            :patch "" :capture 'complete

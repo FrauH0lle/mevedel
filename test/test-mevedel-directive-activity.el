@@ -1,4 +1,4 @@
-;;; test-mevedel-directive-activity.el --- Directive activity tests -*- lexical-binding: t -*-
+;;; test-mevedel-directive-activity.el -- Directive activity tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -197,6 +197,37 @@
         (should (string-match-p "Attempt 1" text))
         (should-not (string-match-p "Exact discussion request" text))))))
 
+(mevedel-deftest mevedel-directive-activity--activity-fragments
+  (:doc "interleaves attempts and discussions by settlement sequence")
+  (let* ((attempt-1
+          (mevedel-directive-attempt--create
+           :sequence 1 :request "First" :result "Done" :outcome 'success
+           :patch "" :capture 'complete
+           :checkpoint '(:session-id "session-1" :turn 1)))
+         (discussion
+          (mevedel-directive-discussion-turn--create
+           :sequence 2 :message "Question" :request "Exact"
+           :result "Answer" :outcome 'success
+           :checkpoint '(:session-id "session-1" :turn 2)))
+         (attempt-2
+          (mevedel-directive-attempt--create
+           :sequence 3 :request "Second" :result "Done" :outcome 'success
+           :patch "" :capture 'complete
+           :checkpoint '(:session-id "session-1" :turn 3)))
+         (directive
+          (mevedel-directive--create
+           :id "directive" :request "Request" :anchor '(:state attached)
+           :attempts (list attempt-1 attempt-2)
+           :discussion (list discussion)))
+         (fragments
+          (mevedel-directive-activity--activity-fragments directive)))
+    (should
+     (equal '(attempt discussion attempt)
+            (mapcar
+             (lambda (fragment)
+               (car (plist-get fragment :id)))
+             fragments)))))
+
 (mevedel-deftest mevedel-directive-activity-submit
   (:vars
    ((mevedel--instruction-states (make-hash-table :test #'equal))
@@ -282,6 +313,7 @@
     (unwind-protect
         (progn
           (setf (mevedel-directive-attempts record) (list attempt))
+          (setf (mevedel-directive-state record) 'implemented)
           (cl-letf (((symbol-function 'pop-to-buffer)
                      (lambda (buffer &rest _) buffer)))
             (setq activity (mevedel-open-directive-activity (caddr fixture))))
@@ -294,6 +326,10 @@
               (should position)
               (goto-char position)
               (mevedel-directive-activity-discuss-result)
+              (should (eq 'discuss
+                          mevedel-directive-activity--composer-action))
+              (should (string-match-p "DISCUSSION" (buffer-string)))
+              (should-not (string-match-p "implement this" (buffer-string)))
               (should (= 1
                          mevedel-directive-activity--selected-attempt-index))
               (should (= (point)
@@ -432,17 +468,14 @@
                 (((symbol-function 'mevedel--workspace-sessions)
                   (lambda (_) (list (cons "main" session-buffer))))
                  ((symbol-function
-                   'mevedel-session-persistence--prompt-candidates)
-                  (lambda (_)
-                    '(("S1 T2" . (:segment 1 :turn 2 :cum-turn 2
-                                    :fork-point-id "point")))))
-                 ((symbol-function 'mevedel-session-persistence-rewind)
-                  (lambda (buffer target)
-                    (setq rewound (list buffer target))
+                   'mevedel-session-persistence-rewind-checkpoint)
+                  (lambda (owner checkpoint &optional buffer)
+                    (setq rewound (list owner checkpoint buffer))
                     t)))
               (should (mevedel-directive-activity-rewind))))
-          (should (eq session-buffer (car rewound)))
-          (should (= 2 (plist-get (cadr rewound) :cum-turn)))
+          (should (eq workspace (car rewound)))
+          (should (= 2 (plist-get (cadr rewound) :turn)))
+          (should (eq session-buffer (caddr rewound)))
           (should (eq #'mevedel-directive-activity-rewind
                       (keymap-lookup
                        mevedel-directive-activity-mode-map "R"))))
@@ -461,7 +494,7 @@
       (should-error (mevedel-directive-activity-rewind)
                     :type 'user-error)))
 
-  :doc "resumes the exact cold execution session without replacing authored records"
+  :doc "delegates a cold execution checkpoint to session persistence"
   (let* ((workspace
           (mevedel-workspace--create
            :type 'test :id "cold-rewind" :root "/tmp" :name "cold-rewind"))
@@ -472,14 +505,10 @@
           (mevedel-directive-attempt--create
            :outcome 'success :capture 'complete :covered-files '("/tmp/a")
            :checkpoint '(:session-id "cold-session" :turn 4)))
-         (session (mevedel-session--create :session-id "cold-session"))
-         (session-buffer (generate-new-buffer " *directive-cold-rewind*"))
-         reset-records resumed restored rewound)
+         rewound)
     (unwind-protect
         (progn
           (mevedel-workspace-add-directive workspace record)
-          (with-current-buffer session-buffer
-            (setq-local mevedel--session session))
           (with-temp-buffer
             (mevedel-directive-activity-mode)
             (setq-local mevedel-directive-activity--workspace workspace
@@ -492,34 +521,17 @@
                 (((symbol-function 'mevedel--workspace-sessions)
                   (lambda (_) nil))
                  ((symbol-function
-                   'mevedel--reset-instructions-preserving-directives)
-                  (lambda (_ records) (push records reset-records)))
-                 ((symbol-function 'mevedel--restore-preserved-directives)
-                  (lambda (_) (setq restored t)))
-                 ((symbol-function 'mevedel-session-persistence-resume-id)
-                  (lambda (selected-workspace session-id)
-                    (setq resumed (list selected-workspace session-id))
-                    session-buffer))
-                 ((symbol-function
-                   'mevedel-session-persistence--prompt-candidates)
-                  (lambda (_)
-                    '(("S1 T4" . (:segment 1 :turn 4 :cum-turn 4
-                                    :fork-point-id "point")))))
-                 ((symbol-function 'mevedel-session-persistence-rewind)
-                  (lambda (buffer target)
-                    (setq rewound (list buffer target))
+                   'mevedel-session-persistence-rewind-checkpoint)
+                  (lambda (owner checkpoint &optional buffer)
+                    (setq rewound (list owner checkpoint buffer))
                     t))
                  ((symbol-function 'mevedel-directive-activity-refresh)
                   #'ignore))
               (should (mevedel-directive-activity-rewind))))
-          (should (equal (list workspace "cold-session") resumed))
-          (should restored)
-          (should (= 2 (length reset-records)))
-          (should (cl-every (lambda (records) (equal (list record) records))
-                            reset-records))
-          (should (eq session-buffer (car rewound)))
-          (should (= 4 (plist-get (cadr rewound) :cum-turn))))
-      (kill-buffer session-buffer))))
+          (should (eq workspace (car rewound)))
+          (should (= 4 (plist-get (cadr rewound) :turn)))
+          (should-not (caddr rewound)))
+      nil)))
 
 (mevedel-deftest mevedel-list-directives
   (:doc "opens the selected workspace record without a source point")

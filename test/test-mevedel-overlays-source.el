@@ -1,4 +1,4 @@
-;;; test-mevedel-overlays-source.el --- Durable directive source tests -*- lexical-binding: t -*-
+;;; test-mevedel-overlays-source.el -- Durable directive source tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-directive-activity)
+(require 'mevedel-directive-persistence)
 (require 'mevedel-overlays)
 (require 'mevedel-persistence)
 (require 'mevedel-structs)
@@ -43,6 +44,7 @@
 (defun mevedel-overlays-source-test--attempt ()
   "Return a complete directive attempt suitable for persistence tests."
   (mevedel-directive-attempt--create
+   :sequence 1
    :directive-request "Preserve this"
    :request "prompt" :result "result" :outcome 'success
    :patch "patch" :capture 'complete :covered-files nil :gaps nil
@@ -307,52 +309,6 @@
           (should-not (memq record (mevedel-workspace-directives workspace))))
       (mevedel-overlays-source-test--discard fixture))))
 
-(mevedel-deftest mevedel--deserialize-directives/source-states
-  (:vars ())
-  ,test
-  (test)
-  :doc "round trips source-missing and archived records without source buffers"
-  (let* ((directory (make-temp-file "mevedel-source-persist-" t))
-         (workspace (mevedel-workspace--create
-                     :type 'test :id directory :root directory
-                     :name "persist"))
-         (missing (mevedel-directive--create
-                   :id "missing" :request "request"
-                   :anchor (list :state 'source-missing
-                                 :file (file-name-concat directory "gone.el")
-                                 :start 1 :end 7
-                                 :evidence '(:schema 1 :bodyless nil
-                                             :text "target")
-                                 :properties
-                                 '(mevedel-instruction t
-                                   mevedel-uuid "missing"
-                                   mevedel-instruction-type directive))
-                   :state nil :session-id nil :attempts nil :discussion nil))
-         (archived (mevedel-directive--create
-                    :id "archived" :request "history"
-                    :anchor (list :state 'archived
-                                  :file (file-name-concat directory "old.el")
-                                  :start 2 :end 2
-                                  :evidence '(:schema 1 :bodyless t)
-                                  :properties
-                                  '(mevedel-instruction t
-                                    mevedel-uuid "archived"
-                                    mevedel-instruction-type directive))
-                    :state 'implemented :session-id nil
-                    :attempts (list (mevedel-overlays-source-test--attempt))
-                    :discussion nil)))
-    (unwind-protect
-        (progn
-          (mevedel-workspace-set-directives workspace (list missing archived))
-          (let* ((serialized (mevedel--serialize-directives workspace directory))
-                 (restored (mevedel--deserialize-directives serialized directory)))
-            (should (equal '(source-missing archived)
-                           (mapcar (lambda (record)
-                                     (plist-get (mevedel-directive-anchor record)
-                                                :state))
-                                   restored)))))
-      (delete-directory directory t))))
-
 (mevedel-deftest mevedel-list-directives/archived
   (:vars ())
   ,test
@@ -427,7 +383,7 @@
                                   (plist-get context :prompt))))
       (mevedel-overlays-source-test--discard fixture)))
 
-  :doc "rejects source-missing submission with one shared validation error"
+  :doc "rejects region-backed source-missing submission with one shared error"
   (let* ((fixture (mevedel-overlays-source-test--fixture))
          (workspace (nth 1 fixture))
          (buffer (nth 3 fixture))
@@ -439,6 +395,31 @@
           (should-error
            (mevedel--directive-action-context record workspace)
            :type 'user-error))
+      (mevedel-overlays-source-test--discard fixture)))
+
+  :doc "reconstructs a top-level bodyless directive without source text"
+  (let* ((fixture (mevedel-overlays-source-test--fixture))
+         (workspace (nth 1 fixture))
+         (buffer (nth 3 fixture))
+         record context transient)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq record
+                  (mevedel--directive-record
+                   (mevedel--create-directive-in
+                    buffer (point-max) (point-max) t "Bodyless request")))
+            (mevedel--mark-buffer-source-missing buffer))
+          (setq context
+                (mevedel--directive-action-context record workspace)
+                transient (plist-get context :directive))
+          (should (overlay-get transient 'mevedel-transient-source-missing))
+          (should (string-match-p "Bodyless request"
+                                  (plist-get context :prompt)))
+          (should (eq 'source-missing
+                      (plist-get (mevedel-directive-anchor record) :state))))
+      (when (and transient (overlay-buffer transient))
+        (kill-buffer (overlay-buffer transient)))
       (mevedel-overlays-source-test--discard fixture))))
 
 (mevedel-deftest mevedel-directive-activity-reattach

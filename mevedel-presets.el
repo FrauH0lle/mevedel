@@ -38,9 +38,9 @@
                   "mevedel-agents" (&optional preset-name))
 
 ;; `mevedel-chat'
+(declare-function mevedel--directive-capture "mevedel-chat" (request))
 (declare-function mevedel--generate-final-patch
                   "mevedel-chat" (&optional workspace))
-(declare-function mevedel--directive-capture "mevedel-chat" (request))
 (declare-function mevedel--replace-patch-buffer
                   "mevedel-chat" (patch-content))
 (defvar mevedel--current-directive-uuid)
@@ -81,8 +81,8 @@
                   (profile &rest keys))
 
 ;; `mevedel-tool-registry'
-(declare-function mevedel-tool-category "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-all "mevedel-tool-registry" ())
+(declare-function mevedel-tool-category "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-read-only-p
                   "mevedel-tool-registry" (cl-x) t)

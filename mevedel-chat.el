@@ -101,24 +101,26 @@
 		  (directive))
 (declare-function mevedel--find-directive-by-uuid "mevedel-overlays"
 		  (uuid))
-(declare-function mevedel--reconcile-directive-sources "mevedel-overlays"
-		  (workspace))
 (declare-function mevedel--highest-priority-instruction
 		  "mevedel-overlays"
 		  (instructions &optional non-processing))
-(declare-function mevedel-get-directive-patch "mevedel-overlays" (directive))
-(declare-function mevedel--instructions-at "mevedel-overlays"
-		  (position &optional type))
 (declare-function mevedel--instruction-with-uuid "mevedel-overlays"
                   (uuid &optional workspace))
-(declare-function mevedel--submitted-subdirectives "mevedel-overlays"
-                  (directive))
+(declare-function mevedel--instructions-at "mevedel-overlays"
+		  (position &optional type))
+(declare-function mevedel--reconcile-directive-sources "mevedel-overlays"
+			  (workspace))
+(declare-function mevedel--remove-directive-presentation
+                  "mevedel-overlays" (directive))
 (declare-function mevedel--set-directive-status "mevedel-overlays"
 		  (directive status))
+(declare-function mevedel--submitted-subdirectives "mevedel-overlays"
+                  (directive))
 (declare-function mevedel--topmost-instruction "mevedel-overlays"
 		  (instruction type))
 (declare-function mevedel--update-instruction-overlay
 		  "mevedel-overlays" (instruction &optional force))
+(declare-function mevedel-get-directive-patch "mevedel-overlays" (directive))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-mode-set-raw
@@ -232,6 +234,10 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-discussion-turn-result
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-next-activity-sequence
+                  "mevedel-structs" (directive))
+(declare-function mevedel-directive-recompute-state
+                  "mevedel-structs" (directive))
 (declare-function mevedel-directive-remove-subdirective
                   "mevedel-structs" (directive subdirective))
 (declare-function mevedel-directive-request-changed-p
@@ -1076,12 +1082,34 @@ discussion.  ATTEMPT-INDEX attaches that implementation result."
 (defun mevedel--implement-discussion-prompt (content directive)
   "Generate an implementation prompt from CONTENT and DIRECTIVE discussion."
   (let ((discussion (mevedel--directive-discussion-transcript directive)))
+    (unless (eq (mevedel-directive-state directive) 'discussed)
+      (user-error "Implement this requires a current discussion"))
     (when (string-empty-p discussion)
       (user-error "Directive has no discussion to implement"))
     (concat
      (mevedel--implement-directive-prompt content)
      "\n\n### DISCUSSION FEEDBACK:\n\n"
      discussion)))
+
+(defun mevedel--directive-implementation-prompt
+    (content directive &optional feedback)
+  "Build DIRECTIVE's complete next implementation prompt from CONTENT.
+FEEDBACK supplies requested changes or optional retry guidance."
+  (pcase (mevedel-directive-state directive)
+    ('discussed
+     (mevedel--implement-discussion-prompt content directive))
+    (_
+     (if (mevedel-directive-request-changed-p directive)
+         (mevedel--implement-directive-prompt content)
+       (pcase (mevedel-directive-state directive)
+         ('implemented
+          (mevedel--request-changes-prompt
+           content directive feedback
+           (mevedel-directive-subdirectives directive)))
+         ((or 'failed 'aborted)
+          (mevedel--retry-directive-prompt content directive feedback))
+         ('nil (mevedel--implement-directive-prompt content))
+         (_ (user-error "Directive action is already in progress")))))))
 
 
 ;;
@@ -1246,7 +1274,11 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
   (setq directive
         (or (mevedel--topmost-instruction directive 'directive)
             directive))
-  (let* ((model-policy (mevedel--directive-model-policy directive))
+  (let ((transient-buffer
+         (and (overlay-get directive 'mevedel-transient-source-missing)
+              (overlay-buffer directive))))
+    (condition-case err
+        (let* ((model-policy (mevedel--directive-model-policy directive))
          ;; Get chat buffer for the directive's buffer workspace
          (workspace (with-current-buffer (overlay-buffer directive)
                       (mevedel-workspace)))
@@ -1293,30 +1325,36 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                             (mevedel-session-turn-count mevedel--session))))
                      (checkpoint
                       (list :session-id execution-session-id :turn turn))
+                     (sequence
+                      (mevedel-directive-next-activity-sequence record))
                      (live-directive
                       (or (and (overlay-buffer directive) directive)
                           (mevedel--find-directive-by-uuid directive-uuid))))
                 (if discussion-p
-                    (setf
-                     (mevedel-directive-discussion record)
-                     (append
-                      (mevedel-directive-discussion record)
-                      (list
-                       (mevedel-directive-discussion-turn--create
-                        :message discussion-message
-                        :request prompt
-                        :result result
-                        :outcome outcome
-                        :attempt-index discussion-attempt-index
-                        :checkpoint checkpoint)))
-                     (mevedel-directive-state record)
-                     (if (eq outcome 'success) 'discussed prior-state))
+                    (progn
+                      (setf
+                       (mevedel-directive-discussion record)
+                       (append
+                        (mevedel-directive-discussion record)
+                        (list
+                         (mevedel-directive-discussion-turn--create
+                          :sequence sequence
+                          :directive-request directive-text
+                          :message discussion-message
+                          :request prompt
+                          :result result
+                          :outcome outcome
+                          :attempt-index discussion-attempt-index
+                          :checkpoint checkpoint)))
+                       (mevedel-directive-state record) prior-state)
+                      (mevedel-directive-recompute-state record))
                   (setf
                    (mevedel-directive-attempts record)
                    (append
                     (mevedel-directive-attempts record)
                     (list
                      (mevedel-directive-attempt--create
+                      :sequence sequence
                       :directive-request directive-text
                       :request prompt :result result :outcome outcome
                       :patch
@@ -1390,8 +1428,13 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                      (overlay-start live-directive)
                      (overlay-end live-directive))))
                 (mevedel--reconcile-directive-sources workspace)
-                (when callback
-                  (funcall callback err fsm)))))))
+                (unwind-protect
+                    (when callback
+                      (funcall callback err fsm))
+                  (when (buffer-live-p transient-buffer)
+                    (when (overlay-buffer directive)
+                      (mevedel--remove-directive-presentation directive))
+                    (kill-buffer transient-buffer))))))))
 
     (with-current-buffer chat-buffer
       (when mevedel--current-request
@@ -1505,7 +1548,13 @@ the original callback."
           (when (or (not bound-session-id) rebind-p)
             (setf (mevedel-directive-session-id record)
                   execution-session-id))
-          fsm)))))
+          fsm))))
+      (t
+       (when (buffer-live-p transient-buffer)
+         (when (overlay-buffer directive)
+           (mevedel--remove-directive-presentation directive))
+         (kill-buffer transient-buffer))
+       (signal (car err) (cdr err))))))
 
 (defun mevedel--discuss-directive-turn
     (directive message &optional attempt-index callback)

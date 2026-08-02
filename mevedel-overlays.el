@@ -38,6 +38,8 @@
 (declare-function mevedel--chat-buffer
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
+(declare-function mevedel--directive-implementation-prompt
+                  "mevedel-chat" (content directive &optional feedback))
 (declare-function mevedel--patch-buffer "mevedel-chat" (&optional create workspace))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
 (defvar mevedel--view-buffer)
@@ -68,9 +70,9 @@
 (declare-function mevedel-directive-attempt-patch
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-has-activity-p
                   "mevedel-structs" (directive))
+(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-p "mevedel-structs" (cl-x))
 (declare-function mevedel-directive-remove-subdirective
                   "mevedel-structs" (directive subdirective))
@@ -416,7 +418,9 @@ overlay is restored.")
 
 (defun mevedel--refresh-directive-anchor (directive)
   "Refresh the durable anchor presented by DIRECTIVE."
-  (when-let* ((record (mevedel--directive-source-record directive)))
+  (when-let* (((not (overlay-get directive
+                                 'mevedel-transient-source-missing)))
+              (record (mevedel--directive-source-record directive)))
     (let ((anchor (if (mevedel-directive-p record)
                       (mevedel-directive-anchor record)
                     (mevedel-subdirective-anchor record))))
@@ -1153,7 +1157,16 @@ This command is useful to see what is actually being sent to the model."
   (interactive)
   (let ((directive (mevedel--topmost-instruction (car (mevedel--instructions-at (point) 'directive))
                                                  'directive)))
-    (let ((request-string (mevedel--directive-llm-prompt directive)))
+    (require 'mevedel-chat)
+    (let* ((record (mevedel--directive-record directive))
+           (state (mevedel-directive-state record))
+           (feedback
+            (pcase state
+              ('implemented (read-string "Requested changes: "))
+              ((or 'failed 'aborted) (read-string "Retry guidance (optional): "))))
+           (request-string
+            (mevedel--directive-implementation-prompt
+             (mevedel--directive-llm-prompt directive) record feedback)))
       (let ((bufname "*mevedel-directive-preview*"))
         (with-temp-buffer-window bufname
             '((display-buffer-reuse-window
@@ -3279,13 +3292,43 @@ treat them as subdirectives, instead."
   "Return RECORD's live directive and validated prompt in WORKSPACE.
 
 This is the shared individual and batch submission eligibility check."
-  (let ((directive
-         (mevedel--instruction-with-uuid
-          (mevedel-directive-id record) workspace)))
+  (let* ((anchor (mevedel-directive-anchor record))
+         (evidence (plist-get anchor :evidence))
+         (directive
+          (or
+           (mevedel--instruction-with-uuid
+            (mevedel-directive-id record) workspace)
+           (when (and (eq 'source-missing (plist-get anchor :state))
+                      (plist-get evidence :bodyless)
+                      (null (plist-get evidence :parent-uuid))
+                      (null (mevedel-directive-subdirectives record)))
+             (let ((buffer
+                    (generate-new-buffer
+                     (format " *mevedel-directive-context %s*"
+                             (mevedel-directive-id record)))))
+               (with-current-buffer buffer
+                 (setq-local mevedel--workspace workspace
+                             buffer-file-name (plist-get anchor :file)
+                             default-directory
+                             (mevedel-workspace-root workspace))
+                 (let ((overlay
+                        (mevedel--reattach-directive-overlay
+                         (mevedel-directive-id record) anchor workspace
+                         buffer (point-min) (point-min))))
+                   (overlay-put overlay 'mevedel-transient-source-missing t)
+                   overlay)))))))
     (unless directive
       (user-error "Directive prompt context is unavailable; reattach its source first"))
-    (list :directive directive
-          :prompt (mevedel--directive-llm-prompt directive))))
+    (condition-case err
+        (list :directive directive
+              :prompt (mevedel--directive-llm-prompt directive))
+      (error
+       (when (overlay-get directive 'mevedel-transient-source-missing)
+         (let ((buffer (overlay-buffer directive)))
+           (mevedel--remove-directive-presentation directive)
+           (when (buffer-live-p buffer)
+             (kill-buffer buffer))))
+       (signal (car err) (cdr err))))))
 
 (defun mevedel--create-id ()
   "Create a unique identifier for an instruction.

@@ -1430,12 +1430,47 @@
                                (should (equal "Why?"
                                               (mevedel-directive-discussion-turn-message
                                                turn)))
+                               (should (equal "Explain it"
+                                              (mevedel-directive-discussion-turn-directive-request
+                                               turn)))
                                (should (equal captured-prompt
                                               (mevedel-directive-discussion-turn-request
                                                turn)))
                                (should (equal "Because.\n"
                                               (mevedel-directive-discussion-turn-result
-                                               turn))))
+                                               turn)))
+                               (should (= 1
+                                          (mevedel-directive-discussion-turn-sequence
+                                           turn)))
+                               (setf
+                                (mevedel-directive-attempts record)
+                                (list
+                                 (mevedel-directive-attempt--create
+                                  :sequence 2
+                                  :directive-request "Explain it"
+                                  :outcome 'success))
+                                (mevedel-directive-state record) 'implemented)
+                               (mevedel--discuss-directive-turn
+                                directive "Anything else?" 1 nil)
+                               (let ((response-start
+                                      (overlay-get
+                                       directive
+                                       'mevedel-directive-response-start)))
+                                 (with-current-buffer captured-chat
+                                   (goto-char response-start)
+                                   (insert "No.\n")))
+                               (funcall
+                                (plist-get (gptel-fsm-info captured-fsm)
+                                           :mevedel-request-callback)
+                                nil captured-fsm)
+                               (should (eq 'implemented
+                                           (mevedel-directive-state record)))
+                               (should (= 3
+                                          (mevedel-directive-discussion-turn-sequence
+                                           (car
+                                            (last
+                                             (mevedel-directive-discussion
+                                              record)))))))
                              (with-current-buffer captured-chat
                                (should (string-search "directive-event"
                                                       (buffer-string)))
@@ -1453,6 +1488,51 @@
                            (kill-buffer view-buf)))
                        (kill-buffer captured-chat))
                      (delete-directory tmpdir t))))
+
+                 :doc "discards synthetic source context when startup is quit"
+                 (let* ((workspace
+                         (mevedel-workspace--create
+                          :type 'test :id "source-missing" :root "/tmp"
+                          :name "source-missing"))
+                        (record
+                         (mevedel-directive--create
+                          :id "directive" :request "Request"
+                          :anchor
+                          '(:state source-missing :file "/tmp/missing.el"
+                            :start 1 :end 1
+                            :evidence (:schema 1 :bodyless t)
+                            :properties
+                            (mevedel-instruction t
+                             mevedel-uuid "directive"
+                             mevedel-instruction-type directive))))
+                        (context
+                         (progn
+                           (mevedel-workspace-set-directives
+                            workspace (list record))
+                           (mevedel--directive-action-context
+                            record workspace)))
+                        (directive (plist-get context :directive))
+                        (transient-buffer (overlay-buffer directive)))
+                   (unwind-protect
+                       (progn
+                         (overlay-put directive
+                                      'mevedel-directive-action 'implement)
+                        (cl-letf
+                            (((symbol-function
+                               'mevedel--directive-session-buffer)
+                               (lambda (&rest _)
+                                 (signal 'quit nil))))
+                           (let (quit-p)
+                             (condition-case nil
+                                 (mevedel--process-directive
+                                  directive '(:system "test")
+                                  #'mevedel--implement-directive-prompt nil)
+                               (quit (setq quit-p t)))
+                             (should quit-p)))
+                         (should-not (buffer-live-p transient-buffer))
+                         (should-not (overlay-buffer directive)))
+                     (when (buffer-live-p transient-buffer)
+                       (kill-buffer transient-buffer))))
 
                  :doc "reuses the directive session even when another is current"
                  (let* ((workspace (mevedel-workspace--create
@@ -1892,6 +1972,7 @@
   (let* ((record
           (mevedel-directive--create
            :id "directive" :request "Request" :anchor '(:state attached)
+           :state 'discussed
            :discussion
            (list
             (mevedel-directive-discussion-turn--create
@@ -1903,7 +1984,51 @@
     (should (string-match-p "IMPLEMENTATION REQUEST" prompt))
     (should (string-match-p "Fresh references" prompt))
     (should (string-match-p "Prefer a small API" prompt))
-    (should (string-match-p "Use one entry point" prompt))))
+    (should (string-match-p "Use one entry point" prompt))
+    (setf (mevedel-directive-state record) 'implemented)
+    (should-error
+     (mevedel--implement-discussion-prompt "Fresh references" record)
+     :type 'user-error)))
+
+(mevedel-deftest mevedel--directive-implementation-prompt
+  (:doc "previews the complete prompt for the directive's next implementation")
+  (let* ((attempt
+          (mevedel-directive-attempt--create
+           :directive-request "Request" :request "Exact"
+           :result "Previous answer" :outcome 'success
+           :patch "historical patch" :capture 'complete
+           :captured-at "2026-08-02T01:00:00+0200"))
+         (directive
+          (mevedel-directive--create
+           :id "directive" :request "Request" :anchor '(:state attached)
+           :state 'implemented :attempts (list attempt)))
+         (prompt
+          (mevedel--directive-implementation-prompt
+           "Fresh references" directive "Change the parser")))
+    (dolist (text '("Fresh references" "Change the parser"
+                    "Previous answer" "historical patch"))
+      (should (string-search text prompt)))
+    (setf (mevedel-directive-state directive) 'failed
+          (mevedel-directive-attempt-outcome attempt) 'error
+          (mevedel-directive-attempt-result attempt) "Transport failed")
+    (setq prompt
+          (mevedel--directive-implementation-prompt
+           "Fresh references" directive "Try locally"))
+    (should (string-search "Transport failed" prompt))
+    (should (string-search "Try locally" prompt))
+    (setf (mevedel-directive-request directive) "Edited request"
+          (mevedel-directive-discussion directive)
+          (list
+           (mevedel-directive-discussion-turn--create
+            :directive-request "Edited request"
+            :message "Prefer the smaller API" :request "Exact discussion"
+            :result "Agreed" :outcome 'success))
+          (mevedel-directive-state directive) 'discussed)
+    (setq prompt
+          (mevedel--directive-implementation-prompt
+           "Fresh references" directive))
+    (should (string-search "DISCUSSION FEEDBACK" prompt))
+    (should (string-search "Prefer the smaller API" prompt))))
 
 (mevedel-deftest mevedel--implement-discussion
   (:vars
@@ -1927,7 +2052,8 @@
               (list
                (mevedel-directive-discussion-turn--create
                 :message "Keep it small" :request "Exact"
-                :result "Agreed" :outcome 'success)))
+                :result "Agreed" :outcome 'success))
+              (mevedel-directive-state record) 'discussed)
         (cl-letf (((symbol-function 'mevedel--process-directive)
                    (lambda (seen preset prompt-fn callback &optional options)
                      (setq captured

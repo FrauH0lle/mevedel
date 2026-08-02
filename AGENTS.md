@@ -147,6 +147,7 @@ Chat / view
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
   mevedel-overlays.el         instruction overlays (references/directives)
   mevedel-mentions.el         @ref and @file mention expansion
+  mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      save/load instructions
   mevedel-session-persistence.el  session save/resume/rewind/fork
   mevedel-preview-mode.el     inline diff preview for Write/Edit

@@ -5053,6 +5053,52 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (should (< (string-match "Ordinary chat" text)
                      (string-match "Directive two" text))))))))
 
+(mevedel-deftest mevedel-session-persistence-rewind-checkpoint
+  (:doc "resumes a cold session without replacing workspace directive records")
+  (let* ((record (mevedel-directive--create
+                  :id "directive" :request "Request"
+                  :anchor '(:state attached)))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id "checkpoint" :root "/tmp"
+                     :name "checkpoint" :directives (list record)))
+         (session (mevedel-session--create :session-id "cold-session"))
+         (buffer (generate-new-buffer " *checkpoint-rewind*"))
+         reset-records resumed restored rewound)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local mevedel--session session))
+          (cl-letf
+              (((symbol-function
+                 'mevedel--reset-instructions-preserving-directives)
+                (lambda (_ records) (push records reset-records)))
+               ((symbol-function 'mevedel--restore-preserved-directives)
+                (lambda (_) (setq restored t)))
+               ((symbol-function 'mevedel-session-persistence-resume-id)
+                (lambda (owner session-id)
+                  (setq resumed (list owner session-id))
+                  buffer))
+               ((symbol-function
+                 'mevedel-session-persistence--prompt-candidates)
+                (lambda (_)
+                  '(("S1 T4" . (:segment 1 :turn 4 :cum-turn 4
+                                  :fork-point-id "point")))))
+               ((symbol-function 'mevedel-session-persistence-rewind)
+                (lambda (selected target)
+                  (setq rewound (list selected target))
+                  t)))
+            (should
+             (mevedel-session-persistence-rewind-checkpoint
+              workspace '(:session-id "cold-session" :turn 4))))
+          (should (equal (list workspace "cold-session") resumed))
+          (should restored)
+          (should (= 2 (length reset-records)))
+          (should (cl-every (lambda (records) (equal (list record) records))
+                            reset-records))
+          (should (eq buffer (car rewound)))
+          (should (= 4 (plist-get (cadr rewound) :cum-turn))))
+      (kill-buffer buffer))))
+
 (mevedel-deftest mevedel-rewind ()
   ,test
   (test)

@@ -48,6 +48,7 @@
 (require 'mevedel-workspace)
 (require 'mevedel-overlays)
 (require 'mevedel-mentions)
+(require 'mevedel-directive-persistence)
 (require 'mevedel-persistence)
 (require 'mevedel-file-state)
 (require 'mevedel-models)

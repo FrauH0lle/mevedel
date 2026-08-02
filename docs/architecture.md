@@ -36,12 +36,14 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   or error, authored-request snapshot, outcome, captured patch, capture time and
   completeness, covered files, explicit gaps, successful attempt's consumed
   subdirective snapshots, and the session/turn checkpoint that can restore the
-  file state around the attempt. A complete empty patch means the request
-  observed its covered files and made no changes; incomplete capture never
-  implies complete coverage.
+  file state around the attempt. Its directive-local settlement sequence orders
+  it against discussion turns. A complete empty patch means the request observed
+  its covered files and made no changes; incomplete capture never implies
+  complete coverage.
 - **`mevedel-directive-discussion-turn`**: immutable local question, submitted
-  request, terminal answer or error, outcome, optional selected-attempt index,
-  and session/turn checkpoint.
+  request, authored-request snapshot, terminal answer or error, outcome,
+  optional selected-attempt index, session/turn checkpoint, and directive-local
+  settlement sequence.
 - **`mevedel-session`**: per-chat state: workspace, working
   directory, tasks, touched-files, permission rules/mode, exact resource grants,
   reminders,
@@ -110,7 +112,9 @@ order rather than retaining source overlays. Each item resolves the same live
 prompt context used by an individual action only when its turn begins, so a
 prior implementation may detach or remove later source without corrupting the
 queue. Ready records use Implement and Discussed records without an attempt use
-Implement this. Records with any implementation attempt or without sufficient
+Implement this. A Source missing record has sufficient context only when it is
+top-level, bodyless, and has no nested details; region-backed records must be
+reattached. Records with any implementation attempt or without sufficient
 current prompt context are reported and skipped; the first failed or aborted
 request stops the batch. A zero-delay continuation starts the next item only
 after terminal request cleanup.

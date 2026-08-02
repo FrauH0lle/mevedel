@@ -4358,6 +4358,38 @@ Return descriptions of every artifact that could not be restored."
                        (plist-get target :turn))
               t)))))))
 
+(defun mevedel-session-persistence-rewind-checkpoint
+    (workspace checkpoint &optional buffer)
+  "Rewind WORKSPACE to CHECKPOINT, resuming its session when needed.
+BUFFER is the already-live execution session when available."
+  (let ((session-id (plist-get checkpoint :session-id))
+        (turn (plist-get checkpoint :turn)))
+    (unless (and (stringp session-id) (natnump turn))
+      (user-error "Malformed implementation checkpoint"))
+    (unless buffer
+      (let ((records (copy-sequence
+                      (mevedel-workspace-directives workspace))))
+        (mevedel--reset-instructions-preserving-directives workspace records)
+        (unwind-protect
+            (setq buffer
+                  (mevedel-session-persistence-resume-id
+                   workspace session-id))
+          (mevedel--reset-instructions-preserving-directives workspace records)
+          (mevedel--restore-preserved-directives workspace))))
+    (unless buffer
+      (user-error "Execution session is unavailable: %s" session-id))
+    (let* ((session (buffer-local-value 'mevedel--session buffer))
+           (target
+            (and session
+                 (cl-loop
+                  for (_ . candidate) in
+                  (mevedel-session-persistence--prompt-candidates session)
+                  when (= turn (plist-get candidate :cum-turn))
+                  return candidate))))
+      (unless target
+        (user-error "Implementation checkpoint is unavailable: turn %s" turn))
+      (mevedel-session-persistence-rewind buffer target))))
+
 ;;;###autoload
 (defun mevedel-rewind ()
   "Pick a settled assistant response and Rewind the current session to it."

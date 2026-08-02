@@ -45,16 +45,16 @@
 (mevedel-deftest mevedel-directive-recompute-state
   (:doc "derives lifecycle state from the latest surviving model activity")
   (let* ((success
-          (mevedel-directive-attempt--create
-           :directive-request "Current" :outcome 'success
+         (mevedel-directive-attempt--create
+           :sequence 1 :directive-request "Current" :outcome 'success
            :checkpoint '(:session-id "session" :turn 1)))
          (failure
-          (mevedel-directive-attempt--create
-           :directive-request "Current" :outcome 'error
+         (mevedel-directive-attempt--create
+           :sequence 3 :directive-request "Current" :outcome 'error
            :checkpoint '(:session-id "session" :turn 3)))
          (discussion
-          (mevedel-directive-discussion-turn--create
-           :outcome 'success
+         (mevedel-directive-discussion-turn--create
+           :sequence 2 :directive-request "Current" :outcome 'success
            :checkpoint '(:session-id "session" :turn 2)))
          (directive
           (mevedel-directive--create
@@ -64,13 +64,33 @@
     (should (eq 'implemented
                 (mevedel-directive-recompute-state directive)))
     (setf (mevedel-directive-discussion directive) (list discussion))
-    (should (eq 'discussed
+    (should (eq 'implemented
                 (mevedel-directive-recompute-state directive)))
     (setf (mevedel-directive-attempts directive) (list success failure))
     (should (eq 'failed
                 (mevedel-directive-recompute-state directive)))
     (setf (mevedel-directive-request directive) "Edited")
-    (should-not (mevedel-directive-recompute-state directive))))
+    (should-not (mevedel-directive-recompute-state directive))
+    (setf (mevedel-directive-discussion directive)
+          (append
+           (mevedel-directive-discussion directive)
+           (list
+            (mevedel-directive-discussion-turn--create
+             :sequence 4 :directive-request "Edited" :outcome 'success
+             :checkpoint '(:session-id "session" :turn 4)))))
+    (should (eq 'discussed
+                (mevedel-directive-recompute-state directive)))))
+
+(mevedel-deftest mevedel-directive-next-activity-sequence
+  (:doc "allocates after the greatest surviving activity sequence")
+  (let ((directive
+         (mevedel-directive--create
+          :id "directive" :request "Request" :anchor '(:state attached)
+          :attempts
+          (list (mevedel-directive-attempt--create :sequence 2))
+          :discussion
+          (list (mevedel-directive-discussion-turn--create :sequence 5)))))
+    (should (= 6 (mevedel-directive-next-activity-sequence directive)))))
 
 (mevedel-deftest mevedel-workspace-rewind-directives
   ()
@@ -86,15 +106,15 @@
            :attempts
            (list
             (mevedel-directive-attempt--create
-             :directive-request "Earlier" :outcome 'success
+             :sequence 1 :directive-request "Earlier" :outcome 'success
              :checkpoint '(:session-id "session" :turn 1))
             (mevedel-directive-attempt--create
-             :directive-request "Earlier" :outcome 'error
+             :sequence 3 :directive-request "Earlier" :outcome 'error
              :checkpoint '(:session-id "session" :turn 4)))
            :discussion
            (list
             (mevedel-directive-discussion-turn--create
-             :outcome 'success
+             :sequence 2 :outcome 'success
              :checkpoint '(:session-id "session" :turn 2)))))
          (edited
           (mevedel-directive--create
@@ -102,7 +122,12 @@
            :attempts
            (list
             (mevedel-directive-attempt--create
-             :directive-request "Original request" :outcome 'success
+             :sequence 1 :directive-request "Original request" :outcome 'success
+             :checkpoint '(:session-id "session" :turn 2)))
+           :discussion
+           (list
+            (mevedel-directive-discussion-turn--create
+             :sequence 2 :directive-request "Edited request" :outcome 'success
              :checkpoint '(:session-id "session" :turn 3)))))
          (later
           (mevedel-directive--create
@@ -117,9 +142,9 @@
     (should (equal (list earlier edited later)
                    (mevedel-workspace-directives workspace)))
     (should (= 1 (length (mevedel-directive-attempts earlier))))
-    (should (eq 'discussed (mevedel-directive-state earlier)))
+    (should (eq 'implemented (mevedel-directive-state earlier)))
     (should (= 1 (length (mevedel-directive-attempts edited))))
-    (should-not (mevedel-directive-state edited))
+    (should (eq 'discussed (mevedel-directive-state edited)))
     (should-not (mevedel-directive-attempts later))
     (should-not (mevedel-directive-state later)))
 
