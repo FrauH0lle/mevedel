@@ -70,6 +70,14 @@
 (declare-function mevedel-workspace-set-directives "mevedel-structs"
                   (workspace directives))
 
+;; `mevedel-overlays'
+(declare-function mevedel--mark-buffer-source-missing
+                  "mevedel-overlays" (buffer))
+(declare-function mevedel--reattach-directive
+                  "mevedel-overlays" (record workspace buffer start end))
+(declare-function mevedel--reconcile-directive-sources
+                  "mevedel-overlays" (workspace))
+
 (defcustom mevedel-patch-outdated-instructions t
   "Automatically patch instructions when the save file is outdated if non-nil."
   :type 'boolean
@@ -206,6 +214,8 @@ file names are serialized relative to it; otherwise absolute names are
 used.  When INCLUDE-ORIGINAL-CONTENT is non-nil, include full buffer
 contents for position patching if the file changes before restore."
   (mevedel--instruction-activate-buffer)
+  (mevedel--reconcile-directive-sources
+   (mevedel--instruction-buffer-workspace (current-buffer)))
   (let ((file-alist ())
         (workspace (mevedel--instruction-buffer-workspace (current-buffer)))
         (base-directory (and base-directory
@@ -278,15 +288,24 @@ contents for position patching if the file changes before restore."
                     (listp attempts)
                     (plist-member entry :discussion)
                     (listp discussion)
-                    (memq (plist-get anchor :state) '(attached detached))
-                    (or
-                     (eq (plist-get anchor :state) 'attached)
-                     (and (stringp (plist-get anchor :file))
-                          (natnump (plist-get anchor :position))
-                          (let ((order (plist-get anchor :source-order)))
-                            (and (listp order)
-                                 (= (length order) 2)
-                                 (cl-every #'natnump order))))))
+                    (memq (plist-get anchor :state)
+                          '(attached detached source-missing archived))
+                    (pcase (plist-get anchor :state)
+                      ('attached t)
+                      ('detached
+                       (and (stringp (plist-get anchor :file))
+                            (natnump (plist-get anchor :position))
+                            (let ((order (plist-get anchor :source-order)))
+                              (and (listp order)
+                                   (= (length order) 2)
+                                   (cl-every #'natnump order)))))
+                      ((or 'source-missing 'archived)
+                       (and (stringp (plist-get anchor :file))
+                            (natnump (plist-get anchor :start))
+                            (natnump (plist-get anchor :end))
+                            (listp (plist-get anchor :evidence))
+                            (listp (plist-get anchor :properties))))
+                      (_ nil)))
          (user-error "Malformed mevedel directive list"))
        (when-let* ((file (plist-get anchor :file)))
          (setq anchor
@@ -528,9 +547,14 @@ reverted, and restores them afterward."
                                    (insert-file-contents file)
                                    (buffer-substring-no-properties (point-min) (point-max)))))
                             (mevedel--stash-buffer buffer file-contents))
-                        (setf (mevedel--instruction-alist)
-                              (assq-delete-all
-                               buffer (mevedel--instruction-alist))))))))
+                        (mevedel--mark-buffer-source-missing buffer))))))
+                nil t)
+      (add-hook 'post-command-hook
+                (lambda ()
+                  (when-let* ((file (buffer-file-name buffer))
+                              ((not (file-exists-p file)))
+                              ((mevedel--buffer-has-instructions-p buffer)))
+                    (mevedel--mark-buffer-source-missing buffer)))
                 nil t))
     (add-hook 'before-revert-hook
               (lambda ()
@@ -663,6 +687,25 @@ When RANGE is non-nil, it is a cons cell limiting valid bounds."
       (mevedel--instruction-anchor-resolve-text
        overlay-start overlay-end anchor range)))))
 
+(defun mevedel--restore-source-missing-directives (buffer)
+  "Reattach exact unambiguous source-missing directives returning in BUFFER."
+  (let* ((workspace (mevedel--instruction-buffer-workspace buffer))
+         (file (buffer-file-name buffer))
+         (restored 0))
+    (when (and workspace file)
+      (dolist (record (mevedel-workspace-directives workspace))
+        (let ((anchor (mevedel-directive-anchor record)))
+          (when (and (eq 'source-missing (plist-get anchor :state))
+                     (file-equal-p file (plist-get anchor :file)))
+            (with-current-buffer buffer
+              (when-let* ((bounds
+                           (mevedel--instruction-anchor-resolve
+                            0 0 (plist-get anchor :evidence) nil)))
+                (mevedel--reattach-directive
+                 record workspace buffer (car bounds) (cdr bounds))
+                (cl-incf restored)))))))
+    restored))
+
 (defun mevedel--instruction-restore-order (instructions)
   "Return INSTRUCTIONS ordered so parents are restored before children."
   (sort (copy-sequence instructions)
@@ -714,7 +757,8 @@ the amount of instructions lost to the patching process, if any.
 If MESSAGE is non-nil, message the intent of patching outdated files."
   (let ((mevedel--inhibit-file-patching t))
     (when-let* ((buffer (find-buffer-visiting file)))
-      (mevedel--instruction-activate-buffer buffer))
+      (mevedel--instruction-activate-buffer buffer)
+      (mevedel--restore-source-missing-directives buffer))
     (unless (and (file-exists-p file)
                  (assoc file (mevedel--instruction-alist)))
       (cl-return-from mevedel--restore-file-instructions (cl-values nil 0 0)))

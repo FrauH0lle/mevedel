@@ -95,6 +95,24 @@
                   'mevedel-directive-activity--directive first)
                  (buffer-local-value
                   'mevedel-directive-activity--directive second)))))
+      (mevedel-directive-activity-test--discard fixture)))
+
+  :doc "opens source-missing activity without a live source overlay"
+  (let* ((fixture (mevedel-directive-activity-test--make-directive "Missing"))
+         (workspace (car fixture))
+         (directive (caddr fixture))
+         (record (car (mevedel-workspace-directives workspace))))
+    (unwind-protect
+        (progn
+          (mevedel-directive-set-anchor record '(:state source-missing))
+          (delete-overlay directive)
+          (cl-letf (((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer)))
+            (let ((activity
+                   (mevedel-open-directive-activity record workspace)))
+              (with-current-buffer activity
+                (should (string-match-p "Source missing" (buffer-string)))
+                (should (string-match-p "Missing" (buffer-string)))))))
       (mevedel-directive-activity-test--discard fixture))))
 
 (mevedel-deftest mevedel-directive-activity-refresh

@@ -449,6 +449,14 @@
               (should (member '(?c "request-changes") choices))
               (should-not (member '(?i "implement") choices))
               (should-not (member '(?r "revise") choices))
+              (setf
+               (mevedel-directive-attempts
+                (mevedel--directive-record directive))
+               (list (mevedel-directive-attempt--create :outcome 'success)))
+              (catch 'captured
+                (mevedel--ov-actions-dispatch directive))
+              (should (member '(?A "archive") choices))
+              (should-not (member '(?k "clear") choices))
               (mevedel--set-directive-status directive 'failed)
               (catch 'captured
                 (mevedel--ov-actions-dispatch directive))

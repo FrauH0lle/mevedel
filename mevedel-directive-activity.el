@@ -21,6 +21,14 @@
                   "mevedel-overlays" (buffer))
 (declare-function mevedel--instruction-with-uuid
                   "mevedel-overlays" (uuid &optional workspace))
+(declare-function mevedel--directive-action-context
+                  "mevedel-overlays" (record workspace))
+(declare-function mevedel--reattach-directive
+                  "mevedel-overlays" (record workspace buffer start end))
+(declare-function mevedel--reconcile-directive-sources
+                  "mevedel-overlays" (workspace))
+(declare-function mevedel-archive-directive
+                  "mevedel-overlays" (record workspace))
 (declare-function mevedel--ov-actions-getov "mevedel-overlays" ())
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction type))
@@ -122,6 +130,8 @@
   :parent special-mode-map
   "g" #'mevedel-directive-activity-refresh
   "o" #'mevedel-directive-activity-goto-source
+  "r" #'mevedel-directive-activity-reattach
+  "a" #'mevedel-directive-activity-archive
   "d" #'mevedel-directive-activity-discuss-result
   "n" #'mevedel-view-zone-next
   "p" #'mevedel-view-zone-previous
@@ -290,6 +300,8 @@
                (mevedel-directive-p mevedel-directive-activity--directive))
     (user-error "No directive activity is associated with this buffer"))
   (require 'mevedel-view-zone)
+  (mevedel--reconcile-directive-sources
+   mevedel-directive-activity--workspace)
   (let* ((input-offset
           (and (markerp mevedel-directive-activity--input-marker)
                (>= (point) mevedel-directive-activity--input-marker)
@@ -345,11 +357,12 @@
     (mevedel--replace-patch-buffer patch)))
 
 (defun mevedel-directive-activity--source-directive ()
-  "Return the live source overlay for the current activity directive."
-  (or (mevedel--instruction-with-uuid
-       (mevedel-directive-id mevedel-directive-activity--directive)
-       mevedel-directive-activity--workspace)
-      (user-error "Directive has no live source context")))
+  "Return the current activity directive after validating its prompt context."
+  (plist-get
+   (mevedel--directive-action-context
+    mevedel-directive-activity--directive
+    mevedel-directive-activity--workspace)
+   :directive))
 
 (defun mevedel-directive-activity-submit ()
   "Submit the local composer using its selected directive ACTION."
@@ -480,8 +493,14 @@ pass a workspace-owned directive record together with WORKSPACE."
   (require 'mevedel-structs)
   (require 'mevedel-workspace)
   (let* ((workspace (or workspace (mevedel-workspace)))
-         (directives (and workspace
-                          (mevedel-workspace-directives workspace))))
+         (_ (mevedel--reconcile-directive-sources workspace))
+         (directives
+          (and workspace
+               (cl-remove-if
+                (lambda (directive)
+                  (eq 'archived
+                      (plist-get (mevedel-directive-anchor directive) :state)))
+                (mevedel-workspace-directives workspace)))))
     (unless directives
       (user-error "Workspace has no directives"))
     (let* ((choices
@@ -497,6 +516,63 @@ pass a workspace-owned directive record together with WORKSPACE."
            (choice (completing-read "Directive: " choices nil t)))
       (mevedel-open-directive-activity
        (alist-get choice choices nil nil #'equal) workspace))))
+
+(defun mevedel-list-archived-directives (&optional workspace)
+  "Choose and inspect an archived directive belonging to WORKSPACE."
+  (interactive)
+  (require 'mevedel-structs)
+  (require 'mevedel-workspace)
+  (let* ((workspace (or workspace (mevedel-workspace)))
+         (directives
+          (and workspace
+               (cl-remove-if-not
+                (lambda (directive)
+                  (eq 'archived
+                      (plist-get (mevedel-directive-anchor directive) :state)))
+                (mevedel-workspace-directives workspace)))))
+    (unless directives
+      (user-error "Workspace has no archived directives"))
+    (let* ((choices
+            (mapcar
+             (lambda (directive)
+               (cons (format "%s  %s"
+                             (mevedel-directive-id directive)
+                             (string-replace
+                              "\n" " "
+                              (mevedel-directive-request directive)))
+                     directive))
+             directives))
+           (choice (completing-read "Archived directive: " choices nil t)))
+      (mevedel-open-directive-activity
+       (alist-get choice choices nil nil #'equal) workspace))))
+
+(defun mevedel-directive-activity-reattach (file start end)
+  "Reattach the current Source missing directive to FILE from START to END."
+  (interactive
+   (let* ((anchor
+           (mevedel-directive-anchor
+            mevedel-directive-activity--directive))
+          (file (read-file-name "Reattach to file: " nil
+                                (plist-get anchor :file) t))
+          (buffer (find-file-noselect file)))
+     (list file
+           (read-number "Start buffer position: "
+                        (with-current-buffer buffer (point-min)))
+           (read-number "End buffer position: "
+                        (with-current-buffer buffer (point-max))))))
+  (let ((buffer (find-file-noselect file)))
+    (mevedel--reattach-directive
+     mevedel-directive-activity--directive
+     mevedel-directive-activity--workspace buffer start end)
+    (mevedel-directive-activity-refresh)))
+
+(defun mevedel-directive-activity-archive ()
+  "Archive the current directive and retain its activity."
+  (interactive)
+  (mevedel-archive-directive
+   mevedel-directive-activity--directive
+   mevedel-directive-activity--workspace)
+  (mevedel-directive-activity-refresh))
 
 (defun mevedel-directive-activity-goto-source ()
   "Visit the live attached source for the current directive."

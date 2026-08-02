@@ -118,6 +118,11 @@ One workspace per project, shared by all sessions for that project."
     (not (equal (mevedel-directive-request directive)
                 (mevedel-directive-attempt-directive-request attempt)))))
 
+(defun mevedel-directive-has-activity-p (directive)
+  "Return non-nil when DIRECTIVE owns model-produced activity."
+  (or (mevedel-directive-attempts directive)
+      (mevedel-directive-discussion directive)))
+
 (defun mevedel-directive-set-state (directive state)
   "Set DIRECTIVE's transient lifecycle STATE."
   (setf (mevedel-directive-state directive) state))

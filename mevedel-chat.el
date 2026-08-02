@@ -106,6 +106,8 @@
 (declare-function mevedel--directivep "mevedel-overlays" (instruction))
 (declare-function mevedel--find-directive-by-uuid "mevedel-overlays"
 		  (uuid))
+(declare-function mevedel--reconcile-directive-sources "mevedel-overlays"
+		  (workspace))
 (declare-function mevedel--highest-priority-instruction
 		  "mevedel-overlays"
 		  (instructions &optional non-processing))
@@ -1361,6 +1363,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                     (pulse-momentary-highlight-region
                      (overlay-start live-directive)
                      (overlay-end live-directive))))
+                (mevedel--reconcile-directive-sources workspace)
                 (when callback
                   (funcall callback err fsm)))))))
 
