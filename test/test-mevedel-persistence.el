@@ -123,6 +123,58 @@
         (kill-buffer source-buffer))
       (delete-directory root t)))
 
+  :doc "round-trips detached position, source order, activity, and actions"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-detached-persistence-" t)))
+         (source (file-name-concat root "source.el"))
+         (snapshot (file-name-concat root "instructions.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root :name "test"))
+         source-buffer id)
+    (unwind-protect
+        (progn
+          (with-temp-file source (insert "before\ntarget\nafter\n"))
+          (setq source-buffer (find-file-noselect source))
+          (with-current-buffer source-buffer
+            (setq-local mevedel--workspace workspace)
+            (let* ((directive
+                    (mevedel--create-directive-in
+                     source-buffer 8 14 nil "Detached request"))
+                   (record (mevedel--directive-record directive)))
+              (setq id (mevedel-directive-id record))
+              (setf (mevedel-directive-state record) 'implemented
+                    (mevedel-directive-attempts record)
+                    (list (mevedel-directive-attempt--create
+                           :directive-request "Detached request"
+                           :request "Exact" :result "Done" :outcome 'success
+                           :patch "" :capture 'complete
+                           :captured-at "2026-08-02T01:00:00+0200"
+                           :checkpoint '(:session-id "session" :turn 1))))
+              (delete-region 8 14)
+              (mevedel--write-instructions-file snapshot root t t t)
+              (mevedel--clear-instruction-state workspace)
+              (mevedel--load-instructions-file
+               snapshot root nil t workspace)))
+          (let* ((record (car (mevedel-workspace-directives workspace)))
+                 (anchor (mevedel-directive-anchor record))
+                 (restored (mevedel--instruction-with-uuid id workspace)))
+            (should (eq 'detached (plist-get anchor :state)))
+            (should (= 8 (plist-get anchor :position)))
+            (should (equal '(8 14) (plist-get anchor :source-order)))
+            (should (= 1 (length (mevedel-directive-attempts record))))
+            (should (= (overlay-start restored) (overlay-end restored)))
+            (should (keymapp (overlay-get restored 'keymap)))
+            (should (string-match-p
+                     "DETACHED.*IMPLEMENTED"
+                     (substring-no-properties
+                      (overlay-get restored 'before-string))))))
+      (when (buffer-live-p source-buffer)
+        (with-current-buffer source-buffer
+          (setq-local kill-buffer-hook nil)
+          (set-buffer-modified-p nil))
+        (kill-buffer source-buffer))
+      (delete-directory root t)))
+
   :doc "rejects the superseded overlay-owned directive shape"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-old-directive-shape-" t)))

@@ -1350,7 +1350,16 @@
                #'mevedel--implement-directive-prompt
                (lambda (err fsm)
                  (setq callback-result (list err (eq fsm captured-fsm)))))
-              (delete-overlay directive)
+              (delete-region (overlay-start directive)
+                             (overlay-end directive))
+              (let ((detached
+                     (mevedel--find-directive-by-uuid
+                      (mevedel-directive-id
+                       (car (mevedel-workspace-directives
+                             (with-current-buffer buf
+                               (mevedel-workspace))))))))
+                (should (overlay-buffer detached))
+                (should (= (overlay-start detached) (overlay-end detached))))
               (funcall (plist-get (gptel-fsm-info captured-fsm)
                                   :mevedel-request-callback)
                        nil captured-fsm)

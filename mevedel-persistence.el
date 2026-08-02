@@ -278,7 +278,15 @@ contents for position patching if the file changes before restore."
                     (listp attempts)
                     (plist-member entry :discussion)
                     (listp discussion)
-                    (eq (plist-get anchor :state) 'attached))
+                    (memq (plist-get anchor :state) '(attached detached))
+                    (or
+                     (eq (plist-get anchor :state) 'attached)
+                     (and (stringp (plist-get anchor :file))
+                          (natnump (plist-get anchor :position))
+                          (let ((order (plist-get anchor :source-order)))
+                            (and (listp order)
+                                 (= (length order) 2)
+                                 (cl-every #'natnump order))))))
          (user-error "Malformed mevedel directive list"))
        (when-let* ((file (plist-get anchor :file)))
          (setq anchor

@@ -12,7 +12,9 @@
 ;; tinting, and buffer navigation between instructions.  The central
 ;; `mevedel--update-instruction-overlay' helper renders every visible
 ;; aspect of an overlay (colour, label, priority, linking) based on
-;; its current state.
+;; its current state.  Full source deletion turns directive overlays into
+;; zero-width detached presentations without discarding their workspace record;
+;; references retain ordinary evaporating overlay behavior.
 
 ;;; Code:
 
@@ -211,6 +213,9 @@ Each value is a plist with keys `:instructions', `:id-counter',
 (defvar-local mevedel--instruction-current-state-key nil
   "Workspace key selected for this buffer's instruction operations.")
 
+(defvar-local mevedel--pending-directive-detachments nil
+  "Directives wholly covered by the current buffer edit.")
+
 (defvar mevedel--instruction-state-key-override nil
   "Dynamically bound instruction state key for explicit operations.")
 
@@ -349,6 +354,11 @@ overlay is restored.")
     (cl-find id (mevedel-workspace-directives workspace)
              :key #'mevedel-directive-id :test #'equal)))
 
+(defun mevedel--detached-directive-p (directive)
+  "Return non-nil when DIRECTIVE presents a detached durable record."
+  (when-let* ((record (mevedel--directive-record directive)))
+    (eq 'detached (plist-get (mevedel-directive-anchor record) :state))))
+
 (defun mevedel--directive-anchor (directive)
   "Return DIRECTIVE's current attached anchor description."
   (when-let* ((buffer (overlay-buffer directive)))
@@ -361,9 +371,109 @@ overlay is restored.")
 (defun mevedel--refresh-directive-anchor (directive)
   "Refresh the durable anchor presented by DIRECTIVE."
   (when-let* ((record (mevedel--directive-record directive)))
-    (mevedel-directive-set-anchor
-     record (mevedel--directive-anchor directive)))
+    (let ((anchor (mevedel-directive-anchor record)))
+      (if (and (eq 'detached (plist-get anchor :state))
+               (= (overlay-start directive) (overlay-end directive)))
+          (progn
+            (setq anchor (copy-tree anchor))
+            (setq anchor (plist-put anchor :file
+                                    (buffer-file-name
+                                     (overlay-buffer directive))))
+            (setq anchor (plist-put anchor :position
+                                    (overlay-start directive)))
+            (mevedel-directive-set-anchor record anchor))
+        (mevedel-directive-set-anchor
+         record (mevedel--directive-anchor directive)))))
   directive)
+
+(defun mevedel--detach-directive (entry)
+  "Replace the evaporated directive described by ENTRY at a zero-width anchor."
+  (let* ((old (plist-get entry :overlay))
+         (record (plist-get entry :record))
+         (marker (plist-get entry :marker))
+         (position (marker-position marker))
+         (properties (plist-get entry :properties))
+         (old-anchor (mevedel-directive-anchor record))
+         (new (make-overlay position position (current-buffer))))
+    (cl-loop for (property value) on properties by #'cddr
+             unless (eq property 'evaporate)
+             do (overlay-put new property value))
+    (overlay-put new 'mevedel-instruction-collapse-p nil)
+    (delete-overlay old)
+    (setf (alist-get (current-buffer) (mevedel--instruction-alist))
+          (cons new
+                (delq old
+                      (alist-get (current-buffer)
+                                 (mevedel--instruction-alist)))))
+    (mevedel-directive-set-anchor
+     record
+     (list :state 'detached
+           :file (buffer-file-name)
+           :position position
+           :source-order (list (plist-get entry :start)
+                               (plist-get entry :end))
+           :evidence (plist-get old-anchor :evidence)))
+    (set-marker marker nil)
+    new))
+
+(defun mevedel--instruction-before-change (beg end)
+  "Capture attached directives wholly deleted between BEG and END."
+  (setq mevedel--pending-directive-detachments nil)
+  (when (< beg end)
+    (dolist (directive (mevedel--instructions-in beg end 'directive))
+      (let ((start (overlay-start directive))
+            (finish (overlay-end directive)))
+        (when (and (< start finish)
+                   (<= beg start)
+                   (<= finish end)
+                   (not (mevedel--detached-directive-p directive)))
+          (push (list :overlay directive
+                      :record (mevedel--directive-record directive)
+                      :marker (copy-marker start)
+                      :start start
+                      :end finish
+                      :properties
+                      (mevedel--instruction-persisted-properties directive))
+                mevedel--pending-directive-detachments))))))
+
+(defun mevedel--order-detached-directives-at (position)
+  "Give detached directives at POSITION stable source-order priorities."
+  (let* ((directives
+          (sort
+           (cl-remove-if-not #'mevedel--detached-directive-p
+                             (mevedel--instructions-at position 'directive))
+           (lambda (a b)
+             (let* ((a-record (mevedel--directive-record a))
+                    (b-record (mevedel--directive-record b))
+                    (a-order
+                     (plist-get (mevedel-directive-anchor a-record)
+                                :source-order))
+                    (b-order
+                     (plist-get (mevedel-directive-anchor b-record)
+                                :source-order)))
+               (or (< (car a-order) (car b-order))
+                   (and (= (car a-order) (car b-order))
+                        (or (< (cadr a-order) (cadr b-order))
+                            (and (= (cadr a-order) (cadr b-order))
+                                 (string-lessp
+                                  (mevedel-directive-id a-record)
+                                  (mevedel-directive-id b-record))))))))))
+         (priority (+ mevedel--default-instruction-priority
+                      (length directives))))
+    (dolist (directive directives)
+      (overlay-put directive 'priority priority)
+      (setq priority (1- priority)))))
+
+(defun mevedel--instruction-after-change (beg end _old-length)
+  "Detach captured directives, then redraw instructions affected by BEG and END."
+  (let ((pending (prog1 mevedel--pending-directive-detachments
+                   (setq mevedel--pending-directive-detachments nil))))
+    (dolist (entry pending)
+      (mevedel--detach-directive entry)))
+  (let ((beg (max (point-min) (1- beg)))
+        (end (min (point-max) (1+ end))))
+    (dolist (instruction (mevedel--instructions-in beg end))
+      (mevedel--update-instruction-overlay instruction))))
 
 (defun mevedel--register-directive (directive request)
   "Create and register DIRECTIVE's workspace record with REQUEST."
@@ -1434,14 +1544,10 @@ Instruction type can either be `reference' or `directive'."
         (push overlay (alist-get buffer (mevedel--instruction-alist)))
         (unless (bound-and-true-p mevedel--after-change-functions-hooked)
           (setq-local mevedel--after-change-functions-hooked t)
+          (add-hook 'before-change-functions
+                    #'mevedel--instruction-before-change nil t)
           (add-hook 'after-change-functions
-                    (lambda (beg end _len)
-                      (let ((beg (max (point-min) (1- beg)))
-                            (end (min (point-max) (1+ end))))
-                        (let ((affected-instructions (mevedel--instructions-in beg end)))
-                          (dolist (instruction affected-instructions)
-                            (mevedel--update-instruction-overlay instruction)))))
-                    nil t))
+                    #'mevedel--instruction-after-change nil t))
         (mevedel--setup-buffer-hooks buffer)
         overlay))))
 
@@ -1492,6 +1598,9 @@ If OF-TYPE is non-nil, returns the parent with the given type."
                                 (or (null of-type)
                                     (eq (mevedel--instruction-type instr)
                                         of-type))
+                                (not
+                                 (and (mevedel--detached-directive-p instruction)
+                                      (mevedel--detached-directive-p instr)))
                                 (<= (overlay-start instr) beg
                                     end (overlay-end instr))))
                          (mevedel--instructions-in beg end))))))
@@ -1608,7 +1717,9 @@ A, B: Two overlays to compare for congruence.
 Returns: t if A and B are congruent, nil otherwise."
   (and (eq (overlay-buffer a) (overlay-buffer b))
        (= (overlay-start a) (overlay-start b))
-       (= (overlay-end a) (overlay-end b))))
+       (= (overlay-end a) (overlay-end b))
+       (not (and (mevedel--detached-directive-p a)
+                 (mevedel--detached-directive-p b)))))
 
 (defun mevedel--instruction-bufferlevel-p (instruction)
   "Return t if INSTRUCTION spans the entirety of its buffer."
@@ -2236,7 +2347,18 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
                (mevedel-always-match-untagged-references
                 "REFERENCES UNTAGGED ONLY")
                (t "REFERENCES NOTHING"))))
-           (append-links))))
+           (append-links))
+         (when (mevedel--detached-directive-p instruction)
+           (setq label "")
+           (append-label
+            (format
+             "DETACHED · %s · DIRECTIVE %s: %s"
+             (upcase
+              (symbol-name
+             (or (mevedel--directive-status instruction) 'ready)))
+             (stylized-id (mevedel--instruction-id instruction))
+             (string-trim
+              (mevedel--directive-truncated-text instruction)))))))
       (append presentation (list :label label :color color)))))
 
 (defun mevedel--instruction-style (presentation)
@@ -2426,7 +2548,10 @@ PRIORITY is the inherited priority and PARENT is the tree parent."
                   'directive)
           (mevedel--refresh-directive-anchor instruction))
         (mevedel--update-instruction-overlay-tree
-         instruction update-children priority parent)))))
+         instruction update-children priority parent)
+        (when (mevedel--detached-directive-p instruction)
+          (mevedel--order-detached-directives-at
+           (overlay-start instruction)))))))
 
 (defun mevedel--buffer-has-instructions-p (buffer)
   "Return non-nil if BUFFER has any mevedel instructions associated with it."

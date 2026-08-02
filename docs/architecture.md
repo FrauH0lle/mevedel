@@ -72,6 +72,14 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 - Instruction types: **References** (source-bound context) and **Directives**
   (workspace-owned prompts with source presentations)
 
+Directive anchors are either Attached, with a live source range, or Detached,
+with a zero-width source position, former source order, and the last attached
+anchor evidence. Deleting an entire directive range preserves its durable
+record and replaces the evaporated range overlay with a compact detached row;
+partial edits use normal overlay resizing. Co-located detached rows are ordered
+by their former source positions. References keep their source-bound
+evaporation behavior.
+
 Top-level directive presentations may persist an exact provider and
 reasoning-effort override. Nested directives edit the top-level request owner.
 Without an override, the directive inherits the main session model at dispatch.

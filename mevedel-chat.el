@@ -96,6 +96,8 @@
 		  (instruction))
 (declare-function mevedel--delete-instruction "mevedel-overlays"
 		  (instruction))
+(declare-function mevedel--detached-directive-p "mevedel-overlays"
+		  (directive))
 (declare-function mevedel--directive-llm-prompt "mevedel-overlays"
 		  (directive))
 (declare-function mevedel--directive-record "mevedel-overlays" (directive))
@@ -1352,7 +1354,8 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                         (mevedel--delete-instruction child-directive))
                       (save-excursion
                         (goto-char (overlay-start live-directive))
-                        (overlay-put live-directive 'evaporate t))))
+                        (unless (mevedel--detached-directive-p live-directive)
+                          (overlay-put live-directive 'evaporate t)))))
                   (mevedel--update-instruction-overlay live-directive t)
                   (with-current-buffer directive-buffer
                     (pulse-momentary-highlight-region

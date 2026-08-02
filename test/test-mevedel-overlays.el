@@ -557,7 +557,117 @@
                          (plist-get (mevedel-directive-anchor record)
                                     :state)))
           (should-not (overlay-get directive 'mevedel-directive)))
-      (mevedel-overlays-test--discard-directive cell))))
+      (mevedel-overlays-test--discard-directive cell)))
+
+  :doc "detaches Ready and attempted directives after real full-region edits"
+  (dolist (state '(nil implemented))
+    (let* ((request (concat "A request " (make-string 140 ?x)))
+           (workspace (mevedel-workspace--create
+                       :type 'test :id (format "detach-%s" state)
+                       :root "/tmp" :name "detach"))
+           (cell (mevedel-overlays-test--make-directive
+                  "before\ndirective body\nafter\n"
+                  request workspace))
+           (directive (cdr cell))
+           (record (mevedel--directive-record directive))
+           (id (mevedel-directive-id record))
+           (start (overlay-start directive))
+           (end (overlay-end directive)))
+      (unwind-protect
+          (with-current-buffer (car cell)
+            (setf (mevedel-directive-state record) state)
+            (when state
+              (setf (mevedel-directive-attempts record)
+                    (list (mevedel-directive-attempt--create
+                           :directive-request (mevedel-directive-request record)
+                           :request "Exact" :result "Done" :outcome 'success
+                           :patch "" :capture 'complete
+                           :captured-at "2026-08-02T01:00:00+0200"
+                           :checkpoint '(:session-id "s" :turn 1)))))
+            (delete-region start end)
+            (let ((detached (mevedel--instruction-with-uuid id workspace))
+                  (anchor (mevedel-directive-anchor record)))
+              (should (overlayp detached))
+              (should (overlay-buffer detached))
+              (should (= (overlay-start detached) (overlay-end detached)))
+              (should-not (overlay-get detached 'evaporate))
+              (should-not (overlay-get detached
+                                       'mevedel-instruction-collapse-p))
+              (should (eq 'detached (plist-get anchor :state)))
+              (should (= start (plist-get anchor :position)))
+              (should (equal (list start end)
+                             (plist-get anchor :source-order)))
+              (should (eq record (car (mevedel-workspace-directives workspace))))
+              (should (string-match-p
+                       (if state "DETACHED.*IMPLEMENTED" "DETACHED.*READY")
+                       (substring-no-properties
+                        (overlay-get detached 'before-string))))
+              (should-not (string-search
+                           request
+                           (substring-no-properties
+                            (overlay-get detached 'before-string))))
+              (should (keymapp (overlay-get detached 'keymap)))))
+        (mevedel-overlays-test--discard-directive cell))))
+
+  :doc "keeps partial edits attached through ordinary overlay resizing"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "detach-partial" :root "/tmp"
+                     :name "detach-partial"))
+         (cell (mevedel-overlays-test--make-directive
+                "directive body\n" "Keep attached" workspace))
+         (directive (cdr cell))
+         (record (mevedel--directive-record directive)))
+    (unwind-protect
+        (with-current-buffer (car cell)
+          (delete-region (1+ (overlay-start directive))
+                         (1- (overlay-end directive)))
+          (should (overlay-buffer directive))
+          (should (< (overlay-start directive) (overlay-end directive)))
+          (should (eq 'attached
+                      (plist-get (mevedel-directive-anchor record) :state))))
+      (mevedel-overlays-test--discard-directive cell)))
+
+  :doc "renders co-located detached directives in former source order"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "detach-many" :root "/tmp"
+                     :name "detach-many"))
+         (file (make-temp-file "mevedel-detach-many-" nil ".txt"
+                               "first\nmiddle\nsecond\n"))
+         (buffer (find-file-noselect file))
+         first second first-id second-id)
+    (unwind-protect
+        (with-current-buffer buffer
+          (fundamental-mode)
+          (setq-local mevedel--workspace workspace)
+          (setq first (mevedel--create-directive-in
+                       buffer 1 6 nil "First request"))
+          (setq second (mevedel--create-directive-in
+                        buffer 14 20 nil "Second request"))
+          (setq first-id (overlay-get first 'mevedel-uuid)
+                second-id (overlay-get second 'mevedel-uuid))
+          (delete-region 1 20)
+          (let ((detached-first
+                 (mevedel--instruction-with-uuid first-id workspace))
+                (detached-second
+                 (mevedel--instruction-with-uuid second-id workspace)))
+            (should (= (overlay-start detached-first)
+                       (overlay-start detached-second)))
+            (should (> (overlay-get detached-first 'priority)
+                       (overlay-get detached-second 'priority)))
+            (should (string-match-p
+                     "First request"
+                     (substring-no-properties
+                      (overlay-get detached-first 'before-string))))
+            (should (string-match-p
+                     "Second request"
+                     (substring-no-properties
+                      (overlay-get detached-second 'before-string))))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (setq-local kill-buffer-hook nil)
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-file file))))
 
 (mevedel-deftest mevedel--create-reference-in
   (:vars
@@ -574,7 +684,12 @@
     (unwind-protect
         (progn
           (should (overlay-get (cdr cell) 'evaporate))
-          (should-not (mevedel-workspace-directives workspace)))
+          (should-not (mevedel-workspace-directives workspace))
+          (with-current-buffer (car cell)
+            (delete-region (overlay-start (cdr cell))
+                           (overlay-end (cdr cell)))
+            (should-not (overlay-buffer (cdr cell)))
+            (should-not (mevedel--all-instructions))))
       (mevedel-overlays-test--discard-reference cell))))
 
 (mevedel-deftest mevedel--set-directive-request

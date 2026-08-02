@@ -165,6 +165,10 @@ All instructions, references or directives, are highlighted in the buffer via an
 overlay. The overlay contains an action menu which can be toggled via
 `mevedel-ov-dispatch-key` and grants access to common operations.
 
+Deleting all source text covered by a directive leaves a compact, zero-width
+detached row at that position. Its request, attempts, discussions, state, and
+actions remain available; deleting a complete reference still removes it.
+
 ![Directive Overlay](.assets/images/ov-actions-menu.png)
 
 > [!NOTE]
