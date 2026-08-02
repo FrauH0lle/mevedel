@@ -60,6 +60,7 @@ check project dir first, then global."
                (:constructor mevedel-directive-attempt--create)
                (:copier nil))
   "One immutable terminal implementation attempt."
+  directive-request
   request
   result
   outcome
@@ -67,6 +68,7 @@ check project dir first, then global."
   capture
   covered-files
   gaps
+  captured-at
   checkpoint)
 
 (cl-defstruct (mevedel-directive-discussion-turn
@@ -109,6 +111,12 @@ One workspace per project, shared by all sessions for that project."
   (setf (mevedel-directive-request directive) request
         (mevedel-directive-state directive) nil)
   request)
+
+(defun mevedel-directive-request-changed-p (directive)
+  "Return non-nil when DIRECTIVE differs from its latest attempt snapshot."
+  (when-let* ((attempt (car (last (mevedel-directive-attempts directive)))))
+    (not (equal (mevedel-directive-request directive)
+                (mevedel-directive-attempt-directive-request attempt)))))
 
 (defun mevedel-directive-set-state (directive state)
   "Set DIRECTIVE's transient lifecycle STATE."

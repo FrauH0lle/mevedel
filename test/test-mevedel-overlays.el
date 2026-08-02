@@ -427,6 +427,7 @@
                 (mevedel--ov-actions-dispatch directive))
               (should (member '(?M "model") choices))
               (should (member '(?o "activity") choices))
+              (should-not (member '(?r "revise") choices))
               (should
                (string-match-p
                 "Session:model · effort default · session"
@@ -442,6 +443,21 @@
                 (mevedel--ov-actions-dispatch directive))
               (should (member '(?d "continue-discussion") choices))
               (should (member '(?i "implement-this") choices))
+              (mevedel--set-directive-status directive 'implemented)
+              (catch 'captured
+                (mevedel--ov-actions-dispatch directive))
+              (should (member '(?c "request-changes") choices))
+              (should-not (member '(?i "implement") choices))
+              (should-not (member '(?r "revise") choices))
+              (mevedel--set-directive-status directive 'failed)
+              (catch 'captured
+                (mevedel--ov-actions-dispatch directive))
+              (should (member '(?r "retry") choices))
+              (should-not (member '(?i "implement") choices))
+              (mevedel--set-directive-status directive 'aborted)
+              (catch 'captured
+                (mevedel--ov-actions-dispatch directive))
+              (should (member '(?r "retry") choices))
               (mevedel--set-directive-status directive 'discussing)
               (catch 'captured
                 (mevedel--ov-actions-dispatch directive))
@@ -455,6 +471,36 @@
                (mevedel--ov-actions-model child)
                :type 'user-error))))
       (kill-buffer session-buffer))))
+
+(mevedel-deftest mevedel--instruction-label/request-changed
+  (:doc "shows Ready with a request-changed qualifier after an authored edit")
+  (with-temp-buffer
+    (insert "directive")
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "edited" :root "/tmp" :name "edited"))
+           (record
+            (mevedel-directive--create
+             :id "directive" :request "Edited request"
+             :anchor '(:state attached) :state nil
+             :attempts
+             (list
+              (mevedel-directive-attempt--create
+               :directive-request "Original request" :request "Exact"
+               :result "Done" :outcome 'success :patch ""
+               :capture 'complete :captured-at "2026-07-01T10:00:00+0200"))))
+           (directive (make-overlay (point-min) (point-max))))
+      (mevedel-workspace-add-directive workspace record)
+      (setq-local mevedel--workspace workspace)
+      (overlay-put directive 'mevedel-uuid "directive")
+      (overlay-put directive 'mevedel-id 1)
+      (overlay-put directive 'mevedel-instruction-type 'directive)
+      (let ((presentation
+             (mevedel--instruction-label
+              (list :instruction directive :type 'directive :padding ""))))
+        (should
+         (string-match-p
+          "READY.*REQUEST CHANGED"
+          (substring-no-properties (plist-get presentation :label))))))))
 
 
 ;;

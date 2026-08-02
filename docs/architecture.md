@@ -30,11 +30,11 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   retain the id needed to resolve this record; they do not own another request,
   status, patch, or attempt copy.
 - **`mevedel-directive-attempt`**: immutable submitted request, terminal answer
-  or error, outcome, captured patch, capture completeness, covered files,
-  explicit gaps, and the session/turn checkpoint that can restore the file
-  state around the attempt. A complete empty patch means the request observed
-  its covered files and made no changes; incomplete capture never implies
-  complete coverage.
+  or error, authored-request snapshot, outcome, captured patch, capture time and
+  completeness, covered files, explicit gaps, and the session/turn checkpoint
+  that can restore the file state around the attempt. A complete empty patch
+  means the request observed its covered files and made no changes; incomplete
+  capture never implies complete coverage.
 - **`mevedel-directive-discussion-turn`**: immutable local question, submitted
   request, terminal answer or error, outcome, optional selected-attempt index,
   and session/turn checkpoint.
@@ -162,8 +162,9 @@ order (later parents win, then the child). Ordinary preset keys resolve to
 `mevedel-foo`/`mevedel--foo` before gptel variables and use gptel's value
 composition semantics. Persistent application is buffer- and session-local;
 request-only application is dynamically scoped. The built-ins are
-`mevedel-discuss`, `mevedel-implement`, `mevedel-revise`, and
-`mevedel-tutor`. Presets can also merge named model tiers and workload maps.
+`mevedel-discuss`, `mevedel-implement`, and `mevedel-tutor`. Request changes
+and Retry use ordinary implementation authority and focused prompt context,
+not another preset. Presets can also merge named model tiers and workload maps.
 Dispatch resolves session values, tier values, workload values, then explicit
 Agent policy or request-owning skill policy. Skill preset entries use
 `$skill-name` workload symbols and are consumed before request realization.
@@ -183,7 +184,7 @@ The built-in selection is deliberate:
 
 | Consumer | Role/tone/context |
 | --- | --- |
-| Main / revise | Own role, shared main tone, tool orchestration, workspace config, memory, environment, skills, Goal |
+| Main | Base role/tone, tool orchestration, workspace config, memory, environment, skills, Goal |
 | Tutor | Tutor role/tone, tool orchestration, workspace config, memory, environment, skills, Goal |
 | Worker | Worker role, report tone, tool orchestration, workspace config, memory, environment, skills |
 | Explorer | Explorer role, report tone, tool orchestration, workspace config, environment, skills |

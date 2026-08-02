@@ -2,10 +2,9 @@
 
 ;;; Commentary:
 
-;; Defines the four gptel presets that drive a mevedel session:
+;; Defines the three gptel presets that drive a mevedel session:
 ;; `mevedel-discuss' (read-only exploration), `mevedel-implement'
-;; (full edit access, inherits discuss), `mevedel-revise' (editing
-;; with instruction context, inherits implement), and `mevedel-tutor'
+;; (full edit access, inherits discuss), and `mevedel-tutor'
 ;; (tutoring assistant, inherits discuss).
 ;;
 ;; Each preset assembles tool lists and registers sub-agents buffer-locally at
@@ -128,7 +127,6 @@
 (defcustom mevedel-action-preset-alist
   '((implement . mevedel-implement)
     (discuss . mevedel-discuss)
-    (revise . mevedel-revise)
     (tutor . mevedel-tutor))
   "Alist mapping actions to presets."
   :group 'mevedel
@@ -402,16 +400,6 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
     :system (lambda ()
               (mevedel-system-build-prompt
                'main
-               :session mevedel--session
-               :refresh-buffer (current-buffer))))
-
-  ;; Revision preset with previous patch context
-  (mevedel-define-preset mevedel-revise
-    :description "Revise previous implementation with full context"
-    :parents (mevedel-implement)
-    :system (lambda ()
-              (mevedel-system-build-prompt
-               'revise
                :session mevedel--session
                :refresh-buffer (current-buffer))))
 

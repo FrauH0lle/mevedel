@@ -43,6 +43,7 @@
                     (mevedel-directive-attempts record)
                     (list
                      (mevedel-directive-attempt--create
+                      :directive-request "Keep this request"
                       :request "Exact submitted request"
                       :result "Exact answer"
                       :outcome 'success
@@ -51,6 +52,7 @@
                       :covered-files (list source)
                       :gaps (list (cons (file-name-concat root "missing.el")
                                         'not-observed))
+                      :captured-at "2026-08-02T01:00:00+0200"
                       :checkpoint '(:session-id "session-1" :turn 3)))
                     (mevedel-directive-discussion record)
                     (list
@@ -77,6 +79,9 @@
             (should (equal "session-1" (mevedel-directive-session-id record)))
             (should (eq 'implemented (mevedel-directive-state record)))
             (let ((attempt (car (mevedel-directive-attempts record))))
+              (should (equal "Keep this request"
+                             (mevedel-directive-attempt-directive-request
+                              attempt)))
               (should (equal "Exact submitted request"
                              (mevedel-directive-attempt-request attempt)))
               (should (equal "Exact answer"
@@ -92,7 +97,9 @@
                                   'not-observed))
                       (mevedel-directive-attempt-gaps attempt)))
               (should (equal '(:session-id "session-1" :turn 3)
-                             (mevedel-directive-attempt-checkpoint attempt))))
+                             (mevedel-directive-attempt-checkpoint attempt)))
+              (should (equal "2026-08-02T01:00:00+0200"
+                             (mevedel-directive-attempt-captured-at attempt))))
             (let ((turn (car (mevedel-directive-discussion record))))
               (should (equal "Why this change?"
                              (mevedel-directive-discussion-turn-message turn)))

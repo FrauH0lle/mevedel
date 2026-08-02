@@ -30,8 +30,9 @@
 ;; Main entry point for mevedel.  Provides the `mevedel' and
 ;; `mevedel-tutoring' commands, installation/uninstallation of hooks
 ;; and presets, and the directive-processing commands
-;; (`mevedel-implement-directive', `mevedel-revise-directive',
-;; `mevedel-discuss-directive', `mevedel-tutor-directive').
+;; (`mevedel-implement-directive', `mevedel-discuss-directive',
+;; `mevedel-request-directive-changes', `mevedel-retry-directive', and
+;; `mevedel-tutor-directive').
 ;;
 ;; Acts as the top-level loader that `require's every mevedel module.
 ;; Downstream consumers need only `(require 'mevedel)'.
@@ -112,8 +113,6 @@
 (declare-function mevedel--process-directive
                   "mevedel-chat" (directive preset prompt-fn callback))
 (declare-function mevedel--read-session-directory "mevedel-chat" (workspace))
-(declare-function mevedel--revise-directive-prompt
-                  "mevedel-chat" (content &optional patch-buffer directive))
 (declare-function mevedel--start-chat
                   "mevedel-chat"
                   (workspace working-directory prompt-session
@@ -151,6 +150,8 @@
                   "mevedel-skills-invoke" (fsm))
 
 ;; `mevedel-structs'
+(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tool-repair'
@@ -241,25 +242,37 @@ the request)."
     (user-error "No directive found at point")))
 
 ;;;###autoload
-(defun mevedel-revise-directive (&optional callback)
-  "Propose a revision to a patch based on the directive at point.
+(defun mevedel-request-directive-changes ()
+  "Open Request changes for the implemented directive at point."
+  (interactive)
+  (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
+                                                     (mevedel--instructions-at (point) 'directive)
+                                                      t)
+                                                     'directive)))
+      (progn
+        (unless (eq (mevedel--directive-status directive) 'implemented)
+          (user-error "Request changes requires an implemented directive"))
+        (let ((buffer (mevedel-open-directive-activity directive)))
+          (with-current-buffer buffer
+            (mevedel-directive-activity-set-action 'request-changes)
+            (goto-char (point-max)))))
+    (user-error "No directive found at point")))
 
-If CALLBACK is provided, it will be called when the implementation
-process completes.  The callback will receive two arguments: ERROR (nil
-on success, a string error description on failure, or the symbol
-\\='abort if the request was aborted) and FSM (the gptel-fsm object for
-the request)."
+;;;###autoload
+(defun mevedel-retry-directive ()
+  "Open Retry for the failed or aborted directive at point."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
                                                       (mevedel--instructions-at (point) 'directive)
                                                       t)
                                                      'directive)))
       (progn
-        (overlay-put directive 'mevedel-directive-action 'revise)
-        (mevedel--process-directive directive (alist-get 'revise mevedel-action-preset-alist)
-                                    (lambda (content)
-                                      (mevedel--revise-directive-prompt content nil directive))
-                                    callback))
+        (unless (memq (mevedel--directive-status directive) '(failed aborted))
+          (user-error "Retry requires a failed or aborted directive"))
+        (let ((buffer (mevedel-open-directive-activity directive)))
+          (with-current-buffer buffer
+            (mevedel-directive-activity-set-action 'retry)
+            (goto-char (point-max)))))
     (user-error "No directive found at point")))
 
 ;;;###autoload
@@ -404,8 +417,15 @@ TOTAL is the total number of directives."
       (progn
         (message "Completed processing %d directive%s" total (if (= total 1) "" "s")))
     ;; Process next directive
-    (let ((directive (car directives))
-          (remaining (cdr directives)))
+    (let* ((directive (car directives))
+           (remaining (cdr directives))
+           (record (mevedel--directive-record directive)))
+      (if (mevedel-directive-attempts record)
+          (progn
+            (message "Skipping directive %d/%d: existing implementation activity"
+                     current total)
+            (mevedel--process-directives-sequentially
+             remaining (1+ current) total))
       (message "Processing directive %d/%d: #%d %s"
                current total
                (overlay-get directive 'mevedel-id)
@@ -424,9 +444,12 @@ TOTAL is the total number of directives."
                            0 nil
                            #'mevedel--process-directives-sequentially
                            remaining (1+ current) total)))))
-        (overlay-put directive 'mevedel-directive-action 'implement)
-        (mevedel--process-directive directive 'mevedel-implement
-                                    #'mevedel--implement-directive-prompt callback)))))
+        (if (eq (mevedel-directive-state record) 'discussed)
+            (mevedel--implement-discussion directive callback)
+          (overlay-put directive 'mevedel-directive-action 'implement)
+          (mevedel--process-directive
+           directive 'mevedel-implement
+           #'mevedel--implement-directive-prompt callback)))))))
 
 ;;;###autoload
 (defun mevedel-instruction-count ()
@@ -621,7 +644,7 @@ always prompt for the session name."
             #'mevedel-tool-exec-handle-execution-event)
     (setq mevedel-execution-mailbox-delivery-function nil))
   ;; Remove presets
-  (dolist (preset '(mevedel-discuss mevedel-implement mevedel-revise))
+  (dolist (preset '(mevedel-discuss mevedel-implement))
     (setf (alist-get preset gptel--known-presets nil 'remove) nil))
 
   ;; Remove mention expansion from gptel

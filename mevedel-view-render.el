@@ -4011,7 +4011,8 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
 
 (defconst mevedel-view--directive-action-labels
   '(("implement" . "Implement")
-    ("revise" . "Revise")
+    ("request-changes" . "Request changes")
+    ("retry" . "Retry")
     ("discuss" . "Discuss")
     ("tutor" . "Tutor"))
   "Plain display labels for directive actions.")

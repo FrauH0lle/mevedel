@@ -24,6 +24,26 @@
 
 
 ;;
+;;; Directive activity
+
+(mevedel-deftest mevedel-directive-request-changed-p
+  (:doc "compares the authored request with the latest attempt snapshot")
+  (let ((directive
+         (mevedel-directive--create
+          :id "directive" :request "Current" :anchor '(:state attached)
+          :attempts
+          (list
+           (mevedel-directive-attempt--create
+            :directive-request "Older")
+           (mevedel-directive-attempt--create
+            :directive-request "Current")))))
+    (should-not (mevedel-directive-request-changed-p directive))
+    (mevedel-directive-set-request directive "Edited")
+    (should (mevedel-directive-request-changed-p directive))
+    (should-not (mevedel-directive-state directive))))
+
+
+;;
 ;;; Session transient state
 
 (mevedel-deftest mevedel-session-pending-inputs ()

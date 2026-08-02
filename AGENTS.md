@@ -263,8 +263,9 @@ warnings.
 ### Key interactive commands
 - `mevedel-create-reference` / `mevedel-create-directive`
 - `mevedel-save-instructions` / `mevedel-load-instructions`
-- `mevedel-implement-directive` / `mevedel-revise-directive` /
-  `mevedel-discuss-directive` / `mevedel-tutor-directive`
+- `mevedel-implement-directive` / `mevedel-discuss-directive` /
+  `mevedel-request-directive-changes` / `mevedel-retry-directive` /
+  `mevedel-tutor-directive`
 - `mevedel` / `mevedel-tutoring`
 - `mevedel-resume` / `mevedel-rewind` / `mevedel-save-session` /
   `mevedel-rename-session`

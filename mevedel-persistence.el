@@ -28,9 +28,13 @@
                   "mevedel-structs" (&rest slots))
 (declare-function mevedel-directive-attempt-capture
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-captured-at
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-checkpoint
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-covered-files
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-directive-request
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-gaps
                   "mevedel-structs" (cl-x) t)
@@ -140,6 +144,9 @@ not saved."
            (mapcar
             (lambda (attempt)
               (list
+               :directive-request
+               (substring-no-properties
+                (mevedel-directive-attempt-directive-request attempt))
                :request (substring-no-properties
                          (mevedel-directive-attempt-request attempt))
                :result (substring-no-properties
@@ -162,6 +169,8 @@ not saved."
                     (car gap) base-directory)
                    (cdr gap)))
                 (mevedel-directive-attempt-gaps attempt))
+               :captured-at
+               (mevedel-directive-attempt-captured-at attempt)
                :checkpoint
                (copy-tree (mevedel-directive-attempt-checkpoint attempt))))
             (mevedel-directive-attempts directive))
@@ -282,16 +291,20 @@ contents for position patching if the file changes before restore."
         :attempts
         (mapcar
          (lambda (attempt)
-           (let ((attempt-request (plist-get attempt :request))
+           (let ((directive-request
+                  (plist-get attempt :directive-request))
+                 (attempt-request (plist-get attempt :request))
                  (result (plist-get attempt :result))
                  (outcome (plist-get attempt :outcome))
                  (patch (plist-get attempt :patch))
                  (capture (plist-get attempt :capture))
                  (covered-files (plist-get attempt :covered-files))
                  (gaps (plist-get attempt :gaps))
+                 (captured-at (plist-get attempt :captured-at))
                  (checkpoint (plist-get attempt :checkpoint)))
              (unless
-                 (and (stringp attempt-request)
+                 (and (stringp directive-request)
+                      (stringp attempt-request)
                       (stringp result)
                       (memq outcome '(success error aborted))
                       (stringp patch)
@@ -303,10 +316,12 @@ contents for position patching if the file changes before restore."
                        (lambda (gap)
                          (and (consp gap) (stringp (car gap))))
                        gaps)
+                      (stringp captured-at)
                       (stringp (plist-get checkpoint :session-id))
                       (natnump (plist-get checkpoint :turn)))
                (user-error "Malformed mevedel directive list"))
              (mevedel-directive-attempt--create
+              :directive-request directive-request
               :request attempt-request :result result
               :outcome outcome :patch patch :capture capture
               :covered-files
@@ -318,6 +333,7 @@ contents for position patching if the file changes before restore."
                         (cons (expand-file-name (car gap) base-directory)
                               (cdr gap)))
                       gaps)
+              :captured-at captured-at
               :checkpoint (copy-tree checkpoint))))
          attempts)
         :discussion

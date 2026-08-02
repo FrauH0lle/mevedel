@@ -66,6 +66,8 @@
 (declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-request-changed-p
+                  "mevedel-structs" (directive))
 (declare-function mevedel-directive-set-anchor "mevedel-structs"
                   (directive anchor))
 (declare-function mevedel-directive-set-request "mevedel-structs"
@@ -1724,17 +1726,18 @@ interactive calls."
                              ,@(and model-choice (list model-choice))
                              ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
                                   '(?e "expand") '(?e "collapse"))))
-                          ('implemented `((?o "activity") (?v "view") (?w "show-answer") (?r "revise") (?p "preview") (?m "modify") (?k "clear")
+                          ('implemented `((?o "activity") (?v "view") (?w "show-answer") (?c "request-changes") (?p "preview") (?m "modify") (?k "clear")
                                         ,@(and model-choice
                                                (list model-choice))
                                         ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
                                              '(?e "expand") '(?e "collapse"))))
-                          ('failed `((?o "activity") (?i "implement") (?r "revise") (?m "modify") (?p "preview") (?k "clear")
+                          ((or 'failed 'aborted)
+                           `((?o "activity") (?r "retry") (?m "modify") (?p "preview") (?k "clear")
                                      ,@(and model-choice
                                             (list model-choice))
                                      ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
                                           '(?e "expand") '(?e "collapse"))))
-                          (_ `((?o "activity") (?d "discuss") (?i "implement") (?r "revise") (?t "tags") (?m "modify")
+                          (_ `((?o "activity") (?d "discuss") (?i "implement") (?t "tags") (?m "modify")
                                (?p "preview") (?k "clear")
                                ,@(and model-choice (list model-choice))
                                ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
@@ -1785,7 +1788,8 @@ interactive calls."
                   (continue-discussion . mevedel-discuss-directive)
                   (implement   . mevedel-implement-directive)
                   (implement-this . mevedel-implement-discussion-directive)
-                  (revise      . mevedel-revise-directive)
+                  (request-changes . mevedel-request-directive-changes)
+                  (retry       . mevedel-retry-directive)
                   (tags        . mevedel-modify-directive-tag-query)
                   (preview     . mevedel-preview-directive-prompt)))
     (let ((name (car pair))
@@ -2178,7 +2182,11 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
            ('failed
             (append-label
              (overlay-get instruction 'mevedel-directive-fail-reason)
-             "FAILED: ")))
+             "FAILED: "))
+           (_
+            (when-let* ((record (mevedel--directive-record instruction))
+                        ((mevedel-directive-request-changed-p record)))
+              (append-label "READY · REQUEST CHANGED"))))
          (setq color
                (mevedel--instruction-directive-color instruction))
          (let* ((directive

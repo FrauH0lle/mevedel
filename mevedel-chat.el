@@ -203,13 +203,21 @@
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt--create
                   "mevedel-structs" (&rest slots))
-(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-capture
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-captured-at
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-directive-request
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-outcome
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-patch
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-request
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-attempt-result
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-discussion "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-discussion-turn--create
                   "mevedel-structs" (&rest slots))
@@ -219,6 +227,8 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-discussion-turn-result
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-request-changed-p
+                  "mevedel-structs" (directive))
 (declare-function mevedel-directive-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-drain-cancellers "mevedel-structs"
@@ -910,49 +920,86 @@ If PATCH-CONTENT is empty, does nothing."
 %s"
    content))
 
-(defun mevedel--revise-directive-prompt (content &optional patch-buffer directive)
-  "Generate a prompt for revising based on CONTENT (revision instructions).
-
-When DIRECTIVE is provided, its latest implementation attempt owns the patch.
-Otherwise PATCH-BUFFER defaults to the reusable patch viewer.
-
-DIRECTIVE is the instruction overlay being revised."
-  (let* ((directive-patch (when directive
-                            (mevedel-get-directive-patch directive)))
-         (patch-buffer (or patch-buffer (mevedel--patch-buffer)))
-         (patch-content
-          (cond
-           (directive
-            (or (and directive-patch
-                     (not (string-empty-p directive-patch))
-                     directive-patch)
-                (user-error "Directive has no captured patch")))
-           (patch-buffer
-            (with-current-buffer patch-buffer
-              (buffer-substring-no-properties (point-min) (point-max))))
-           (t (user-error "No patch found for revision")))))
+(defun mevedel--request-changes-prompt
+    (content directive feedback &optional new-context-p)
+  "Build focused Request changes context for DIRECTIVE.
+CONTENT contains the current request and freshly resolved references.  FEEDBACK
+may be empty only when NEW-CONTEXT-P says new subdirectives supply the changes."
+  (let* ((attempt (car (last (mevedel-directive-attempts directive))))
+         (feedback (string-trim (or feedback ""))))
+    (unless (and (eq (mevedel-directive-state directive) 'implemented)
+                 attempt
+                 (eq 'success (mevedel-directive-attempt-outcome attempt))
+                 (not (mevedel-directive-request-changed-p directive)))
+      (user-error "Request changes requires a successful current attempt"))
+    (when (and (string-empty-p feedback) (not new-context-p))
+      (user-error "Request changes requires feedback or new subdirectives"))
     (format
-     "## TASK: Revise your previous implementation based on new feedback.
+     "## TASK: Implement requested changes to the directive.
 
-### INSTRUCTIONS:
+Current repository state is authoritative. Inspect it before editing; the
+preceding patch below is historical evidence, not a patch to reapply.
 
-1. Read the revision instructions below (if any)
-2. Review your previous patch
-3. Read and understand all provided references
-4. Use the references to complete the request
-5. Understand what needs to be changed or improved
-6. Create a NEW implementation that addresses the feedback
-7. Use your tools to make the changes
+### CURRENT REQUEST AND FRESH REFERENCES:
+
 %s
-==================================
-YOUR PREVIOUS WORK (for reference)
-==================================
 
+### REQUESTED CHANGES:
+
+%s
+
+### IMMEDIATELY PRECEDING ATTEMPT (historical)
+
+Captured at: %s
+Capture completeness: %s
+
+Answer:
+%s
+
+Historical observed patch:
 %s"
-     (if (and content (not (string-empty-p content)))
-         (format "\n### REVISION INSTRUCTIONS:\n\n%s\n\n" content)
-       "")
-     patch-content)))
+     content
+     (if (string-empty-p feedback)
+         "Use the newly supplied directive context as the requested changes."
+       feedback)
+     (mevedel-directive-attempt-captured-at attempt)
+     (upcase (symbol-name (mevedel-directive-attempt-capture attempt)))
+     (mevedel-directive-attempt-result attempt)
+     (mevedel-directive-attempt-patch attempt))))
+
+(defun mevedel--retry-directive-prompt (content directive guidance)
+  "Build focused Retry context for DIRECTIVE from CONTENT and GUIDANCE."
+  (let* ((attempt (car (last (mevedel-directive-attempts directive))))
+         (guidance (string-trim (or guidance ""))))
+    (unless (and (memq (mevedel-directive-state directive)
+                       '(failed aborted))
+                 attempt
+                 (memq (mevedel-directive-attempt-outcome attempt)
+                       '(error aborted))
+                 (not (mevedel-directive-request-changed-p directive)))
+      (user-error "Retry requires a failed or aborted current attempt"))
+    (format
+     "## TASK: Retry the directive implementation.
+
+Current repository state is authoritative. Inspect it before editing; the
+preceding partial patch is diagnostic evidence, not a patch to reapply.
+
+### CURRENT REQUEST AND FRESH REFERENCES:
+
+%s%s
+
+### IMMEDIATELY PRECEDING FAILURE:
+
+%s
+
+Observed partial changes:
+%s"
+     content
+     (if (string-empty-p guidance)
+         ""
+       (format "\n\n### OPTIONAL GUIDANCE:\n\n%s" guidance))
+     (mevedel-directive-attempt-result attempt)
+     (mevedel-directive-attempt-patch attempt))))
 
 (defun mevedel--directive-discussion-transcript (directive)
   "Return DIRECTIVE's complete local discussion as plain text."
@@ -1033,7 +1080,8 @@ discussion.  ATTEMPT-INDEX attaches that implementation result."
 
 (defconst mevedel--directive-action-labels
   '((implement . "Implement")
-    (revise . "Revise")
+    (request-changes . "Request changes")
+    (retry . "Retry")
     (discuss . "Discuss")
     (tutor . "Tutor"))
   "Plain display labels for directive actions.")
@@ -1175,8 +1223,8 @@ settling."
   "Process DIRECTIVE using PRESET and PROMPT-FN, calling CALLBACK when complete.
 
 DIRECTIVE is the instruction overlay to process.
-PRESET is the gptel preset to use (mevedel-implement, mevedel-revise,
-mevedel-discuss).
+PRESET is the gptel preset to use (mevedel-implement, mevedel-discuss, or
+mevedel-tutor).
 PROMPT-FN is a function that generates the prompt from the directive
 content.
 CALLBACK is called with (err fsm) when processing completes.
@@ -1251,6 +1299,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                     (mevedel-directive-attempts record)
                     (list
                      (mevedel-directive-attempt--create
+                      :directive-request directive-text
                       :request prompt :result result :outcome outcome
                       :patch
                       (or (plist-get info :mevedel-directive-patch) "")
@@ -1260,6 +1309,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                       :covered-files
                       (plist-get info :mevedel-directive-covered-files)
                       :gaps (plist-get info :mevedel-directive-gaps)
+                      :captured-at (format-time-string "%FT%T%z")
                       :checkpoint checkpoint)))
                    (mevedel-directive-state record)
                    (pcase outcome
@@ -1450,6 +1500,35 @@ ordinary directive terminal arguments."
      directive (alist-get 'implement mevedel-action-preset-alist)
      (lambda (content)
        (mevedel--implement-discussion-prompt content record))
+     callback)))
+
+(defun mevedel--request-directive-changes
+    (directive feedback &optional callback)
+  "Implement DIRECTIVE again using focused FEEDBACK and latest activity."
+  (let* ((record (mevedel--directive-record directive))
+         (new-context-p
+          (cl-some #'mevedel--directivep
+                   (mevedel--child-instructions directive))))
+    ;; Validate before changing presentation or starting request setup.
+    (mevedel--request-changes-prompt "" record feedback new-context-p)
+    (overlay-put directive 'mevedel-directive-action 'request-changes)
+    (mevedel--process-directive
+     directive (alist-get 'implement mevedel-action-preset-alist)
+     (lambda (content)
+       (mevedel--request-changes-prompt
+        content record feedback new-context-p))
+     callback)))
+
+(defun mevedel--retry-directive (directive guidance &optional callback)
+  "Retry DIRECTIVE using its latest failure and optional GUIDANCE."
+  (let ((record (mevedel--directive-record directive)))
+    ;; Validate before changing presentation or starting request setup.
+    (mevedel--retry-directive-prompt "" record guidance)
+    (overlay-put directive 'mevedel-directive-action 'retry)
+    (mevedel--process-directive
+     directive (alist-get 'implement mevedel-action-preset-alist)
+     (lambda (content)
+       (mevedel--retry-directive-prompt content record guidance))
      callback)))
 
 (defun mevedel-abort (&optional buf)

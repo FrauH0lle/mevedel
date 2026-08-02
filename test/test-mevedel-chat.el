@@ -640,25 +640,104 @@
 ;;
 ;;; Directive processing
 
-(mevedel-deftest mevedel--revise-directive-prompt ()
+(mevedel-deftest mevedel--request-changes-prompt ()
   ,test
   (test)
-  :doc "uses directive-owned attempt patches instead of patch-viewer contents"
-  (with-temp-buffer
-    (insert "viewer-only")
-    (let ((directive (make-overlay (point-min) (point-max))))
-      (cl-letf (((symbol-function 'mevedel-get-directive-patch)
-                 (lambda (_) "attempt-owned")))
-        (let ((prompt (mevedel--revise-directive-prompt
-                       "Fix it" (current-buffer) directive)))
-          (should (string-search "attempt-owned" prompt))
-          (should-not (string-search "viewer-only" prompt))))
-      (cl-letf (((symbol-function 'mevedel-get-directive-patch)
-                 (lambda (_) nil)))
-        (should-error
-         (mevedel--revise-directive-prompt
-          "Fix it" (current-buffer) directive)
-         :type 'user-error)))))
+  :doc "uses fresh context and only the immediately preceding attempt"
+  (let* ((older
+          (mevedel-directive-attempt--create
+           :directive-request "Original" :request "Older exact request"
+           :result "Older answer" :outcome 'success :patch "older patch"
+           :capture 'complete :captured-at "2026-07-01T10:00:00+0200"))
+         (latest
+          (mevedel-directive-attempt--create
+           :directive-request "Current request" :request "Latest exact request"
+           :result "Latest answer" :outcome 'success :patch "latest patch"
+           :capture 'incomplete :captured-at "2026-07-02T11:30:00+0200"))
+         (directive
+          (mevedel-directive--create
+           :id "directive" :request "Current request"
+           :anchor '(:state attached) :state 'implemented
+           :attempts (list older latest)))
+         (prompt
+          (mevedel--request-changes-prompt
+           "Current request\n\nFresh reference" directive
+           "> change one\nchange two")))
+    (dolist (text '("Current repository state is authoritative"
+                    "Fresh reference" "> change one\nchange two"
+                    "Latest answer" "latest patch"
+                    "2026-07-02T11:30:00+0200" "INCOMPLETE"
+                    "historical"))
+      (should (string-search text prompt)))
+    (dolist (text '("Older exact request" "Older answer" "older patch"
+                    "Latest exact request"))
+      (should-not (string-search text prompt))))
+
+  :doc "requires feedback unless unconsumed subdirectives provide changes"
+  (let ((directive
+         (mevedel-directive--create
+          :id "directive" :request "Request" :anchor '(:state attached)
+          :state 'implemented
+          :attempts
+          (list
+           (mevedel-directive-attempt--create
+            :directive-request "Request" :request "Exact"
+            :result "Done" :outcome 'success :patch "" :capture 'complete
+            :captured-at "2026-07-02T12:00:00+0200")))))
+    (should-error
+     (mevedel--request-changes-prompt "Request" directive "")
+     :type 'user-error)
+    (should
+     (string-search
+      "newly supplied directive context"
+      (mevedel--request-changes-prompt "Request\nChild change" directive nil
+                                       t)))
+    (setf (mevedel-directive-state directive) nil)
+    (should-error
+     (mevedel--request-changes-prompt "Request" directive "Feedback")
+     :type 'user-error)))
+
+(mevedel-deftest mevedel--retry-directive-prompt ()
+  ,test
+  (test)
+  :doc "uses the latest error and observed partial changes with optional guidance"
+  (let* ((directive
+          (mevedel-directive--create
+           :id "directive" :request "Request" :anchor '(:state attached)
+           :state 'failed
+           :attempts
+           (list
+            (mevedel-directive-attempt--create
+             :directive-request "Request" :request "Older"
+             :result "Old failure" :outcome 'error :patch "old patch"
+             :capture 'complete :captured-at "2026-07-01T10:00:00+0200")
+            (mevedel-directive-attempt--create
+             :directive-request "Request" :request "SECRET LATEST REQUEST"
+             :result "Latest failure" :outcome 'error :patch "partial patch"
+             :capture 'incomplete
+             :captured-at "2026-07-02T11:30:00+0200"))))
+         (guided
+          (mevedel--retry-directive-prompt
+           "Request\n\nFresh reference" directive "Try the parser first"))
+         (unguided
+          (mevedel--retry-directive-prompt
+           "Request\n\nFresh reference" directive "")))
+    (dolist (text '("Current repository state is authoritative"
+                    "Fresh reference" "Latest failure" "partial patch"
+                    "Try the parser first"))
+      (should (string-search text guided)))
+    (dolist (text '("Old failure" "old patch" "SECRET LATEST REQUEST"))
+      (should-not (string-search text guided)))
+    (should-not (string-search "OPTIONAL GUIDANCE" unguided))
+    (setf (mevedel-directive-state directive) nil)
+    (should-error
+     (mevedel--retry-directive-prompt "Request" directive "")
+     :type 'user-error)))
+
+(mevedel-deftest mevedel-revision-api-removed
+  (:doc "removes the superseded revision command and prompt path")
+  (should-not (fboundp 'mevedel-revise-directive))
+  (should-not (fboundp 'mevedel--revise-directive-prompt)))
 
 (mevedel-deftest mevedel--directive-save-buffer-p ()
   ,test
@@ -737,6 +816,11 @@
           (cl-letf (((symbol-function 'mevedel--directive-text)
                      (lambda (directive)
                        (overlay-get directive 'mevedel-directive-text)))
+                    ((symbol-function 'mevedel--directive-record)
+                     (lambda (_)
+                       (mevedel-directive--create
+                        :id "batch" :request "Batch"
+                        :anchor '(:state attached) :state nil)))
                     ((symbol-function 'mevedel--process-directive)
                      (lambda (directive _preset _prompt-fn callback)
                        (push (overlay-get directive 'mevedel-id) calls)
@@ -752,6 +836,56 @@
             (should (equal (list (list ov2) 2 2) scheduled-args))
             (apply scheduled-fn scheduled-args)
             (should (equal '(2 1) calls))))
+      (when (buffer-live-p buf)
+        (kill-buffer buf))))
+
+  :doc "skips attempted directives and implements Discussed activity feedback"
+  (let ((buf (generate-new-buffer " *mevedel-directive-batch-state*"))
+        calls)
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "abcdef")
+          (let* ((attempted (make-overlay 1 2))
+                 (discussed (make-overlay 2 3))
+                 (ready (make-overlay 3 4)))
+            (overlay-put attempted 'mevedel-test-record
+                         (mevedel-directive--create
+                          :id "attempted" :request "Attempted"
+                          :anchor '(:state attached) :state 'failed
+                          :attempts
+                          (list (mevedel-directive-attempt--create
+                                 :outcome 'error))))
+            (overlay-put attempted 'mevedel-id 1)
+            (overlay-put discussed 'mevedel-test-record
+                         (mevedel-directive--create
+                          :id "discussed" :request "Discussed"
+                          :anchor '(:state attached) :state 'discussed))
+            (overlay-put discussed 'mevedel-id 2)
+            (overlay-put ready 'mevedel-test-record
+                         (mevedel-directive--create
+                          :id "ready" :request "Ready"
+                          :anchor '(:state attached) :state nil))
+            (overlay-put ready 'mevedel-id 3)
+            (cl-letf (((symbol-function 'mevedel--directive-record)
+                       (lambda (directive)
+                         (overlay-get directive 'mevedel-test-record)))
+                      ((symbol-function 'mevedel--implement-discussion)
+                       (lambda (directive callback)
+                         (push (list 'discussion directive) calls)
+                         (funcall callback nil nil)))
+                      ((symbol-function 'mevedel--process-directive)
+                       (lambda (directive _preset _prompt callback &optional _)
+                         (push (list 'initial directive) calls)
+                         (funcall callback nil nil)))
+                      ((symbol-function 'run-at-time)
+                       (lambda (_secs _repeat function &rest args)
+                         (apply function args))))
+              (mevedel--process-directives-sequentially
+               (list attempted discussed ready) 1 3)
+              (should
+               (equal (list (list 'discussion discussed)
+                            (list 'initial ready))
+                      (nreverse calls))))))
       (when (buffer-live-p buf)
         (kill-buffer buf)))))
 
@@ -777,9 +911,19 @@
 			 (write-region (point-min) (point-max) file nil 'silent)
 			 (set-buffer-modified-p nil)
 			 (goto-char (point-min))
-			 (let ((directive (mevedel--create-directive-in
-					   buf (point-min) (line-end-position)
-					   nil "Change alpha.")))
+			 (let* ((directive (mevedel--create-directive-in
+					    buf (point-min) (line-end-position)
+					    nil "Change alpha."))
+				(older-attempt
+				 (mevedel-directive-attempt--create
+				  :directive-request "Older request"
+				  :request "Older exact request" :result "Older result"
+				  :outcome 'error :patch "" :capture 'complete
+				  :captured-at "2026-08-01T01:00:00+0200"
+				  :checkpoint '(:session-id "older" :turn 1))))
+			   (setf (mevedel-directive-attempts
+				  (mevedel--directive-record directive))
+				 (list older-attempt))
 			   (overlay-put directive 'mevedel-directive-action 'implement)
                            (overlay-put directive
                                         'mevedel-directive-model-provider
@@ -912,14 +1056,25 @@
 			     (should (eq 'implemented
 					 (mevedel--directive-status directive)))
 			     (let* ((record (mevedel--directive-record directive))
-				    (attempt (car (mevedel-directive-attempts record)))
+				    (attempt
+				     (car (last (mevedel-directive-attempts record))))
 				    (checkpoint
 				     (mevedel-directive-attempt-checkpoint attempt)))
+			       (should (= 2 (length
+					     (mevedel-directive-attempts record))))
+			       (should (eq older-attempt
+					   (car (mevedel-directive-attempts record))))
 			       (should (equal (mevedel-directive-session-id record)
 					      (plist-get checkpoint :session-id)))
 			       (should (= 1 (plist-get checkpoint :turn)))
 			       (should (equal captured-prompt
 					      (mevedel-directive-attempt-request attempt)))
+			       (should (equal "Change alpha."
+					      (mevedel-directive-attempt-directive-request
+					       attempt)))
+			       (should
+				(stringp
+				 (mevedel-directive-attempt-captured-at attempt)))
 			       (should (equal "Answer text.\n"
 					      (mevedel-directive-attempt-result attempt)))
 			       (should (eq 'success
@@ -1597,6 +1752,105 @@
           (should (string-match-p "Keep it small" (nth 2 captured)))
           (should (eq #'ignore (nth 3 captured)))
           (should-not (nth 4 captured)))))))
+
+(mevedel-deftest mevedel--request-directive-changes
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global)))
+  ,test
+  (test)
+  :doc "uses ordinary implementation authority and accepts child-only feedback"
+  (let ((workspace (mevedel-workspace--create
+                    :type 'test :id "changes" :root "/tmp" :name "changes"))
+        (mevedel-action-preset-alist '((implement . implement-preset)))
+        captured)
+    (with-temp-buffer
+      (insert "source")
+      (setq-local mevedel--workspace workspace)
+      (let* ((directive
+              (mevedel--create-directive-in
+               (current-buffer) (point-min) (point-max) nil "Request"))
+             (record (mevedel--directive-record directive)))
+        (setf (mevedel-directive-state record) 'implemented
+              (mevedel-directive-attempts record)
+              (list
+               (mevedel-directive-attempt--create
+                :directive-request "Request" :request "Exact"
+                :result "Done" :outcome 'success :patch "old patch"
+                :capture 'complete
+                :captured-at "2026-08-02T01:00:00+0200")))
+        (cl-letf (((symbol-function 'mevedel--child-instructions)
+                   (lambda (_) '(child)))
+                  ((symbol-function 'mevedel--directivep)
+                   (lambda (_) t))
+                  ((symbol-function 'mevedel--process-directive)
+                   (lambda (seen preset prompt-fn callback &optional options)
+                     (setq captured
+                           (list seen preset
+                                 (funcall prompt-fn "Fresh\nChild change")
+                                 callback options
+                                 (overlay-get seen 'mevedel-directive-action)))
+                     'accepted)))
+          (should
+           (eq 'accepted
+               (mevedel--request-directive-changes directive "" #'ignore)))
+          (should (eq directive (nth 0 captured)))
+          (should (eq 'implement-preset (nth 1 captured)))
+          (should (string-search "Child change" (nth 2 captured)))
+          (should (eq #'ignore (nth 3 captured)))
+          (should-not (nth 4 captured))
+          (should (eq 'request-changes (nth 5 captured)))))))
+
+  :doc "rejects Request changes without feedback or new subdirectives"
+  (let ((record
+         (mevedel-directive--create
+          :id "directive" :request "Request" :anchor '(:state attached)
+          :state 'implemented
+          :attempts
+          (list
+           (mevedel-directive-attempt--create
+            :directive-request "Request" :outcome 'success)))))
+    (with-temp-buffer
+      (insert "source")
+      (let ((directive (make-overlay (point-min) (point-max))))
+        (cl-letf (((symbol-function 'mevedel--directive-record)
+                   (lambda (_) record))
+                  ((symbol-function 'mevedel--child-instructions)
+                   (lambda (_) nil)))
+          (should-error
+           (mevedel--request-directive-changes directive "" nil)
+           :type 'user-error))))))
+
+(mevedel-deftest mevedel--retry-directive
+  (:doc "accepts empty guidance and uses ordinary implementation authority")
+  (let ((record
+         (mevedel-directive--create
+          :id "directive" :request "Request" :anchor '(:state attached)
+          :state 'failed
+          :attempts
+          (list
+           (mevedel-directive-attempt--create
+            :directive-request "Request" :request "Exact"
+            :result "Failure" :outcome 'error :patch "partial"
+            :capture 'incomplete :captured-at "2026-08-02T01:00:00+0200"))))
+        (mevedel-action-preset-alist '((implement . implement-preset)))
+        captured)
+    (with-temp-buffer
+      (insert "source")
+      (let ((directive (make-overlay (point-min) (point-max))))
+        (cl-letf (((symbol-function 'mevedel--directive-record)
+                   (lambda (_) record))
+                  ((symbol-function 'mevedel--process-directive)
+                   (lambda (seen preset prompt-fn callback &optional options)
+                     (setq captured
+                           (list seen preset (funcall prompt-fn "Fresh")
+                                 callback options
+                                 (overlay-get seen 'mevedel-directive-action)))
+                     'accepted)))
+          (should (eq 'accepted (mevedel--retry-directive directive "" nil)))
+          (should (eq 'implement-preset (nth 1 captured)))
+          (should (string-search "Failure" (nth 2 captured)))
+          (should (eq 'retry (nth 5 captured))))))))
 
 (mevedel-deftest mevedel--generate-final-patch ()
   ,test

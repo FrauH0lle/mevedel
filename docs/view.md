@@ -101,6 +101,13 @@ character is `>`. A discussion result can target one selected attempt, and
 `Implement this` submits the directive with the complete local discussion as
 additional implementation context.
 
+The same composer switches to Request changes after a successful attempt and
+Retry after a failed or aborted attempt. Request changes requires multiline
+feedback unless newly added subdirectives already supply it; Retry guidance is
+optional. The resulting implementation prompt uses fresh directive context and
+only the immediately preceding attempt. Older attempts remain visible but do
+not enter the request automatically.
+
 ## Render flow
 
 ```mermaid

@@ -167,7 +167,7 @@
         (should (string-match-p "Attempt 1" text))
         (should-not (string-match-p "Exact discussion request" text))))))
 
-(mevedel-deftest mevedel-directive-activity-submit-discussion
+(mevedel-deftest mevedel-directive-activity-submit
   (:vars
    ((mevedel--instruction-states (make-hash-table :test #'equal))
     (mevedel--instruction-current-state-key :global))
@@ -189,10 +189,50 @@
             (goto-char mevedel-directive-activity--input-marker)
             (insert "> question\nmore")
             (should (eq 'accepted
-                        (mevedel-directive-activity-submit-discussion)))
+                        (mevedel-directive-activity-submit)))
             (should (equal (list directive "> question\nmore" 2) captured))
             (should (equal "" (mevedel-directive-activity--input-text)))
             (should-not mevedel-directive-activity--selected-attempt-index)))
+      (mevedel-directive-activity-test--discard fixture))))
+
+(mevedel-deftest mevedel-directive-activity-set-action
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global))
+   :doc "dispatches multiline Request changes and optional-guidance Retry")
+  (let* ((fixture (mevedel-directive-activity-test--make-directive "Change"))
+         (directive (caddr fixture))
+         calls activity)
+    (unwind-protect
+        (cl-letf (((symbol-function 'pop-to-buffer)
+                   (lambda (buffer &rest _) buffer))
+                  ((symbol-function 'mevedel--request-directive-changes)
+                   (lambda (selected feedback callback)
+                     (push (list 'request-changes selected feedback) calls)
+                     (funcall callback nil nil)
+                     'changes-accepted))
+                  ((symbol-function 'mevedel--retry-directive)
+                   (lambda (selected guidance callback)
+                     (push (list 'retry selected guidance) calls)
+                     (funcall callback nil nil)
+                     'retry-accepted)))
+          (setq activity (mevedel-open-directive-activity directive))
+          (with-current-buffer activity
+            (mevedel-directive-activity-set-action 'request-changes)
+            (should (string-match-p "REQUEST CHANGES" (buffer-string)))
+            (goto-char mevedel-directive-activity--input-marker)
+            (insert "> first\nsecond")
+            (should (eq 'changes-accepted
+                        (mevedel-directive-activity-submit)))
+            (mevedel-directive-activity-set-action 'retry)
+            (should (string-match-p "RETRY" (buffer-string)))
+            (should (eq 'retry-accepted
+                        (mevedel-directive-activity-submit))))
+          (should
+           (equal
+            (list (list 'retry directive "")
+                  (list 'request-changes directive "> first\nsecond"))
+            calls)))
       (mevedel-directive-activity-test--discard fixture))))
 
 (mevedel-deftest mevedel-directive-activity-discuss-result
@@ -294,9 +334,11 @@
                 (mevedel-directive-attempts record)
                 (list
                  (mevedel-directive-attempt--create
+                  :directive-request "Current"
                   :request "Exact submitted request"
                   :result "Exact answer"
                   :outcome 'success :patch "" :capture 'complete
+                  :captured-at "2026-08-02T01:00:00+0200"
                   :covered-files '("/tmp/a") :gaps nil
                   :checkpoint '(:session-id "session-1" :turn 2))))
           (cl-letf (((symbol-function 'pop-to-buffer)
@@ -304,12 +346,17 @@
             (setq activity
                   (mevedel-open-directive-activity (caddr fixture))))
           (with-current-buffer activity
+            (should (eq 'request-changes
+                        mevedel-directive-activity--composer-action))
             (let ((text (buffer-substring-no-properties
                          (point-min) (point-max))))
               (should (string-match-p "Implemented" text))
               (should (string-match-p "Exact submitted request" text))
               (should (string-match-p "Exact answer" text))
               (should (string-match-p "Complete capture; no changes" text))
+              (should
+               (string-match-p
+                (regexp-quote "2026-08-02T01:00:00+0200") text))
               (should (string-match-p "session-1, turn 2" text)))))
       (mevedel-directive-activity-test--discard fixture))))
 

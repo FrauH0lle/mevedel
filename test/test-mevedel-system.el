@@ -34,18 +34,16 @@
 ;;; Built-in profiles
 
 (mevedel-deftest mevedel-system-build-prompt/built-ins
-  (:doc "built-in profiles select their own roles and tones")
+  (:doc "built-in profiles select main and tutor roles without revision")
   (let ((main (mevedel-system-build-prompt 'main))
-        (revise (mevedel-system-build-prompt 'revise))
         (tutor (mevedel-system-build-prompt 'tutor)))
     (should (string-match-p "Task execution protocol" main))
     (should (string-match-p "Tone and style" main))
     (should (string-match-p "Tool orchestration" main))
-    (should (string-match-p "revising a previous implementation" revise))
-    (should (string-match-p "Tone and style" revise))
     (should (string-match-p "NEVER PROVIDE SOLUTIONS" tutor))
     (should (string-match-p "Tutoring style" tutor))
-    (should-not (string-match-p "Tone and style" tutor))))
+    (should-not (string-match-p "Tone and style" tutor))
+    (should-error (mevedel-system-build-prompt 'revise))))
 
 
 ;;

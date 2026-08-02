@@ -316,7 +316,7 @@
                   :message "Inspect only."
                   :role role)))))))
 
-  :doc "selects main, revise, and tutor prompt profiles"
+  :doc "selects main and tutor prompts with no revision preset"
   (let ((mevedel-preset--registry nil)
         (gptel--known-presets nil))
     (mevedel-tools-register)
@@ -324,15 +324,12 @@
     (let ((main (funcall (plist-get
                           (gptel-get-preset 'mevedel-discuss)
                           :system)))
-          (revise (funcall (plist-get
-                            (gptel-get-preset 'mevedel-revise)
-                            :system)))
           (tutor (funcall (plist-get
                            (gptel-get-preset 'mevedel-tutor)
                            :system))))
       (should (string-match-p "Task execution protocol" main))
-      (should (string-match-p "revising a previous implementation" revise))
-      (should (string-match-p "NEVER PROVIDE SOLUTIONS" tutor)))))
+      (should (string-match-p "NEVER PROVIDE SOLUTIONS" tutor))
+      (should-not (gptel-get-preset 'mevedel-revise)))))
 
 (mevedel-deftest mevedel-preset--variable-for-key
   ()

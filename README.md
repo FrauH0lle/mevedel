@@ -150,7 +150,8 @@ References are pieces of context selected from normal buffers. Directives are
 prompts that can be processed with one of mevedel's presets. A directive gathers
 context from matching references, linked references, and reference commentary;
 then the selected action decides whether the model may edit files, only discuss,
-revise existing work, or tutor Socratically.
+request focused changes to existing work, retry a failure, or tutor
+Socratically.
 
 This means there are two complementary workflows:
 
@@ -429,9 +430,10 @@ Currently, linking is only relevant for references.
 | Command                            | Command Description                                                          |
 |------------------------------------|------------------------------------------------------------------------------|
 | `mevedel-implement-directive`      | Implement directive with full editing capabilities.                          |
-| `mevedel-revise-directive`         | Revise directive with additional context from existing patches.              |
 | `mevedel-discuss-directive`        | Open the directive activity composer for a local read-only discussion.       |
 | `mevedel-implement-discussion-directive` | Implement using the complete local discussion as additional context.  |
+| `mevedel-request-directive-changes` | Open multiline feedback after a successful implementation.                  |
+| `mevedel-retry-directive`          | Retry a failed or aborted implementation with optional guidance.             |
 | `mevedel-tutor-directive`          | Tutoring mode that guides without providing direct solutions (experimental). |
 | `mevedel-preview-directive-prompt` | Preview directive prompt at the current point.                               |
 | `mevedel-open-directive-activity`  | Inspect attempts and project captured patches for the current directive.     |
@@ -453,11 +455,14 @@ directive prompt:
 
 [directive-preview.webm](https://github.com/user-attachments/assets/72c77cfa-5a6d-45a1-9fc4-ee6b1ad66034)
 
-The `mevedel-implement-directive`, `mevedel-revise-directive`, and
-`mevedel-tutor-directive` commands process the directive directly.
+The `mevedel-implement-directive` and `mevedel-tutor-directive` commands
+process the directive directly.
 `mevedel-discuss-directive` opens its activity composer; discussion turns are
 read-only, persist locally, and can be continued or promoted with `Implement
 this` without adding the exchange to main-chat context.
+After implementation, the activity surface offers Request changes after
+success or Retry after failure/abort. Both use current repository state, fresh
+references, and only the immediately preceding attempt as model context.
 
 Note: The tutoring preset is experimental and uses a Socratic questioning
 approach to guide learning rather than providing direct solutions.
@@ -1081,7 +1086,7 @@ that can be checked into version control. `AGENTS.local.md` is loaded after
 `AGENTS.md` in each directory for private checkout-specific guidance.
 
 When a prompt profile selects memory, the first 200 lines of each configured
-memory index are included. Main, revise, tutor, and worker profiles select it;
+memory index are included. Main, tutor, and worker profiles select it;
 Explorer, verifier, reviewer, guardian, and compaction do not. The default
 memory roots are `.mevedel/memory/`,
 `.agents/memory/`, `~/.mevedel/memory/`, and `~/.agents/memory/`.

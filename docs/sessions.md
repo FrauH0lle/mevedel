@@ -5,7 +5,8 @@ Settled directive work is represented in a session segment by a compact hidden
 outcome, and turn. The workspace-owned implementation attempt or discussion
 turn retains the exact submitted request, terminal result, and matching
 `(:session-id ... :turn ...)` checkpoint; implementation attempts additionally
-retain capture metadata and patches. Consequently resume and Rewind keep
+retain the authored-request snapshot, capture timestamp, capture metadata, and
+patch. Consequently resume and Rewind keep
 chronology and file-state linkage without reintroducing the full isolated
 directive exchange into model context. A directive reuses its bound live or
 persisted session. If that session no longer exists, rebinding requires explicit
