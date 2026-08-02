@@ -123,6 +123,36 @@ One workspace per project, shared by all sessions for that project."
   (or (mevedel-directive-attempts directive)
       (mevedel-directive-discussion directive)))
 
+(defun mevedel-directive-recompute-state (directive)
+  "Recompute DIRECTIVE state from its surviving model activity."
+  (let ((latest-turn -1)
+        state)
+    (dolist (attempt (mevedel-directive-attempts directive))
+      (let ((turn (or (plist-get
+                       (mevedel-directive-attempt-checkpoint attempt) :turn)
+                      -1)))
+        (when (> turn latest-turn)
+          (setq latest-turn turn
+                state
+                (pcase (mevedel-directive-attempt-outcome attempt)
+                  ('success 'implemented)
+                  ('aborted 'aborted)
+                  (_ 'failed))))))
+    (dolist (discussion (mevedel-directive-discussion directive))
+      (let ((turn (or (plist-get
+                       (mevedel-directive-discussion-turn-checkpoint
+                        discussion)
+                       :turn)
+                      -1)))
+        (when (and (eq 'success
+                       (mevedel-directive-discussion-turn-outcome discussion))
+                   (> turn latest-turn))
+          (setq latest-turn turn
+                state 'discussed))))
+    (setf (mevedel-directive-state directive)
+          (unless (mevedel-directive-request-changed-p directive)
+            state))))
+
 (defun mevedel-directive-set-state (directive state)
   "Set DIRECTIVE's transient lifecycle STATE."
   (setf (mevedel-directive-state directive) state))
@@ -140,6 +170,29 @@ One workspace per project, shared by all sessions for that project."
 (defun mevedel-workspace-set-directives (workspace directives)
   "Replace WORKSPACE's directive records with DIRECTIVES."
   (setf (mevedel-workspace-directives workspace) directives))
+
+(defun mevedel-workspace-rewind-directives
+    (workspace session-id target-turn)
+  "Discard directive activity in WORKSPACE from SESSION-ID TARGET-TURN onward."
+  (dolist (directive (mevedel-workspace-directives workspace))
+    (setf
+     (mevedel-directive-attempts directive)
+     (cl-remove-if
+      (lambda (attempt)
+        (let ((checkpoint (mevedel-directive-attempt-checkpoint attempt)))
+          (and (equal session-id (plist-get checkpoint :session-id))
+               (>= (or (plist-get checkpoint :turn) 0) target-turn))))
+      (mevedel-directive-attempts directive))
+     (mevedel-directive-discussion directive)
+     (cl-remove-if
+      (lambda (turn)
+        (let ((checkpoint
+               (mevedel-directive-discussion-turn-checkpoint turn)))
+          (and (equal session-id (plist-get checkpoint :session-id))
+               (>= (or (plist-get checkpoint :turn) 0) target-turn))))
+      (mevedel-directive-discussion directive)))
+    (mevedel-directive-recompute-state directive))
+  workspace)
 
 
 ;;

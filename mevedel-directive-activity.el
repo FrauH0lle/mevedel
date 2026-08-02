@@ -15,23 +15,50 @@
 
 (eval-when-compile (require 'cl-lib))
 
+;; `mevedel-chat'
+(declare-function mevedel--discuss-directive-turn
+                  "mevedel-chat"
+                  (directive message &optional attempt-index callback))
+(declare-function mevedel--implement-discussion
+                  "mevedel-chat" (directive &optional callback))
+(declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
+(declare-function mevedel--request-directive-changes
+                  "mevedel-chat" (directive feedback &optional callback))
+(declare-function mevedel--retry-directive
+                  "mevedel-chat" (directive guidance &optional callback))
+(declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
+
 ;; `mevedel-overlays'
+(declare-function mevedel--directive-action-context
+                  "mevedel-overlays" (record workspace))
 (declare-function mevedel--directive-record "mevedel-overlays" (directive))
 (declare-function mevedel--instruction-buffer-workspace
                   "mevedel-overlays" (buffer))
 (declare-function mevedel--instruction-with-uuid
                   "mevedel-overlays" (uuid &optional workspace))
-(declare-function mevedel--directive-action-context
-                  "mevedel-overlays" (record workspace))
+(declare-function mevedel--ov-actions-getov "mevedel-overlays" ())
 (declare-function mevedel--reattach-directive
                   "mevedel-overlays" (record workspace buffer start end))
 (declare-function mevedel--reconcile-directive-sources
                   "mevedel-overlays" (workspace))
-(declare-function mevedel-archive-directive
-                  "mevedel-overlays" (record workspace))
-(declare-function mevedel--ov-actions-getov "mevedel-overlays" ())
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction type))
+(declare-function mevedel-archive-directive
+                  "mevedel-overlays" (record workspace))
+
+;; `mevedel-persistence'
+(declare-function mevedel--reset-instructions-preserving-directives
+                  "mevedel-persistence" (workspace directives))
+(declare-function mevedel--restore-preserved-directives
+                  "mevedel-persistence" (workspace))
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--prompt-candidates
+                  "mevedel-session-persistence" (session))
+(declare-function mevedel-session-persistence-resume-id
+                  "mevedel-session-persistence" (workspace session-id))
+(declare-function mevedel-session-persistence-rewind
+                  "mevedel-session-persistence" (buffer target))
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
@@ -68,21 +95,12 @@
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-p "mevedel-structs" (cl-x))
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-request-changed-p
+                  "mevedel-structs" (directive))
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
-
-;; `mevedel-chat'
-(declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
-(declare-function mevedel--discuss-directive-turn
-                  "mevedel-chat"
-                  (directive message &optional attempt-index callback))
-(declare-function mevedel--implement-discussion
-                  "mevedel-chat" (directive &optional callback))
-(declare-function mevedel--request-directive-changes
-                  "mevedel-chat" (directive feedback &optional callback))
-(declare-function mevedel--retry-directive
-                  "mevedel-chat" (directive guidance &optional callback))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-activate-at-point "mevedel-view"
@@ -131,6 +149,7 @@
   "g" #'mevedel-directive-activity-refresh
   "o" #'mevedel-directive-activity-goto-source
   "r" #'mevedel-directive-activity-reattach
+  "R" #'mevedel-directive-activity-rewind
   "a" #'mevedel-directive-activity-archive
   "d" #'mevedel-directive-activity-discuss-result
   "n" #'mevedel-view-zone-next
@@ -222,6 +241,8 @@
                (gaps (mevedel-directive-attempt-gaps attempt))
                (checkpoint (mevedel-directive-attempt-checkpoint attempt))
                (patch-p (not (string-empty-p patch)))
+               (rewind-p
+                (or (eq capture 'incomplete) covered gaps patch-p))
                (capture-line
                 (cond
                  ((eq capture 'incomplete)
@@ -236,11 +257,14 @@
                       (upcase (symbol-name outcome)))
               'face 'bold)
             :body
-            ,(format "%s\nCaptured: %s\nCheckpoint: %s, turn %s\n\nRequest:\n%s\n\nResult:\n%s"
+            ,(format "%s\nCaptured: %s\nCheckpoint: %s, turn %s%s\n\nRequest:\n%s\n\nResult:\n%s"
                      capture-line
                      (mevedel-directive-attempt-captured-at attempt)
                      (plist-get checkpoint :session-id)
                      (plist-get checkpoint :turn)
+                     (if rewind-p
+                         "\nRewind: R restores the complete session suffix"
+                       "")
                      (mevedel-directive-attempt-request attempt)
                      (mevedel-directive-attempt-result attempt))
             :entry ,attempt
@@ -320,11 +344,13 @@
         :navigatable t)
        (:namespace directive-activity :id state
         :label-left ,(propertize "STATE" 'face 'bold)
-        :body ,(capitalize
-                (string-replace
-                 "-" " "
-                 (symbol-name
-                  (or (mevedel-directive-state directive) 'ready))))
+        :body ,(if (mevedel-directive-request-changed-p directive)
+                   "Ready · request changed"
+                 (capitalize
+                  (string-replace
+                   "-" " "
+                   (symbol-name
+                    (or (mevedel-directive-state directive) 'ready)))))
         :navigatable t)
        (:namespace directive-activity :id anchor
         :label-left ,(propertize "ANCHOR" 'face 'bold)
@@ -355,6 +381,69 @@
       (user-error "Attempt has no captured patch"))
     (require 'mevedel-chat)
     (mevedel--replace-patch-buffer patch)))
+
+(defun mevedel-directive-activity-rewind ()
+  "Rewind the execution session to before the implementation at point."
+  (interactive)
+  (let* ((attempt (get-text-property (point) 'mevedel-view-zone-entry))
+         (checkpoint
+          (and attempt (mevedel-directive-attempt-checkpoint attempt))))
+    (unless (and attempt
+                 checkpoint
+                 (or (eq 'incomplete
+                         (mevedel-directive-attempt-capture attempt))
+                     (mevedel-directive-attempt-covered-files attempt)
+                     (mevedel-directive-attempt-gaps attempt)
+                     (not (string-empty-p
+                           (or (mevedel-directive-attempt-patch attempt)
+                               "")))))
+      (user-error "No effectful implementation attempt at point"))
+    (require 'mevedel-chat)
+    (require 'mevedel-session-persistence)
+    (let* ((session-id (plist-get checkpoint :session-id))
+           (turn (plist-get checkpoint :turn))
+           (buffer
+            (or
+             (cl-loop
+              for (_ . candidate) in
+              (mevedel--workspace-sessions
+               mevedel-directive-activity--workspace)
+              when (equal
+                    session-id
+                    (mevedel-session-session-id
+                     (buffer-local-value 'mevedel--session candidate)))
+              return candidate)
+             (let ((records
+                    (copy-sequence
+                     (mevedel-workspace-directives
+                      mevedel-directive-activity--workspace)))
+                   resumed)
+               (mevedel--reset-instructions-preserving-directives
+                mevedel-directive-activity--workspace records)
+               (unwind-protect
+                   (setq resumed
+                         (mevedel-session-persistence-resume-id
+                          mevedel-directive-activity--workspace session-id))
+                 (mevedel--reset-instructions-preserving-directives
+                  mevedel-directive-activity--workspace records)
+                 (mevedel--restore-preserved-directives
+                  mevedel-directive-activity--workspace))
+               resumed)))
+           (session
+            (and buffer (buffer-local-value 'mevedel--session buffer)))
+           (target
+            (and session
+                 (cl-loop
+                  for (_ . candidate) in
+                  (mevedel-session-persistence--prompt-candidates session)
+                  when (= turn (plist-get candidate :cum-turn))
+                  return candidate))))
+      (unless buffer
+        (user-error "Execution session is unavailable: %s" session-id))
+      (unless target
+        (user-error "Implementation checkpoint is unavailable: turn %s" turn))
+      (prog1 (mevedel-session-persistence-rewind buffer target)
+        (mevedel-directive-activity-refresh)))))
 
 (defun mevedel-directive-activity--source-directive ()
   "Return the current activity directive after validating its prompt context."

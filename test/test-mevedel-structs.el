@@ -42,6 +42,84 @@
     (should (mevedel-directive-request-changed-p directive))
     (should-not (mevedel-directive-state directive))))
 
+(mevedel-deftest mevedel-directive-recompute-state
+  (:doc "derives lifecycle state from the latest surviving model activity")
+  (let* ((success
+          (mevedel-directive-attempt--create
+           :directive-request "Current" :outcome 'success
+           :checkpoint '(:session-id "session" :turn 1)))
+         (failure
+          (mevedel-directive-attempt--create
+           :directive-request "Current" :outcome 'error
+           :checkpoint '(:session-id "session" :turn 3)))
+         (discussion
+          (mevedel-directive-discussion-turn--create
+           :outcome 'success
+           :checkpoint '(:session-id "session" :turn 2)))
+         (directive
+          (mevedel-directive--create
+           :id "directive" :request "Current" :anchor '(:state attached))))
+    (should-not (mevedel-directive-recompute-state directive))
+    (setf (mevedel-directive-attempts directive) (list success))
+    (should (eq 'implemented
+                (mevedel-directive-recompute-state directive)))
+    (setf (mevedel-directive-discussion directive) (list discussion))
+    (should (eq 'discussed
+                (mevedel-directive-recompute-state directive)))
+    (setf (mevedel-directive-attempts directive) (list success failure))
+    (should (eq 'failed
+                (mevedel-directive-recompute-state directive)))
+    (setf (mevedel-directive-request directive) "Edited")
+    (should-not (mevedel-directive-recompute-state directive))))
+
+(mevedel-deftest mevedel-workspace-rewind-directives
+  (:doc "prunes one execution-session suffix while retaining authored records")
+  (let* ((workspace
+          (mevedel-workspace--create
+           :type 'test :id "rewind" :root "/tmp" :name "rewind"))
+         (earlier
+          (mevedel-directive--create
+           :id "earlier" :request "Earlier" :anchor '(:state attached)
+           :attempts
+           (list
+            (mevedel-directive-attempt--create
+             :directive-request "Earlier" :outcome 'success
+             :checkpoint '(:session-id "session" :turn 1))
+            (mevedel-directive-attempt--create
+             :directive-request "Earlier" :outcome 'error
+             :checkpoint '(:session-id "session" :turn 4)))
+           :discussion
+           (list
+            (mevedel-directive-discussion-turn--create
+             :outcome 'success
+             :checkpoint '(:session-id "session" :turn 2)))))
+         (edited
+          (mevedel-directive--create
+           :id "edited" :request "Edited request" :anchor '(:state attached)
+           :attempts
+           (list
+            (mevedel-directive-attempt--create
+             :directive-request "Original request" :outcome 'success
+             :checkpoint '(:session-id "session" :turn 3)))))
+         (later
+          (mevedel-directive--create
+           :id "later" :request "Later" :anchor '(:state source-missing)
+           :attempts
+           (list
+            (mevedel-directive-attempt--create
+             :directive-request "Later" :outcome 'aborted
+             :checkpoint '(:session-id "session" :turn 5))))))
+    (mevedel-workspace-set-directives workspace (list earlier edited later))
+    (mevedel-workspace-rewind-directives workspace "session" 4)
+    (should (equal (list earlier edited later)
+                   (mevedel-workspace-directives workspace)))
+    (should (= 1 (length (mevedel-directive-attempts earlier))))
+    (should (eq 'discussed (mevedel-directive-state earlier)))
+    (should (= 1 (length (mevedel-directive-attempts edited))))
+    (should-not (mevedel-directive-state edited))
+    (should-not (mevedel-directive-attempts later))
+    (should-not (mevedel-directive-state later))))
+
 
 ;;
 ;;; Session transient state

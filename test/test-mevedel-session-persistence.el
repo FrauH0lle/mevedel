@@ -2602,6 +2602,77 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
         (delete-directory tempdir t)
         (test-mevedel-session-persistence--reset-instructions)
         (mevedel-workspace-clear-registry))))
+  :doc "loads historical presentations without replacing current directive records"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let ((source-buf nil)
+          (data-buf nil)
+          (session nil))
+      (unwind-protect
+          (let ((source-file (file-name-concat tempdir "source.el")))
+            (test-mevedel-session-persistence--reset-instructions)
+            (write-region "EARLY\nLATER\n" nil source-file nil 'silent)
+            (setq source-buf (find-file-noselect source-file))
+            (with-current-buffer source-buf
+              (setq-local mevedel--workspace workspace)
+              (goto-char (point-min))
+              (search-forward "EARLY")
+              (mevedel--create-directive-in
+               source-buf (match-beginning 0) (match-end 0) nil "Early"))
+            (setq session (mevedel-session-create "main" workspace)
+                  data-buf (generate-new-buffer "*test-data-buf*"))
+            (setf (mevedel-session-turn-count session) 1)
+            (with-current-buffer data-buf
+              (setq-local mevedel--workspace workspace)
+              (setq-local mevedel--session session)
+              (org-mode)
+              (insert "First turn\n")
+              (mevedel-session-persistence-save session data-buf))
+            (let ((early (car (mevedel-workspace-directives workspace))))
+              (setf (mevedel-directive-attempts early)
+                    (list
+                     (mevedel-directive-attempt--create
+                      :directive-request "Early" :request "Early prompt"
+                      :result "Done" :outcome 'success :patch ""
+                      :capture 'complete :captured-at "2026-08-02T03:00:00+0200"
+                      :checkpoint '(:session-id "session" :turn 1))))
+              (mevedel-directive-set-request early "Current early edit")
+              (with-current-buffer source-buf
+                (goto-char (point-min))
+                (search-forward "LATER")
+                (mevedel--create-directive-in
+                 source-buf (match-beginning 0) (match-end 0) nil "Later"))
+              (let* ((later (car (mevedel-workspace-directives workspace)))
+                     (records (copy-sequence
+                               (mevedel-workspace-directives workspace))))
+                (setf (mevedel-directive-attempts later)
+                      (list
+                       (mevedel-directive-attempt--create
+                        :directive-request "Later" :outcome 'success
+                        :checkpoint '(:session-id "session" :turn 2))))
+                (with-current-buffer data-buf
+                  (mevedel-session-persistence--load-instructions
+                   session data-buf 1 records))
+                (should (equal records
+                               (mevedel-workspace-directives workspace)))
+                (should (equal "Current early edit"
+                               (mevedel-directive-request early)))
+                (should (= 1 (length (mevedel-directive-attempts early))))
+                (should (= 1 (length (mevedel-directive-attempts later))))
+                (dolist (record records)
+                  (should
+                   (eq record
+                       (mevedel--directive-record
+                        (mevedel--instruction-with-uuid
+                         (mevedel-directive-id record) workspace))))))))
+        (when (and data-buf (buffer-live-p data-buf))
+          (test-mevedel-session-persistence--release-and-kill data-buf session))
+        (when (buffer-live-p source-buf)
+          (with-current-buffer source-buf (set-buffer-modified-p nil))
+          (kill-buffer source-buf))
+        (delete-directory tempdir t)
+        (test-mevedel-session-persistence--reset-instructions)
+        (mevedel-workspace-clear-registry))))
   :doc "ignores unreadable instruction snapshots during session restore"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -4951,6 +5022,37 @@ rotation never saves through a rebound temporary visited filename or prompts"
         (should (= next-prompt-pos
                    (mevedel-session-persistence--find-turn-cutoff 1)))))))
 
+(mevedel-deftest mevedel-session-persistence--rewind-impact
+  (:doc "lists the complete discarded prompt suffix in chronological order")
+  (let* ((session
+          (mevedel-session--create
+           :name "rewind" :turn-count 3
+           :prompt-index
+           '((1 . ((:turn 1 :cum-turn 1 :preview "Directive one"
+                    :fork-point-id "one")
+                   (:turn 2 :cum-turn 2 :preview "Ordinary chat"
+                    :fork-point-id "two")
+                   (:turn 3 :cum-turn 3 :preview "Directive two"
+                    :fork-point-id "three"))))))
+         (target '(:segment 1 :turn 2 :cum-turn 2 :fork-point-id "two"))
+         impact)
+    (cl-letf (((symbol-function
+                'mevedel-session-persistence--detached-child-count)
+               (lambda (&rest _) 0))
+              ((symbol-function 'display-buffer) #'ignore))
+      (setq impact
+            (mevedel-session-persistence--rewind-impact session target nil))
+      (should
+       (equal '("Ordinary chat" "Directive two")
+              (mapcar (lambda (entry) (plist-get entry :preview))
+                      (plist-get impact :discarded-prompts))))
+      (mevedel-session-persistence--render-rewind-impact session impact)
+      (with-current-buffer "*mevedel-rewind-impact*"
+        (let ((text (buffer-string)))
+          (should (string-match-p "Discarded session events" text))
+          (should (< (string-match "Ordinary chat" text)
+                     (string-match "Directive two" text))))))))
+
 (mevedel-deftest mevedel-rewind ()
   ,test
   (test)
@@ -5215,6 +5317,141 @@ rotation never saves through a rebound temporary visited filename or prompts"
             (should (string-match-p "capture failed" (buffer-string)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))))
+  :doc "preserves serial authored directives and reattaches a restored deleted source"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let ((session nil)
+          (buffer nil)
+          (source-buffer nil)
+          (source-file (file-name-concat tempdir "source.el")))
+      (unwind-protect
+          (progn
+            (test-mevedel-session-persistence--reset-instructions)
+            (write-region "EARLY\nLATER\n" nil source-file nil 'silent)
+            (setq source-buffer (find-file-noselect source-file))
+            (with-current-buffer source-buffer
+              (setq-local mevedel--workspace workspace)
+              (goto-char (point-min))
+              (search-forward "EARLY")
+              (mevedel--create-directive-in
+               source-buffer (match-beginning 0) (match-end 0) nil "Early"))
+            (setq session (mevedel-session-create "main" workspace)
+                  buffer (generate-new-buffer "*test-directive-rewind*"))
+            (with-current-buffer buffer
+              (org-mode)
+              (setq-local mevedel--workspace workspace)
+              (setq-local mevedel--session session)
+              (insert "First directive\n")
+              (insert (propertize "First reply.\n" 'gptel 'response))
+              (setf (mevedel-session-turn-count session) 1)
+              (mevedel-session-persistence-save session buffer t))
+            (let ((early (car (mevedel-workspace-directives workspace))))
+              (setf (mevedel-directive-attempts early)
+                    (list
+                     (mevedel-directive-attempt--create
+                      :directive-request "Early" :request "Early prompt"
+                      :result "Done" :outcome 'success :patch ""
+                      :capture 'complete
+                      :captured-at "2026-08-02T03:00:00+0200"
+                      :checkpoint
+                      (list :session-id (mevedel-session-session-id session)
+                            :turn 1)))
+                    (mevedel-directive-state early) 'implemented)
+              (mevedel-directive-set-request early "Current early edit")
+              (with-current-buffer source-buffer
+                (goto-char (point-min))
+                (search-forward "LATER")
+                (mevedel--create-directive-in
+                 source-buffer (match-beginning 0) (match-end 0) nil "Later"))
+              (let* ((later (car (mevedel-workspace-directives workspace)))
+                     (records (copy-sequence
+                               (mevedel-workspace-directives workspace)))
+                     target)
+                (setf (mevedel-directive-attempts later)
+                      (list
+                       (mevedel-directive-attempt--create
+                        :directive-request "Later" :request "Later prompt"
+                        :result "Deleted" :outcome 'success
+                        :patch "deleted source.el" :capture 'complete
+                        :captured-at "2026-08-02T03:01:00+0200"
+                        :covered-files (list source-file)
+                        :checkpoint
+                        (list :session-id
+                              (mevedel-session-session-id session)
+                              :turn 2)))
+                      (mevedel-directive-state later) 'implemented)
+                (with-current-buffer buffer
+                  (mevedel-request-begin session)
+                  (puthash source-file "EARLY\nLATER\n"
+                           (mevedel-request-file-snapshots
+                            mevedel--current-request))
+                  (delete-file source-file)
+                  (goto-char (point-max))
+                  (insert "Second directive\n")
+                  (insert (propertize "Second reply.\n" 'gptel 'response))
+                  (setf (mevedel-session-turn-count session) 2)
+                  (mevedel-session-persistence-save session buffer t)
+                  (setq target
+                        (copy-sequence
+                         (cdr
+                          (cl-find-if
+                           (lambda (entry)
+                             (= 2 (plist-get (cdr entry) :cum-turn)))
+                           (mevedel-session-persistence--prompt-candidates
+                            session)))))
+                  (mevedel-request-end)
+                  (goto-char (point-max))
+                  (insert "Ordinary later chat\n")
+                  (insert (propertize "Later reply.\n" 'gptel 'response))
+                  (setf (mevedel-session-turn-count session) 3)
+                  (mevedel-session-persistence-save session buffer t))
+                (when (buffer-live-p source-buffer)
+                  (kill-buffer source-buffer)
+                  (setq source-buffer nil))
+                (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                          ((symbol-function 'yes-or-no-p)
+                           (lambda (&rest _) t))
+                          ((symbol-function 'mevedel--run-session-start-hooks)
+                           #'ignore))
+                  (should
+                   (mevedel-session-persistence-rewind buffer target)))
+                (should (= 1 (mevedel-session-turn-count session)))
+                (with-current-buffer buffer
+                  (should (string-match-p "First reply" (buffer-string)))
+                  (should-not (string-match-p "Second directive"
+                                              (buffer-string)))
+                  (should-not (string-match-p "Ordinary later chat"
+                                              (buffer-string))))
+                (should (file-exists-p source-file))
+                (should (equal records
+                               (mevedel-workspace-directives workspace)))
+                (should (= 1 (length (mevedel-directive-attempts early))))
+                (should-not (mevedel-directive-state early))
+                (should-not (mevedel-directive-attempts later))
+                (should-not (mevedel-directive-state later))
+                (should
+                 (eq 'attached
+                     (plist-get (mevedel-directive-anchor later) :state)))
+                (let ((overlay
+                       (mevedel--instruction-with-uuid
+                        (mevedel-directive-id later) workspace)))
+                  (should overlay)
+                  (should (eq later (mevedel--directive-record overlay)))
+                  (should
+                   (equal "LATER"
+                          (with-current-buffer (overlay-buffer overlay)
+                            (buffer-substring-no-properties
+                             (overlay-start overlay) (overlay-end overlay)))))))))
+        (when (and buffer (buffer-live-p buffer))
+          (test-mevedel-session-persistence--release-and-kill buffer session))
+        (setq source-buffer (or source-buffer
+                                (find-buffer-visiting source-file)))
+        (when (buffer-live-p source-buffer)
+          (with-current-buffer source-buffer (set-buffer-modified-p nil))
+          (kill-buffer source-buffer))
+        (delete-directory tempdir t)
+        (test-mevedel-session-persistence--reset-instructions)
+        (mevedel-workspace-clear-registry))))
   :doc "cancelling the impact confirmation changes no transcript or file state"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -5368,7 +5605,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                (buf (generate-new-buffer "*test-rewind-rollback*"))
                (path-a (file-name-concat tempdir "a.el"))
                (path-b (file-name-concat tempdir "b.el"))
-               target)
+               target record)
           (unwind-protect
               (with-current-buffer buf
                 (org-mode)
@@ -5406,28 +5643,42 @@ rotation never saves through a rebound temporary visited filename or prompts"
                  (mevedel-session-persistence--sidecar-path
                   (mevedel-session-save-path session))
                  (mevedel-session-persistence--build-sidecar session buf))
+                (setq record
+                      (mevedel-directive--create
+                       :id "rollback-directive" :request "Keep me"
+                       :anchor '(:state source-missing) :state 'failed
+                       :attempts
+                       (list
+                        (mevedel-directive-attempt--create
+                         :directive-request "Keep me" :outcome 'success
+                         :checkpoint
+                         (list :session-id
+                               (mevedel-session-session-id session)
+                               :turn 1))
+                        (mevedel-directive-attempt--create
+                         :directive-request "Keep me" :outcome 'error
+                         :checkpoint
+                         (list :session-id
+                               (mevedel-session-session-id session)
+                               :turn 2)))))
+                (mevedel-workspace-add-directive workspace record)
                 (let* ((plan
                         (mevedel-session-persistence-restore-plan session 1))
                        (before-buffer (buffer-string))
+                       (before-attempts
+                        (mevedel-directive-attempts record))
                        (before-state
                         (mevedel-session-persistence-serialize session))
                        (sidecar-path
                         (mevedel-session-persistence--sidecar-path
                          (mevedel-session-save-path session)))
                        (before-sidecar
-                        (mevedel-session-persistence--file-text sidecar-path))
-                       (original-load
-                        (symbol-function
-                         'mevedel-session-persistence--load-instructions))
-                       (load-calls 0))
+                        (mevedel-session-persistence--file-text sidecar-path)))
                   (cl-letf
                       (((symbol-function
-                         'mevedel-session-persistence--load-instructions)
-                        (lambda (&rest args)
-                          (cl-incf load-calls)
-                          (if (= load-calls 1)
-                              (error "Injected publication failure")
-                            (apply original-load args)))))
+                         'mevedel-session-persistence--save-instructions)
+                        (lambda (&rest _)
+                          (error "Injected publication failure"))))
                     (should-error
                      (mevedel-session-persistence--commit-rewind
                       session buf target plan)))
@@ -5443,7 +5694,12 @@ rotation never saves through a rebound temporary visited filename or prompts"
                           (mevedel-session-persistence--file-text path-a)))
                   (should
                    (equal "new-b"
-                          (mevedel-session-persistence--file-text path-b)))))
+                          (mevedel-session-persistence--file-text path-b)))
+                  (should (equal (list record)
+                                 (mevedel-workspace-directives workspace)))
+                  (should (eq before-attempts
+                              (mevedel-directive-attempts record)))
+                  (should (eq 'failed (mevedel-directive-state record)))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
       (delete-directory tempdir t)
@@ -5455,9 +5711,13 @@ rotation never saves through a rebound temporary visited filename or prompts"
          (save-path (file-name-as-directory
                      (file-name-concat tempdir "session")))
          (path (file-name-concat tempdir "tracked.el"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'test :id "rewind" :root tempdir :name "rewind"))
          (session
           (mevedel-session--create
            :name "main"
+           :workspace workspace
            :save-path save-path
            :current-segment 1
            :turn-count 1))

@@ -7,7 +7,11 @@
 ;;; Code:
 
 (require 'mevedel-directive-activity)
+(require 'mevedel-chat)
 (require 'mevedel-overlays)
+(require 'mevedel-persistence)
+(require 'mevedel-session-persistence)
+(require 'mevedel-workspace)
 (require 'mevedel-structs)
 (require 'helpers
          (file-name-concat
@@ -119,7 +123,7 @@
   (:vars
    ((mevedel--instruction-states (make-hash-table :test #'equal))
     (mevedel--instruction-current-state-key :global))
-   :doc "rerenders the current workspace record after request edits")
+   :doc "rerenders request edits as Ready with a request-changed qualifier")
   (let* ((fixture (mevedel-directive-activity-test--make-directive "Before"))
          (workspace (car fixture))
          (record (car (mevedel-workspace-directives workspace)))
@@ -129,11 +133,19 @@
                    (lambda (buffer &rest _) buffer)))
           (setq activity
                 (mevedel-open-directive-activity (caddr fixture)))
+          (setf (mevedel-directive-attempts record)
+                (list
+                 (mevedel-directive-attempt--create
+                  :directive-request "Before" :outcome 'success
+                  :checkpoint '(:session-id "session-1" :turn 1)))
+                (mevedel-directive-state record) 'implemented)
           (mevedel-directive-set-request record "After")
           (with-current-buffer activity
             (mevedel-directive-activity-refresh)
             (should (string-match-p "After" (buffer-string)))
-            (should-not (string-match-p "Before" (buffer-string)))))
+            (should-not (string-match-p "Before" (buffer-string)))
+            (should (string-match-p "Ready · request changed"
+                                    (buffer-string)))))
       (mevedel-directive-activity-test--discard fixture))))
 
 (mevedel-deftest mevedel-directive-activity--input-text
@@ -377,6 +389,131 @@
                 (regexp-quote "2026-08-02T01:00:00+0200") text))
               (should (string-match-p "session-1, turn 2" text)))))
       (mevedel-directive-activity-test--discard fixture))))
+
+(mevedel-deftest mevedel-directive-activity-rewind
+  ()
+  ,test
+  (test)
+  :doc "rewinds from an effectful attempt through its exact execution session checkpoint"
+  (let* ((workspace
+          (mevedel-workspace--create
+           :type 'test :id "rewind" :root "/tmp" :name "rewind"))
+         (record
+          (mevedel-directive--create
+           :id "directive" :request "Request" :anchor '(:state attached)))
+         (attempt
+          (mevedel-directive-attempt--create
+           :outcome 'error :patch "" :capture 'incomplete
+           :gaps '((:path "/tmp/missed" :reason "capture failed"))
+           :checkpoint '(:session-id "session-1" :turn 2)))
+         (session
+          (mevedel-session--create :session-id "session-1"))
+         (session-buffer (generate-new-buffer " *directive-rewind-session*"))
+         rewound)
+    (unwind-protect
+        (progn
+          (with-current-buffer session-buffer
+            (setq-local mevedel--session session))
+          (with-temp-buffer
+            (mevedel-directive-activity-mode)
+            (setq-local mevedel-directive-activity--workspace workspace
+                        mevedel-directive-activity--directive record)
+            (let ((position (point)))
+              (insert (propertize "Attempt"
+                                  'mevedel-view-zone-entry attempt))
+              (goto-char position))
+            (cl-letf
+                (((symbol-function 'mevedel--workspace-sessions)
+                  (lambda (_) (list (cons "main" session-buffer))))
+                 ((symbol-function
+                   'mevedel-session-persistence--prompt-candidates)
+                  (lambda (_)
+                    '(("S1 T2" . (:segment 1 :turn 2 :cum-turn 2
+                                    :fork-point-id "point")))))
+                 ((symbol-function 'mevedel-session-persistence-rewind)
+                  (lambda (buffer target)
+                    (setq rewound (list buffer target))
+                    t)))
+              (should (mevedel-directive-activity-rewind))))
+          (should (eq session-buffer (car rewound)))
+          (should (= 2 (plist-get (cadr rewound) :cum-turn)))
+          (should (eq #'mevedel-directive-activity-rewind
+                      (keymap-lookup
+                       mevedel-directive-activity-mode-map "R"))))
+      (kill-buffer session-buffer)))
+  :doc "rejects attempts with a complete no-change capture"
+  (let ((attempt
+         (mevedel-directive-attempt--create
+          :outcome 'success :patch "" :capture 'complete
+          :covered-files nil :gaps nil
+          :checkpoint '(:session-id "session-1" :turn 1))))
+    (with-temp-buffer
+      (mevedel-directive-activity-mode)
+      (let ((position (point)))
+        (insert (propertize "Attempt" 'mevedel-view-zone-entry attempt))
+        (goto-char position))
+      (should-error (mevedel-directive-activity-rewind)
+                    :type 'user-error)))
+
+  :doc "resumes the exact cold execution session without replacing authored records"
+  (let* ((workspace
+          (mevedel-workspace--create
+           :type 'test :id "cold-rewind" :root "/tmp" :name "cold-rewind"))
+         (record
+          (mevedel-directive--create
+           :id "directive" :request "Request" :anchor '(:state attached)))
+         (attempt
+          (mevedel-directive-attempt--create
+           :outcome 'success :capture 'complete :covered-files '("/tmp/a")
+           :checkpoint '(:session-id "cold-session" :turn 4)))
+         (session (mevedel-session--create :session-id "cold-session"))
+         (session-buffer (generate-new-buffer " *directive-cold-rewind*"))
+         reset-records resumed restored rewound)
+    (unwind-protect
+        (progn
+          (mevedel-workspace-add-directive workspace record)
+          (with-current-buffer session-buffer
+            (setq-local mevedel--session session))
+          (with-temp-buffer
+            (mevedel-directive-activity-mode)
+            (setq-local mevedel-directive-activity--workspace workspace
+                        mevedel-directive-activity--directive record)
+            (let ((position (point)))
+              (insert (propertize "Attempt"
+                                  'mevedel-view-zone-entry attempt))
+              (goto-char position))
+            (cl-letf
+                (((symbol-function 'mevedel--workspace-sessions)
+                  (lambda (_) nil))
+                 ((symbol-function
+                   'mevedel--reset-instructions-preserving-directives)
+                  (lambda (_ records) (push records reset-records)))
+                 ((symbol-function 'mevedel--restore-preserved-directives)
+                  (lambda (_) (setq restored t)))
+                 ((symbol-function 'mevedel-session-persistence-resume-id)
+                  (lambda (selected-workspace session-id)
+                    (setq resumed (list selected-workspace session-id))
+                    session-buffer))
+                 ((symbol-function
+                   'mevedel-session-persistence--prompt-candidates)
+                  (lambda (_)
+                    '(("S1 T4" . (:segment 1 :turn 4 :cum-turn 4
+                                    :fork-point-id "point")))))
+                 ((symbol-function 'mevedel-session-persistence-rewind)
+                  (lambda (buffer target)
+                    (setq rewound (list buffer target))
+                    t))
+                 ((symbol-function 'mevedel-directive-activity-refresh)
+                  #'ignore))
+              (should (mevedel-directive-activity-rewind))))
+          (should (equal (list workspace "cold-session") resumed))
+          (should restored)
+          (should (= 2 (length reset-records)))
+          (should (cl-every (lambda (records) (equal (list record) records))
+                            reset-records))
+          (should (eq session-buffer (car rewound)))
+          (should (= 4 (plist-get (cadr rewound) :cum-turn))))
+      (kill-buffer session-buffer))))
 
 (mevedel-deftest mevedel-list-directives
   (:doc "opens the selected workspace record without a source point")

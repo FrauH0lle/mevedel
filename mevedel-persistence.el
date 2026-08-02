@@ -78,6 +78,9 @@
 (declare-function mevedel--reconcile-directive-sources
                   "mevedel-overlays" (workspace))
 
+;; `mevedel-workspace'
+(defvar mevedel--workspace)
+
 (defcustom mevedel-patch-outdated-instructions t
   "Automatically patch instructions when the save file is outdated if non-nil."
   :type 'boolean
@@ -87,6 +90,9 @@
   "If t, `mevedel--restore-file-instructions' becomes inert.
 This is sometimes necessary to prevent various hooks from interfering with the
 instruction restoration process.")
+
+(defvar mevedel--inhibit-source-missing-restore nil
+  "Non-nil while a historical instruction snapshot is being installed.")
 
 ;;;###autoload
 (defun mevedel-save-instructions (path)
@@ -437,12 +443,43 @@ Returns the number of saved instructions."
     (insert-file-contents path)
     (read (current-buffer))))
 
+(defun mevedel--reset-instructions-preserving-directives
+    (workspace directives)
+  "Clear WORKSPACE presentations while retaining authored DIRECTIVES."
+  (let ((mevedel--instruction-state-key-override
+         (mevedel--instruction-workspace-key workspace)))
+    (dolist (entry (copy-sequence (mevedel--instruction-alist)))
+      (when (and (bufferp (car entry))
+                 (buffer-live-p (car entry)))
+        (mevedel--mark-buffer-source-missing (car entry))))
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-workspace-set-directives workspace directives)))
+
+(defun mevedel--restore-preserved-directives (workspace)
+  "Safely restore Source missing directive presentations in WORKSPACE."
+  (dolist (file
+           (delete-dups
+            (cl-loop
+             for directive in (mevedel-workspace-directives workspace)
+             for anchor = (mevedel-directive-anchor directive)
+             when (and (eq 'source-missing (plist-get anchor :state))
+                       (stringp (plist-get anchor :file))
+                       (file-exists-p (plist-get anchor :file)))
+             collect (plist-get anchor :file))))
+    (let ((buffer (find-file-noselect file)))
+      (with-current-buffer buffer
+        (setq-local mevedel--workspace workspace))
+      (mevedel--restore-source-missing-directives buffer))))
+
 (defun mevedel--load-instructions-file
-    (path &optional base-directory confirm quiet workspace)
+    (path &optional base-directory confirm quiet workspace directive-records
+          preserve-directives-p)
   "Load instruction overlays from PATH into WORKSPACE.
 
 BASE-DIRECTORY resolves relative file names in PATH.  CONFIRM prompts
-before replacing existing instructions.  QUIET suppresses messages."
+before replacing existing instructions.  QUIET suppresses messages.
+DIRECTIVE-RECORDS retains current authored records; PRESERVE-DIRECTIVES-P
+enables that mode for an empty record list."
   (setq workspace (or workspace
                       (mevedel--instruction-buffer-workspace
                        (current-buffer))))
@@ -465,12 +502,15 @@ before replacing existing instructions.  QUIET suppresses messages."
     (unless (and (plist-member save-file :directives)
                  (listp serialized-directives))
       (user-error "Malformed mevedel directive list"))
-    (mevedel--clear-instruction-state workspace)
-    (mevedel-workspace-set-directives
-     workspace
-     (mevedel--deserialize-directives
-      serialized-directives
-      (or base-directory (file-name-parent-directory path))))
+    (if (or preserve-directives-p directive-records)
+        (mevedel--reset-instructions-preserving-directives
+         workspace directive-records)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-workspace-set-directives
+       workspace
+       (mevedel--deserialize-directives
+        serialized-directives
+        (or base-directory (file-name-parent-directory path)))))
     (cl-destructuring-bind (&key id-counter used-ids retired-ids) id-counter-plist
       (let ((hm (make-hash-table)))
         (cl-loop for used-id in used-ids
@@ -496,11 +536,14 @@ before replacing existing instructions.  QUIET suppresses messages."
                                               (plist-get plist :instructions))
                                             (mapcar #'cdr (mevedel--instruction-alist))))
                             :initial-value 0)))
-      (cl-loop for (file . _) in (mevedel--instruction-alist)
-               do (progn
-                    (cl-multiple-value-bind (_ restored kia) (mevedel--restore-file-instructions file t)
+      (let ((mevedel--inhibit-source-missing-restore t))
+        (cl-loop for (file . _) in (mevedel--instruction-alist)
+                 do (cl-multiple-value-bind (_ restored kia)
+                        (mevedel--restore-file-instructions file t workspace)
                       (cl-incf total-restored restored)
                       (cl-incf total-kia kia))))
+      (when (or preserve-directives-p directive-records)
+        (mevedel--restore-preserved-directives workspace))
       (when (and (not quiet) confirm)
         (message "Restored %d out of %d instructions from %s%s"
                  total-restored
@@ -748,15 +791,18 @@ Return the restored overlay, or nil when unresolved."
               (puthash uuid bounds parent-ranges))
             ov))))))
 
-(cl-defun mevedel--restore-file-instructions (file &optional message)
+(cl-defun mevedel--restore-file-instructions (file &optional message workspace)
   "Restore FILE and its INSTRUCTIONS.
 
 Returns tree values: restored buffer, the amount of instructions restored, and
 the amount of instructions lost to the patching process, if any.
 
-If MESSAGE is non-nil, message the intent of patching outdated files."
+If MESSAGE is non-nil, message the intent of patching outdated files.
+When WORKSPACE is non-nil, associate the restored buffer with it before
+restoring overlays."
   (let ((mevedel--inhibit-file-patching t))
-    (when-let* ((buffer (find-buffer-visiting file)))
+    (when-let* (((not mevedel--inhibit-source-missing-restore))
+                (buffer (find-buffer-visiting file)))
       (mevedel--instruction-activate-buffer buffer)
       (mevedel--restore-source-missing-directives buffer))
     (unless (and (file-exists-p file)
@@ -771,6 +817,8 @@ If MESSAGE is non-nil, message the intent of patching outdated files."
             (restored 0)
             (kia 0))
         (with-current-buffer buffer
+          (when workspace
+            (setq-local mevedel--workspace workspace))
           (mevedel--setup-buffer-hooks buffer)
           (cl-labels ((restore-overlays
                        (dstbuf instr-maybe-plists &optional raw-position-ok)

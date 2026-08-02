@@ -276,6 +276,8 @@ Rewind is an in-place transaction. It discards the selected turn and every
 later transcript and session artifact, restores every captured working-tree
 file to immediately before the selected turn, and keeps
 the same session identity, name, directory, working directory, and lineage.
+The impact lists the discarded prompt suffix in order, including ordinary chat
+and compact directive events, alongside restored files and every known gap.
 External working-tree changes to captured files are overwritten. Git HEAD and
 the index are not changed, so the impact identifies staged files whose index
 content will diverge from the restored working tree. Failure rolls back both
@@ -288,6 +290,16 @@ not disable Rewind and are never presented as restored paths. Rewind creates
 neither a child session nor a redo variant. Existing
 child sessions and worktrees are not removed; children forked after the target
 become detached from the Source's visible history.
+
+Workspace-owned directive identity is not historical session state. Rewind
+retains each authored directive and its current request, removes only model
+activity at or after the target turn in that execution session, and recomputes
+the lifecycle from what survives. A surviving request edit remains Ready with
+a request-changed qualifier. Historical instruction snapshots restore source
+presentation only; a source file restored by Rewind uses the normal safe anchor
+reattachment path. The directive activity view's `R` action resolves an
+effectful attempt's exact execution session and pre-turn checkpoint, then uses
+this same Rewind transaction and impact confirmation.
 
 Only a committed Rewind emits `SessionStart(rewind)`; it does not emit
 `SessionEnd`. Any context produced by that event belongs to the next accepted
