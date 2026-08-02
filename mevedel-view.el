@@ -2,8 +2,9 @@
 
 ;;; Commentary:
 
-;; Coordinates the user-facing view mode, session lifecycle, and managed
-;; zones.  `mevedel-view-composer' owns editable input and submission;
+;; Defines the shared ephemeral surface mode and coordinates the user-facing
+;; chat view, session lifecycle, and managed zones.  `mevedel-view-composer'
+;; owns editable input and submission;
 ;; `mevedel-view-render' owns the transcript projection.  The gptel data
 ;; buffer remains the authoritative conversation.
 ;;
@@ -466,8 +467,13 @@ above `mevedel-view--input-marker'."
   "t" #'mevedel-view-toggle-transcript
   "q" #'mevedel-view-close-agent-transcript)
 
+(defvar-keymap mevedel-surface-mode-map
+  :doc "Keymap inherited by editable mevedel surfaces."
+  :parent text-mode-map)
+
 (defvar-keymap mevedel-view-mode-map
   :doc "Keymap for `mevedel-view-mode'."
+  :parent mevedel-surface-mode-map
   "C-g" #'mevedel-view-abort
   "C-c C-k" #'mevedel-view-abort
   "C-c C-o" #'mevedel-menu
@@ -490,8 +496,8 @@ navigation and activation fallbacks."
      "RET" #'mevedel-view-activate-at-point)
    mevedel-tool-task--status-keymap))
 
-(defun mevedel-view--enforce-ephemeral (&rest _)
-  "Keep the current view buffer out of Emacs save machinery."
+(defun mevedel-surface--enforce-ephemeral (&rest _)
+  "Keep the current mevedel surface out of Emacs save machinery."
   (setq buffer-file-name nil
         buffer-file-truename nil
         buffer-file-number nil)
@@ -503,7 +509,18 @@ navigation and activation fallbacks."
   (setq-local create-lockfiles nil)
   (set-buffer-modified-p nil))
 
-(define-derived-mode mevedel-view-mode text-mode "MevView"
+(define-derived-mode mevedel-surface-mode text-mode "MevSurface"
+  "Base mode for ephemeral mevedel surfaces with editable regions."
+  (visual-line-mode +1)
+  (setq-local window-point-insertion-type t)
+  (auto-save-mode -1)
+  (mevedel-surface--enforce-ephemeral)
+  (add-hook 'after-change-functions
+            #'mevedel-surface--enforce-ephemeral nil t)
+  (add-hook 'post-command-hook
+            #'mevedel-surface--enforce-ephemeral nil t))
+
+(define-derived-mode mevedel-view-mode mevedel-surface-mode "MevView"
   "Major mode for the mevedel chat view buffer.
 
 Displays a compact rendering of the gptel data buffer.  Interactive view
@@ -512,15 +529,7 @@ request progress row, and input zone.  The input zone starts at
 `mevedel-view--input-marker' with a read-only prompt prefix followed by
 the editable composer body.
 
-\\{mevedel-view-mode-map}"
-  (visual-line-mode +1)
-  (setq-local window-point-insertion-type t)
-  (auto-save-mode -1)
-  (mevedel-view--enforce-ephemeral)
-  (add-hook 'after-change-functions
-            #'mevedel-view--enforce-ephemeral nil t)
-  (add-hook 'post-command-hook
-            #'mevedel-view--enforce-ephemeral nil t))
+\\{mevedel-view-mode-map}")
 
 
 ;;
@@ -565,7 +574,7 @@ view.  When `:preserve-data-view-buffer' is non-nil, leave DATA-BUF's
     (when (overlayp mevedel-view--composer-keymap-overlay)
       (delete-overlay mevedel-view--composer-keymap-overlay))
     (mevedel-view-mode)
-    (mevedel-view--enforce-ephemeral)
+    (mevedel-surface--enforce-ephemeral)
     (setq-local mevedel--data-buffer data-buf)
     (setq-local mevedel--session
                 (and (buffer-live-p data-buf)

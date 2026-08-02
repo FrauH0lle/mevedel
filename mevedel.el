@@ -286,7 +286,8 @@ the request)."
 
 ;;;###autoload
 (defun mevedel-discuss-directive ()
-  "Open the directive at point and focus its local discussion composer."
+  "Discuss the directive at point.
+Submit a Ready directive immediately; otherwise focus its follow-up composer."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
                                                       (mevedel--instructions-at (point) 'directive)
@@ -294,7 +295,9 @@ the request)."
                                                      'directive)))
       (let ((buffer (mevedel-open-directive-activity directive)))
         (with-current-buffer buffer
-          (goto-char (point-max))))
+          (if (mevedel--directive-status directive)
+              (goto-char (point-max))
+            (mevedel-directive-activity-start-discussion))))
     (user-error "No directive found at point")))
 
 ;;;###autoload

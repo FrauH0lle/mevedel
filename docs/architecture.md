@@ -95,9 +95,11 @@ dispatch.
 
 Directive requests submit an explicit prompt built from the current authored
 request and freshly resolved references, so gptel realizes the request in an
-isolated prompt buffer without main-chat history. Discussion continuations add
-only the directive's durable local discussion transcript. The first accepted
-request binds the directive to its execution session. Terminal settlement
+isolated prompt buffer without main-chat history. Starting a Ready discussion
+submits that request directly as the first local turn; the activity composer is
+reserved for follow-ups. Discussion continuations add only durable local turns
+whose authored-request snapshot matches the current directive request. The
+first accepted request binds the directive to its execution session. Terminal settlement
 writes the attempt or discussion turn to the workspace record even if the
 source overlay detached while the request was in flight; overlay updates remain
 optional presentation work. The main session retains only a hidden compact

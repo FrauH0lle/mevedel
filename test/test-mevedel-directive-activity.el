@@ -69,15 +69,21 @@
           (let ((activity (mevedel-open-directive-activity directive)))
             (should (buffer-live-p activity))
             (with-current-buffer activity
+              (should (derived-mode-p 'mevedel-surface-mode))
               (should (derived-mode-p 'mevedel-directive-activity-mode))
+              (should-not (derived-mode-p 'mevedel-view-mode))
               (should (eq workspace mevedel-directive-activity--workspace))
               (should (eq record mevedel-directive-activity--directive))
               (should (string-match-p "Initial request" (buffer-string)))
               (should (string-match-p "Ready" (buffer-string)))
               (should (string-match-p "Attached" (buffer-string)))
               (should (string-match-p "No activity yet" (buffer-string)))
-              (should (markerp mevedel-directive-activity--input-marker))
-              (should (string-match-p "C-c RET: discuss" (buffer-string))))
+              (should-not mevedel-directive-activity--input-marker)
+              (should
+               (text-property-any
+                (point-min) mevedel-directive-activity--composer-marker
+                'mevedel-view-zone-activate
+                #'mevedel-directive-activity-start-discussion)))
             (should-not
              (string-match-p
               "No activity yet"
@@ -99,6 +105,44 @@
                   'mevedel-directive-activity--directive first)
                  (buffer-local-value
                   'mevedel-directive-activity--directive second)))))
+      (mevedel-directive-activity-test--discard fixture)))
+
+  :doc "accepts and submits keyboard input in an empty discussion composer"
+  (let* ((fixture (mevedel-directive-activity-test--make-directive "Discuss"))
+         (workspace (car fixture))
+         (directive (caddr fixture))
+         (record (car (mevedel-workspace-directives workspace)))
+         captured)
+    (unwind-protect
+        (progn
+          (setf (mevedel-directive-discussion record)
+                (list
+                 (mevedel-directive-discussion-turn--create
+                  :directive-request "Discuss"
+                  :message "Discuss"
+                  :request "Exact"
+                  :result "Answer"
+                  :outcome 'success
+                  :checkpoint '(:session-id "session-1" :turn 1)))
+                (mevedel-directive-state record) 'discussed)
+          (cl-letf (((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _)
+                       (switch-to-buffer buffer)))
+                    ((symbol-function 'mevedel--discuss-directive-turn)
+                     (lambda (_selected message _attempt-index callback)
+                       (setq captured message)
+                       (funcall callback nil nil)
+                       'accepted)))
+            (let ((activity (mevedel-open-directive-activity directive)))
+              (with-current-buffer activity
+                (goto-char mevedel-directive-activity--input-marker)
+                (execute-kbd-macro (kbd "x"))
+                (should (equal "x" (mevedel-directive-activity--input-text)))
+                (execute-kbd-macro (kbd "RET"))
+                (should (equal "x\n"
+                               (mevedel-directive-activity--input-text)))
+                (execute-kbd-macro (kbd "C-c RET"))
+                (should (equal "x\n" captured))))))
       (mevedel-directive-activity-test--discard fixture)))
 
   :doc "opens source-missing activity without a live source overlay"
@@ -159,19 +203,20 @@
          (draft "> first line\nsecond line")
          activity)
     (unwind-protect
-        (cl-letf (((symbol-function 'pop-to-buffer)
-                   (lambda (buffer &rest _) buffer)))
-          (setq activity (mevedel-open-directive-activity (caddr fixture)))
+        (progn
+          (setf (mevedel-directive-state record) 'discussed)
+          (cl-letf (((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer)))
+            (setq activity (mevedel-open-directive-activity (caddr fixture))))
           (with-current-buffer activity
             (goto-char mevedel-directive-activity--input-marker)
             (insert draft)
             (goto-char (+ mevedel-directive-activity--input-marker 7))
-            (setf (mevedel-directive-state record) 'discussing)
             (mevedel-directive-activity-refresh)
             (should (equal draft (mevedel-directive-activity--input-text)))
             (should (= (point)
                        (+ mevedel-directive-activity--input-marker 7)))
-            (should (string-match-p "Discussing" (buffer-string)))))
+            (should (string-match-p "Discussed" (buffer-string)))))
       (mevedel-directive-activity-test--discard fixture))))
 
 (mevedel-deftest mevedel-directive-activity--discussion-fragments
@@ -237,13 +282,17 @@
          (directive (caddr fixture))
          captured activity)
     (unwind-protect
-        (cl-letf (((symbol-function 'pop-to-buffer)
-                   (lambda (buffer &rest _) buffer))
-                  ((symbol-function 'mevedel--discuss-directive-turn)
-                   (lambda (selected message attempt-index callback)
-                     (setq captured (list selected message attempt-index))
-                     (funcall callback nil nil)
-                     'accepted)))
+        (progn
+          (setf (mevedel-directive-state
+                 (car (mevedel-workspace-directives (car fixture))))
+                'discussed)
+          (cl-letf (((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer))
+                    ((symbol-function 'mevedel--discuss-directive-turn)
+                     (lambda (selected message attempt-index callback)
+                       (setq captured (list selected message attempt-index))
+                       (funcall callback nil nil)
+                       'accepted)))
           (setq activity (mevedel-open-directive-activity directive))
           (with-current-buffer activity
             (setq mevedel-directive-activity--selected-attempt-index 2)
@@ -253,7 +302,54 @@
                         (mevedel-directive-activity-submit)))
             (should (equal (list directive "> question\nmore" 2) captured))
             (should (equal "" (mevedel-directive-activity--input-text)))
-            (should-not mevedel-directive-activity--selected-attempt-index)))
+            (should-not mevedel-directive-activity--selected-attempt-index))))
+      (mevedel-directive-activity-test--discard fixture))))
+
+(mevedel-deftest mevedel-directive-activity-start-discussion
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global))
+   :doc "submits Ready, exposes follow-ups on success, and restores Ready on abort")
+  (let* ((fixture (mevedel-directive-activity-test--make-directive "Discuss"))
+         (workspace (car fixture))
+         (directive (caddr fixture))
+         (record (car (mevedel-workspace-directives workspace)))
+         terminal-callback activity)
+    (unwind-protect
+        (cl-letf (((symbol-function 'pop-to-buffer)
+                   (lambda (buffer &rest _) buffer))
+                  ((symbol-function 'mevedel--start-directive-discussion)
+                   (lambda (selected callback)
+                     (should (eq directive selected))
+                     (setf (mevedel-directive-state record) 'discussing)
+                     (setq terminal-callback callback)
+                     'accepted)))
+          (setq activity (mevedel-open-directive-activity directive))
+          (with-current-buffer activity
+            (should (eq 'accepted
+                        (mevedel-directive-activity-start-discussion)))
+            (should (string-match-p "Discussing" (buffer-string)))
+            (should-not mevedel-directive-activity--input-marker))
+          (setf (mevedel-directive-state record) 'discussed)
+          (funcall terminal-callback nil nil)
+          (with-current-buffer activity
+            (should (eq 'discuss
+                        mevedel-directive-activity--composer-action))
+            (should mevedel-directive-activity--input-marker)
+            (setf (mevedel-directive-state record) nil)
+            (mevedel-directive-activity-set-action nil)
+            (mevedel-directive-activity-refresh)
+            (mevedel-directive-activity-start-discussion))
+          (setf (mevedel-directive-state record) nil)
+          (funcall terminal-callback 'abort nil)
+          (with-current-buffer activity
+            (should (string-match-p "Ready" (buffer-string)))
+            (should-not mevedel-directive-activity--input-marker)
+            (should
+             (text-property-any
+              (point-min) mevedel-directive-activity--composer-marker
+              'mevedel-view-zone-activate
+              #'mevedel-directive-activity-start-discussion))))
       (mevedel-directive-activity-test--discard fixture))))
 
 (mevedel-deftest mevedel-directive-activity-set-action
@@ -353,7 +449,8 @@
                  (mevedel-directive-discussion-turn--create
                   :message "Prefer the smaller API"
                   :request "Exact" :result "Agreed" :outcome 'success
-                  :checkpoint '(:session-id "session-1" :turn 1))))
+                  :checkpoint '(:session-id "session-1" :turn 1)))
+                (mevedel-directive-state record) 'discussed)
           (cl-letf (((symbol-function 'pop-to-buffer)
                      (lambda (buffer &rest _) buffer))
                     ((symbol-function 'mevedel--implement-discussion)
@@ -478,7 +575,7 @@
           (should (eq session-buffer (caddr rewound)))
           (should (eq #'mevedel-directive-activity-rewind
                       (keymap-lookup
-                       mevedel-directive-activity-mode-map "R"))))
+                       mevedel-directive-activity--display-map "R"))))
       (kill-buffer session-buffer)))
   :doc "rejects attempts with a complete no-change capture"
   (let ((attempt

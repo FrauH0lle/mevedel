@@ -4,6 +4,9 @@ The view modules render a compact user-facing projection of the authoritative
 gptel data buffer. `mevedel-view.el` owns the mode, zones, and session
 coordination. `mevedel-view-composer.el` owns the editable composer,
 submission hooks, pending input, and send/fork dispatch.
+`mevedel-surface-mode`, derived from `text-mode`, supplies the shared
+ephemeral editable-buffer behavior used by both the chat view and directive
+activity modes.
 `mevedel-view-agent.el` owns agent transcript inspection, live agent status,
 and targeted handle refresh. `mevedel-view-interaction.el` owns interaction
 descriptor registration, ordering, callback overlays, and redraw.
@@ -92,12 +95,18 @@ create or focus an inspection window automatically.
 The view is reconstructable from the data buffer. Avoid storing durable
 conversation state only in view overlays or text properties.
 
-Directive activity uses a separate read-only projection with its own multiline
-composer. It renders durable implementation attempts and discussion turns from
+Directive activity uses a separate projection with read-only rendered zones
+and a state-dependent multiline composer. It renders durable implementation
+attempts and discussion turns from
 the workspace directive record, including the nested details consumed by each
 successful attempt; discussion never enters the main chat history. Nested
 directive presentations always open and act through their topmost parent's
 single activity history.
+Ready shows a read-only Discuss action instead of an empty composer. Activating
+it submits the directive request immediately. A successful answer then exposes
+the composer for follow-up questions; failed or aborted initial turns return to
+Ready. Follow-up prompts include only discussion turns recorded for the current
+authored request.
 Refreshing activity replaces only the managed projection above the composer,
 preserving the draft and point exactly, including drafts whose first editable
 character is `>`. A discussion result can target one selected attempt, and
@@ -242,6 +251,9 @@ discussion turns in settlement order through the managed
 workspace record directly and never adds content to a transcript or model
 request. `mevedel-list-directives` provides workspace-level selection, and an
 Attached anchor can be visited from the activity view with `o` or `RET`.
+The source `Discuss` command and the activity `Discuss` action use the same
+immediate-submission path. Rendered single-letter commands are scoped above the
+composer, where ordinary text editing and `RET` remain available.
 Prompt preview renders the complete next state-dependent implementation action,
 including discussion context, requested changes, or retry guidance.
 Each attempt exposes its exact request and answer/error, capture completeness,

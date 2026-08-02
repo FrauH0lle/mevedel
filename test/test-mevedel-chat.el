@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Focused coverage for chat-buffer setup helpers.
+;; Focused coverage for chat-buffer lifecycle and directive request commands.
 
 ;;; Code:
 
@@ -739,6 +739,32 @@
   (should-not (fboundp 'mevedel-revise-directive))
   (should-not (fboundp 'mevedel--revise-directive-prompt)))
 
+(mevedel-deftest mevedel-discuss-directive
+  (:doc "routes the source action through immediate activity submission")
+  (let ((directive (make-overlay (point-min) (point-min)))
+        (activity (generate-new-buffer " *mevedel-discuss-command*"))
+        started)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel--instructions-at)
+                   (lambda (&rest _) (list directive)))
+                  ((symbol-function 'mevedel--highest-priority-instruction)
+                   (lambda (instructions &optional _) (car instructions)))
+                  ((symbol-function 'mevedel--topmost-instruction)
+                   (lambda (instruction _) instruction))
+                  ((symbol-function 'mevedel-open-directive-activity)
+                   (lambda (selected)
+                     (should (eq directive selected))
+                     activity))
+                  ((symbol-function
+                    'mevedel-directive-activity-start-discussion)
+                   (lambda ()
+                     (setq started (current-buffer))
+                     'accepted)))
+          (should (eq 'accepted (mevedel-discuss-directive)))
+          (should (eq activity started)))
+      (delete-overlay directive)
+      (kill-buffer activity))))
+
 (mevedel-deftest mevedel--directive-save-buffer-p ()
   ,test
   (test)
@@ -916,6 +942,7 @@
            :state 'discussed
            :discussion
            (list (mevedel-directive-discussion-turn--create
+                  :directive-request "Discussed"
                   :message "Question" :request "Question prompt"
                   :result "Answer" :outcome 'success))))
          (ready
@@ -1364,7 +1391,7 @@
 			 (kill-buffer captured-chat))
 		       (delete-directory tmpdir t))))
 
-                 :doc "stores discussion locally and keeps its full turn out of chat"
+                 :doc "starts discussion from the directive and keeps its full turn out of chat"
                  (let* ((tmpdir (file-name-as-directory
                                  (make-temp-file "mevedel-discussion-turn-" t)))
                         (file (file-name-concat tmpdir "sample.txt"))
@@ -1403,8 +1430,8 @@
                                                  (lambda (&rest _) nil)))
                                           (setq captured-fsm fsm)
                                           fsm))))
-                             (mevedel--discuss-directive-turn
-                              directive "Why?" nil nil)
+                             (mevedel--start-directive-discussion
+                              directive nil)
                              (should (eq 'discussing
                                          (mevedel--directive-status directive)))
                              (let ((response-start
@@ -1427,7 +1454,7 @@
                                            (mevedel-directive-state record)))
                                (should-not
                                 (mevedel-directive-attempts record))
-                               (should (equal "Why?"
+                               (should (equal "Explain it"
                                               (mevedel-directive-discussion-turn-message
                                                turn)))
                                (should (equal "Explain it"
@@ -1436,6 +1463,8 @@
                                (should (equal captured-prompt
                                               (mevedel-directive-discussion-turn-request
                                                turn)))
+                               (should-not
+                                (string-match-p "### QUESTION:" captured-prompt))
                                (should (equal "Because.\n"
                                               (mevedel-directive-discussion-turn-result
                                                turn)))
@@ -1922,16 +1951,22 @@
        :type 'user-error))))
 
 (mevedel-deftest mevedel--directive-discussion-transcript
-  (:doc "renders only durable local messages and replies in order")
+  (:doc "renders only current-request local messages and replies in order")
   (let ((record
          (mevedel-directive--create
           :id "directive" :request "Request" :anchor '(:state attached)
           :discussion
           (list
            (mevedel-directive-discussion-turn--create
+            :directive-request "Older request"
+            :message "Stale" :request "Hidden stale request"
+            :result "Stale answer" :outcome 'success)
+           (mevedel-directive-discussion-turn--create
+            :directive-request "Request"
             :message "One" :request "Hidden request one"
             :result "Answer one" :outcome 'success)
            (mevedel-directive-discussion-turn--create
+            :directive-request "Request"
             :message "Two" :request "Hidden request two"
             :result "Transport failed" :outcome 'error)))))
     (should
@@ -1953,6 +1988,7 @@
            :discussion
            (list
             (mevedel-directive-discussion-turn--create
+             :directive-request "Request"
              :message "First question" :request "Old exact request"
              :result "First answer" :outcome 'success
              :checkpoint '(:session-id "session-1" :turn 2)))))
@@ -1976,6 +2012,7 @@
            :discussion
            (list
             (mevedel-directive-discussion-turn--create
+             :directive-request "Request"
              :message "Prefer a small API" :request "Exact"
              :result "Use one entry point" :outcome 'success
              :checkpoint '(:session-id "session-1" :turn 1)))))
@@ -2051,6 +2088,7 @@
         (setf (mevedel-directive-discussion record)
               (list
                (mevedel-directive-discussion-turn--create
+                :directive-request "Request"
                 :message "Keep it small" :request "Exact"
                 :result "Agreed" :outcome 'success))
               (mevedel-directive-state record) 'discussed)

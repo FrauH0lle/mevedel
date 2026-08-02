@@ -30,6 +30,7 @@
 ;; `cl-seq'
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-position "cl-seq" (cl-item cl-seq &rest cl-keys))
+(declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-sort "cl-seq" (cl-seq cl-pred &rest cl-keys))
 
 ;; `gptel'
@@ -228,6 +229,8 @@
 (declare-function mevedel-directive-discussion "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-discussion-turn--create
                   "mevedel-structs" (&rest slots))
+(declare-function mevedel-directive-discussion-turn-directive-request
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-discussion-turn-message
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-discussion-turn-outcome
@@ -1020,7 +1023,7 @@ Observed partial changes:
      (mevedel-directive-attempt-patch attempt))))
 
 (defun mevedel--directive-discussion-transcript (directive)
-  "Return DIRECTIVE's complete local discussion as plain text."
+  "Return DIRECTIVE's current-request local discussion as plain text."
   (mapconcat
    (lambda (turn)
      (format "User: %s\nAssistant%s: %s"
@@ -1031,7 +1034,11 @@ Observed partial changes:
                (format " (%s)"
                        (mevedel-directive-discussion-turn-outcome turn)))
              (mevedel-directive-discussion-turn-result turn)))
-   (mevedel-directive-discussion directive)
+   (cl-remove-if-not
+    (lambda (turn)
+      (equal (mevedel-directive-request directive)
+             (mevedel-directive-discussion-turn-directive-request turn)))
+    (mevedel-directive-discussion directive))
    "\n\n"))
 
 (defun mevedel--discuss-directive-prompt
@@ -1555,6 +1562,22 @@ the original callback."
            (mevedel--remove-directive-presentation directive))
          (kill-buffer transient-buffer))
        (signal (car err) (cdr err))))))
+
+(defun mevedel--start-directive-discussion (directive &optional callback)
+  "Submit DIRECTIVE itself as its initial read-only discussion turn.
+CALLBACK receives the ordinary directive terminal arguments."
+  (setq directive
+        (or (mevedel--topmost-instruction directive 'directive)
+            directive))
+  (let ((record (mevedel--directive-record directive)))
+    (when (mevedel-directive-state record)
+      (user-error "Initial discussion requires a Ready directive"))
+    (overlay-put directive 'mevedel-directive-action 'discuss)
+    (mevedel--process-directive
+     directive (alist-get 'discuss mevedel-action-preset-alist)
+     #'mevedel--discuss-directive-prompt
+     callback
+     (list :message (mevedel-directive-request record)))))
 
 (defun mevedel--discuss-directive-turn
     (directive message &optional attempt-index callback)
