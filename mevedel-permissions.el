@@ -67,6 +67,7 @@
 (declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-get-paths "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
@@ -90,14 +91,14 @@ Each entry is a list:
                    :sandbox-permissions LEVEL
                    :action ACTION)
 
-TOOL-NAME is a string matching a tool name (e.g., \"Read\", \"Edit\"),
+TOOL-NAME is a string matching a tool name (e.g., \"Read\", \"ApplyPatch\"),
 or \"*\" to match all tools.
 
 SPECIFIER is optional and selects what aspect of the invocation the
 rule matches against.  At most one specifier is allowed per rule:
 
   :path    GLOB  - filesystem path (supports *, **, ?, ~)
-                   Used by Read, Edit, Write, Glob, Grep, MkDir, Bash
+                   Used by Read, ApplyPatch, Glob, Grep, Bash
                    when it resolves a bare path.
   :pattern GLOB  - command or expression string (supports *, plus
                    Bash-style PREFIX:*).  Used by Bash and by qualified
@@ -133,8 +134,8 @@ Precedence within matching rules:
 
 Example:
   ((\"Read\" :action allow)
-   (\"Edit\" :path \"~/projects/**\" :action allow)
-   (\"Write\" :path \"~/.ssh/**\" :action deny)
+   (\"ApplyPatch\" :path \"~/projects/**\" :action allow)
+   (\"ApplyPatch\" :path \"~/.ssh/**\" :action deny)
    (\"Bash\" :pattern \"ls *\" :action allow)
    (\"Bash\" :pattern \"git log:*\" :action allow)
    (\"Bash\" :pattern \"npx test*\" :network t :action allow)
@@ -413,7 +414,7 @@ switches into a dedicated `*Customize ...*' buffer, so at commit time
 `current-buffer' is the Customize buffer and no session is in scope.
 Changes made through the Customize UI therefore always update the
 global default, never the current session.  Use `setopt' (or the
-interactive workflow in `mevedel-preview-mode') for session-scoped
+session UI) for session-scoped
 changes.
 
 Plain `setq' / `setq-local' bypass this path entirely and tool
@@ -451,7 +452,8 @@ than assume cross-tool uniformity for the same keyword."
     (cond ((mevedel-tool-get-pattern tool) :pattern)
           ((mevedel-tool-get-domain  tool) :domain)
           ((mevedel-tool-get-name    tool) :name)
-          ((mevedel-tool-get-path    tool) :path))))
+          ((or (mevedel-tool-get-path tool)
+               (mevedel-tool-get-paths tool)) :path))))
 
 (defun mevedel-permission--parse-rule-string (entry)
   "Parse ENTRY (an `allowed-tools' string) into a rule.
@@ -463,7 +465,7 @@ Returns a rule plist of the form
 Recognised forms:
 
 - `\"Read\"'              bare tool name
-- `\"Edit(src/**)\"'      qualified by path
+- `\"ApplyPatch(src/**)\"' qualified by path
 - `\"Bash(git status)\"'  qualified by exact pattern
 - `\"Bash(git status *)\"' qualified by glob pattern
 - `\"WebFetch(example.com)\"' qualified by domain
@@ -725,16 +727,17 @@ Returns non-nil if the path is protected."
 ;;; Mode decisions
 
 (defun mevedel-permission--mode-decision
-    (mode read-only-p &optional native-edit-p)
+    (mode read-only-p &optional native-edit-p reviewed-edit-p)
   "Determine permission from MODE and the tool's capability flags.
 READ-ONLY-P identifies inspection tools.  NATIVE-EDIT-P identifies tools in
-the native `edit' group; it never applies to Bash or Eval.
+the native `edit' group; it never applies to Bash or Eval.  REVIEWED-EDIT-P
+identifies edits whose handler supplies mandatory approval in `ask' mode.
 
 Returns `allow', `deny', or `ask'."
   (pcase mode
     ('full-auto 'allow)
     ('edits (if (or read-only-p native-edit-p) 'allow 'ask))
-    ('ask (if read-only-p 'allow 'ask))
+    ('ask (if (or read-only-p reviewed-edit-p) 'allow 'ask))
     ;; Unknown mode: fall through to ask
     (_ 'ask)))
 
@@ -1289,6 +1292,8 @@ mode, and native-resource tail."
          (tool (plist-get context :tool))
          (native-edit-p
           (and tool (memq 'edit (mevedel-tool-groups tool))))
+         (reviewed-edit-p
+          (and tool (memq 'reviewed-edit (mevedel-tool-groups tool))))
          (resource-decision
           (and (not skip-resource-boundary-p)
                (mevedel-permission--resource-decision context))))
@@ -1309,13 +1314,13 @@ mode, and native-resource tail."
             (mevedel-permission--decision 'allow 'rule :bucket bucket))
            ((eq action 'ask)
             (if (eq (mevedel-permission--mode-decision
-                     mode read-only-p native-edit-p)
+                     mode read-only-p native-edit-p reviewed-edit-p)
                     'deny)
                 (mevedel-permission--decision 'deny 'mode :bucket bucket)
               (mevedel-permission--decision 'ask 'rule :bucket bucket)))))))
      ;; Step 6: mode hard-deny.
      ((eq (mevedel-permission--mode-decision
-           mode read-only-p native-edit-p)
+           mode read-only-p native-edit-p reviewed-edit-p)
           'deny)
       (mevedel-permission--decision 'deny 'mode))
      ;; Steps 7-8: missing native resource authority forces a prompt.  An
@@ -1327,7 +1332,8 @@ mode, and native-resource tail."
       resource-decision)
      ;; Step 9: mode/default decision.
      (t (let ((mode-result (mevedel-permission--mode-decision
-                            mode read-only-p native-edit-p)))
+                            mode read-only-p native-edit-p
+                            reviewed-edit-p)))
           (if (and (eq mode-result 'allow)
                    resource-decision
                    (eq (mevedel-permission-decision-raw-outcome

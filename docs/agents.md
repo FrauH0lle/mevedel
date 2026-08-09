@@ -39,7 +39,8 @@ path-sorted retained roster without storage IDs or transcript content.
 `FollowupAgent` continues an idle retained conversation or steers a running
 invocation at its next safe request boundary; later terminal results still go
 to the original spawn parent. A successful follow-up renders a collapsed
-`Interacted with PATH` disclosure containing the exact follow-up text.
+`FollowupAgent: PATH (follow-up sent)` disclosure containing the exact
+follow-up text.
 `SendMessage`
 queues interim plain-text mail for `/root` or any retained path without
 activating a turn. `WaitAgent` suspends its ordinary asynchronous tool callback
@@ -179,8 +180,8 @@ PATH` from the canonical event.
 `SendMessage(target, message)` resolves canonical or relative retained paths
 tree-wide. It queues one canonical `MAIL` record containing type, sender path,
 recipient path, and payload; it never starts an idle turn. Successful sends
-return an empty result and render a collapsed `Message sent to PATH`
-disclosure whose path opens the retained transcript and whose body contains the
+return an empty result and render a collapsed
+`SendMessage: PATH (message queued)` disclosure whose path opens the retained transcript and whose body contains the
 sent message. Canonical `MAIL` payloads are retained in full without a mailbox
 body cap. Since this delivery is interim and may cross a root-turn boundary,
 an agent should put its final verdict in its terminal response rather than
@@ -200,10 +201,10 @@ new mail releases it immediately, as does follow-up steering. New root user
 input becomes a separate user-role
 steering message in the same resumed request, so no intermediate model sample
 can run before the input is visible. The default timeout is 30,000 ms.
-Positive shorter values are clamped to 10,000 ms, values above 3,600,000 ms
-are rejected, and timeout is a successful outcome. Its result
+Values clamp to the 10,000-3,600,000 ms range; malformed values fall back
+to the default, and timeout is a successful outcome. Its result
 contains only the wake reason. The view renders `Waiting for agents` while the
-tool is pending. Settled waits render `Waited for agents (OUTCOME)`;
+tool is pending. Settled waits render `WaitAgent: agents (OUTCOME)`;
 consecutive calls coalesce into the final row with a count while every
 canonical call remains in the transcript.
 

@@ -31,7 +31,6 @@
 (require 'mevedel-file-state)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-ui)
-(require 'mevedel-preview-mode)
 (require 'mevedel-permission-queue)
 (require 'mevedel-tool-exec)
 (require 'mevedel-goal)
@@ -3672,13 +3671,14 @@ state of its inner sections"
         (should (equal draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4)))
         (goto-char (point-min))
-        (search-forward "Session agents (1)")
+        (search-forward "ListAgents: session (1 agent)")
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (should (search-forward "/root/timer_patch_review  explorer  running"
                                 mevedel-view--input-marker t))
         (goto-char (point-min))
-        (search-forward "Message sent to /root/timer_patch_review")
+        (search-forward
+         "SendMessage: /root/timer_patch_review (message queued)")
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (should (search-forward "Detailed finding"
@@ -3688,9 +3688,10 @@ state of its inner sections"
           (should (= 1 (mevedel-view-test--count-substring
                         "Started /root/timer_patch_review" visible)))
           (should (= 1 (mevedel-view-test--count-substring
-                        "Session agents (1)" visible)))
+                        "ListAgents: session (1 agent)" visible)))
           (should (= 1 (mevedel-view-test--count-substring
-                        "Message sent to /root/timer_patch_review" visible)))))))
+                        "SendMessage: /root/timer_patch_review (message queued)"
+                        visible)))))))
 
   :doc "an intervening visible tool ends the coalescing run"
   (mevedel-view-test--with-buffers

@@ -30,6 +30,7 @@
 (require 'mevedel-tool-fs)
 (require 'mevedel-tool-goal)
 (require 'mevedel-tool-introspect)
+(require 'mevedel-tool-patch)
 (require 'mevedel-goal)
 (require 'mevedel-tool-skills)
 (require 'mevedel-tool-task)
@@ -135,6 +136,7 @@
   "Register the complete built-in tool surface with the mevedel registry."
   (mevedel-tool-web--register)
   (mevedel-tool-fs--register)
+  (mevedel-tool-patch-register)
   (mevedel-tool-code--register)
   (mevedel-tool-tutor--register)
   (mevedel-tool-exec--register)

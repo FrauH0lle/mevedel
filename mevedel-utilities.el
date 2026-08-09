@@ -39,9 +39,6 @@
                   "mevedel-mention-bindings"
                   (start end binding &optional object))
 
-;; `mevedel-preview-mode'
-(defvar mevedel-preview-mode--current-overlay)
-
 ;; `mevedel-structs'
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
@@ -285,6 +282,23 @@ the rest of the list rotated around it.  Otherwise, returns the LIST."
                        while (not (eq elt element))
                        collect elt))
     list))
+
+(defun mevedel--clamped-integer (value default minimum maximum)
+  "Coerce VALUE to an integer clamped between MINIMUM and MAXIMUM.
+Floats round and numeric strings parse; anything else, including nil,
+falls back to DEFAULT.  Models frequently send tuning parameters like
+timeouts as floats, strings, or out-of-range numbers; such values are
+never worth failing a tool call over."
+  (let ((number
+         (cond ((integerp value) value)
+               ((numberp value) (round value))
+               ((and (stringp value)
+                     (string-match-p
+                      "\\`[[:space:]]*-?[0-9]+\\(\\.[0-9]*\\)?[[:space:]]*\\'"
+                      value))
+                (round (string-to-number value)))
+               (t default))))
+    (min maximum (max minimum number))))
 
 (defun mevedel--raw-byte-char-p (char)
   "Return non-nil when CHAR is an Emacs raw byte character."
@@ -894,16 +908,6 @@ original patch file with the new content."
               (when (search-forward mevedel--original-patch-string nil t)
                 (replace-match new-content t t)
                 (message "Patch updated in %s" (buffer-name patch-buffer)))))))
-
-      ;; Update the temp file with the user's ediff modifications so that
-      ;; return-to-inline-preview can regenerate a clean diff buffer.
-      (when-let* ((ov mevedel-preview-mode--current-overlay)
-                  (temp-file (overlay-get ov 'mevedel--temp-file)))
-        (let ((user-content (with-current-buffer ediff-buffer-B
-                              (buffer-substring-no-properties
-                               (point-min) (point-max)))))
-          (with-temp-file temp-file
-            (insert user-content))))
 
       ;; Finalize the ediff session by removing read-only protection and
       ;; restoring the original file with the modified version

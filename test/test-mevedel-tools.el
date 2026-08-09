@@ -1176,6 +1176,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 (mevedel-deftest mevedel-tools--handle-plan-tool-filter
   (:before-each (progn (mevedel-tool-clear-registry)
                        (mevedel-tool-fs--register)
+                       (mevedel-tool-patch-register)
                        (mevedel-tool-exec--register)
                        (mevedel-tool-goal--register))
    :after-each (mevedel-tool-clear-registry))
@@ -1189,7 +1190,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
          (tools (mapcar (lambda (name)
                           (mevedel-tool-gptel-tool
                            (mevedel-tool-get name "mevedel")))
-                        '("Read" "Edit" "Write" "MkDir" "Eval" "Bash"))))
+                        '("Read" "ApplyPatch" "Eval" "Bash"))))
     (unwind-protect
         (progn
           (setf (mevedel-session-plan-mode session) t)
@@ -1258,7 +1259,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
          (tools (mapcar (lambda (name)
                           (mevedel-tool-gptel-tool
                            (mevedel-tool-get name "mevedel")))
-                        '("Read" "Edit" "Write" "MkDir" "Eval" "Bash"))))
+                        '("Read" "ApplyPatch" "Eval" "Bash"))))
     (unwind-protect
         (progn
           (setf (mevedel-session-plan-mode session) t

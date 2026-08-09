@@ -157,7 +157,7 @@ guidance in the rejection reminder.
 
 ### Edit diagnostics
 
-Diagnostics are observed only after a successful `Write` or approved `Edit`.
+Diagnostics are observed only after a successful `ApplyPatch`.
 Before the first edit of a visited file in a request, mevedel captures that
 file's current Flymake and Flycheck diagnostics as its baseline. After the
 edit, an unmodified stale buffer is safely reverted, active checkers are

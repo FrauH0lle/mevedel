@@ -959,7 +959,7 @@ enough to surface immediately rather than throttle."
 
 
 ;;
-;;; Edit diagnostics
+;;; Patch diagnostics
 
 (defun mevedel-reminders--workspace-buffers (session)
   "Return live buffers visiting files under SESSION's workspace root."

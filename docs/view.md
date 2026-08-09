@@ -188,7 +188,7 @@ Terminology:
   above the input prompt. It is not part of the history, status, or
   interaction zones. Its elapsed value measures active request work, excluding
   time spent awaiting an Ask answer, permission decision, Plan approval,
-  Write/Edit preview decision, or direct request input. During those waits it
+  ApplyPatch review decision, or direct request input. During those waits it
   reads `Waiting for input` while its spinner frame keeps animating. Queued
   Pending Inputs and an armed session fork do not pause active elapsed time.
 - **Input zone**: the read-only prompt prefix plus the editable composer.
@@ -201,6 +201,8 @@ cleanup; they are not independent renderers. Register controls with
 `mevedel-view--interaction-register`; do not direct-insert ad hoc UI near the
 composer. Registering or rebuilding an interaction must not auto-focus the
 prompt or move point out of the composer.
+Use `:body-properties-owned` only when the producer supplies complete per-span
+`read-only` and stickiness properties, as ApplyPatch does for inline feedback.
 Interaction keybindings are active only when point is on the interaction text;
 composer input must never settle or cycle interaction prompts.
 
@@ -630,16 +632,16 @@ rows and badges, and status/handle refresh. Transcript turn rendering remains
 in `mevedel-view-render.el`.
 
 Agent activity rows are projections of canonical tool and lifecycle events:
-`Started PATH`, `Interacted with PATH`, `Message sent to PATH`, `Interrupted
-PATH`, and `Waiting for agents`. Settled waits render `Waited for agents
-(OUTCOME)`; consecutive wait rows retain only the final outcome and show the
+`Started PATH`, `FollowupAgent: PATH`, `SendMessage: PATH`,
+`InterruptAgent: PATH`, and `Waiting for agents`. Settled waits render
+`WaitAgent: agents (OUTCOME)`; consecutive wait rows retain only the final outcome and show the
 combined count. The view does not infer a second activity state from internal
 storage identities or runtime tables.
 
 Agent handles use `TAB` to expand or collapse their details.  `RET` on the
 visible agent path, or a mouse click, opens the transcript.  Agent handles
 and activity-row paths are clickable when a transcript entry is available.
-`Interacted with PATH` and `Message sent to PATH` start collapsed and expand
+`FollowupAgent: PATH` and `SendMessage: PATH` start collapsed and expand
 to the exact follow-up or sent message.
 Running agents show status/activity in the main view
 and may open a rendered read-only transcript view over the live agent

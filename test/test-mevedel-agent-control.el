@@ -1341,7 +1341,7 @@
       (apply (car scheduled) (cdr scheduled))
       (should (equal '(mailbox) reasons))))
 
-  :doc "times out, clamps positive short waits, and validates the upper bound"
+  :doc "times out and clamps or defaults out-of-range timeouts"
   (let ((session (mevedel-agent-control-test--session))
         reasons scheduled delay)
     (cl-letf (((symbol-function 'run-at-time)
@@ -1360,10 +1360,14 @@
                  'fake-timer)))
       (mevedel-agent-control-wait session #'ignore 1)
       (should (= 10 delay))
-      (mevedel-agent-control-cancel-wait session "/root"))
-    (dolist (timeout '(0 -1 3600001 10000.0 "10000"))
-      (should-error
-       (mevedel-agent-control-wait session #'ignore timeout)))
+      (mevedel-agent-control-cancel-wait session "/root")
+      ;; Out-of-range values clamp, coercible values coerce, and
+      ;; garbage falls back to the default instead of erroring.
+      (dolist (case '((0 . 10) (-1 . 10) (3600001 . 3600) (10000.0 . 10)
+                      ("10000" . 10) ("nonsense" . 30) (t . 30)))
+        (mevedel-agent-control-wait session #'ignore (car case))
+        (should (= (cdr case) delay))
+        (mevedel-agent-control-cancel-wait session "/root")))
     (cl-letf (((symbol-function 'run-at-time)
                (lambda (&rest _) 'fake-timer)))
       (mevedel-agent-control-wait session #'ignore 10000)

@@ -266,10 +266,11 @@
     (should (eq (mevedel-permission--mode-decision 'edits t) 'allow))
     (should (eq (mevedel-permission--mode-decision 'edits nil t) 'allow))
     (should (eq (mevedel-permission--mode-decision 'edits nil nil) 'ask)))
-  :doc "ask allows read-only and asks for writes"
+  :doc "ask allows read-only and reviewed edits but asks for other writes"
   (progn
     (should (eq (mevedel-permission--mode-decision 'ask t) 'allow))
-    (should (eq (mevedel-permission--mode-decision 'ask nil) 'ask))))
+    (should (eq (mevedel-permission--mode-decision 'ask nil) 'ask))
+    (should (eq (mevedel-permission--mode-decision 'ask nil t t) 'allow))))
 
 
 ;;
@@ -458,6 +459,32 @@
                   :tool-struct mock-tool
                   :mode 'ask)
                 'ask)))
+  :doc "reviewed edits use review inside roots and retain outside path rules"
+  (let ((mevedel-protected-paths nil)
+        (tool (mevedel-tool--create
+               :name "ApplyPatch" :groups '(edit reviewed-edit))))
+    (let ((mevedel-permission-rules nil))
+      (should (eq (mevedel-check-permission
+                   "ApplyPatch" :tool-struct tool :path "/project/a"
+                   :mode 'ask :workspace-root "/project")
+                  'allow))
+      (should (eq (mevedel-check-permission
+                   "ApplyPatch" :tool-struct tool :path "/outside/a"
+                   :mode 'ask :workspace-root "/project")
+                  'ask)))
+    (let ((mevedel-permission-rules
+           '(("ApplyPatch" :path "/outside/a" :action allow))))
+      (should (eq (mevedel-check-permission
+                   "ApplyPatch" :tool-struct tool :path "/outside/a"
+                   :mode 'ask :workspace-root "/project")
+                  'allow)))
+    (let ((mevedel-permission-rules
+           '(("ApplyPatch" :action ask))))
+      (dolist (mode '(ask edits full-auto))
+        (should (eq (mevedel-check-permission
+                     "ApplyPatch" :tool-struct tool :path "/project/a"
+                     :mode mode :workspace-root "/project")
+                    'ask)))))
   :doc "Plan mode denies edits and Eval across modes and explicit allows"
   (let* ((mevedel-permission-rules nil)
          (mevedel-protected-paths nil)

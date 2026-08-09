@@ -214,6 +214,18 @@ workspace root of the session tied to the current data buffer."
       (setq ranges (cdr ranges)))
     found))
 
+(defun mevedel-view--linkify-exempt-p (position)
+  "Return non-nil when POSITION opted out of Markdown decoration.
+Renderers stamp `mevedel-view-no-linkify' on verbatim content, such as
+diff lines, that must never be linkified, rewritten, or inlined."
+  (get-text-property position 'mevedel-view-no-linkify))
+
+(defun mevedel-view--decoration-blocked-p (position ranges)
+  "Return non-nil when POSITION must not be decorated.
+True for linkify-exempt text and for positions inside RANGES."
+  (or (mevedel-view--linkify-exempt-p position)
+      (mevedel-view--position-in-ranges-p position ranges)))
+
 (defconst mevedel-view--markdown-table-line-regexp
   "^[ \t]*|.*|[ \t]*$"
   "Regexp matching one simple Markdown pipe table line.")
@@ -321,13 +333,13 @@ not treated as delimiters."
       (beginning-of-line)
       (while (< (point) end)
         (let ((line-start (line-beginning-position)))
-          (if (or (mevedel-view--position-in-ranges-p line-start code-ranges)
+          (if (or (mevedel-view--decoration-blocked-p line-start code-ranges)
                   (not (looking-at mevedel-view--markdown-table-line-regexp)))
               (forward-line 1)
             (let ((table-start line-start)
                   rows)
               (while (and (< (point) end)
-                          (not (mevedel-view--position-in-ranges-p
+                          (not (mevedel-view--decoration-blocked-p
                                 (line-beginning-position) code-ranges))
                           (looking-at mevedel-view--markdown-table-line-regexp))
                 (let* ((row-start (line-beginning-position))
@@ -497,7 +509,7 @@ not treated as delimiters."
         (let* ((mb (match-beginning 0))
                (me (match-end 0))
                (url (match-string-no-properties 1))
-               (path (and (not (mevedel-view--position-in-ranges-p
+               (path (and (not (mevedel-view--decoration-blocked-p
                                 mb code-ranges))
                           (mevedel-view--local-link-target url))))
           (when (and path (mevedel-view--image-file-p path))
@@ -509,7 +521,7 @@ not treated as delimiters."
                (me (match-end 0))
                (raw (match-string-no-properties 0))
                (path (and (not (get-text-property mb 'display))
-                          (not (mevedel-view--position-in-ranges-p
+                          (not (mevedel-view--decoration-blocked-p
                                 mb code-ranges))
                           (mevedel-view--path-candidate-p raw)
                           (mevedel-view--path-context-candidate-p mb raw)
@@ -561,7 +573,8 @@ not treated as delimiters."
                            (match-string-no-properties 2))))
                (resolved (mevedel-view--resolve-path raw)))
           (push (cons mb me) ranges)
-          (when (and resolved (file-exists-p resolved))
+          (when (and resolved (file-exists-p resolved)
+                     (not (mevedel-view--linkify-exempt-p mb)))
             (mevedel-view--make-file-button mb me resolved line)))))
     (nreverse ranges)))
 
@@ -579,7 +592,8 @@ not treated as delimiters."
                (path (mevedel-view--local-link-target url))
                (line (mevedel-view--local-link-line url)))
           (push (cons whole-start whole-end) ranges)
-          (when path
+          (when (and path
+                     (not (mevedel-view--linkify-exempt-p whole-start)))
             (mevedel-view--make-file-button mb me path line)))))
     (nreverse ranges)))
 
@@ -596,7 +610,7 @@ not treated as delimiters."
                (url (match-string-no-properties 2)))
           (unless (or (and (> whole-start (point-min))
                            (eq (char-before whole-start) ?!))
-                      (mevedel-view--position-in-ranges-p
+                      (mevedel-view--decoration-blocked-p
                        whole-start src-ranges))
             (remove-text-properties
              0 (length title) mevedel-view--link-action-properties title)
@@ -653,7 +667,7 @@ file.el#L12."
                (raw (buffer-substring-no-properties mb (match-end 1)))
                (suffix-start (or (match-beginning 2) (match-beginning 3)))
                (suffix-end (or (match-end 2) (match-end 3)))
-               (resolved (and (not (mevedel-view--position-in-ranges-p
+               (resolved (and (not (mevedel-view--decoration-blocked-p
                                     mb src-ranges))
                               (mevedel-view--path-candidate-p raw)
                               (mevedel-view--path-context-candidate-p mb raw)

@@ -2926,11 +2926,13 @@ default Bash keeps bare dot inspection automatic"
                   (list :yield-time_ms 250))))
   (should (= 30000 (mevedel-tool-exec--bash-yield-time-ms
                     (list :yield-time_ms 30000))))
-  :doc "rejects out-of-range and non-integer values"
-  (dolist (value '(249 30001 1.5 "250"))
-    (should-error
-     (mevedel-tool-exec--bash-yield-time-ms
-      (list :yield-time_ms value)))))
+  :doc "clamps out-of-range values and coerces or defaults non-integers"
+  (dolist (case '((249 . 250) (30001 . 30000) (60000 . 30000)
+                  (1500.4 . 1500) ("250" . 250) ("abc" . 10000)
+                  (nil . 10000) (t . 10000)))
+    (should (= (cdr case)
+               (mevedel-tool-exec--bash-yield-time-ms
+                (list :yield-time_ms (car case)))))))
 
 (mevedel-deftest mevedel-tool-exec--write-wait-time-ms ()
   ,test
@@ -2948,15 +2950,16 @@ default Bash keeps bare dot inspection automatic"
     (should (= (car case)
                (mevedel-tool-exec--write-wait-time-ms
                 (list :yield-time_ms (car case)) (cadr case)))))
-  :doc "validates the distinct poll and input ranges"
-  (dolist (value '(-1 0 300001 1.5 "5000"))
-    (should-error
-     (mevedel-tool-exec--write-wait-time-ms
-      (list :yield-time_ms value) "")))
-  (should-error
-   (mevedel-tool-exec--write-wait-time-ms '(:yield-time_ms 249) "x"))
-  (should-error
-   (mevedel-tool-exec--write-wait-time-ms '(:yield-time_ms 30001) "x")))
+  :doc "clamps to the distinct poll and input ranges without erroring"
+  (dolist (case '((-1 . 5000) (0 . 5000) (300001 . 300000)
+                  (1.5 . 5000) ("5000" . 5000) ("abc" . 5000)))
+    (should (= (cdr case)
+               (mevedel-tool-exec--write-wait-time-ms
+                (list :yield-time_ms (car case)) ""))))
+  (should (= 250 (mevedel-tool-exec--write-wait-time-ms
+                  '(:yield-time_ms 249) "x")))
+  (should (= 30000 (mevedel-tool-exec--write-wait-time-ms
+                    '(:yield-time_ms 30001) "x"))))
 
 (mevedel-deftest mevedel-tool-exec--execution-artifact-directory ()
   ,test
@@ -3275,11 +3278,13 @@ default Bash keeps bare dot inspection automatic"
   (should-error
    (test-bash-permissions--call-bash #'ignore '(:command "sleep 1 &"))
    :type 'error)
-  :doc "validates the public yield range"
-  (should-error
-   (test-bash-permissions--call-bash
-    #'ignore (list :command "sleep 1" :yield-time_ms 100))
-   :type 'error)
+  :doc "clamps an out-of-range public yield instead of erroring"
+  (let (captured)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (&rest args) (setq captured args))))
+      (test-bash-permissions--call-bash
+       #'ignore (list :command "sleep 1" :yield-time_ms 100)))
+    (should (= 250 (plist-get (cdr captured) :yield-time-ms))))
   :doc "trusted internal waits disable yielding"
   (let (captured)
     (cl-letf (((symbol-function 'mevedel-execution-start-bash)
@@ -4479,12 +4484,12 @@ the execution boundary owns the session's single unavailable warning"
           "<bash-execution execution_id=\"exec-1\" state=\"running\"/>"
           '(:status success :state running :execution-id "exec-1"
             :execution-control input :observation-output-p nil))))
-    (should (equal "Polled background process (completed · exec-1)"
+    (should (equal "WriteStdin: polled background process (completed · exec-1)"
                    (plist-get poll :header)))
     (should (equal "WriteStdin:exec-1"
                    (plist-get poll :coalesce-key)))
     (should
-     (equal "Interacted with background process (running · exec-1)"
+     (equal "WriteStdin: sent input to background process (running · exec-1)"
             (plist-get input :header)))
     (should-not (plist-get input :coalesce-key)))
 

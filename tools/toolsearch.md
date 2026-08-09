@@ -40,7 +40,7 @@ ToolSearch(query="function_source", load=true)
 ToolSearch(query="edit", load=false)
 -> Shows matching editing tools without loading them.
 
-ToolSearch(query="Edit", load=true)
--> Loads Edit. The tool is available now; call Edit with its normal
+ToolSearch(query="ApplyPatch", load=true)
+-> Loads ApplyPatch. The tool is available now; call ApplyPatch with its normal
    arguments in your next tool call.
 </example>

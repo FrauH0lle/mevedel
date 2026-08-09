@@ -135,6 +135,7 @@ Chat / view
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
   mevedel-view-composer.el    composer editing, submission, queueing, fork/send flow
   mevedel-pending-inputs.el   Pending Inputs cockpit and queue management
+  mevedel-patch-review.el     staged ApplyPatch review UI
   mevedel-plan-mode.el        Plan conversations and proposal approval UI
   mevedel-view-interaction.el interaction registration, ordering, callback overlays, redraw
   mevedel-view-render.el      transcript rendering, folding, source mapping, navigation
@@ -148,7 +149,6 @@ Chat / view
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-persistence.el      save/load instructions
   mevedel-session-persistence.el  session save/resume/rewind/fork
-  mevedel-preview-mode.el     inline diff preview for Write/Edit
   mevedel-compact.el          conversation compaction (split-on-compact)
 
 Prompt / presets / agents
@@ -165,7 +165,8 @@ Prompt / presets / agents
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Tools (each dispatches through mevedel-pipeline)
-  mevedel-tool-fs.el          Read, Glob, Grep, Write, Edit, MkDir
+  mevedel-tool-fs.el          Read, Glob, Grep
+  mevedel-tool-patch.el       ApplyPatch parse/match/apply engine + tool
   mevedel-tool-code.el        XrefReferences, XrefDefinitions, Imenu, Treesitter
   mevedel-tool-exec.el        Bash, Eval
   mevedel-tool-web.el         WebSearch, WebFetch, YouTube

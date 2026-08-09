@@ -101,6 +101,8 @@
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-utilities'
+(declare-function mevedel--clamped-integer
+                  "mevedel-utilities" (value default minimum maximum))
 (declare-function mevedel--head-tail-preview-parts
                   "mevedel-utilities"
                   (head tail total-length &optional preview-size))
@@ -386,14 +388,11 @@ REASON is the wake outcome, or `cancelled' when omitted."
   "Suspend SESSION's current caller until mail, steering, or TIMEOUT-MS.
 CALLBACK receives one of `mailbox', `steering', `user', or `timeout'.
 Return the caller path when suspended, and nil after an immediate release."
-  (let ((timeout (or timeout-ms mevedel-agent-control--wait-default-ms)))
-    (unless (and (integerp timeout)
-                 (< 0 timeout)
-                 (<= timeout mevedel-agent-control--wait-max-ms))
-      (user-error "WaitAgent timeout_ms must be an integer from %d through %d"
+  (let ((timeout (mevedel--clamped-integer
+                  timeout-ms
+                  mevedel-agent-control--wait-default-ms
                   mevedel-agent-control--wait-min-ms
-                  mevedel-agent-control--wait-max-ms))
-    (setq timeout (max timeout mevedel-agent-control--wait-min-ms))
+                  mevedel-agent-control--wait-max-ms)))
     (let ((path (mevedel-agent-control-current-path session)))
       (cond
        ((mevedel-agent-control--mailbox-queue session path)

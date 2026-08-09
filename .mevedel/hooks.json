@@ -14,7 +14,7 @@
         ]
       },
       {
-        "matcher": "Edit|Write",
+        "matcher": "ApplyPatch",
         "hooks": [
           {
             "type": "command",

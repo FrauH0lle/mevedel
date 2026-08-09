@@ -68,6 +68,26 @@
              (plist-get preview :text)))
     (should (= 20 (plist-get preview :omitted-chars)))))
 
+(mevedel-deftest mevedel--clamped-integer ()
+  ,test
+  (test)
+
+  :doc "keeps in-range integers and clamps out-of-range ones"
+  (should (= 500 (mevedel--clamped-integer 500 100 10 1000)))
+  (should (= 10 (mevedel--clamped-integer 3 100 10 1000)))
+  (should (= 1000 (mevedel--clamped-integer 4000 100 10 1000)))
+
+  :doc "coerces floats and numeric strings"
+  (should (= 500 (mevedel--clamped-integer 499.6 100 10 1000)))
+  (should (= 500 (mevedel--clamped-integer "500" 100 10 1000)))
+  (should (= 500 (mevedel--clamped-integer " 500.0 " 100 10 1000)))
+
+  :doc "falls back to the default for absent or malformed values"
+  (should (= 100 (mevedel--clamped-integer nil 100 10 1000)))
+  (should (= 100 (mevedel--clamped-integer "fast" 100 10 1000)))
+  (should (= 100 (mevedel--clamped-integer t 100 10 1000)))
+  (should (= 10 (mevedel--clamped-integer nil 3 10 1000))))
+
 (mevedel-deftest mevedel--normalize-message-text ()
   ,test
   (test)

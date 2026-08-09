@@ -55,15 +55,15 @@ Important tool metadata:
 
 - Behavior: `:read-only-p`, `:snapshot-p`, `:destructive-p`, `:async-p`
 - Permissions: `:check-permission`, `:check-permission-async`,
-  `:get-path`, `:get-pattern`, `:get-domain`, `:get-name`
+  `:get-path`, `:get-paths`, `:get-pattern`, `:get-domain`, `:get-name`
 - Loading/grouping: `:category`, `:groups`, `:wrap`, `:prompt-file`
 - Input contracts: `:args`, `:repair-input`
 - Display/output: `:summary`, `:max-result-size`, `:render-transform`,
   `:renderer`
 
 `:snapshot-p` is an explicit declaration for file-mutating tools whose
-before-state participates in the final patch. `Write` and `Edit` declare it;
-other mutating tools such as `MkDir` do not snapshot their path.
+before-state participates in the final patch. `ApplyPatch` declares it and
+uses `:get-paths` so permission and snapshot steps cover every affected path.
 
 ### Tool input validation and repair
 
@@ -371,16 +371,17 @@ Agent tool calls and direct asynchronous workflows use `:kind
 collaboration-event` render-data. A `started` event renders the retained
 transcript handle; the registry-backed aggregate status uses distinct
 `Running`, `Waiting`, and `Blocked` rows. Canonical tool and lifecycle events
-are the only sources for `Started PATH`, `Interacted with PATH`, `Message sent
-to PATH`, `Interrupted PATH`, and `Waiting for agents`. Settled `WaitAgent`
-calls render `Waited for agents (OUTCOME)`; consecutive waits coalesce into
-the final row with a count. `Interacted with PATH` and `Message sent to PATH`
-start collapsed and expand to their exact follow-up or mail text.
+are the only sources for `Started PATH`, `FollowupAgent: PATH`,
+`SendMessage: PATH`, `InterruptAgent: PATH`, and `Waiting for agents`.
+Settled `WaitAgent` calls render `WaitAgent: agents (OUTCOME)`; consecutive
+waits coalesce into the final row with a count. `FollowupAgent: PATH` and
+`SendMessage: PATH` start collapsed and expand to their exact follow-up or
+mail text.
 Render-data lookup/patching scans literal open/close delimiters rather
 than matching the whole hidden block with one regexp; live agent metadata
 and multiline payloads can be large enough to overflow Emacs regexp
-limits. MkDir uses `:kind mkdir` render-data to distinguish newly-created
-directories from idempotent already-existing directories in the view.
+limits. ApplyPatch uses `:kind patch` render-data for one persisted aggregate
+whose body contains structured per-file diff blocks.
 
 ## Tool result persistence
 
@@ -397,8 +398,8 @@ workspace → no persistence.
 
 Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
 Glob 30k, Ask 30k, Xref*/Imenu 20k, Treesitter 30k,
-WebFetch/YouTube 50k. Read/Write/Edit/MkDir: nil (self-bounded or
-short). Agent `RESULT` mailbox records inline at most a 32 KiB preview of the
+WebFetch/YouTube 50k. Read/ApplyPatch: nil (self-bounded or short). Agent
+`RESULT` mailbox records inline at most a 32 KiB preview of the
 final response and point to the persisted transcript when available.
 
 ## External helper confinement
@@ -457,7 +458,8 @@ followed by KILL to the whole group. On Windows it terminates the direct child.
 The result includes partial combined stdout/stderr and structured termination
 facts.
 
-Bash waits up to `yield_time_ms` (10 seconds by default, 250-30000ms). A command
+Bash waits up to `yield_time_ms` (10 seconds by default, clamped to
+250-30000ms; malformed values fall back to the default). A command
 that finishes first returns normally and discards its temporary spool when all
 output fits inline. A command still running at the boundary returns its unread
 output, an opaque owner-scoped execution ID, and a retained session artifact.
@@ -480,8 +482,9 @@ apply. A successful empty `WriteStdin` poll while the execution remains
 running is model-visible but omitted as a separate view row; progress continues
 to update the original Bash row. Polls with output, input writes, terminal
 observations, and failures remain visible. Adjacent successful output-free
-poll rows for one execution coalesce into the final `Polled background
-process` row; input writes render `Interacted with background process`.
+poll rows for one execution coalesce into the final `WriteStdin: polled
+background process` row; input writes render `WriteStdin: sent input to
+background process`.
 Each `WriteStdin` attempt records
 its requested `yield_time_ms` and the
 effective wait, making omitted or stale tool arguments visible without storing

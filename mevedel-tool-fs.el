@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; File system tool implementations: Read, Glob, Grep, Write, Edit, Insert,
-;; MkDir.  Also provides diff generation utilities and file snapshotting used
+;; File system tool implementations: Read, Glob, and Grep.  Also provides diff
+;; generation utilities and file snapshotting used
 ;; by the inline/buffer preview system.
 
 ;;; Code:
@@ -30,7 +30,6 @@
 (defvar gptel-backend)
 
 ;; `mevedel-chat'
-(defvar mevedel--diff-preview-buffer-name)
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-run-helper
@@ -49,9 +48,6 @@
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--tool-results-dir
                   "mevedel-pipeline" (session buffer))
-
-;; `mevedel-preview-mode'
-(declare-function mevedel-preview-mode-add-preview "mevedel-preview-mode" t t)
 
 ;; `mevedel-structs'
 (declare-function mevedel-current-origin "mevedel-structs" ())
@@ -120,124 +116,6 @@ patching machinery, which needs a real source path to resolve."
                       (t (concat output "\n")))))
           (when (file-exists-p orig-file) (delete-file orig-file))
           (when (file-exists-p mod-file) (delete-file mod-file)))))))
-
-(defun mevedel-tool-fs--setup-diff-buffer (temp-file real-path workspace root
-                                                     &optional chat-buffer labels-real)
-  "Build a diff preview buffer comparing REAL-PATH to TEMP-FILE.
-
-Creates and configures `mevedel--diff-preview-buffer-name' with the
-unified diff, `diff-mode', read-only, and the buffer-local variables that
-`mevedel-ediff-patch' needs to resolve the source file and workspace.
-
-Arguments:
-- TEMP-FILE: Path to file with proposed changes
-- REAL-PATH: Path to actual file
-- WORKSPACE: Workspace identifier
-- ROOT: Workspace root directory
-- CHAT-BUFFER: Optional chat buffer reference
-- LABELS-REAL: When non-nil, always label both sides of the diff
-  with `a/REL-PATH' / `b/REL-PATH' and skip the `new file mode' /
-  `deleted file mode' headers.  Use this when the diff needs to drive
-  ediff's patching machinery, which requires a real source path.
-
-Returns the configured diff buffer."
-  (let* ((rel-path (file-relative-name real-path root))
-         (original-content (when (file-exists-p real-path)
-                             (with-temp-buffer
-                               (insert-file-contents real-path)
-                               (buffer-string))))
-         (modified-content (with-temp-buffer
-                             (insert-file-contents temp-file)
-                             (buffer-string)))
-         (diff (mevedel-tools--generate-diff original-content modified-content
-                                             rel-path labels-real))
-         (diff-buffer (generate-new-buffer mevedel--diff-preview-buffer-name)))
-    (with-current-buffer diff-buffer
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert (format "diff --git a/%s b/%s\n" rel-path rel-path))
-        ;; Add file mode lines for new or deleted files, but only when
-        ;; labels-real is nil -- otherwise we pretend the file already
-        ;; existed so ediff can patch it.
-        (unless labels-real
-          (cond
-           ((and (or (not original-content) (string-empty-p original-content))
-                 (and modified-content (not (string-empty-p modified-content))))
-            (insert "new file mode 100644\n"))
-           ((and (and original-content (not (string-empty-p original-content)))
-                 (or (not modified-content) (string-empty-p modified-content)))
-            (insert "deleted file mode 100644\n"))))
-        (insert diff)
-        (diff-mode)
-        (read-only-mode 1)
-        (setq-local truncate-lines t)
-        (when (derived-mode-p 'diff-mode)
-          (diff-setup-buffer-type))
-
-        (setq-local default-directory root
-                    mevedel--workspace workspace
-                    mevedel--temp-file temp-file
-                    mevedel--real-path real-path
-                    mevedel--data-buffer chat-buffer)
-
-        (goto-char (point-min))))
-    diff-buffer))
-
-
-;;
-;;; Diff renderer (Edit / Write)
-
-(defun mevedel-tool-fs--count-diff-changes (patch)
-  "Return a cons `(ADDED . REMOVED)' of changed lines in unified diff PATCH.
-Lines starting with `+' (but not `+++') count as added; lines starting
-with `-' (but not `---') count as removed.  Non-string PATCH yields
-`(0 . 0)'."
-  (let ((added 0) (removed 0))
-    (when (stringp patch)
-      (dolist (line (split-string patch "\n"))
-        (when (> (length line) 0)
-          (let ((first (aref line 0)))
-            (cond
-             ((and (eq first ?+) (not (string-prefix-p "+++" line)))
-              (cl-incf added))
-             ((and (eq first ?-) (not (string-prefix-p "---" line)))
-              (cl-incf removed)))))))
-    (cons added removed)))
-
-(defun mevedel-tool-fs--render-diff-summary (name args _result render-data)
-  "Build a collapsible diff rendering plist for Edit/Write results.
-
-NAME is the tool name (\"Edit\" or \"Write\").  ARGS is the tool arg
-plist.  RENDER-DATA must be a plist of the form
-  (:kind diff :patch PATCH :path PATH :rel-path REL)
-emitted by `mevedel-preview-mode--apply-overlay'.
-
-Returns a rendering plist `(:header :body :body-mode
-:initially-collapsed-p)' or nil when RENDER-DATA is absent or malformed,
-so the view falls back to the default one-liner.
-
-The diff starts collapsed in every permission mode so Edit/Write
-results do not expand the transcript by default."
-  (when (and (listp render-data)
-             (eq (plist-get render-data :kind) 'diff)
-             (stringp (plist-get render-data :patch)))
-    (let* ((patch (plist-get render-data :patch))
-           (rel-path (plist-get render-data :rel-path))
-           (abs-path (or (plist-get render-data :path)
-                         (plist-get args :file_path)))
-           (shown (or rel-path
-                      (and abs-path (file-name-nondirectory abs-path))
-                      ""))
-           (counts (mevedel-tool-fs--count-diff-changes patch))
-           (header (format "%s: %s (+%d -%d)"
-                           (or name "Edit")
-                           shown
-                           (car counts)
-                           (cdr counts))))
-      (list :header header
-            :body patch
-            :body-mode 'diff-mode
-            :initially-collapsed-p t))))
 
 (defun mevedel-tool-fs--mode-for-file (path)
   "Return the major-mode symbol `auto-mode-alist' would select for PATH, or nil.
@@ -383,42 +261,6 @@ list of matching files.  Header shows pattern and file count."
             :body result
             :body-mode nil
             :initially-collapsed-p t))))
-
-(defun mevedel-tool-fs--render-mkdir (name args result render-data)
-  "Rendering plist for the MkDir tool.
-NAME is the tool display name.  ARGS carries `:path'.
-RESULT is the tool result string.
-RENDER-DATA carries normalized path metadata when available.
-Header shows the directory path with a created, exists, or error suffix."
-  (when (stringp result)
-    (let* ((rel-path (plist-get render-data :rel-path))
-           (raw-path (or rel-path
-                         (plist-get render-data :path)
-                         (plist-get args :path)
-                         "?"))
-           (raw-path (if (and (stringp rel-path)
-                              (not (string-search "/" rel-path)))
-                         (concat "./" rel-path)
-                       raw-path))
-           (shown (if (stringp raw-path)
-                      (file-name-as-directory raw-path)
-                    "?"))
-           (status
-            (cond
-             ((string-prefix-p "Error" result) "error")
-             ((and (proper-list-p render-data)
-                   (eq (plist-get render-data :kind) 'mkdir))
-              (if (plist-get render-data :created) "created" "exists"))
-             (t (error "Invalid MkDir render data")))))
-      (list :header (format "%s: %s (%s)"
-                            (or name "MkDir")
-                            shown
-                            status)
-            :body nil
-            :body-mode nil
-            :expandable-p nil
-            :initially-collapsed-p t))))
-
 
 ;;
 ;;; File Snapshotting
@@ -1647,185 +1489,6 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
 
 
 ;;
-;;; Pipeline-compatible handlers
-
-(defun mevedel-tool-fs--write (callback args)
-  "Write a file to the local filesystem.
-CALLBACK receives the result envelope.  ARGS is a plist with :file_path
-and :content."
-  (let* ((file-path (plist-get args :file_path))
-         (content (plist-get args :content))
-         (full-path (expand-file-name file-path))
-         (dir (file-name-directory full-path)))
-    (unless (stringp file-path)
-      (error "Parameter file_path is required"))
-    (unless (stringp content)
-      (error "Parameter content is required"))
-    (require 'mevedel-preview-mode)
-    (condition-case err
-        (let* ((temp-file (make-temp-file "mevedel-write-" nil nil content))
-               (original-content (when (file-exists-p full-path)
-                                   (with-temp-buffer
-                                     (insert-file-contents full-path)
-                                     (buffer-string)))))
-          (mevedel-preview-mode-add-preview
-           :temp-file temp-file
-           :original-content original-content
-           :path full-path
-           :callback (lambda (result)
-                       (funcall callback
-                                (mevedel-tool-fs--handler-result result)))
-           :tool-name "Write"
-           ;; Write replaces the entire file -- no need for diff-apply
-           :apply-fn (lambda ()
-                       (make-directory dir t)
-                       (copy-file temp-file full-path t))))
-      (error
-       (funcall callback
-                (mevedel-tool-fs--handler-result
-                 (format "Error: Writing file %s failed: %s"
-                         file-path (error-message-string err))))))))
-
-(defun mevedel-tool-fs--edit (callback args)
-  "Edit a file by performing exact string replacement.
-CALLBACK receives the result envelope.  ARGS is a plist with :file_path,
-:old_string, :new_string, and optionally :replace_all."
-  (let* ((file-path (plist-get args :file_path))
-         (old-string (plist-get args :old_string))
-         (new-string (plist-get args :new_string))
-         (replace-all (plist-get args :replace_all))
-         (full-path (expand-file-name file-path)))
-    (unless (stringp file-path)
-      (error "Parameter file_path is required"))
-    (unless (stringp old-string)
-      (error "Parameter old_string is required"))
-    (unless (stringp new-string)
-      (error "Parameter new_string is required"))
-    (unless (file-exists-p full-path)
-      (error "File does not exist: %s" file-path))
-    (when (file-directory-p full-path)
-      (error "Cannot edit a directory: %s" file-path))
-    (when (string= old-string new-string)
-      (error "`old_string' and `new_string' must be different"))
-    (require 'mevedel-preview-mode)
-    (condition-case err
-        (let* ((temp-file (make-temp-file "mevedel-edit-"))
-               (original-content (with-temp-buffer
-                                   (insert-file-contents full-path)
-                                   (buffer-string))))
-          ;; Copy original to temp file
-          (with-temp-file temp-file
-            (insert original-content))
-          ;; Apply replacement to temp file
-          (mevedel-tool-fs--apply-string-replacement
-           temp-file old-string new-string replace-all
-           (lambda (success-or-error)
-             (if (stringp success-or-error)
-                 ;; Error -- clean up and report
-                 (progn
-                   (delete-file temp-file)
-                   (funcall callback
-                            (mevedel-tool-fs--handler-result
-                             success-or-error)))
-               ;; Success -- show diff and confirm
-               (mevedel-preview-mode-add-preview
-                :temp-file temp-file
-                :original-content original-content
-                :path full-path
-                :callback (lambda (result)
-                            (funcall
-                             callback
-                             (mevedel-tool-fs--handler-result result)))
-                :tool-name "Edit")))))
-      (error
-       (funcall callback
-                (mevedel-tool-fs--handler-result
-                 (format "Error: Editing file %s failed: %s"
-                         file-path (error-message-string err))))))))
-
-(defun mevedel-tool-fs--apply-string-replacement (temp-file old-string new-string replace-all callback)
-  "Apply string replacement to TEMP-FILE.
-Replace OLD-STRING with NEW-STRING.  When REPLACE-ALL is truthy (per
-`mevedel-tool-truthy-p'), replace all occurrences; otherwise require a
-unique match.  Calls CALLBACK with t on success or an error string on
-failure."
-  (condition-case err
-      (let (success)
-        (with-temp-buffer
-          (insert-file-contents temp-file)
-          (goto-char (point-min))
-          (if (mevedel-tool-truthy-p replace-all)
-              ;; Replace all occurrences
-              (if (search-forward old-string nil t)
-                  (progn
-                    (replace-match new-string t t)
-                    (while (search-forward old-string nil t)
-                      (replace-match new-string t t))
-                    (write-region nil nil temp-file nil 'silent)
-                    (setq success t))
-                (funcall callback
-                         (format "Error: Could not find old_string in file: %s"
-                                 (truncate-string-to-width old-string 40))))
-            ;; Single unique replacement
-            (if (search-forward old-string nil t)
-                (if (save-excursion (search-forward old-string nil t))
-                    (funcall callback
-                             "Error: old_string is not unique in the file. Use replace_all or provide more context")
-                  ;; Unique match found
-                  (replace-match new-string t t)
-                  ;; When new-string is empty and old-string didn't end with
-                  ;; newline but was followed by one, strip trailing newline
-                  (when (and (string-empty-p new-string)
-                             (not (string-suffix-p "\n" old-string))
-                             (eq (char-after) ?\n))
-                    (delete-char 1))
-                  (write-region nil nil temp-file nil 'silent)
-                  (setq success t))
-              (funcall callback
-                       (format "Error: Could not find old_string in file: %s"
-                               (truncate-string-to-width old-string 40))))))
-        (when success
-          (funcall callback success)))
-    (error
-     (funcall callback (format "Error: %s" (error-message-string err))))))
-
-
-(defun mevedel-tool-fs--mkdir (callback args)
-  "Create a directory at the given path.
-CALLBACK receives the result envelope, including render-data on success.
-ARGS is a plist with :path."
-  (let ((path (plist-get args :path)))
-    (unless (stringp path)
-      (error "Parameter path is required"))
-    (condition-case err
-        (let* ((full-path (expand-file-name path))
-               (existed (file-directory-p full-path))
-               (root (and (boundp 'mevedel--workspace)
-                          mevedel--workspace
-                          (ignore-errors
-                            (mevedel-workspace-root mevedel--workspace))))
-               (rel-path (and root
-                              (ignore-errors
-                                (file-relative-name full-path root)))))
-          (make-directory full-path t)
-          (funcall callback
-                   (list :result
-                         (if existed
-                             (format "Directory already exists: %s" full-path)
-                           (format "Directory created: %s" full-path))
-                         :render-data
-                         (list :kind 'mkdir
-                               :created (not existed)
-                               :path full-path
-                               :rel-path rel-path))))
-      (error
-       (funcall callback
-                (mevedel-tool-fs--handler-result
-                 (format "Error creating directory %s: %s"
-                         path (error-message-string err))))))))
-
-
-;;
 ;;; Register Tools
 
 (defun mevedel-tool-fs--register ()
@@ -1909,52 +1572,6 @@ ARGS is a plist with :path."
     :groups (read)
     :get-path (lambda (args) (plist-get args :path))
     :renderer #'mevedel-tool-fs--render-grep)
-
-  (mevedel-define-tool
-    :name "MkDir"
-    :description "Create a new directory at the given path."
-    :prompt-file "tools/mkdir.md"
-    :handler #'mevedel-tool-fs--mkdir
-    :args ((path path :required
-                 "The path of the directory to create. Relative paths are resolved from the session working directory."))
-    :async-p t
-    :groups (edit)
-    :get-path (lambda (args) (plist-get args :path))
-    :renderer #'mevedel-tool-fs--render-mkdir)
-
-  (mevedel-define-tool
-    :name "Write"
-    :description "Write a file to the local filesystem."
-    :prompt-file "tools/write.md"
-    :handler #'mevedel-tool-fs--write
-    :args ((file_path path :required
-                      "Absolute or relative path to the file to write. Relative paths are resolved from the session working directory.")
-           (content string :required
-                   "The content to write to the file."))
-    :async-p t
-    :groups (edit)
-    :snapshot-p t
-    :get-path (lambda (args) (plist-get args :file_path))
-    :renderer #'mevedel-tool-fs--render-diff-summary)
-
-  (mevedel-define-tool
-    :name "Edit"
-    :description "Performs exact string replacements in files."
-    :prompt-file "tools/edit.md"
-    :handler #'mevedel-tool-fs--edit
-    :args ((file_path path :required
-                      "Absolute or relative path to the file to modify. Relative paths are resolved from the session working directory.")
-           (old_string string :required
-                       "The text to replace.")
-           (new_string string :required
-                       "The text to replace it with (must be different from old_string).")
-           (replace_all boolean :optional
-                        "Replace all occurrences of old_string (default false)."))
-    :async-p t
-    :groups (edit)
-    :snapshot-p t
-    :get-path (lambda (args) (plist-get args :file_path))
-    :renderer #'mevedel-tool-fs--render-diff-summary)
 
 )
 

@@ -230,10 +230,11 @@
   (when (and (stringp result)
              (stringp (plist-get render-data :path)))
     (let ((path (plist-get render-data :path)))
-      (list :header (format (if (equal name "SendMessage")
-                               "Message sent to %s"
-                             "Interacted with %s")
-                            path)
+      (list :header (format "%s: %s (%s)"
+                            (or name "SendMessage") path
+                            (if (equal name "SendMessage")
+                                "message queued"
+                              "follow-up sent"))
             :body (or (plist-get args :message) "")
             :body-mode nil
             :agent-path path
@@ -252,7 +253,7 @@
     0))
 
 (defun mevedel-tool-ui--render-list-agents
-    (_name _args result _render-data)
+    (name _args result _render-data)
   "Render the ListAgents RESULT as a compact table."
   (when (stringp result)
     (condition-case nil
@@ -278,7 +279,9 @@
                        (mapcar (lambda (row) (length (cadr row))) rows)))
                (row-format
                 (format "%%-%ds  %%-%ds  %%s" path-width role-width)))
-          (list :header (format "Session agents (%d)" (length rows))
+          (list :header (format "%s: session (%d %s)"
+                                (or name "ListAgents") (length rows)
+                                (if (= (length rows) 1) "agent" "agents"))
                 :body
                 (mapconcat
                  (lambda (row) (apply #'format row-format row))
@@ -289,12 +292,13 @@
       (error nil))))
 
 (defun mevedel-tool-ui--render-interrupt-agent
-    (_name _args result render-data)
+    (name _args result render-data)
   "Render an interrupted-agent RESULT from RENDER-DATA."
   (when (and (stringp result)
              (eq (plist-get render-data :event) 'interrupted)
              (stringp (plist-get render-data :path)))
-    (list :header (format "Interrupted %s"
+    (list :header (format "%s: %s (interrupted)"
+                          (or name "InterruptAgent")
                           (plist-get render-data :path))
           :expandable-p nil)))
 
@@ -314,11 +318,11 @@
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-ui--render-wait-agent
-    (_name _args result render-data)
+    (name _args result render-data)
   "Render completed WaitAgent RESULT from RENDER-DATA."
   (when (and (stringp result)
              (eq (plist-get render-data :event) 'finished-waiting))
-    (list :header (format "Waited for agents (%s)" result)
+    (list :header (format "%s: agents (%s)" (or name "WaitAgent") result)
           :expandable-p nil
           :coalesce-key "WaitAgent")))
 
@@ -418,7 +422,7 @@
     :prompt-file "tools/waitagent.md"
     :handler #'mevedel-tool-ui--wait-agent
     :args ((timeout_ms integer :optional
-                       "Timeout in milliseconds; positive values below 10000 are clamped, maximum 3600000."))
+                       "Timeout in milliseconds, clamped to 10000-3600000; omitted or invalid values default to 30000."))
     :async-p t
     :read-only-p t
     :groups (util)

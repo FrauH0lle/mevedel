@@ -494,7 +494,7 @@ display rendering.
 
 ### Available Tools
 
-**File operations:** `Read`, `Write`, `Edit`, `MkDir`, `Glob`, `Grep`.
+**File operations:** `Read`, `ApplyPatch`, `Glob`, `Grep`.
 `Read` also supports PNG/JPG/GIF/WEBP/PDF media when the active backend can
 accept native media, and can render selected PDF pages through Poppler.
 
@@ -631,33 +631,19 @@ While the agent runs, the parent view shows a live inline `Review` or `Verify`
 handle with transcript status and tool-call counts. The final response remains
 the readable agent summary.
 
-### Inline Diff Preview
+### ApplyPatch Review
 
-![Edit tool](.assets/images/edit-tool.png)
+The model submits one Codex-style `ApplyPatch` payload for Add, Update, Delete,
+and Move operations across multiple files. In `ask` mode, one aggregate review
+appears in the view before anything is written. `TAB` expands individual files;
+Update hunks can be independently selected, edited with `e`, or annotated with
+multiline feedback using `f`. Add, Delete, and Move remain indivisible.
 
-When the LLM proposes file edits via the `Write` or `Edit` tools, a diff preview
-is shown for user approval before any changes are applied. Small diffs are shown
-inline in the chat view; larger diffs open in a separate preview buffer
-(controlled by `mevedel-inline-preview-threshold`). Under `edits` and
-`full-auto` permission modes the diff is auto-applied and a summary entry is
-still added to the view. `MkDir` goes through the permission system, but creates
-directories directly rather than showing a diff preview. A direct user-authored
-allow rule for `Write` or `Edit` also auto-applies the matching preview after
-its path authority is satisfied; a path grant by itself does not.
-
-Per-overlay keybindings:
-
-| Key                     | Action                                                |
-|-------------------------|-------------------------------------------------------|
-| `C-c C-c` / `a` / `RET` | Approve and apply the diff                            |
-| `C-c C-k` / `r` / `q`   | Reject the diff                                       |
-| `C-c C-e` / `e`         | Edit the diff via ediff before apply                  |
-| `C-c C-f` / `f`         | Provide feedback and reject                           |
-| `S`                     | Approve all pending and switch to `edits` mode         |
-| `TAB`                   | Collapse / expand the preview overlay                 |
-
-Buffer-wide commands live under the `C-c p` prefix: `n`/`p` navigate, `a`
-approves all pending, `r` rejects all.
+The primary action changes between Apply selected, Request revision, and Reject
+patch. Application validates the captured baseline again and commits all
+selected changes as one rollback-backed transaction. Under `edits` and
+`full-auto`, or when a direct rule allows every affected path, the same
+validation and transaction run without the interactive review.
 
 ### Permission System
 
@@ -670,7 +656,7 @@ commands, web fetches, sub-agent spawns. Permission rules live on the unified
 
 | Key        | Matches                | Used by                            |
 |------------|------------------------|------------------------------------|
-| `:path`    | path (glob, `~` exp.)  | `Read`, `Edit`, `Write`, `Glob`, … |
+| `:path`    | path (glob, `~` exp.)  | `Read`, `ApplyPatch`, `Glob`, …    |
 | `:pattern` | command string (glob)  | `Bash`                             |
 | `:domain`  | host name (glob)       | `WebFetch`, `YouTube`              |
 | `:name`    | free-form name (glob)  | `Agent` (`task_name`)              |
@@ -833,7 +819,7 @@ Example project `.mevedel/hooks.el`:
              :timeout 5
              :fail-closed t)))))
  (PostToolUse
-  ((:matcher "Edit|Write"
+  ((:matcher "ApplyPatch"
     :hooks ((:type command
              :command ".mevedel/hooks/format-changed-file.sh"
              :timeout 30))))))

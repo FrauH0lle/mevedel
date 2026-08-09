@@ -73,7 +73,7 @@ One workspace per project, shared by all sessions for that project."
   "Cached state of a tracked file within a workspace.
 
 Stored inside a `mevedel-file-cache' on the workspace; updated by
-Read/Edit/Write tool handlers and polled by external-change detection.
+Read/ApplyPatch tool handlers and polled by external-change detection.
 
 PATH is the absolute filesystem path.  CONTENT is the full file
 content as captured at the last read or write.  MTIME is the file's

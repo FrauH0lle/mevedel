@@ -1247,8 +1247,7 @@ BUF defaults to the current buffer if not specified."
           (mevedel-view-stream-stop)))
       ;; Phase 1: drain the request's cancellers.  Each canceller
       ;; settles its owned overlays with `aborted' so FSMs parked in
-      ;; TOOL can advance out; preview-mode's canceller invokes
-      ;; `mevedel-preview-mode-dismiss-all'.  Draining before the
+      ;; TOOL can advance out. Draining before the
       ;; `gptel-abort' loop is load-bearing -- follow-up HTTP
       ;; requests launched by `aborted' callbacks land in
       ;; `gptel--request-alist' and get torn down in phase 2.
