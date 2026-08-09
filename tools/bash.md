@@ -5,8 +5,8 @@ equivalents) available. Use this to inspect system state, run builds,
 tests or other development or system administration tasks.
 
 IMPORTANT: Do NOT use this for file operations, finding, reading or
-editing files. Use the provided file tools instead: `Read`, `Write`,
-`Edit`, `Glob`, `Grep`.
+editing files. Use the provided file tools instead: `Read`, `ApplyPatch`,
+`Glob`, `Grep`.
 
 # Instructions
 
@@ -98,8 +98,7 @@ prompt or before a relevant confined failure.
 - Finding files -> use `Glob`
 - Searching contents -> use `Grep`
 - Reading files -> use `Read`
-- Editing files -> use `Edit`
-- Writing files -> use `Write`
+- Editing or creating files -> use `ApplyPatch`
 - Communication with user -> output text directly
 
 ### Examples of good usage

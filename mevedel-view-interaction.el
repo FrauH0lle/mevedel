@@ -347,6 +347,8 @@ OVERLAY is stored on the text as the descriptor's callback handle."
          (help (plist-get descriptor :help-echo))
          (kind (plist-get descriptor :kind))
          (id (plist-get descriptor :id))
+         (body-properties-owned
+          (plist-get descriptor :body-properties-owned))
          (read-only (if (plist-member descriptor :read-only)
                         (plist-get descriptor :read-only)
                       t)))
@@ -354,12 +356,14 @@ OVERLAY is stored on the text as the descriptor's callback handle."
      0 (length body)
      `(mevedel-view-interaction-kind ,kind
        mevedel-view-interaction-id ,id
-       mevedel-view-interaction-overlay ,overlay
-       read-only ,read-only
-       front-sticky nil
-       rear-nonsticky t)
+       mevedel-view-interaction-overlay ,overlay)
      body)
-    (when map
+    (unless body-properties-owned
+      (add-text-properties
+       0 (length body)
+       `(read-only ,read-only front-sticky nil rear-nonsticky t)
+       body))
+    (when (and map (not body-properties-owned))
       (add-text-properties 0 (length body) `(keymap ,map) body))
     (when help
       (add-text-properties 0 (length body) `(help-echo ,help) body))
@@ -491,6 +495,8 @@ OVERLAY is stored on the text as the descriptor's callback handle."
                          :help-echo (plist-get descriptor :help-echo)
                          :entry (plist-get descriptor :entry)
                          :activate (plist-get descriptor :activate)
+                         :body-properties-owned
+                         (plist-get descriptor :body-properties-owned)
                          :navigatable (and (or (plist-get descriptor :activate)
                                                (plist-get descriptor :keymap))
                                            t))))

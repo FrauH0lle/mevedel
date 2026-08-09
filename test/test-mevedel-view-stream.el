@@ -19,7 +19,6 @@
 (require 'mevedel-mentions)
 (require 'mevedel-permission-queue)
 (require 'mevedel-pipeline)
-(require 'mevedel-preview-mode)
 (require 'mevedel-review)
 (require 'mevedel-session-persistence)
 (require 'mevedel-telemetry)

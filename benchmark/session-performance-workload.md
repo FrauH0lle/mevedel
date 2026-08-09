@@ -31,8 +31,8 @@ Constraints:
 - Do not use the network.
 - Do not install or update dependencies.
 - Use exactly two retained agents beneath root, as described.
-- Use Write once and Edit exactly four times for the fixture. Do not manipulate
-  the fixture through Bash.
+- Use ApplyPatch exactly five times for the fixture. Do not manipulate the
+  fixture through Bash.
 - Run exactly the two specified root Bash calls and no other root tests or
   builds.
 - Call XrefReferences exactly once, at the specified step.
@@ -67,7 +67,7 @@ Constraints:
    are no findings.
 
 3. Immediately call ListAgents. Do not wait for either agent and do not poll
-   them yet. Continue with the fixture Write and Edit workload while
+   them yet. Continue with the fixture ApplyPatch workload while
    `spec_review` is waiting for Bash approval.
 
 4. Immediately send this message to `/root/spec_review`:
@@ -76,10 +76,10 @@ Constraints:
    regression covers adjacent Agent, ListAgents, and SendMessage disclosures."
 
 5. Continue with the fixture workload. Do not call ListAgents or WaitAgent
-   again until after all four Edit operations, both Bash test calls, and the
+   again until after all five ApplyPatch operations, both Bash test calls, and the
    XrefReferences call have completed.
 
-6. Create `.scratch/mevedel-performance-measurement.md` with Write, replacing
+6. Create `.scratch/mevedel-performance-measurement.md` with ApplyPatch, replacing
    any existing contents with exactly:
 
    # Mevedel performance measurement
@@ -104,14 +104,14 @@ Constraints:
 
    Initial state remains stable.
 
-7. Perform Edit operation 1: replace the thirteen baseline-item lines with
+7. Perform ApplyPatch operation 2: replace the thirteen baseline-item lines with
    exactly these three lines:
 
    - retained item alpha
    - retained item beta
    - retained item gamma
 
-8. Perform Edit operation 2: append exactly this block:
+8. Perform ApplyPatch operation 3: append exactly this block:
 
    ## Added observations
 
@@ -140,7 +140,7 @@ Constraints:
    - observation 23
    - observation 24
 
-9. Perform Edit operation 3: replace:
+9. Perform ApplyPatch operation 4: replace:
 
    Initial state remains stable.
 
@@ -149,7 +149,7 @@ Constraints:
    The retained-agent metadata changed while adjacent collaboration results
    remained independently expandable.
 
-10. Perform Edit operation 4: replace:
+10. Perform ApplyPatch operation 5: replace:
 
     - observation 24
 

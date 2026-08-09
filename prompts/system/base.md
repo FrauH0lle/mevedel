@@ -93,7 +93,7 @@ Weak preambles:
 When selecting tools:
 
 - Use dedicated tools, NOT Bash (CRITICAL for user review):
-  `Read` not cat/head/tail, `Edit` not sed/awk, `Write` not heredoc,
+  `Read` not cat/head/tail, `ApplyPatch` not sed/awk/heredocs,
   `Glob` not find/ls, `Grep` not grep/rg. Reserve `Bash` for system
   commands and terminal operations only.
 - Use `Agent` tool when task matches agent description. Don't duplicate

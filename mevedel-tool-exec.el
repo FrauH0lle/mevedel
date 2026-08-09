@@ -185,6 +185,10 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-utilities'
+(declare-function mevedel--clamped-integer
+                  "mevedel-utilities" (value default minimum maximum))
+
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 
@@ -2327,37 +2331,22 @@ direct non-workspace uses."
     (file-name-as-directory (or session-dir root default-directory))))
 
 (defun mevedel-tool-exec--bash-yield-time-ms (input)
-  "Return the validated Bash yield time in milliseconds from INPUT."
-  (let* ((milliseconds
-          (if (plist-member input :yield-time_ms)
-              (plist-get input :yield-time_ms)
-            10000)))
-    (unless (and (integerp milliseconds)
-                 (<= 250 milliseconds)
-                 (<= milliseconds 30000))
-      (error "Parameter yield_time_ms must be an integer from 250 to 30000"))
-    milliseconds))
+  "Return the Bash yield time in milliseconds from INPUT.
+Missing or non-numeric values fall back to the default; out-of-range
+values clamp instead of failing the tool call."
+  (mevedel--clamped-integer (plist-get input :yield-time_ms)
+                            10000 250 30000))
 
 (defun mevedel-tool-exec--write-wait-time-ms (input chars)
-  "Return the validated observation wait from INPUT and CHARS.
-Clamp positive short polls to the poll minimum."
-  (let* ((input-p (and (stringp chars) (not (string-empty-p chars))))
-         (milliseconds
-          (if (plist-member input :yield-time_ms)
-              (plist-get input :yield-time_ms)
-            (if input-p 250 5000)))
-         (minimum (if input-p 250 5000))
-         (maximum (if input-p 30000 300000)))
-    (when (and (not input-p)
-               (integerp milliseconds)
-               (< 0 milliseconds minimum))
-      (setq milliseconds minimum))
-    (unless (and (integerp milliseconds)
-                 (<= minimum milliseconds)
-                 (<= milliseconds maximum))
-      (error "Parameter yield_time_ms must be an integer from %d to %d"
-             minimum maximum))
-    milliseconds))
+  "Return the observation wait from INPUT and CHARS.
+Input writes poll quickly, pure polls wait longer.  Missing or
+non-numeric values fall back to the default; out-of-range values clamp
+instead of failing the tool call."
+  (let ((input-p (and (stringp chars) (not (string-empty-p chars)))))
+    (mevedel--clamped-integer (plist-get input :yield-time_ms)
+                              (if input-p 250 5000)
+                              (if input-p 250 5000)
+                              (if input-p 30000 300000))))
 
 (defun mevedel-tool-exec--execution-artifact-directory (session)
   "Return SESSION's retained execution artifact directory, if available."
@@ -2975,9 +2964,11 @@ Header shows a truncated first line of the command; body fontifies as
               :header
               (concat
                (if write-stdin-p
-                   (if (eq control 'poll)
-                       "Polled background process"
-                     "Interacted with background process")
+                   (format "%s: %s"
+                           (or name "WriteStdin")
+                           (if (eq control 'poll)
+                               "polled background process"
+                             "sent input to background process"))
                  (format "%s: %s"
                          (or name "Bash")
                          (truncate-string-to-width

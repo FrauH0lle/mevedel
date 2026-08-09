@@ -12,7 +12,10 @@
 (require 'mevedel-execution)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-registry)
+(require 'mevedel-tool-patch)
+(require 'mevedel-patch-review)
 (require 'mevedel-tools)
+(require 'mevedel-view)
 (require 'mevedel-session-persistence)
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-prompt)
@@ -538,6 +541,39 @@
 
 ;;
 ;;; Step list builder
+
+(mevedel-deftest mevedel-pipeline--step-snapshot ()
+  ,test
+  (test)
+  :doc "snapshots every path declared by one aggregate edit"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-multi-snapshot-" t)))
+         (path-a (file-name-concat root "a.txt"))
+         (path-b (file-name-concat root "b.txt"))
+         (missing (file-name-concat root "new.txt"))
+         (request (mevedel-request--create
+                   :file-snapshots (make-hash-table :test #'equal)))
+         (mevedel--current-request request)
+         (tool (mevedel-tool--create
+                :name "ApplyPatch" :snapshot-p t
+                :get-paths (lambda (_args)
+                             (list path-a path-b missing))))
+         next-called)
+    (unwind-protect
+        (progn
+          (with-temp-file path-a (insert "a"))
+          (with-temp-file path-b (insert "b"))
+          (mevedel-pipeline--step-snapshot
+           (list :tool tool :args nil)
+           (lambda (_context) (setq next-called t)) #'ignore)
+          (should next-called)
+          (let ((snapshots (mevedel-request-file-snapshots request)))
+            (should (= 3 (hash-table-count snapshots)))
+            (should (equal "a" (gethash path-a snapshots)))
+            (should (equal "b" (gethash path-b snapshots)))
+            (let ((absent (make-symbol "absent")))
+              (should-not (eq absent (gethash missing snapshots absent))))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-pipeline--build-steps ()
 		 ,test
@@ -1283,6 +1319,67 @@
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
 		   (should called))
+		 :doc "authorizes every path declared by one aggregate edit"
+		 (let* ((dir (file-name-as-directory
+			      (make-temp-file "mevedel-multi-permission-" t)))
+			(path-a (file-name-concat dir "a.txt"))
+			(path-b (file-name-concat dir "b.txt"))
+			(session (mevedel-session--create
+				  :name "multi" :save-path dir
+				  :permission-mode 'full-auto
+				  :resource-grants
+				  (list (list :path path-a :access 'write)
+					(list :path path-b :access 'write))))
+			(tool (mevedel-tool--create
+			       :name "ApplyPatch" :groups '(edit)
+			       :get-paths (lambda (_args) (list path-a path-b))))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			(mevedel-permission-log-enabled t)
+			called)
+		   (unwind-protect
+		       (progn
+			 (mevedel-pipeline--step-permission
+			  (list :tool tool :args nil :session session)
+			  (lambda (_context) (setq called t)) #'ignore)
+			 (should called)
+			 (should
+			  (equal (list path-a path-b)
+				 (mapcar
+				  (lambda (entry)
+				    (plist-get entry :specifier-value))
+				  (cl-remove-if-not
+				   (lambda (entry)
+				     (eq (plist-get entry :event)
+					 'permission-decision))
+				   (test-mevedel-pipeline--read-permission-log
+				    session))))))
+		     (delete-directory dir t)))
+		 :doc "rejects an aggregate edit when any affected path is denied"
+		 (let* ((dir (file-name-as-directory
+			      (make-temp-file "mevedel-multi-denial-" t)))
+			(path-a (file-name-concat dir "a.txt"))
+			(path-b (file-name-concat dir "b.txt"))
+			(session (mevedel-session--create
+				  :name "multi-denial" :save-path dir
+				  :permission-mode 'full-auto))
+			(tool (mevedel-tool--create
+			       :name "ApplyPatch" :groups '(edit)
+			       :get-paths (lambda (_args) (list path-a path-b))))
+			(mevedel-permission-rules
+			 (list (list "ApplyPatch" :path path-a :action 'allow)
+			       (list "ApplyPatch" :path path-b :action 'deny)))
+			(mevedel-protected-paths nil)
+			next-called failure)
+		   (unwind-protect
+		       (progn
+			 (mevedel-pipeline--step-permission
+			  (list :tool tool :args nil :session session)
+			  (lambda (_context) (setq next-called t))
+			  (lambda (message) (setq failure message)))
+			 (should-not next-called)
+			 (should (string-match-p "Permission denied" failure)))
+		     (delete-directory dir t)))
 		 :doc "Bash and network asks render as one combined authority card"
 		 (let* ((tool (mevedel-tool-ensure "Bash"))
 			(session (mevedel-session--create
@@ -2471,6 +2568,81 @@
 					(plist-get handler-context :result)))
 			 (should auto-apply-p))
 		     (delete-directory root t)))
+		 :doc "allowed-root ApplyPatch goes directly to its mandatory review"
+		 (mevedel-view-test--with-buffers
+		   (let* ((root (file-name-as-directory
+				 (make-temp-file "mevedel-pipeline-patch-ret-" t)))
+			  (path (file-name-concat root "test.el"))
+			  (workspace
+			   (mevedel-workspace--create
+			    :type 'project :id root :root root :name "patch-ret"
+			    :file-cache (mevedel-test-file-cache-create)))
+			  (session
+			   (mevedel-session--create
+			    :name "patch-ret" :workspace workspace
+			    :working-directory root :permission-mode 'ask))
+			  (patch
+			   (string-join
+			    '("*** Begin Patch"
+			      "*** Update File: test.el"
+			      "@@"
+			      "-(defun hello-world ())"
+			      "+(defun hello-world ()"
+			      "+  (interactive)"
+			      "+  (message \"Hello, world!\"))"
+			      "*** End Patch")
+			    "\n"))
+			  (tool (or (mevedel-tool-get "ApplyPatch" "mevedel")
+				    (progn
+				      (mevedel-tool-patch-register)
+				      (mevedel-tool-get "ApplyPatch" "mevedel"))))
+			  (mevedel-permission-rules nil)
+			  (mevedel-protected-paths nil)
+			  file-buffer
+			  result)
+		     (unwind-protect
+			 (progn
+			   (with-temp-file path
+			     (insert "(defun hello-world ())\n"))
+			   (setq file-buffer (find-file-noselect path))
+			   (with-current-buffer data-buf
+			     (setq-local default-directory root
+					 mevedel--workspace workspace
+					 mevedel--session session)
+			     (mevedel-pipeline-run-tool
+			      tool (lambda (value) (setq result value))
+			      (list :patch patch)))
+			   (with-current-buffer view-buf
+			     (goto-char (point-min))
+			     (should-not (search-forward "Permission Request" nil t))
+			     (goto-char (point-min))
+			     (search-forward "M test.el")
+			     (mevedel-patch-review-toggle-fold)
+			     (should (string-search "- │ (defun hello-world ())"
+						    (buffer-string)))
+			     (should (string-search "Keys:" (buffer-string)))
+			     (goto-char (point-min))
+			     (search-forward "[ Apply 1 change in 1 file ]")
+			     (backward-char 2)
+			     (let ((command (key-binding (kbd "RET"))))
+			       (should (eq command #'mevedel-patch-review-submit))
+			       (call-interactively command)))
+			   (should (string-search "Applied patch" result))
+			   (should
+			    (equal
+			     "(defun hello-world ()\n  (interactive)\n  (message \"Hello, world!\"))\n"
+			     (with-temp-buffer
+			       (insert-file-contents path)
+			       (buffer-string))))
+			   (should
+			    (equal
+			     "(defun hello-world ()\n  (interactive)\n  (message \"Hello, world!\"))\n"
+			     (with-current-buffer file-buffer (buffer-string))))
+			   (should (verify-visited-file-modtime file-buffer)))
+		       (when (buffer-live-p file-buffer)
+			 (with-current-buffer file-buffer (set-buffer-modified-p nil))
+			 (kill-buffer file-buffer))
+		       (when (file-directory-p root) (delete-directory root t)))))
 		 :doc "request cancellation settles an active pipeline exactly once"
 		 (let* ((session (mevedel-session--create
 				  :name "cancel-pipeline"

@@ -75,7 +75,7 @@ to `*Messages*` and is not captured).
 ### When NOT to use `Eval`
 
 - Multi-expression evaluations -> one call per expression (no progn)
-- File modifications -> use `Edit`
+- File modifications -> use `ApplyPatch`
 - Shell operations -> use `Bash`
 - Test commands -> use `Bash`
 - Untrusted code -> live Eval is unrestricted code execution, and batch
@@ -115,6 +115,6 @@ Should make two separate Eval calls instead of using progn.
 <example>
 Eval(expression="(find-file \"/path/to/file.txt\")")
 <reasoning>
-Use Edit tool for file modifications, not Eval.
+Use ApplyPatch for file modifications, not Eval.
 </reasoning>
 </example>

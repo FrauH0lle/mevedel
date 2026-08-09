@@ -22,7 +22,6 @@
 (require 'mevedel-workspace)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-ui)
-(require 'mevedel-preview-mode)
 (require 'mevedel-permission-queue)
 (require 'mevedel-goal)
 (require 'mevedel-agents)
@@ -998,6 +997,15 @@
           (mevedel-view--interaction-rebuild)
           (should-preserve-composer)
           (should-show-current-body)
+          (mevedel-view--interaction-rebuild)
+          (should-preserve-composer)
+          (should-show-current-body)
+          (mevedel-view--interaction-register
+           (list :kind 'preview :id 'preview :count 1
+                 :body (propertize (concat "\n" current-body "\n")
+                                   'read-only t)
+                 :body-properties-owned t
+                 :keymap map :help-echo "Preview" :activate #'ignore))
           (mevedel-view--interaction-rebuild)
           (should-preserve-composer)
           (should-show-current-body)

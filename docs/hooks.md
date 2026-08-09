@@ -138,7 +138,7 @@ Lisp shape:
             (:type elisp
              :function my-mevedel-bash-policy)))))
  (PostToolUse
-  ((:matcher "Edit|Write"
+  ((:matcher "ApplyPatch"
     :hooks ((:type command
              :command ".mevedel/hooks/format-changed-file"
              :timeout 30))))))
@@ -207,7 +207,7 @@ JSON shape:
 ## Matching
 
 `matcher` is event-specific.  For tool events it matches the mevedel tool
-name (`Bash`, `Read`, `Edit`, `Write`, `Agent`, MCP names when wrapped).
+name (`Bash`, `Read`, `ApplyPatch`, `Agent`, MCP names when wrapped).
 For agent events it matches agent role.  For compaction it matches
 `manual` or `auto`.
 
@@ -219,7 +219,7 @@ Matcher rules:
 - any other string is an Emacs regexp matched case-sensitively.
 
 Handler-level `:if` can be added later using the existing permission rule
-parser style, e.g. `"Bash(git *)"` or `"Edit(src/*.el)"`.  It is not
+parser style, e.g. `"Bash(git *)"`. It is not
 part of the current implementation.
 
 ## Handler types

@@ -61,6 +61,17 @@ recommends those elements while leaving Codex room to choose the next action.
 
 ## Inbox
 
+- ApplyPatch follow-ups (deferred while landing the tracer bullet):
+  - Teach the repair pipeline numeric ranges: `:minimum`/`:maximum` in the
+    tool arg DSL plus a clamp-range repair rule, so range clamping (Bash
+    `yield_time_ms`, WaitAgent `timeout_ms`) becomes model-visible and
+    telemetry'd instead of silent handler policy.
+  - Live streaming patch preview: render the review incrementally while the
+    model is still generating, like Codex's `StreamingPatchParser` +
+    `PatchApplyUpdated` events.
+  - Cumulative turn/session diff view aggregating all applied patches,
+    like Codex's `SharedTurnDiffTracker`; could reuse the ediff glue.
+
 - Add a memory-verification slash command or skill that consolidates project
   memories and checks whether they are still accurate; explore whether a
   weekly automated check is useful.
@@ -74,6 +85,8 @@ recommends those elements while leaving Codex room to choose the next action.
 
 - Find a better folder for the tool description markdown files
 - Ensure all tools have the examples and their descriptions in markdown files
+
+- 
 
 ## Entry format
 

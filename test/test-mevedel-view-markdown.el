@@ -168,6 +168,16 @@
     (should (equal "| Name  | Role     |\n|-------|----------|\n| **Alice** | [Engineer](http://x.com) |\n"
                    (buffer-string))))
 
+  :doc "leaves linkify-exempt table text verbatim"
+  (with-temp-buffer
+    (insert (propertize "| Name | Role |\n|------|------|\n"
+                        'mevedel-view-no-linkify t))
+    (mevedel-view--prettify-markdown-tables-in-range
+     (point-min) (point-max))
+    (should (equal "| Name | Role |\n|------|------|\n"
+                   (buffer-substring-no-properties (point-min)
+                                                   (point-max)))))
+
   :doc "keeps inline pipes and unmatched literal backticks from breaking table detection"
   (let ((tick (make-string 1 ?`)))
     (with-temp-buffer
@@ -262,6 +272,29 @@
               (should button)
               (should (equal file
                              (button-get button 'mevedel-view-path))))))
+      (delete-directory root t)))
+
+  :doc "linkify-exempt text stays plain even when the path exists"
+  (let* ((root (make-temp-file "mevedel-view-linkify-exempt-" t))
+         (file (file-name-concat root "mevedel-skills.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-exempt"
+                     :root root :name "linkify-exempt"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert (propertize "+;;; mevedel-skills.el --- functions\n"
+                                'mevedel-view-no-linkify t))
+            (insert "Read: mevedel-skills.el\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "mevedel-skills.el")
+            (should-not (button-at (match-beginning 0)))
+            (search-forward "mevedel-skills.el")
+            (should (button-at (match-beginning 0)))))
       (delete-directory root t)))
 
   :doc "missing slashless filename stays plain text"

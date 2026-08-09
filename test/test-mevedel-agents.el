@@ -173,7 +173,7 @@
 
   :doc "worker has independent broad implementation capabilities"
   (let ((tools (test-mevedel-agents--resolved-tool-names "worker")))
-    (dolist (tool '("Read" "Write" "Edit" "Bash" "Eval"
+    (dolist (tool '("Read" "ApplyPatch" "Bash" "Eval"
                     "XrefDefinitions" "Skill" "TaskCreate"))
       (should (member tool tools))))
 

@@ -242,12 +242,12 @@
 
 (defface mevedel-view-tool-diff-added
   '((t :inherit success :weight bold))
-  "Face for added-line counts in Edit and Write summaries."
+  "Face for added-line counts in patch summaries."
   :group 'mevedel)
 
 (defface mevedel-view-tool-diff-removed
   '((t :inherit error :weight bold))
-  "Face for removed-line counts in Edit and Write summaries."
+  "Face for removed-line counts in patch summaries."
   :group 'mevedel)
 
 (defface mevedel-view-tool-warning

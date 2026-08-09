@@ -56,7 +56,7 @@ Resolved through symlinks so data files (tools/, etc.) are reachable.")
 Parallel struct alongside `gptel-tool'.  `mevedel-tool' holds behavioral
 metadata (permissions, groups, read-only status).  The `gptel-tool' is
 created as a side effect of registration and handles serialization."
-  name              ; string: "Read", "Edit", "Bash"
+  name              ; string: "Read", "ApplyPatch", "Bash"
   handler           ; function: the actual tool implementation
   description       ; string: short LLM-facing description (for schema, "ToolSearch")
   summary           ; string or nil: ultra-short one-liner for the
@@ -82,6 +82,7 @@ created as a side effect of registration and handles serialization."
                     ;   the sync slot; `mevedel-check-permission-async' adapts
                     ;   the sync slot when only it is present.
   get-path          ; function or nil: (input) -> path this tool touches
+  get-paths         ; function or nil: (input) -> every path this tool touches
   get-pattern       ; function or nil: (input) -> command string for :pattern rules
   get-domain        ; function or nil: (input) -> host string for :domain rules
   get-name          ; function or nil: (input) -> match name for :name rules
@@ -118,8 +119,9 @@ created as a side effect of registration and handles serialization."
     ("Ask" mevedel-tool-ask mevedel-tool-ask-register)
     ("Bash" "Eval" "ListExecutions" "StopExecution" "WriteStdin"
      mevedel-tool-exec mevedel-tool-exec--register)
-    ("Edit" "Glob" "Grep" "MkDir" "Read" "Write"
+    ("Glob" "Grep" "Read"
      mevedel-tool-fs mevedel-tool-fs--register)
+    ("ApplyPatch" mevedel-tool-patch mevedel-tool-patch-register)
     ("GetHints" "RecordHint" mevedel-tool-tutor mevedel-tool-tutor--register)
     ("UpdateGoal" mevedel-tool-goal mevedel-tool-goal--register)
     ("Imenu" "Treesitter" "XrefDefinitions" "XrefReferences"
@@ -641,6 +643,7 @@ Optional (both forms):
                                  tools that prompt the user via their own
                                  overlay UI (Bash, Eval) define this.
   :get-path         FN           Extract path from input for `:path' rules
+  :get-paths        FN           Extract all paths from aggregate file input
   :get-pattern      FN           Extract command string from input for
                                  `:pattern' rules (Bash and similar)
   :get-domain       FN           Extract host from input for `:domain' rules
@@ -695,6 +698,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (check-permission (plist-get props :check-permission))
          (check-permission-async (plist-get props :check-permission-async))
          (get-path (plist-get props :get-path))
+         (get-paths (plist-get props :get-paths))
          (get-pattern (plist-get props :get-pattern))
          (get-domain (plist-get props :get-domain))
          (get-name (plist-get props :get-name))
@@ -731,6 +735,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :check-permission ,check-permission
               :check-permission-async ,check-permission-async
               :get-path ,get-path
+              :get-paths ,get-paths
               :get-pattern ,get-pattern
               :get-domain ,get-domain
               :get-name ,get-name

@@ -1404,7 +1404,7 @@ category `mevedel'; callers treat a nil return as \"use the generic
 tool renderer\".
 
 The renderer receives RENDER-DATA as-is (possibly nil): data-driven
-renderers like the Edit/Write diff summary can check for their kind
+renderers like the ApplyPatch summary can check for their kind
 and opt out; output-driven renderers (Grep, Bash, Read, ...) work
 straight off ARGS and RESULT without needing render-data."
   (let* ((explicit-status

@@ -36,8 +36,8 @@ continues to use the `compaction` workload.
 
 ## Tool boundary
 
-Plan requests omit `Write`, `Edit`, and `MkDir`. The pipeline denies those
-tools tree-wide as a backstop, including for retained agents and already
+Plan requests omit `ApplyPatch`. The pipeline denies it tree-wide as a
+backstop, including for retained agents and already
 realized requests. Bash remains available only when the canonical analysis and
 policy classify the invocation as read-only. Permission modes and explicit
 allow rules cannot widen this workflow boundary. `Eval` is also unavailable:

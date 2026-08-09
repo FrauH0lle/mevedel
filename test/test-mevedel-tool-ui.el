@@ -924,7 +924,7 @@
   (:doc "Renders retained-agent interaction events")
   ,test
   (test)
-  :doc "renders Interacted with PATH without changing a leading-> draft"
+  :doc "renders a follow-up header without changing a leading-> draft"
   (mevedel-view-test--with-buffers
     (let ((draft "> quoted\nsecond line")
           (rendering
@@ -935,7 +935,7 @@
             '(:kind collaboration-event
               :event interacted
               :path "/root/spec_review"))))
-      (should (equal "Interacted with /root/spec_review"
+      (should (equal "FollowupAgent: /root/spec_review (follow-up sent)"
                      (plist-get rendering :header)))
       (should (equal "/root/spec_review"
                      (plist-get rendering :agent-path)))
@@ -975,7 +975,7 @@
                :event interacted
                :path "/root/spec_review")))
            opened)
-      (should (equal "Message sent to /root/spec_review"
+      (should (equal "SendMessage: /root/spec_review (message queued)"
                      (plist-get message :header)))
       (should (equal "Verify documentation" (plist-get followup :body)))
       (should (plist-get followup :initially-collapsed-p))
@@ -987,7 +987,7 @@
           (mevedel-view--insert-rendered-tool followup (cons 1 1))
           (mevedel-view--insert-rendered-tool message (cons 2 2)))
         (goto-char (point-min))
-        (search-forward "Interacted with /root/spec_review")
+        (search-forward "FollowupAgent: /root/spec_review (follow-up sent)")
         (goto-char (match-beginning 0))
         (search-forward "/root/spec_review")
         (goto-char (match-beginning 0))
@@ -996,7 +996,7 @@
           (mevedel-view-activate-at-point))
         (should (equal "/root/spec_review" opened))
         (goto-char (point-min))
-        (search-forward "Interacted with /root/spec_review")
+        (search-forward "FollowupAgent: /root/spec_review (follow-up sent)")
         (goto-char (match-beginning 0))
         (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
                    (lambda (&rest _) followup)))
@@ -1004,7 +1004,7 @@
         (should (search-forward "Verify documentation"
                                 mevedel-view--input-marker t))
         (goto-char (point-min))
-        (search-forward "Message sent to /root/spec_review")
+        (search-forward "SendMessage: /root/spec_review (message queued)")
         (goto-char (match-beginning 0))
         (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
                    (lambda (&rest _) message)))
@@ -1024,7 +1024,8 @@
              "ListAgents" nil
              "[{\"path\":\"/root\",\"role\":\"default\",\"activity\":\"running\"},{\"path\":\"/root/v2_smoke\",\"role\":\"explorer\",\"activity\":\"idle\"}]"
              nil)))
-      (should (equal "Session agents (2)" (plist-get rendering :header)))
+      (should (equal "ListAgents: session (2 agents)"
+                     (plist-get rendering :header)))
       (should
        (equal (concat "Path            Role      Activity\n"
                       "/root           default   running\n"
@@ -1081,7 +1082,7 @@
              '(:kind collaboration-event
                :event interrupted
                :path "/root/spec_review"))))
-      (should (equal "Interrupted /root/spec_review"
+      (should (equal "InterruptAgent: /root/spec_review (interrupted)"
                      (plist-get rendering :header)))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
@@ -1162,7 +1163,7 @@
                :reason timeout))))
       (should (equal "Waiting for agents"
                      (mevedel-view--tool-status-string "WaitAgent" nil)))
-      (should (equal "Waited for agents (Timeout elapsed)"
+      (should (equal "WaitAgent: agents (Timeout elapsed)"
                      (plist-get rendering :header)))
       (should (equal "WaitAgent" (plist-get rendering :coalesce-key)))
       (should-not (plist-get rendering :expandable-p))
@@ -1176,7 +1177,7 @@
               (mevedel-view--insert-rendered-tool rendering (cons 1 1))
             (set-marker-insertion-type mevedel-view--input-marker nil)))
         (should (string-match-p
-                 "Waited for agents"
+                 "WaitAgent: agents"
                  (buffer-substring-no-properties
                   (point-min) mevedel-view--input-marker)))
         (should (string= draft (mevedel-view--input-text)))))))

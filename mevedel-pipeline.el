@@ -7,9 +7,8 @@
 ;; permission -> snapshot -> handler -> repair-reminder -> render-transform ->
 ;; persist -> specialist-nudges -> post-hooks -> re-persist ->
 ;; Goal-budget-warning -> attach-render-data -> attach-media.
-;; Tool handlers that need user confirmation of a file change call
-;; `mevedel-preview-mode-add-preview' directly; there is no explicit
-;; confirm step in the pipeline.
+;; Interactive handlers own any confirmation needed after the pipeline's
+;; permission and snapshot steps.
 ;;
 ;; The persist step saves oversized results to disk and replaces them
 ;; with a preview + file path, preventing LLM context overflow from
@@ -125,6 +124,7 @@
 (declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-get-paths "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-handler "mevedel-tool-registry" (cl-x) t)
@@ -686,8 +686,9 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
   (let* ((tool (plist-get context :tool))
          (tool-name (and tool (mevedel-tool-name tool)))
          (args (plist-get context :args))
-         (path (when-let* ((fn (and tool (mevedel-tool-get-path tool))))
-                 (ignore-errors (funcall fn args))))
+         (path (or (plist-get context :permission-path)
+                   (when-let* ((fn (and tool (mevedel-tool-get-path tool))))
+                     (ignore-errors (funcall fn args)))))
          (raw-pattern (when-let* ((fn (and tool (mevedel-tool-get-pattern tool))))
                         (ignore-errors (funcall fn args))))
          (pattern (mevedel-pipeline--permission-sanitized-pattern
@@ -972,7 +973,7 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
      (plist-get context :request)
      (plist-get context :invocation))))
 
-(defun mevedel-pipeline--step-permission (context next fail)
+(defun mevedel-pipeline--step-permission-one (context next fail)
   "Check permission for the tool invocation.
 
 Reads session / workspace from CONTEXT (captured at
@@ -1005,6 +1006,7 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
            :request request
            :invocation invocation
            :buffer (plist-get context :buffer)
+           :path (plist-get context :permission-path)
            :permission-request
            (lambda (entry queue-session settle)
              (mevedel-pipeline--request-permission
@@ -1057,6 +1059,46 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
           :decision logged-decision
           :permission-context permission-context)))
      (mevedel-permission--checker-args permission-context))))
+
+(defun mevedel-pipeline--tool-paths (tool args)
+  "Return every filesystem path declared by TOOL for ARGS."
+  (delete-dups
+   (delq nil
+         (condition-case nil
+             (cond
+              ((mevedel-tool-get-paths tool)
+               (funcall (mevedel-tool-get-paths tool) args))
+              ((mevedel-tool-get-path tool)
+               (list (funcall (mevedel-tool-get-path tool) args))))
+           (error nil)))))
+
+(defun mevedel-pipeline--step-permission (context next fail)
+  "Authorize each filesystem path in CONTEXT before continuing."
+  (let* ((tool (plist-get context :tool))
+         (paths (mevedel-pipeline--tool-paths
+                 tool (plist-get context :args))))
+    (if (null paths)
+        (mevedel-pipeline--step-permission-one context next fail)
+      (cl-labels
+          ((authorize (remaining current all-direct-p)
+             (if (null remaining)
+                 (funcall next
+                          (plist-put current :auto-apply-edit-p
+                                     all-direct-p))
+               (let ((path-context
+                      (plist-put
+                       (plist-put (copy-sequence current)
+                                  :permission-path (car remaining))
+                       :auto-apply-edit-p nil)))
+                 (mevedel-pipeline--step-permission-one
+                  path-context
+                  (lambda (updated)
+                    (authorize
+                     (cdr remaining) updated
+                     (and all-direct-p
+                          (plist-get updated :auto-apply-edit-p))))
+                  fail)))))
+        (authorize paths context t)))))
 
 (cl-defun mevedel-pipeline--dispatch-permission-outcome
     (outcome context next fail
@@ -1182,12 +1224,10 @@ snapshots it.  Only included for tools declaring snapshots.  CONTEXT must
 contain `:tool' and `:args'.  NEXT is called on success.  FAIL is
 unused -- a snapshot failure is best-effort and should never fail the
 pipeline."
-  (let* ((tool (plist-get context :tool))
-         (args (plist-get context :args))
-         (get-path-fn (mevedel-tool-get-path tool)))
-    (when get-path-fn
-      (when-let* ((path (ignore-errors (funcall get-path-fn args))))
-        (mevedel--snapshot-file-if-needed path)))
+  (let ((tool (plist-get context :tool))
+        (args (plist-get context :args)))
+    (dolist (path (mevedel-pipeline--tool-paths tool args))
+      (mevedel--snapshot-file-if-needed path))
     (funcall next context)))
 
 (defun mevedel-pipeline--record-use (tool)

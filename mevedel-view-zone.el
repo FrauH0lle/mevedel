@@ -170,6 +170,8 @@ responsible for rerendering the producer."
                              region fragment)))
          (collapsed (mevedel-view-zone--fragment-collapsed-p
                      region fragment))
+         (body-properties-owned
+          (plist-get fragment :body-properties-owned))
          (props `(mevedel-view-zone-key ,key
                   mevedel-view-zone-region ,(car key)
                   mevedel-view-zone-namespace ,(plist-get fragment :namespace)
@@ -182,9 +184,14 @@ responsible for rerendering the producer."
                   mevedel-view-zone-collapsible
                   ,(plist-get fragment :collapsible)
                   mevedel-view-zone-collapse-key ,collapse-key
-                  mevedel-view-zone-collapsed ,collapsed
-                  rear-nonsticky (read-only font-lock-face face keymap help-echo)
-                  front-sticky (read-only))))
+                  mevedel-view-zone-collapsed ,collapsed)))
+    (unless body-properties-owned
+      (setq props
+            (append
+             '(rear-nonsticky
+               (read-only font-lock-face face keymap help-echo)
+               front-sticky (read-only))
+             props)))
     (when read-only
       (setq props (append `(read-only ,read-only) props)))
     props))

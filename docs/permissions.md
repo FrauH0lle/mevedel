@@ -48,6 +48,12 @@ Single decision function `mevedel-check-permission`. Decision chain:
 9. Permission-mode fallback when no earlier policy decides; satisfied resource
    authority does not itself authorize a mutating operation
 
+ApplyPatch is the deliberate exception to step 9. Its reviewed-edit capability
+is allowed because `ask` mode already supplies mandatory per-file/hunk review
+before any write. Allowed-root patches therefore proceed directly to that
+review. Protected or outside-root paths still require resource authority before
+the review appears, and explicit allow/ask/deny rules retain their precedence.
+
 For a tool with a command checker, command authority and filesystem resource
 authority are layered: both must allow. A command rule cannot authorize its
 path, and a resource grant cannot authorize its command. Native `:path` rules
@@ -109,7 +115,7 @@ One specifier per rule:
 
 | Key        | Matches                | Used by                           |
 |------------|------------------------|-----------------------------------|
-| `:path`    | path (glob, `~` exp.)  | Read, Edit, Write, Glob, Grep, ...|
+| `:path`    | path (glob, `~` exp.)  | Read, ApplyPatch, Glob, Grep, ... |
 | `:pattern` | command/expression glob | Bash; full-escalation Eval rules |
 | `:domain`  | host name (glob)       | WebFetch, YouTube                 |
 | `:name`    | free-form name (glob)  | Agent (`role`)                    |
@@ -150,8 +156,9 @@ credential globs are inaccessible. String-only entries are invalid by design.
 
 The three canonical modes are `ask`, `edits`, and `full-auto`:
 
-- `ask` allows recognized inspection and prompts for edits and uncertain
-  Bash or Eval execution.
+- `ask` allows recognized inspection, sends ApplyPatch directly to its
+  mandatory review when its paths are authorized, and prompts for other edits
+  and uncertain Bash or Eval execution.
 - `edits` additionally applies native edits inside allowed roots, but grants no
   blanket Bash or Eval authority.
 - `full-auto` bypasses heuristic Bash and Eval prompts, including live Eval,
@@ -182,7 +189,7 @@ configured memory roots, and manually configured additional roots. A native
 filesystem operation outside those roots prompts for exact `read` or `write`
 authority. A session grant is stored in the durable session sidecar and
 survives save/resume of that same session; an always grant is stored only in
-the workspace permission file. Neither enters an unrelated session. Write
+the workspace permission file. Neither enters an unrelated session. ApplyPatch
 authority covers reading the same exact path, but read authority does not cover
 writes. These grants do not cover siblings or descendants, add workspace
 roots, or authorize Bash/Eval code. Revoking the grant restores the underlying
@@ -254,7 +261,7 @@ flushed when the session directory is created.
 Each tool invocation that reaches permission checking records a sanitized
 `permission-decision` event with fields such as tool name, origin, mode,
 outcome, specifier, protected-path flag, resolver path, and rule bucket. It
-does not include raw Write/Edit content, arbitrary tool args, or extra raw
+does not include raw ApplyPatch content, arbitrary tool args, or extra raw
 Bash/Eval payloads. Prompt lifecycle events remain separate: queue
 enqueue/resolve/abort/coalesce events describe prompt handling without raw
 Bash commands or Eval expressions.
