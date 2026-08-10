@@ -112,7 +112,13 @@ You can send your requests to the LLM either via the chat buffer (accessible by
 using `mevedel`) or by creating and submitting a directive.
 
 **Please note:** Requests sent from a directive **DO NOT** use the context of
-the chat buffer, only what is defined by the directive and its references.
+the chat buffer, only the current directive and freshly resolved references.
+The first accepted directive request binds the directive to an execution
+session. Each directive exchange renders there as a complete chronological turn
+using the ordinary view, tools, permissions, and interactions, but remains
+excluded from ordinary-chat model context. Exact attempts and read-only
+discussion also remain on the durable directive record for follow-ups and
+inspection.
 
 ### Quick start
 
@@ -146,7 +152,8 @@ References are pieces of context selected from normal buffers. Directives are
 prompts that can be processed with one of mevedel's presets. A directive gathers
 context from matching references, linked references, and reference commentary;
 then the selected action decides whether the model may edit files, only discuss,
-revise existing work, or tutor Socratically.
+request focused changes to existing work, retry a failure, or tutor
+Socratically.
 
 This means there are two complementary workflows:
 
@@ -159,6 +166,13 @@ This means there are two complementary workflows:
 All instructions, references or directives, are highlighted in the buffer via an
 overlay. The overlay contains an action menu which can be toggled via
 `mevedel-ov-dispatch-key` and grants access to common operations.
+
+Deleting all source text covered by a directive leaves a compact, zero-width
+detached row at that position. Its request, attempts, discussions, state, and
+actions remain available. If the file disappears, the workspace record remains
+available as Source missing until exact automatic or explicit reattachment.
+Deleting a complete reference still removes it. Nested directives remain
+current details of their topmost parent rather than owning separate activity.
 
 ![Directive Overlay](.assets/images/ov-actions-menu.png)
 
@@ -225,7 +239,7 @@ memory roots, the configured plans directory, and manually configured roots.
 | `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
 | `mevedel-tutoring`                | Start a tutoring chat session in the current workspace.               |
 | `mevedel-init`                    | Bootstrap or refresh project instruction files.                       |
-| `mevedel-process-directives`      | Process multiple directives sequentially (region, point, or buffer).  |
+| `mevedel-process-directives`      | Batch initial implementations in source order (region, point, or buffer). |
 | `mevedel-abort`                   | Abort any active request in the current buffer.                       |
 | `mevedel-version`                 | Show (or insert with prefix arg) the current mevedel version.         |
 
@@ -269,7 +283,6 @@ it read-only instead of corrupting the writer's transcript.
 |------------------------------------------|-------------------------------------------------------|
 | `mevedel-sessions-directory`             | Directory for sessions (default `.mevedel/sessions/`). |
 | `mevedel-session-max-age-days`           | Auto-cleanup age, in days. `nil` disables.             |
-| `mevedel-file-history-max-snapshots`     | Per-session file backup retention.                     |
 | `mevedel-file-history-max-snapshot-bytes` | Maximum size for an individual file snapshot.         |
 | `mevedel-view-input-history-size`        | Size of the workspace input history ring.              |
 
@@ -426,10 +439,14 @@ Currently, linking is only relevant for references.
 | Command                            | Command Description                                                          |
 |------------------------------------|------------------------------------------------------------------------------|
 | `mevedel-implement-directive`      | Implement directive with full editing capabilities.                          |
-| `mevedel-revise-directive`         | Revise directive with additional context from existing patches.              |
-| `mevedel-discuss-directive`        | Discuss directive in read-only mode without making changes.                  |
+| `mevedel-discuss-directive`        | Start an isolated read-only directive turn in the shared session view.       |
+| `mevedel-implement-discussion-directive` | Implement using the complete local discussion as additional context.  |
+| `mevedel-request-directive-changes` | Open multiline feedback after a successful implementation.                  |
+| `mevedel-retry-directive`          | Retry a failed or aborted implementation with optional guidance.             |
 | `mevedel-tutor-directive`          | Tutoring mode that guides without providing direct solutions (experimental). |
 | `mevedel-preview-directive-prompt` | Preview directive prompt at the current point.                               |
+| `mevedel-open-directive-activity`  | Open the current directive's read-only durable inspector.                    |
+| `mevedel-list-directives`          | Choose a workspace directive for inspection or further action.               |
 | `mevedel-diff-apply-buffer`        | Apply the diff in the patch buffer with overlay preservation.                |
 | `mevedel-ediff-patch`              | Launch an ediff session on the patch buffer for manual editing.              |
 | `mevedel-clear-patch-buffer`       | Clear the contents of the patch buffer for the current workspace.            |
@@ -447,9 +464,29 @@ directive prompt:
 
 [directive-preview.webm](https://github.com/user-attachments/assets/72c77cfa-5a6d-45a1-9fc4-ee6b1ad66034)
 
-The `mevedel-implement-directive`, `mevedel-revise-directive`,
-`mevedel-discuss-directive`, or `mevedel-tutor-directive` commands will process
-the directive.
+The `mevedel-implement-directive` and `mevedel-tutor-directive` commands
+process the directive directly.
+`mevedel-discuss-directive` starts a complete read-only directive turn in the
+bound session's shared view. Continue discussion and other follow-ups switch the
+shared composer into an explicit directive scope with a separate draft and
+Back to chat action. Discussion persists on the directive record and can be
+promoted with `Implement this` without entering ordinary-chat context.
+After implementation, the directive turn and read-only inspector offer Request
+changes after success or Retry after failure/abort. Both use current repository
+state, fresh references, and only the immediately preceding attempt as model
+context.
+Captured patches belong to immutable attempts and are display/context artifacts,
+not undo data. Rewind before an implementation is the sole implementation undo:
+it restores the attempt's pre-turn file checkpoint and discards that session's
+complete later turn suffix while retaining authored directive records.
+
+`mevedel-process-directives` performs only initial work in stable source order.
+Ready parents use Implement, Discussed parents without an implementation use
+Implement this with their full local discussion, and any parent with a prior
+implementation attempt is skipped. The batch validates each current source
+context when its turn arrives, never infers Request changes or Retry, and stops
+after the first failure or abort. Nested directives are submitted only as part
+of their parent.
 
 Note: The tutoring preset is experimental and uses a Socratic questioning
 approach to guide learning rather than providing direct solutions.
@@ -1059,7 +1096,7 @@ that can be checked into version control. `AGENTS.local.md` is loaded after
 `AGENTS.md` in each directory for private checkout-specific guidance.
 
 When a prompt profile selects memory, the first 200 lines of each configured
-memory index are included. Main, revise, tutor, and worker profiles select it;
+memory index are included. Main, tutor, and worker profiles select it;
 Explorer, verifier, reviewer, guardian, and compaction do not. The default
 memory roots are `.mevedel/memory/`,
 `.agents/memory/`, `~/.mevedel/memory/`, and `~/.agents/memory/`.

@@ -37,9 +37,27 @@
 (declare-function mevedel-agent-invocation-transcript-status
 		  "mevedel-agents" (cl-x) t)
 
+;; `mevedel-chat'
+(declare-function mevedel--directive-action-label "mevedel-chat" (action))
+(declare-function mevedel--implement-discussion
+                  "mevedel-chat" (directive &optional callback))
+(declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
+
+;; `mevedel-directive'
+(declare-function mevedel-directive-actions "mevedel-directive" (directive))
+
+;; `mevedel-directive-activity'
+(declare-function mevedel-open-directive-activity
+                  "mevedel-directive-activity"
+                  (&optional directive workspace))
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-sandbox-summary-class
                   "mevedel-execution" (summary))
+
+;; `mevedel-overlays'
+(declare-function mevedel--directive-action-context
+                  "mevedel-overlays" (record workspace))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
@@ -81,12 +99,29 @@
                   (session-dir &optional lifecycle-source session-override))
 (declare-function mevedel-session-persistence-rewind
 		  "mevedel-session-persistence" (buffer target))
+(declare-function mevedel-session-persistence-rewind-checkpoint
+                  "mevedel-session-persistence"
+                  (workspace checkpoint &optional buffer))
 (declare-function mevedel-session-persistence-segments
                   "mevedel-session-persistence" (session live-buffer))
 
 ;; `mevedel-structs'
+(declare-function mevedel-directive-attempt-checkpoint
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-patch
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempt-sequence
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-attempt-index
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-sequence
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-active-elapsed-seconds
                   "mevedel-structs" (request &optional now))
+(declare-function mevedel-request-directive-uuid "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-agent-registry "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-current-segment "mevedel-structs"
@@ -100,6 +135,8 @@
 (declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
@@ -147,6 +184,8 @@
 (autoload 'mevedel--strip-hook-audit-blocks "mevedel-transcript-audit")
 (declare-function mevedel-transcript-audit-only-p
                   "mevedel-transcript-audit" (text))
+(declare-function mevedel-transcript-buffer-directive-ranges
+                  "mevedel-transcript-audit" (&optional allow-open))
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties
@@ -193,6 +232,9 @@
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--set-historical-composer-visible
                   "mevedel-view-composer" (visible))
+(declare-function mevedel-view-enter-directive-scope
+                  "mevedel-view-composer"
+                  (directive action &optional attempt-index workspace))
 (declare-function mevedel-view-refresh-input-prompt
                   "mevedel-view-composer" ())
 (defvar mevedel-view--armed-session-fork)
@@ -474,6 +516,9 @@ interaction zones instead of inside them.")
 Keys are source-collapse keys from `mevedel-view--source-collapse-state-key'.
 Values are t when collapsed and nil when expanded.")
 
+(defvar-local mevedel-view--directive-collapse-states nil
+  "Hash table of directive turn fold states keyed by directive id and turn.")
+
 (defvar-local mevedel-view--response-fontify-cache nil
   "Hash table caching response fontification for this view.")
 
@@ -534,6 +579,8 @@ turns rendered as usual.")
   (setq-local mevedel-view--tool-rendering-cache
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--source-collapse-states
+              (make-hash-table :test #'equal))
+  (setq-local mevedel-view--directive-collapse-states
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--response-fontify-cache
               (make-hash-table :test #'equal))
@@ -1174,6 +1221,51 @@ real user message."
                   :end (caddr (car current-segs)))
             turns))
     (nreverse turns)))
+
+(defun mevedel-view--directive-boundary-segment-p (segment data-buf)
+  "Return non-nil when SEGMENT is directive boundary audit data."
+  (and (eq (car segment) 'ignored)
+       (with-current-buffer data-buf
+         (require 'mevedel-transcript-audit)
+         (mevedel-transcript-audit-records
+          (buffer-substring-no-properties
+           (cadr segment) (caddr segment))
+          'directive-turn-boundary))))
+
+(defun mevedel-view--directive-ranges (data-buf)
+  "Return absolute directive transcript ranges in DATA-BUF."
+  (with-current-buffer data-buf
+    (require 'mevedel-transcript-audit)
+    (mapcar
+     (lambda (range)
+       (plist-put range :render-id
+                  (cl-gensym "mevedel-view-directive-turn-")))
+     (mevedel-transcript-buffer-directive-ranges
+      (and mevedel--current-request
+           (mevedel-request-directive-uuid mevedel--current-request))))))
+
+(defun mevedel-view--group-transcript-turns (segments data-buf)
+  "Group SEGMENTS and annotate first-class directive turns in DATA-BUF."
+  (let* ((ranges (mevedel-view--directive-ranges data-buf))
+         (turns
+          (mevedel-view--group-into-turns
+           (cl-remove-if
+            (lambda (segment)
+              (mevedel-view--directive-boundary-segment-p segment data-buf))
+            segments)
+           data-buf)))
+    (dolist (turn turns)
+      (when-let* ((range
+                   (cl-find-if
+                    (lambda (candidate)
+                      (and (< (plist-get turn :start)
+                              (plist-get candidate :body-end))
+                           (> (plist-get turn :end)
+                              (plist-get candidate :body-start))))
+                    ranges)))
+        (plist-put turn :directive range)
+        (plist-put turn :render-id (plist-get range :render-id))))
+    turns))
 
 
 ;;
@@ -2967,7 +3059,7 @@ the render so user toggles survive streaming ticks."
          (segments (when (and data-from data-to)
                      (with-current-buffer data-buf
                        (mevedel-transcript-segments data-from data-to))))
-         (turns (mevedel-view--group-into-turns segments data-buf))
+         (turns (mevedel-view--group-transcript-turns segments data-buf))
          (in-flight-p (mevedel-view--in-flight-turn-start-position))
          (pre-rendered-user-visible-p
           (mevedel-view--pre-rendered-user-visible-p))
@@ -3176,6 +3268,7 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
         (segments (plist-get turn :segments))
         (turn-start (plist-get turn :start))
         (turn-end (plist-get turn :end))
+        (directive (plist-get turn :directive))
         (turn-source nil))
     (setq turn-source
           (mevedel-view--source-range data-buf turn-start turn-end))
@@ -3198,13 +3291,14 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
                 (insert-start (point)))
             (pcase role
               ('user
-               (mevedel-view--render-user-turn segments data-buf))
+               (mevedel-view--render-user-turn segments data-buf directive))
               ('assistant
                (mevedel-view--render-assistant-turn
                 segments data-buf
                 (and decorate-variants
                      (mevedel-view--conversation-variant-button
-                      data-buf turn-start turn-end variant-session)))))
+                      data-buf turn-start turn-end variant-session))
+                directive)))
             ;; Blank line above the trailing separator so the rule doesn't
             ;; butt up against the last response line.
             (when (eq role 'assistant)
@@ -3257,9 +3351,14 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
             ;; Tag every character in this turn with a unique id so
             ;; turn-level fold/unfold can find the whole span even after
             ;; inner sections have been expanded or collapsed.
-            (put-text-property insert-start (point)
-                               'mevedel-view-turn-id
-                               (cl-gensym "mevedel-view-turn-")))))))))
+            (add-text-properties
+             insert-start (point)
+             `(mevedel-view-turn-id
+               ,(or (plist-get turn :render-id)
+                    (cl-gensym "mevedel-view-turn-"))
+               ,@(when directive
+                   `(mevedel-view-directive ,directive
+                     mevedel-view-turn-role directive)))))))))))
 
 (defun mevedel-view--user-turn-display-text (segments data-buf)
   "Return persisted view text from user SEGMENTS in DATA-BUF, or nil."
@@ -3897,8 +3996,8 @@ buffer for gptel, but the view must not render them as `You' turns."
                  (setq ok nil))))
            (and found ok)))))
 
-(defun mevedel-view--render-user-turn (segments data-buf)
-  "Render user SEGMENTS from DATA-BUF."
+(defun mevedel-view--render-user-turn (segments data-buf &optional directive)
+  "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."
   (require 'mevedel-transcript)
   (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
          (prompt-drawers (mevedel-view--user-turn-prompt-drawers
@@ -3929,11 +4028,29 @@ buffer for gptel, but the view must not render them as `You' turns."
       (mevedel-view--decorate-agent-result-blocks text-start (point))
       (mevedel-view--decorate-agent-message-blocks text-start (point)))
      (t
-      (insert (propertize "You\n"
-                          'font-lock-face 'mevedel-view-user-header
-                          'mevedel-view-type 'turn-header
-                          'mevedel-view-turn-role 'user
-                          'mevedel-view-collapsed nil))
+      (let ((header-start (point)))
+        (insert (propertize
+                 (if directive
+                   (format "◆ %s · %s · T%s · excluded from model context\n"
+                           (truncate-string-to-width
+                            (or (plist-get directive :directive-id) "?")
+                            8 nil nil "…")
+                           (mevedel--directive-action-label
+                            (plist-get directive :action))
+                           (or (plist-get directive :turn) "?"))
+                   "You\n")
+                 'font-lock-face 'mevedel-view-user-header
+                 'mevedel-view-type 'turn-header
+                 'mevedel-view-turn-role
+                 (if directive 'directive 'user)
+                 'mevedel-view-collapsed nil))
+        (when directive
+          (add-text-properties
+           header-start (1- (point))
+           (list 'mevedel-view-zone-activate
+                 (lambda () (mevedel-view-directive-actions directive))
+                 'mouse-face 'highlight
+                 'help-echo "RET: directive actions"))))
       (setq text-start (point))
       (unless (string-empty-p text)
         (insert text)
@@ -3983,28 +4100,107 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
       (let ((body (string-trim (match-string 1 trimmed)))
             (action (match-string 2 trimmed)))
         (if (string-empty-p body)
-            (mevedel-view--directive-action-label action)
+            (mevedel--directive-action-label action)
           (format "%s: %s"
-                  (mevedel-view--directive-action-label action)
+                  (mevedel--directive-action-label action)
                   body))))
      ((string-match "\\``\\([^`]+\\)`[ \t\n]+\\(.+\\)\\'" trimmed)
       (format "%s: %s"
-              (mevedel-view--directive-action-label (match-string 1 trimmed))
+              (mevedel--directive-action-label (match-string 1 trimmed))
               (match-string 2 trimmed)))
      (t trimmed))))
 
-(defconst mevedel-view--directive-action-labels
-  '(("implement" . "Implement")
-    ("revise" . "Revise")
-    ("discuss" . "Discuss")
-    ("tutor" . "Tutor"))
-  "Plain display labels for directive actions.")
+(defun mevedel-view--directive-metadata-context (directive)
+  "Return `(RECORD WORKSPACE ATTEMPT ATTEMPT-INDEX)' for DIRECTIVE metadata."
+  (when-let* ((data-buffer (mevedel-view--display-data-buffer))
+              ((buffer-live-p data-buffer))
+              (session
+               (or (buffer-local-value 'mevedel--session data-buffer)
+                   (and (buffer-live-p mevedel--data-buffer)
+                        (buffer-local-value
+                         'mevedel--session mevedel--data-buffer))))
+              (workspace (mevedel-session-workspace session))
+              (record
+               (cl-find (plist-get directive :directive-id)
+                        (mevedel-workspace-directives workspace)
+                        :key #'mevedel-directive-id :test #'equal)))
+    (let* ((attempt
+            (and (eq (plist-get directive :activity-kind) 'attempt)
+                 (cl-find (plist-get directive :sequence)
+                          (mevedel-directive-attempts record)
+                          :key #'mevedel-directive-attempt-sequence)))
+           (discussion
+            (and (eq (plist-get directive :activity-kind) 'discussion)
+                 (cl-find (plist-get directive :sequence)
+                          (mevedel-directive-discussion record)
+                          :key #'mevedel-directive-discussion-turn-sequence)))
+           (attempt-index
+            (if attempt
+                (1+ (cl-position
+                     attempt (mevedel-directive-attempts record)
+                     :test #'eq))
+              (and discussion
+                   (mevedel-directive-discussion-turn-attempt-index
+                    discussion)))))
+      (list record workspace attempt attempt-index))))
 
-(defun mevedel-view--directive-action-label (action)
-  "Return the display label for directive ACTION."
-  (or (cdr (assoc (format "%s" action) mevedel-view--directive-action-labels))
-      (capitalize (replace-regexp-in-string
-                   "[-_]+" " " (format "%s" action)))))
+(defun mevedel-view--directive-checkpoint-buffer (checkpoint)
+  "Return the live execution buffer matching CHECKPOINT, or nil."
+  (when (buffer-live-p mevedel--data-buffer)
+    (when-let* ((session
+                 (buffer-local-value 'mevedel--session mevedel--data-buffer))
+                ((equal (plist-get checkpoint :session-id)
+                        (mevedel-session-session-id session))))
+      mevedel--data-buffer)))
+
+(defun mevedel-view-directive-actions (directive)
+  "Choose a state-correct action for the rendered DIRECTIVE turn."
+  (interactive (list (get-text-property (point) 'mevedel-view-directive)))
+  (pcase-let* ((`(,record ,workspace ,attempt ,attempt-index)
+                (or (mevedel-view--directive-metadata-context directive)
+                    (user-error "Directive record is unavailable")))
+               (actions (mevedel-directive-actions record))
+               (discussion-p
+                (eq (plist-get directive :activity-kind) 'discussion))
+               (choices
+                (append
+                 (when attempt '((?d "discuss result")))
+                 (when discussion-p '((?d "continue discussion")))
+                 (when (memq 'implement-this actions)
+                   '((?i "implement this")))
+                 (when (memq 'request-changes actions)
+                   '((?c "request changes")))
+                 (when (memq 'retry actions)
+                   '((?r "retry")))
+                 (when (and attempt
+                            (not (string-empty-p
+                                  (or (mevedel-directive-attempt-patch attempt)
+                                      ""))))
+                   '((?p "view patch")))
+                 (when (and attempt
+                            (mevedel-directive-attempt-checkpoint attempt))
+                   '((?w "rewind before this implementation")))
+                 '((?o "inspect"))))
+               (choice (car (read-multiple-choice "Directive action: " choices))))
+    (pcase choice
+      (?d (mevedel-view-enter-directive-scope
+           record 'discuss attempt-index workspace))
+      (?i (require 'mevedel-overlays)
+          (mevedel--implement-discussion
+           (plist-get (mevedel--directive-action-context record workspace)
+                      :directive)))
+      (?c (mevedel-view-enter-directive-scope
+           record 'request-changes nil workspace))
+      (?r (mevedel-view-enter-directive-scope record 'retry nil workspace))
+      (?p (mevedel--replace-patch-buffer
+           (mevedel-directive-attempt-patch attempt)))
+      (?w (require 'mevedel-session-persistence)
+          (let ((checkpoint (mevedel-directive-attempt-checkpoint attempt)))
+            (mevedel-session-persistence-rewind-checkpoint
+             workspace checkpoint
+             (mevedel-view--directive-checkpoint-buffer checkpoint))))
+      (?o (require 'mevedel-directive-activity)
+          (mevedel-open-directive-activity record workspace)))))
 
 (defun mevedel-view--fontify-directive-display-text (text)
   "Return TEXT with the directive action label fontified."
@@ -4153,23 +4349,24 @@ added when the text before point does not already end with a blank line
                         'mevedel-view-collapsed nil))))
 
 (defun mevedel-view--render-assistant-turn
-    (segments data-buf &optional variant-button)
+    (segments data-buf &optional variant-button directive)
   "Render assistant SEGMENTS from DATA-BUF.
 Response text is shown inline, tool calls as collapsed one-liners,
 reasoning blocks as collapsed summaries.  Adjacent thinking segments
 are merged into a single summary.  VARIANT-BUTTON, when non-nil, is
 inserted beside the header."
-  (let ((header-start (point)))
-    (insert "Assistant")
-    (when variant-button
-      (insert "  " variant-button))
-    (insert "\n")
-    (add-text-properties
-     header-start (point)
-     '(font-lock-face mevedel-view-assistant-header
-       mevedel-view-type turn-header
-       mevedel-view-turn-role assistant
-       mevedel-view-collapsed nil)))
+  (unless directive
+    (let ((header-start (point)))
+      (insert "Assistant")
+      (when variant-button
+        (insert "  " variant-button))
+      (insert "\n")
+      (add-text-properties
+       header-start (point)
+       '(font-lock-face mevedel-view-assistant-header
+         mevedel-view-type turn-header
+         mevedel-view-turn-role assistant
+         mevedel-view-collapsed nil))))
   (let ((view-buf (current-buffer))
         tool-group thinking-group request-summary-group)
     (dolist (seg segments)
@@ -4281,7 +4478,7 @@ inserted beside the header."
              (when tool-group
                (mevedel-view--render-tool-group
                 (nreverse tool-group) data-buf)
-               (setq tool-group nil))
+             (setq tool-group nil))
              (mevedel-view--render-collaboration-event-segment data-buf seg))
             ((and tool-group
                   (mevedel-view--hook-audit-only-segment-p
@@ -4791,9 +4988,15 @@ Fallback disclosures retain their header; response summaries do not."
          (source (or trimmed source))
          (data-start (car source))
          (data-end (cdr source))
-         (rendering (and data-buf (buffer-live-p data-buf)
-                         (mevedel-view--segment-rendering
-                          data-buf data-start data-end))))
+         (rendering
+          (and data-buf
+               (buffer-live-p data-buf)
+               (let ((candidate
+                      (mevedel-view--segment-rendering
+                       data-buf data-start data-end)))
+                 (and (eq vtype
+                          (or (plist-get candidate :vtype) 'tool-summary))
+                      candidate)))))
     (when (and bounds data-buf (buffer-live-p data-buf))
       (let* ((inhibit-read-only t)
              (view-start (car bounds))
@@ -4938,9 +5141,15 @@ Tool segments with a registered renderer produce the renderer's
          (source (or trimmed source))
          (data-start (car source))
          (data-end (cdr source))
-         (rendering (and data-buf (buffer-live-p data-buf)
-                         (mevedel-view--segment-rendering
-                          data-buf data-start data-end t)))
+         (rendering
+          (and data-buf
+               (buffer-live-p data-buf)
+               (let ((candidate
+                      (mevedel-view--segment-rendering
+                       data-buf data-start data-end t)))
+                 (and (eq vtype
+                          (or (plist-get candidate :vtype) 'tool-summary))
+                      candidate))))
          (summary
           (cond
            (rendering
@@ -5155,6 +5364,71 @@ synthesizes a preview with tool counters."
                       (t (format "%d reminders" reminder-count)))))
        (t "Assistant")))))
 
+(defun mevedel-view--directive-turn-summary (start end directive)
+  "Build a one-line summary for DIRECTIVE rendered between START and END."
+  (let ((tool-count 0)
+        (attempt (nth 2 (mevedel-view--directive-metadata-context directive))))
+    (let ((pos start))
+      (while (< pos end)
+        (when (eq (get-text-property pos 'mevedel-view-type) 'tool-summary)
+          (cl-incf tool-count))
+        (setq pos (or (next-single-property-change
+                       pos 'mevedel-view-type nil end)
+                      end))))
+    (concat
+     (format "◆ %s · %s · T%s · %s%s%s"
+             (truncate-string-to-width
+              (or (plist-get directive :directive-id) "?") 8 nil nil "…")
+             (mevedel--directive-action-label
+              (plist-get directive :action))
+             (or (plist-get directive :turn) "?")
+             (pcase (plist-get directive :outcome)
+               ('success
+                (if (eq (plist-get directive :activity-kind) 'attempt)
+                    "Implemented"
+                  "Discussed"))
+               ('error "Failed")
+               ('aborted "Aborted")
+               (_ "Running"))
+             (pcase tool-count
+               (0 "")
+               (1 " · 1 tool call")
+               (_ (format " · %d tool calls" tool-count)))
+             (if-let* ((patch (and attempt
+                                   (mevedel-directive-attempt-patch attempt)))
+                       ((not (string-empty-p patch))))
+                 (let ((additions 0)
+                       (deletions 0))
+                   (dolist (line (split-string patch "\n"))
+                     (cond
+                      ((and (string-prefix-p "+" line)
+                            (not (string-prefix-p "+++" line)))
+                       (cl-incf additions))
+                      ((and (string-prefix-p "-" line)
+                            (not (string-prefix-p "---" line)))
+                       (cl-incf deletions))))
+                   (format " · +%d −%d" additions deletions))
+               ""))
+     (propertize " · RET: actions"
+                 'face `(:inherit shadow
+                         :overline
+                         ,(face-attribute 'mevedel-view-user-header
+                                          :foreground nil 'default))))))
+
+(defun mevedel-view--directive-collapse-state-key (directive)
+  "Return the stable fold-state key for DIRECTIVE metadata."
+  (list (plist-get directive :directive-id)
+        (plist-get directive :turn)))
+
+(defun mevedel-view--record-directive-collapse-state (directive collapsed)
+  "Remember whether DIRECTIVE is COLLAPSED in the current view."
+  (unless (hash-table-p mevedel-view--directive-collapse-states)
+    (setq mevedel-view--directive-collapse-states
+          (make-hash-table :test #'equal)))
+  (puthash (mevedel-view--directive-collapse-state-key directive)
+           (and collapsed t)
+           mevedel-view--directive-collapse-states))
+
 (defun mevedel-view--collapse-turn ()
   "Collapse the turn at point into a one-line summary.
 Stashes the original propertized text on the summary so expand can
@@ -5162,7 +5436,8 @@ restore the turn with all inner section state intact.  Signals a
 `user-error' when the turn is too short to benefit from folding."
   (let* ((bounds (mevedel-view--turn-bounds))
          (role (get-text-property (point) 'mevedel-view-turn-role))
-         (id (get-text-property (point) 'mevedel-view-turn-id)))
+         (id (get-text-property (point) 'mevedel-view-turn-id))
+         (directive (get-text-property (point) 'mevedel-view-directive)))
     (unless (and bounds role id)
       (user-error "No turn at point"))
     (mevedel-view--in-flight-turn-start-position)
@@ -5185,12 +5460,18 @@ restore the turn with all inner section state intact.  Signals a
                       ('user (mevedel-view--user-turn-summary
                               turn-start turn-end))
                       ('assistant (mevedel-view--assistant-turn-summary
-                                   turn-start turn-end))))
+                                   turn-start turn-end))
+                      ('directive
+                       (mevedel-view--directive-turn-summary
+                        turn-start turn-end directive))))
            (face (pcase role
                    ('user 'mevedel-view-user-header)
-                   ('assistant 'mevedel-view-assistant-header))))
+                   ('assistant 'mevedel-view-assistant-header)
+                   ('directive 'mevedel-view-user-header))))
       (unless summary
         (user-error "Turn is already compact"))
+      (when directive
+        (mevedel-view--record-directive-collapse-state directive t))
       (let ((inhibit-read-only t))
         (save-excursion
           (goto-char turn-start)
@@ -5200,29 +5481,45 @@ restore the turn with all inner section state intact.  Signals a
           (unwind-protect
               (progn
                 (delete-region turn-start turn-end)
-                (insert (propertize (concat summary
-                                            (when variant-button
-                                              (concat "  " variant-button))
-                                            "\n\n")
-                                    'font-lock-face face
-                                    'mevedel-view-type 'turn-summary
-                                    'mevedel-view-turn-role role
-                                    'mevedel-view-turn-id id
-                                    'mevedel-view-collapsed t
-                                    'mevedel-view-stash stash
-                                    'read-only t
-                                    'keymap mevedel-view--display-map
-                                    'front-sticky '(read-only keymap)
-                                    'rear-nonsticky '(read-only keymap))))
+                (let ((summary-start (point)))
+                  (insert (propertize (concat summary
+                                              (when variant-button
+                                                (concat "  " variant-button))
+                                              "\n\n")
+                                      'font-lock-face face
+                                      'mevedel-view-type 'turn-summary
+                                      'mevedel-view-turn-role role
+                                      'mevedel-view-turn-id id
+                                      'mevedel-view-directive directive
+                                      'mevedel-view-collapsed t
+                                      'mevedel-view-stash stash
+                                      'read-only t
+                                      'keymap mevedel-view--display-map
+                                      'front-sticky '(read-only keymap)
+                                      'rear-nonsticky '(read-only keymap)))
+                  (when directive
+                    (add-text-properties
+                     summary-start
+                     (save-excursion
+                       (goto-char summary-start)
+                       (1+ (line-end-position)))
+                     (list 'mevedel-view-zone-activate
+                           (lambda ()
+                             (mevedel-view-directive-actions directive))
+                           'mouse-face 'highlight
+                           'help-echo "RET: directive actions")))))
             (set-marker-insertion-type mevedel-view--input-marker nil)))))))
 
 (defun mevedel-view--expand-turn ()
   "Restore a collapsed turn at point from its stashed content."
   (let* ((bounds (mevedel-view--turn-bounds))
-         (stash (get-text-property (point) 'mevedel-view-stash)))
+         (stash (get-text-property (point) 'mevedel-view-stash))
+         (directive (get-text-property (point) 'mevedel-view-directive)))
     (unless (and bounds stash)
       (user-error "No collapsed turn at point"))
     (mevedel-view--in-flight-turn-start-position)
+    (when directive
+      (mevedel-view--record-directive-collapse-state directive nil))
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char (car bounds))
@@ -5233,25 +5530,74 @@ restore the turn with all inner section state intact.  Signals a
               (insert stash))
           (set-marker-insertion-type mevedel-view--input-marker nil))))))
 
-(defun mevedel-view-fork-point-at-point ()
-  "Return the stable assistant fork point at point.
+(defun mevedel-view--collapse-settled-directive-turns (&optional collapse-newest)
+  "Collapse settled directive turns except the newest turn by default.
+When COLLAPSE-NEWEST is non-nil, collapse that turn too."
+  (unless (mevedel-view--in-flight-turn-start-position)
+    (let ((pos (point-min))
+          (limit (mevedel-view--input-marker-position)))
+      (while (< pos limit)
+        (let* ((directive
+                (get-text-property pos 'mevedel-view-directive))
+               (next (or (next-single-property-change
+                          pos 'mevedel-view-turn-id nil limit)
+                         limit))
+               (collapse-state
+                (and directive
+                     (gethash
+                      (mevedel-view--directive-collapse-state-key directive)
+                      mevedel-view--directive-collapse-states
+                      mevedel-view--missing-collapse-state)))
+               (later-turn-p
+                (and (< next limit)
+                     (text-property-not-all
+                      next limit 'mevedel-view-turn-id nil))))
+          (when (and directive
+                     (plist-get directive :outcome)
+                     (not (eq collapse-state nil))
+                     (or collapse-newest later-turn-p
+                         (eq collapse-state t))
+                     (not (get-text-property pos 'mevedel-view-collapsed)))
+            (save-excursion
+              (goto-char pos)
+              (mevedel-view--collapse-turn))
+            (setq limit (mevedel-view--input-marker-position)
+                  next (or (next-single-property-change
+                            pos 'mevedel-view-turn-id nil limit)
+                           limit)))
+          (setq pos next))))))
 
-Signal a user error when point is not on a settled assistant turn."
+(defun mevedel-view--settled-response-at-point ()
+  "Return the stable settled response target at point."
   (let* ((bounds (mevedel-view--turn-bounds))
          (role (and bounds
                     (get-text-property
                      (car bounds) 'mevedel-view-turn-role)))
-         (source (and bounds
-                      (get-text-property
-                       (car bounds) 'mevedel-view-source)))
+         (source-pos
+          (and bounds
+               (if (eq role 'directive)
+                   (text-property-any
+                    (car bounds) (cdr bounds) 'mevedel-view-type 'response)
+                 (car bounds))))
+         (source (and source-pos
+                      (get-text-property source-pos 'mevedel-view-source)))
          (data-buffer (mevedel-view--display-data-buffer)))
-    (unless (and (eq role 'assistant)
+    (unless (and (memq role '(assistant directive))
                  (consp source)
                  (buffer-live-p data-buffer))
       (user-error "Point is not on an assistant response"))
     (or (mevedel-session-persistence-fork-point-at-source
          data-buffer (car source) (cdr source))
         (user-error "Assistant response is not a settled fork point"))))
+
+(defun mevedel-view-fork-point-at-point ()
+  "Return the stable assistant fork point at point.
+
+Signal a user error for directive turns because they have no conversational
+continuation context."
+  (when (get-text-property (point) 'mevedel-view-directive)
+    (user-error "Directive turns cannot be forked"))
+  (mevedel-view--settled-response-at-point))
 
 (defun mevedel-view-goto-conversation-variant (fork-point-id)
   "Move point to the assistant header for FORK-POINT-ID."
@@ -5339,7 +5685,7 @@ Signal a user error when point is not on a settled assistant turn."
   (interactive)
   (require 'mevedel-session-persistence)
   (when (mevedel-session-persistence-rewind
-         mevedel--data-buffer (mevedel-view-fork-point-at-point))
+         mevedel--data-buffer (mevedel-view--settled-response-at-point))
     (mevedel-view-return-to-latest-segment)
     t))
 
@@ -5972,7 +6318,8 @@ turn.  SAVED-STATES restores matching disclosure state."
         (narrow-to-region scan-start (point-max))
         (let* ((segments
                 (mevedel-transcript-segments (point-min) (point-max)))
-               (turns (mevedel-view--group-into-turns segments data-buf))
+               (turns (mevedel-view--group-transcript-turns
+                       segments data-buf))
                (session
                 (and (not agent-transcript-p)
                      (buffer-local-value
@@ -6001,6 +6348,7 @@ turn.  SAVED-STATES restores matching disclosure state."
                     (setq last-current-assistant-turn-start
                           view-turn-start))))
               (mevedel-view--render-turn turn data-buf t session))
+            (mevedel-view--collapse-settled-directive-turns)
             (when saved-states
               (mevedel-view--apply-collapse-states
                (point-min)

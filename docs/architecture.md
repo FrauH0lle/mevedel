@@ -19,10 +19,37 @@ flowchart TD
 
 Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 
-- **`mevedel-workspace`**: type, id, root, name, file-cache.
+- **`mevedel-workspace`**: type, id, root, name, file-cache, and the durable
+  directive records shared by every session in the workspace.
   Additional roots live in `mevedel-workspace-additional-roots`.
   `.mevedel/` is derived by
   `mevedel-workspace-state-dir`, not stored as a slot.
+- **`mevedel-directive`**: stable directive id, current authored request,
+  source-anchor description, lifecycle state, bound execution-session id, and
+  Plan-before-implementation preference and proposal, chronological planning,
+  implementation, and discussion turns, and current parent-owned
+  subdirectives. Source overlays retain the id needed to resolve this record;
+  they do not own another request, status, patch, or attempt copy.
+  The lifecycle state is derived from the current authored request and surviving
+  activity whenever the record is loaded or queried; it is not persisted as an
+  independent authority.
+- **`mevedel-subdirective`**: stable id, current authored request, and attached
+  source anchor for one nested detail owned by a top-level directive. It never
+  owns a session, lifecycle state, attempt list, discussion, or Rewind action.
+- **`mevedel-directive-attempt`**: immutable action framing, submitted request,
+  terminal answer or error, authored-request snapshot, outcome, captured patch,
+  capture time and completeness, covered files, explicit gaps, the successful
+  attempt's consumed subdirective snapshots, conservatively detected tool
+  effects outside snapshot coverage, and the session/turn checkpoint
+  that can restore the file state around the attempt, plus any accepted plan
+  and request-local implementation selection. Its directive-local
+  settlement sequence orders it against discussion turns. A complete empty
+  patch means the request observed its covered files and made no changes;
+  incomplete capture never implies complete coverage.
+- **`mevedel-directive-discussion-turn`**: immutable local question, submitted
+  request, authored-request snapshot, terminal answer or error, outcome,
+  optional selected-attempt index, session/turn checkpoint, and directive-local
+  settlement sequence.
 - **`mevedel-session`**: per-chat state: workspace, working
   directory, tasks, touched-files, permission rules/mode, exact resource grants,
   reminders,
@@ -42,8 +69,9 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   token/time/turn accounting, optional budget and accepted-plan reference,
   and timestamps.
 - **`mevedel-request`**: per-turn state: process-unique request identity,
-  owning session and agent origin, request start time, accumulated active-work
-  pause time, file-snapshots, directive UUID, pending plan, cancellers,
+  owning session and agent origin, its once-reserved session turn identity,
+  request start time, accumulated active-work pause time, file-snapshots,
+  directive UUID, immutable Plan read-only authority, pending plan, cancellers,
   skill-scoped permission rules, user-attached skill records, and hook rules.
   Skill model and effort policy is consumed before
   gptel realizes an owning request rather than stored for late mutation.
@@ -54,22 +82,83 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   `get-domain`, `get-name`), groups, max-result-size, display argument,
   render transform, renderer, and its provider-facing gptel tool.
 - `mevedel--instruction-states`: workspace-keyed instruction alists and ID state
-- Instruction types: **References** (context) and **Directives** (prompts)
+- Instruction types: **References** (source-bound context) and **Directives**
+  (workspace-owned prompts with source presentations)
 
-Top-level directives may persist an exact provider and reasoning-effort
-override on their overlay. Nested directives edit the top-level request owner.
-Without an override, the directive inherits the main session model at dispatch.
+Directive anchors are either Attached, with a live source range, or Detached,
+with a zero-width source position, former source order, and the last attached
+anchor evidence. Deleting an entire directive range preserves its durable
+record and replaces the evaporated range overlay with a compact detached row;
+partial edits use normal overlay resizing. Co-located detached rows are ordered
+by their former source positions. References keep their source-bound
+evaporation behavior.
 
-Directive request callbacks must not assume the original overlay object is
-still live. Capture the directive UUID and re-resolve the directive before
-marking success/failure or touching overlay bounds; detached overlays can
-occur while a request is in flight.
+Top-level directive presentations may persist an exact provider and
+reasoning-effort override. Nested directives are durable details owned by the
+topmost directive. Acting on any nested presentation resolves that owner, and
+prompt construction includes every current nested detail in stable source
+order. Without an override, the directive inherits the main session model at
+dispatch.
+
+Directive requests submit an explicit string prompt built from the current
+authored request and freshly resolved references, so request construction never
+reads surrounding ordinary-chat history. Direct implementation-type prompts
+additionally append the record's persisted skill selection as instruction
+mentions, revalidated against the session at every dispatch; accepted-plan
+handoffs instead carry the approval card's selection. Each request streams as a first-class
+turn in the bound execution session's canonical transcript with ordinary user,
+response, tool, and interaction roles. Paired durable boundary records identify
+the directive turn without replacing any of those roles. Before gptel parses an
+ordinary chat request, a synchronous prompt-copy transform marks every enclosed
+directive body `gptel 'ignore`; explicit directive requests continue to use
+only the workspace record and directive-local history.
+
+Starting a Ready discussion submits that request directly as the first
+directive turn. Follow-ups enter a sticky directive scope in the shared
+composer and add only durable discussion turns whose authored-request snapshot
+matches the current directive request. The first accepted request binds the
+directive to its execution session. Each accepted request reserves one session
+turn identity before tools run; snapshots, transcript metadata, prompt/Rewind
+indexing, and directive checkpoint links use that same identity, which terminal
+settlement commits without recomputing it.
+
+When Plan before implementation is enabled, every implementation-starting
+action first records a read-only planning turn in that same bound session. The
+directive record owns the proposal and approval selection; the session keeps
+only a transient reservation identifying whether the workflow is planning,
+awaiting approval, or implementing. The accepted handoff reuses the ordinary
+directive request path with request-local mode and model policy, and stores the
+accepted plan on the resulting immutable attempt. Standalone Plan and directive
+planning are mutually exclusive session owners.
+
+Terminal settlement keeps the complete turn in the transcript and writes the
+immutable attempt or discussion turn to the workspace record even if the source
+overlay detached while the request was in flight; this bounded duplication
+keeps chronological presentation separate from durable follow-up context.
+Overlay updates remain optional presentation work. A successful implementation
+records immutable snapshots of, then consumes, exactly the subdirectives present
+at dispatch. Failure and abort consume none; details authored while a request is
+in flight remain current.
+
+Batch processing queues durable top-level directive records in stable source
+order rather than retaining source overlays. Each item resolves the same live
+prompt context used by an individual action only when its turn begins, so a
+prior implementation may detach or remove later source without corrupting the
+queue. Ready records use Implement and Discussed records without an attempt use
+Implement this. Either action pauses the batch at the directive approval card
+when Plan before implementation is enabled. A Source missing record has
+sufficient context only when it is top-level, bodyless, and has no nested
+details; region-backed records must be
+reattached. Records with any implementation attempt or without sufficient
+current prompt context are reported and skipped; the first failed or aborted
+request stops the batch. A zero-delay continuation starts the next item only
+after terminal request cleanup.
 
 ## Workspace context chain
 
 ```
 Data buffer (authoritative gptel/org buffer; holds mevedel--workspace,
-mevedel--session, and the model-visible transcript)
+mevedel--session, and the canonical transcript projected into provider context)
   |
 View buffer (mevedel-view-mode; holds mevedel--data-buffer and the
 input zone / editable composer)
@@ -140,14 +229,19 @@ order (later parents win, then the child). Ordinary preset keys resolve to
 `mevedel-foo`/`mevedel--foo` before gptel variables and use gptel's value
 composition semantics. Persistent application is buffer- and session-local;
 request-only application is dynamically scoped. The built-ins are
-`mevedel-discuss`, `mevedel-implement`, `mevedel-revise`, and
-`mevedel-tutor`. Presets can also merge named model tiers and workload maps.
+`mevedel-discuss`, `mevedel-implement`, and `mevedel-tutor`. Request changes
+and Retry use ordinary implementation authority and focused prompt context,
+not another preset. Presets can also merge named model tiers and workload maps.
 Dispatch resolves session values, tier values, workload values, then explicit
 Agent policy or request-owning skill policy. Skill preset entries use
 `$skill-name` workload symbols and are consumed before request realization.
 Directive overrides are validated before processing starts and appended as the
 final prompt transform. They therefore win for that directive request and its
 continuations without mutating the session model.
+Ordinary-chat prompt assembly also runs the directive-boundary transform in
+gptel's temporary request copy. It applies `gptel 'ignore` to complete directive
+turns there, including tool spans, while leaving the canonical response and
+`(tool . id)` properties intact for persistence and rendering.
 System prompts are assembled dynamically from ordered profiles in
 `mevedel-system.el`. `mevedel-define-prompt-component` registers reusable
 Markdown, literal text, or dynamic producers.
@@ -161,7 +255,7 @@ The built-in selection is deliberate:
 
 | Consumer | Role/tone/context |
 | --- | --- |
-| Main / revise | Own role, shared main tone, tool orchestration, workspace config, memory, environment, skills, Goal |
+| Main | Base role/tone, tool orchestration, workspace config, memory, environment, skills, Goal |
 | Tutor | Tutor role/tone, tool orchestration, workspace config, memory, environment, skills, Goal |
 | Worker | Worker role, report tone, tool orchestration, workspace config, memory, environment, skills |
 | Explorer | Explorer role, report tone, tool orchestration, workspace config, environment, skills |

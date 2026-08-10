@@ -1077,8 +1077,7 @@ slot unchanged and returns nil."
                       :workspace-root workspace-root
                       :model (and (boundp 'gptel-model) gptel-model)
                       :turn-id (and session
-                                    (1+ (or (mevedel-session-turn-count session)
-                                            0)))
+                                    (mevedel-current-turn session))
                       :origin "/root")))
     (while extra
       (setq plist (plist-put plist (pop extra) (pop extra))))

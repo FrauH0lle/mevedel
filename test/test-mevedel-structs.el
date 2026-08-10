@@ -26,6 +26,15 @@
 ;;
 ;;; Session transient state
 
+(mevedel-deftest mevedel-request-note-untracked-effect
+  (:doc "deduplicates capture gaps by their mutation source")
+  (let ((request (mevedel-request--create)))
+    (mevedel-request-note-untracked-effect request "Bash" "first")
+    (mevedel-request-note-untracked-effect request "Bash" "second")
+    (mevedel-request-note-untracked-effect request "Eval" "third")
+    (should (equal '(("Eval" . "third") ("Bash" . "first"))
+                   (mevedel-request-untracked-effects request)))))
+
 (mevedel-deftest mevedel-session-pending-inputs ()
   ,test
   (test)
@@ -510,6 +519,18 @@
     (let ((mevedel--current-request nil))
       (should (equal "/root" (mevedel-current-origin))))))
 
+(mevedel-deftest mevedel-current-turn ()
+  ,test
+  (test)
+  :doc "uses the active request reservation and otherwise the next turn"
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create :turn-count 4))
+           (mevedel--current-request nil))
+      (should (= 5 (mevedel-current-turn session)))
+      (setq mevedel--current-request
+            (mevedel-request--create :session session :turn 7))
+      (should (= 7 (mevedel-current-turn session))))))
+
 (mevedel-deftest mevedel-request-active-p ()
   ,test
   (test)
@@ -576,6 +597,16 @@
       (should (hash-table-p (mevedel-request-file-snapshots req)))
       (should (null (mevedel-request-directive-uuid req)))))
 
+  :doc "reserves the next turn without committing it"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws)))
+      (setf (mevedel-session-turn-count session) 4)
+      (let ((req (mevedel-request-begin session)))
+        (should (= 5 (mevedel-request-turn req)))
+        (should (= 4 (mevedel-session-turn-count session))))))
+
   :doc "sets directive-uuid when provided"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
@@ -583,6 +614,16 @@
            (session (mevedel-session-create "main" ws))
            (req (mevedel-request-begin session "test-uuid")))
       (should (equal "test-uuid" (mevedel-request-directive-uuid req)))))
+
+  :doc "stamps directive planning authority onto the request"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws)))
+      (setf (mevedel-session-directive-planning session)
+            '(:directive-id "d1" :phase planning))
+      (should (mevedel-request-plan-read-only
+               (mevedel-request-begin session)))))
 
   :doc "records agent origin when request begins in a sub-agent buffer"
   (with-temp-buffer

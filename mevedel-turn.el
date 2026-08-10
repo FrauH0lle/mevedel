@@ -207,14 +207,22 @@
            mevedel--session workspace request nil))))))
 
 
-(defun mevedel--turn-increment (fsm)
-  "Increment the session turn count for FSM's live request buffer."
+(defun mevedel--turn-commit (fsm)
+  "Commit FSM's request-reserved turn to its live session.
+Signal when the request is missing or its reservation is not the next turn."
   (when-let* ((info (gptel-fsm-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
-      (when mevedel--session
-        (cl-incf (mevedel-session-turn-count mevedel--session))))))
+      (unless (and mevedel--session mevedel--current-request)
+        (error "Cannot commit turn without an active request"))
+      (let ((reserved (mevedel-request-turn mevedel--current-request))
+            (expected (1+ (or (mevedel-session-turn-count mevedel--session)
+                              0))))
+        (unless (equal reserved expected)
+          (error "Reserved turn %S does not follow committed turn %S"
+                 reserved (mevedel-session-turn-count mevedel--session)))
+        (setf (mevedel-session-turn-count mevedel--session) reserved)))))
 
 (defun mevedel--turn-autosave (fsm)
   "Persist the completed turn represented by FSM and refresh its view."
@@ -295,10 +303,10 @@
 
 (defun mevedel--complete-turn (fsm)
   "Run the canonical successful top-level turn transaction for FSM."
+  (mevedel--turn-commit fsm)
   (mevedel--run-turn-steps
    fsm
-   (list #'mevedel--turn-increment
-         (lambda (machine)
+   (list (lambda (machine)
            (mevedel--turn-record-settlement machine 'success))
          (lambda (machine)
            (mevedel--turn-settle-plan-handoff machine 'success))
@@ -314,11 +322,11 @@
 
 (defun mevedel--fail-turn (fsm status)
   "Run failure cleanup for FSM with terminal STATUS."
+  (mevedel--turn-commit fsm)
   (mevedel--run-turn-steps
    fsm
    (append
-    (list #'mevedel--turn-increment
-          (lambda (machine)
+    (list (lambda (machine)
             (mevedel--turn-record-settlement machine status))
           (lambda (machine)
             (mevedel--turn-settle-plan-handoff machine status))

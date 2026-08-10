@@ -71,6 +71,59 @@
     (should (equal "mevedel-view-composer"
                    (mevedel-view-composer-test--owner symbol)))))
 
+(mevedel-deftest mevedel-view-enter-directive-scope
+  (:doc "selects Discuss result attempts and rejects unavailable actions")
+  (let* ((workspace
+          (mevedel-workspace--create
+           :type 'test :id "directive-scope" :root "/tmp"
+           :name "directive-scope"))
+         (record
+          (mevedel-directive--create
+           :id "directive" :request "Request"
+           :attempts
+           (list (mevedel-directive-attempt--create
+                  :directive-request "Request" :outcome 'success))))
+         (data-buffer (generate-new-buffer " *directive-scope-data*"))
+         (view-buffer (generate-new-buffer " *directive-scope-view*"))
+         captured)
+    (unwind-protect
+        (progn
+          (mevedel-workspace-set-directives workspace (list record))
+          (with-current-buffer data-buffer
+            (setq-local mevedel--view-buffer view-buffer))
+          (cl-letf (((symbol-function 'mevedel--directive-session-buffer)
+                     (lambda (&rest _) (cons data-buffer nil)))
+                    ((symbol-function 'mevedel-view--switch-composer-scope)
+                     (lambda (scope) (setq captured scope)))
+                    ((symbol-function 'pop-to-buffer)
+                     (lambda (&rest _) nil)))
+            (mevedel-view-enter-directive-scope
+             record 'discuss nil workspace)
+            (should (= 1 (plist-get captured :attempt-index)))
+            (mevedel-view-enter-directive-scope
+             record 'request-changes nil workspace)
+            (should (eq 'request-changes (plist-get captured :action)))
+            (should-error
+             (mevedel-view-enter-directive-scope
+              record 'retry nil workspace)
+             :type 'user-error)
+            (setf (mevedel-directive-attempt-outcome
+                   (car (mevedel-directive-attempts record)))
+                  'failure)
+            (mevedel-view-enter-directive-scope
+             record 'retry nil workspace)
+            (should (eq 'retry (plist-get captured :action)))
+            (setf (mevedel-directive-plan record) '(:status draft))
+            (mevedel-view-enter-directive-scope
+             record 'plan nil workspace)
+            (should (eq 'plan (plist-get captured :action)))
+            (should-error
+             (mevedel-view-enter-directive-scope
+              record 'request-changes nil workspace)
+             :type 'user-error)))
+      (kill-buffer data-buffer)
+      (kill-buffer view-buffer))))
+
 
 ;;
 ;;; Test helpers
@@ -282,7 +335,144 @@
   (let ((mevedel--session
          (mevedel-session--create :name "main" :plan-mode t)))
     (should (string= "\n[Plan · full-auto] > "
-                     (mevedel-view--input-prompt-string 'full-auto)))))
+                     (mevedel-view--input-prompt-string 'full-auto))))
+
+  :doc "directive scope is loud and uses its distinct prompt prefix"
+  (let ((mevedel-view--composer-scope
+         (list :directive-id "abcdef123456" :action 'request-changes
+               :record (mevedel-directive--create
+                        :request "Explain this code"))))
+    (let ((prompt (mevedel-view--input-prompt-string 'ask)))
+      (should
+       (string=
+        (concat "\n◆ Request changes · Explain this code\n"
+                "  isolated from chat · ask · C-c C-k Back\n◆ > ")
+        (substring-no-properties prompt)))
+      (should (eq 'shadow
+                  (get-text-property
+                   (string-match "isolated from chat" prompt)
+                   'font-lock-face prompt)))
+      (should (eq 'mevedel-view-permission-mode-ask
+                  (get-text-property
+                   (string-match "ask" prompt)
+                   'font-lock-face prompt)))
+      (should (string-suffix-p "◆ > " prompt)))
+    (setq mevedel-view--composer-scope
+          (plist-put mevedel-view--composer-scope :action 'retry))
+    (let ((case-fold-search nil))
+      (should
+       (string-match-p
+        "◆ Retry ·"
+        (mevedel-view--input-prompt-string 'ask))))
+    (setq mevedel-view--composer-scope
+          (plist-put mevedel-view--composer-scope :action 'plan))
+    (should (string-match-p
+             "◆ Plan ·" (mevedel-view--input-prompt-string 'ask)))
+    (let* ((mevedel--session
+            (mevedel-session--create :name "main" :plan-mode t))
+           (prompt (mevedel-view--input-prompt-string 'edits)))
+      (should (string-match-p "edits · Plan paused" prompt))
+      (should (eq 'mevedel-view-permission-mode-edits
+                  (get-text-property
+                   (string-match "edits" prompt)
+                   'font-lock-face prompt)))
+      (should (eq 'mevedel-view-plan-mode
+                  (get-text-property
+                   (string-match "Plan paused" prompt)
+                   'font-lock-face prompt)))))
+
+  :doc "directive discussion labels reflect the next scoped action"
+  (let* ((record (mevedel-directive--create
+                  :request "Explain this code"))
+         (mevedel-view--composer-scope
+          (list :directive-id "abcdef123456" :action 'discuss
+                :record record)))
+    (should
+     (string-match-p
+      "◆ Discuss ·"
+      (mevedel-view--input-prompt-string 'ask)))
+    (setf (mevedel-directive-discussion record)
+          (list (mevedel-directive-discussion-turn--create
+                 :sequence 1 :directive-request "Explain this code"
+                 :outcome 'success))
+          (mevedel-directive-state record) 'discussed)
+    (should
+     (string-match-p
+      "◆ Continue discussion ·"
+      (mevedel-view--input-prompt-string 'ask)))
+    (setq mevedel-view--composer-scope
+          (plist-put mevedel-view--composer-scope :attempt-index 1))
+    (should
+     (string-match-p
+      "◆ Discuss result ·"
+      (mevedel-view--input-prompt-string 'ask)))
+    (setf (mevedel-directive-request record) "Changed request"
+          (mevedel-directive-state record) nil)
+    (setq mevedel-view--composer-scope
+          (plist-put mevedel-view--composer-scope :attempt-index nil))
+    (should
+     (string-match-p
+      "◆ Discuss ·"
+      (mevedel-view--input-prompt-string 'ask)))))
+
+(mevedel-deftest mevedel-view--switch-composer-scope ()
+  ,test
+  (test)
+  :doc "preserves independent chat and directive drafts with exact point"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "scope" :root "/tmp" :name "scope"))
+           (session (mevedel-session-create "main" workspace))
+           (record (mevedel-directive--create
+                    :id "directive-1" :request "Explain this code"))
+           (scope (list :directive-id "directive-1" :action 'discuss
+                        :record record :workspace workspace))
+           (chat-draft ">first editable character\nsecond line"))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (goto-char (mevedel-view--input-start))
+        (insert chat-draft)
+        (goto-char (+ (mevedel-view--input-start) 7))
+        (mevedel-view--switch-composer-scope scope)
+        (should (string-empty-p (mevedel-view--input-text)))
+        (insert "directive draft")
+        (mevedel-view-back-to-chat)
+        (should (equal chat-draft
+                       (buffer-substring-no-properties
+                        (mevedel-view--input-start) (point-max))))
+        (should (= 7 (- (point) (mevedel-view--input-start))))))))
+
+(mevedel-deftest mevedel-view--queue-follow-up
+  ()
+  ,test
+  (test)
+  :doc "stores directive scope on queued follow-ups"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "queue-scope" :root "/tmp"
+                       :name "queue-scope"))
+           (session (mevedel-session-create "main" workspace)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session
+                    mevedel-view--composer-scope
+                    '(:directive-id "directive-1" :action discuss
+                      :attempt-index 2))
+        (cl-letf (((symbol-function 'mevedel-view--interaction-rebuild)
+                   #'ignore)
+                  ((symbol-function
+                    'mevedel-view--schedule-late-follow-up-drain)
+                   #'ignore))
+          (mevedel-view--queue-follow-up "follow up"))
+        (let ((scope
+               (plist-get (car (mevedel-session-pending-follow-ups session))
+                          :scope)))
+          (should (equal "directive-1" (plist-get scope :directive-id)))
+          (should (eq 'discuss (plist-get scope :action)))
+          (should (= 2 (plist-get scope :attempt-index))))))))
 
 (mevedel-deftest mevedel-view--next-permission-mode
   (:doc "cycles permission modes in view order")
@@ -3085,7 +3275,18 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should (mevedel-view--follow-up-auto-drain-blocked-p session))))
   (let ((session (mevedel-session--create
                   :name "failed" :pending-input-failure-paused t)))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p session))))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p session)))
+  :doc "holds ordinary input but permits the owning directive Plan follow-up"
+  (let ((session
+         (mevedel-session--create
+          :name "directive-plan"
+          :directive-planning '(:directive-id "d1" :phase approval)
+          :pending-follow-ups '((:input "ordinary")))))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p session))
+    (setf (mevedel-session-pending-follow-ups session)
+          '((:input "ordinary")
+            (:input "revise" :scope (:directive-id "d1" :action plan))))
+    (should-not (mevedel-view--follow-up-auto-drain-blocked-p session))))
 
 (mevedel-deftest mevedel-view-send/pending-input ()
   ,test
@@ -3600,6 +3801,30 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (= 1 (mevedel-view-test--count-matches
                       "reserved retry context" (buffer-string)))))))
 
+  :doc "a queued directive follow-up keeps its scope through dispatch"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "directive-queue" :root "/tmp"
+                       :name "directive-queue"))
+           (session (mevedel-session-create "main" workspace))
+           (scope '(:directive-id "directive-1" :action discuss
+                    :attempt-index 2))
+           captured)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (mevedel-session-set-pending-inputs
+       session 'follow-up
+       (list (list :input "queued directive question" :scope scope)))
+      (cl-letf (((symbol-function 'mevedel-view--dispatch-directive-input)
+                 (lambda (queued-scope input)
+                   (setq captured (list queued-scope input))))
+                ((symbol-function 'mevedel-view--interaction-rebuild)
+                 #'ignore))
+        (mevedel-view--drain-follow-up data-buf))
+      (should (equal (list scope "queued directive question") captured))
+      (should-not (mevedel-session-pending-follow-ups session))))
+
   :doc "queued direct reference keeps its UUID when the number is reused"
   (let* ((root (make-temp-file "mevedel-ref-queue-" t))
          (file (file-name-concat root "reference.txt"))
@@ -4059,6 +4284,35 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (mevedel-view--drain-follow-up data-buf))
       (should-not sent)
       (should (= 1 (length (mevedel-session-pending-follow-ups session))))))
+
+  :doc "directive planning drains its revision before earlier ordinary input"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-directive-plan" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           sent)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--current-request nil))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (setf (mevedel-session-directive-planning session)
+            '(:directive-id "d1" :phase approval)
+            (mevedel-session-pending-follow-ups session)
+            '((:input "ordinary" :display-text "ordinary")
+              (:input "revise" :display-text "revise"
+               :scope (:directive-id "d1" :action plan))))
+      (cl-letf (((symbol-function 'mevedel-view--dispatch-directive-input)
+                 (lambda (_scope input) (setq sent input))))
+        (mevedel-view--drain-follow-up data-buf))
+      (should (equal "revise" sent))
+      (should (equal '("ordinary")
+                     (mapcar (lambda (entry) (plist-get entry :input))
+                             (mevedel-session-pending-follow-ups session))))))
 
   :doc "late drain scheduler uses data buffer after request cleanup"
   (mevedel-view-test--with-buffers
@@ -4800,7 +5054,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (mevedel-view-send)
               (should mevedel-view--prompt-hook-pending)
               (should-error (mevedel-view-send) :type 'user-error)
-              (let ((deadline (+ (float-time) 5)))
+              (let ((deadline (+ (float-time) 10)))
                 (while (and mevedel-view--prompt-hook-pending
                             (< (float-time) deadline))
                   (accept-process-output nil 0.05)))

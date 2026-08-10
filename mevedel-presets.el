@@ -2,10 +2,9 @@
 
 ;;; Commentary:
 
-;; Defines the four gptel presets that drive a mevedel session:
+;; Defines the three gptel presets that drive a mevedel session:
 ;; `mevedel-discuss' (read-only exploration), `mevedel-implement'
-;; (full edit access, inherits discuss), `mevedel-revise' (editing
-;; with instruction context, inherits implement), and `mevedel-tutor'
+;; (full edit access, inherits discuss), and `mevedel-tutor'
 ;; (tutoring assistant, inherits discuss).
 ;;
 ;; Each preset assembles tool lists and registers sub-agents buffer-locally at
@@ -39,6 +38,7 @@
                   "mevedel-agents" (&optional preset-name))
 
 ;; `mevedel-chat'
+(declare-function mevedel--directive-capture "mevedel-chat" (request))
 (declare-function mevedel--generate-final-patch
                   "mevedel-chat" (&optional workspace))
 (declare-function mevedel--replace-patch-buffer
@@ -81,8 +81,11 @@
                   (profile &rest keys))
 
 ;; `mevedel-tool-registry'
+(declare-function mevedel-tool-all "mevedel-tool-registry" ())
 (declare-function mevedel-tool-category "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-read-only-p
+                  "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-resolve "mevedel-tool-registry" (specs))
 (declare-function mevedel-tool-resolve-gptel
                   "mevedel-tool-registry" (specs))
@@ -124,7 +127,6 @@
 (defcustom mevedel-action-preset-alist
   '((implement . mevedel-implement)
     (discuss . mevedel-discuss)
-    (revise . mevedel-revise)
     (tutor . mevedel-tutor))
   "Alist mapping actions to presets."
   :group 'mevedel
@@ -151,6 +153,9 @@ Each value contains the raw parent, agent, tool, and variable settings.")
 
 (defvar mevedel-preset--temporary-p nil
   "Non-nil while a preset is applied for one dynamic request only.")
+
+(defvar-local mevedel--directive-read-only-request-p nil
+  "Non-nil while the current directive turn has read-only capability.")
 
 (defconst mevedel-preset--structural-keys
   '(:description :parents :pre :post :backend :model :system :tools :agents
@@ -372,14 +377,8 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
   ;; Read-only preset for discussion/analysis
   (mevedel-define-preset mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
-    :tools (read util (:tool "Bash")
-            (:tool "WriteStdin") (:tool "ListExecutions")
-            (:tool "StopExecution")
-            (:deferred (:tool "Eval"))
-            (:deferred code)
-            (:deferred web)
-            (:deferred elisp))
-    :agents (worker explorer reviewer verifier)
+    :tools (read (:tool "ToolSearch") (:deferred code) (:deferred web))
+    :agents ()
     :system (lambda ()
               (mevedel-system-build-prompt
                'main
@@ -404,16 +403,6 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
                :session mevedel--session
                :refresh-buffer (current-buffer))))
 
-  ;; Revision preset with previous patch context
-  (mevedel-define-preset mevedel-revise
-    :description "Revise previous implementation with full context"
-    :parents (mevedel-implement)
-    :system (lambda ()
-              (mevedel-system-build-prompt
-               'revise
-               :session mevedel--session
-               :refresh-buffer (current-buffer))))
-
   ;; Tutoring preset - guides through hints, never provides solutions
   (mevedel-define-preset mevedel-tutor
     :description "Tutoring preset - guides through hints, never provides solutions"
@@ -432,6 +421,17 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
                'tutor
                :session mevedel--session
                :refresh-buffer (current-buffer)))))
+
+(defun mevedel-preset--read-only-rules ()
+  "Return request rules denying mutation and mutation-capable delegation."
+  (mapcar
+   (lambda (name) (list name :action 'deny))
+   (delete-dups
+    (append
+     '("Agent" "FollowupAgent" "SendMessage")
+     (mapcar
+      #'mevedel-tool-name
+      (cl-remove-if #'mevedel-tool-read-only-p (mevedel-tool-all)))))))
 
 ;;
 ;;; Request-time preset setup
@@ -530,15 +530,28 @@ Has no effect when no extras are registered for PRESET-NAME."
               ((buffer-live-p chat-buffer))
               (workspace (with-current-buffer chat-buffer
                            (mevedel-workspace))))
-    (let* ((directive-uuid (with-current-buffer chat-buffer
-                             mevedel--current-directive-uuid))
+    (let* ((request (or (plist-get info :mevedel-request)
+                        (with-current-buffer chat-buffer
+                          mevedel--current-request)))
            (final-patch (with-current-buffer chat-buffer
-                          (mevedel--generate-final-patch workspace))))
+                          (mevedel--generate-final-patch workspace)))
+           (capture (with-current-buffer chat-buffer
+                      (mevedel--directive-capture request))))
+      (setq info (plist-put info :mevedel-directive-patch final-patch))
+      (setq info
+            (plist-put info :mevedel-directive-capture
+                       (plist-get capture :capture)))
+      (setq info
+            (plist-put info :mevedel-directive-covered-files
+                       (plist-get capture :covered-files)))
+      (setq info
+            (plist-put info :mevedel-directive-gaps
+                       (plist-get capture :gaps)))
+      (setq info
+            (plist-put info :mevedel-directive-untracked-effects
+                       (plist-get capture :untracked-effects)))
+      (setf (gptel-fsm-info fsm) info)
       (when (and final-patch (> (length final-patch) 0))
-        (when directive-uuid
-          (when-let* ((directive (mevedel--find-directive-by-uuid
-                                  directive-uuid)))
-            (overlay-put directive 'mevedel-directive-patch final-patch)))
         (mevedel--replace-patch-buffer final-patch)))))
 
 (defun mevedel-preset--build-handlers (handlers)
@@ -587,9 +600,10 @@ alist with mevedel-specific handlers added:
                                    (buffer-live-p chat-buffer))
                           (with-current-buffer chat-buffer
                             (when mevedel--session
-                              (mevedel-request-begin
-                               mevedel--session
-                               mevedel--current-directive-uuid)
+                              (unless mevedel--current-request
+                                (mevedel-request-begin
+                                 mevedel--session
+                                 mevedel--current-directive-uuid))
                               (when (and mevedel--current-request
                                          (fboundp 'mevedel-request-id))
                                 (setf (mevedel-request-fsm
@@ -606,6 +620,15 @@ alist with mevedel-specific handlers added:
                                          mevedel--current-request)
                                 (mevedel-skills--drain-pending-context
                                  mevedel--current-request))
+                              (when (and mevedel--current-request
+                                         mevedel--directive-read-only-request-p)
+                                (setf
+                                 (mevedel-request-skill-permission-rules
+                                  mevedel--current-request)
+                                 (append
+                                  (mevedel-request-skill-permission-rules
+                                   mevedel--current-request)
+                                  (mevedel-preset--read-only-rules))))
                               (when (fboundp
                                      'mevedel-view-stream-ensure-progress-for-fsm)
                                 (mevedel-view-stream-ensure-progress-for-fsm

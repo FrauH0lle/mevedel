@@ -36,9 +36,9 @@ Single decision function `mevedel-check-permission`. Decision chain:
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
    `get-name` slots
 2. Deny rules (across all buckets — see bucket precedence below)
-3. Active Plan with a tool in the native `edit` group or `Eval`, or active
-   Goal planning/review with a native edit tool -> deny regardless of allow
-   rules or permission mode
+3. Active standalone Plan or directive Planning with a tool in the native
+   `edit` group or `Eval`, or active Goal planning/review with a native edit
+   tool -> deny regardless of allow rules or permission mode
 4. Tool's own `check-permission` slot decides command authority
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
 6. Permission-mode hard deny, if any
@@ -98,6 +98,10 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
 - Step 2 (deny) is absolute — any bucket's `deny` wins.
 - Step 5 (allow/ask) is innermost-first — the first bucket yielding any
   decision wins.
+- Directive discussion installs request-scoped denies for every registered
+  mutation-capable tool and for mutation-capable delegation. These denies are
+  a hard capability ceiling: broader session, workspace, or global allows
+  cannot enable mutation during that discussion request.
 - Goals use the same tool permission policy as ordinary root conversation
   turns. Goal lifecycle state never raises the session permission mode.
 - Standalone Plan approval applies the selected Ask, Edits, or Full Auto mode to

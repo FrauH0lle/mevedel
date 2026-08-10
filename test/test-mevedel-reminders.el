@@ -742,7 +742,13 @@
       (regexp-quote skeleton)
       (funcall (mevedel-reminder-content reminder) session)))
     (setf (mevedel-session-plan-mode session) nil)
-    (should-not (funcall (mevedel-reminder-trigger reminder) session))))
+    (should-not (funcall (mevedel-reminder-trigger reminder) session))
+    (let ((mevedel--current-request
+           (mevedel-request--create :plan-read-only t)))
+      (should (funcall (mevedel-reminder-trigger reminder) session)))
+    (let ((mevedel--agent-invocation
+           (mevedel-agent-invocation--create :plan-read-only t)))
+      (should (funcall (mevedel-reminder-trigger reminder) session)))))
 
 (mevedel-deftest mevedel-reminders-make-full-auto-mode
   (:after-each (mevedel-workspace-clear-registry))

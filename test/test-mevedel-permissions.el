@@ -26,12 +26,29 @@
   (let ((session (mevedel-session--create :name "main" :plan-mode t)))
     (should (mevedel-permission--plan-mode-p session)))
 
+  :doc "keeps a directive planning request read-only after its phase advances"
+  (let ((session (mevedel-session--create :name "main"))
+        (mevedel--current-request
+         (mevedel-request--create :plan-read-only t)))
+    (should (mevedel-permission--plan-mode-p session))
+    (setf (mevedel-session-directive-planning session)
+          '(:directive-id "d1" :phase implementation))
+    (should (mevedel-permission--plan-mode-p session)))
+
   :doc "uses a retained agent's parent session"
   (let ((session (mevedel-session--create :name "main" :plan-mode t)))
     (with-temp-buffer
       (setq-local mevedel--agent-invocation
                   (mevedel-agent-invocation--create
                    :parent-session session))
+      (should (mevedel-permission--plan-mode-p))))
+
+  :doc "uses immutable directive planning authority on a retained agent"
+  (let ((session (mevedel-session--create :name "main")))
+    (with-temp-buffer
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create
+                   :parent-session session :plan-read-only t))
       (should (mevedel-permission--plan-mode-p)))))
 
 

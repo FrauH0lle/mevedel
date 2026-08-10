@@ -552,9 +552,6 @@ present."
 (mevedel-define-prompt-component tutor-role
   :file "prompts/system/tutor.md")
 
-(mevedel-define-prompt-component revise-role
-  :file "prompts/system/revise.md")
-
 (mevedel-define-prompt-component main-tone
   :file "prompts/tones/main.md")
 
@@ -573,17 +570,6 @@ present."
 (mevedel-define-prompt-profile main
   :workspace-aware t
   :components '(main-role
-                main-tone
-                tool-orchestration
-                workspace-config
-                memory
-                environment
-                skills
-                active-goal))
-
-(mevedel-define-prompt-profile revise
-  :workspace-aware t
-  :components '(revise-role
                 main-tone
                 tool-orchestration
                 workspace-config

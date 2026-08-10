@@ -324,6 +324,12 @@ transcript views remain inspection-only. A turn blocked on either queue remains
 active and consumes tree capacity. Interrupting that turn cancels only its own
 queued entries.
 
+Directive planning additionally stamps immutable read-only authority on the
+root request and copies it into every delegated invocation and nested request.
+Those agents retain Plan tool and Bash restrictions after the root workflow
+advances to approval or implementation; mutable session phase is not an
+authority boundary.
+
 Delegated invocation/request rules may narrow authority and may allow ordinary
 known-safe commands, but they cannot authorize dangerous or complex Bash, live
 Eval, protected resources, or full execution escalation. An ordinary sub-agent

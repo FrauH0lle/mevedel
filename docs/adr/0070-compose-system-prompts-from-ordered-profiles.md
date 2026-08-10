@@ -7,14 +7,14 @@ components declare a file, literal text, or dynamic producer; profiles choose
 those components, may add inline file or text components, and define render
 order directly. Workspace-aware profiles must explicitly include workspace
 configuration and environment components, so context cannot disappear through
-implicit defaults. Main, revise, tutor, agent, Bash guardian, and compaction
+implicit defaults. Main, tutor, agent, Bash guardian, and compaction
 prompts use this mechanism. Agent definitions declare inline
 `:system-components`; the rendered string is still frozen when the retained
 agent is spawned.
 
-Role and tone remain separate selectable components. Main and revise share a
-tone, worker/explorer/verifier share a reporting tone, and tutor owns its
-tutoring tone. Memory is selected only for main, revise, tutor, and worker.
+Role and tone remain separate selectable components. Main owns the coding tone,
+worker/explorer/verifier share a reporting tone, and tutor owns its tutoring
+tone. Memory is selected only for main, tutor, and worker.
 Compaction uses an isolated single-component profile.
 
 This supersedes ADR 0021's exclusion of workspace instructions from guardian

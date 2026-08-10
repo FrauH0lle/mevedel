@@ -41,8 +41,21 @@
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 
 ;; `mevedel-chat'
+(declare-function mevedel--directive-action-label "mevedel-chat" (action))
+(declare-function mevedel--directive-session-buffer
+                  "mevedel-chat" (directive workspace))
+(declare-function mevedel--discuss-directive-turn
+                  "mevedel-chat"
+                  (directive message &optional attempt-index callback))
+(declare-function mevedel--request-directive-changes
+                  "mevedel-chat" (directive feedback &optional callback))
+(declare-function mevedel--retry-directive
+                  "mevedel-chat" (directive guidance &optional callback))
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 (defvar mevedel--pending-model-input)
+
+;; `mevedel-directive'
+(declare-function mevedel-directive-actions "mevedel-directive" (directive))
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-start "mevedel-goal"
@@ -79,12 +92,22 @@
 (declare-function mevedel-mentions-expand-user-input
 		  "mevedel-mentions" (text session))
 (declare-function mevedel-mentions-file-paths-in-text
-		  "mevedel-mentions" (text))
+                  "mevedel-mentions" (text))
 (declare-function mevedel-mentions-file-token "mevedel-mentions"
 		  (path))
 (declare-function mevedel-mentions-install "mevedel-mentions" nil)
 (declare-function mevedel-mentions-prepare-user-input
 		  "mevedel-mentions" (text &optional session))
+
+;; `mevedel-overlays'
+(declare-function mevedel--directive-action-context
+                  "mevedel-overlays" (record workspace))
+(declare-function mevedel--directive-record
+                  "mevedel-overlays" (directive))
+(declare-function mevedel--instruction-buffer-workspace
+                  "mevedel-overlays" (buffer))
+(declare-function mevedel--topmost-instruction
+                  "mevedel-overlays" (instruction type))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" nil)
@@ -203,6 +226,11 @@
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
+(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-p "mevedel-structs" (cl-x))
+(declare-function mevedel-directive-plan "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-begin "mevedel-structs"
@@ -222,6 +250,8 @@
 		  "mevedel-structs" (session path))
 (declare-function mevedel-session-clear-dropped-file-grants
 		  "mevedel-structs" (session))
+(declare-function mevedel-session-directive-planning
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-dropped-file-grants
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-enqueue-pending-input
@@ -231,14 +261,6 @@
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-hook-context-pending
 		  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-pending-plan-approval
-		  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs"
-		  (cl-x) t)
-(declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-pop-dropped-file-grants
-		  "mevedel-structs" (session paths))
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-input-delivery-paused-p
@@ -247,13 +269,22 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-input-paused
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-plan-approval
+		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pop-dropped-file-grants
+		  "mevedel-structs" (session paths))
 (declare-function mevedel-session-set-pending-inputs
                   "mevedel-structs" (session category entries))
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x)
 		  t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-state-dir "mevedel-structs"
 		  (workspace))
 (defvar mevedel--agent-invocation nil)
@@ -443,6 +474,34 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
 (defconst mevedel-view--input-prompt "> "
   "Read-only prefix rendered at the start of the input zone.")
 
+(defface mevedel-view-directive-scope
+  '((t :inherit font-lock-keyword-face :weight bold))
+  "Face for directive-scoped composer chrome."
+  :group 'mevedel)
+
+(defface mevedel-view-directive-scope-banner
+  '((((background light))
+     :inherit mevedel-view-directive-scope :background "#eef3fe" :extend t)
+    (((background dark))
+     :inherit mevedel-view-directive-scope :background "#0d1b3d" :extend t)
+    (t :inherit mevedel-view-directive-scope :extend t))
+  "Face for the full-width directive-scope composer banner line."
+  :group 'mevedel)
+
+(defvar-local mevedel-view--composer-scope nil
+  "Current directive composer scope, or nil for ordinary chat.")
+
+(defvar-local mevedel-view--composer-drafts nil
+  "Draft snapshots keyed by chat or directive composer scope.")
+
+(defun mevedel-view-composer-scope-label (&optional scope)
+  "Return a concise label for SCOPE or the current composer scope."
+  (when-let* ((scope (or scope mevedel-view--composer-scope)))
+    (format "directive %s/%s"
+            (substring (plist-get scope :directive-id)
+                       0 (min 8 (length (plist-get scope :directive-id))))
+            (symbol-name (plist-get scope :action)))))
+
 (defun mevedel-view--effective-permission-mode ()
   "Return the permission mode to apply to the current view buffer."
   (require 'mevedel-permissions)
@@ -488,43 +547,86 @@ Nil and unknown modes are treated as `ask'."
 The prompt starts with a blank separator line so status and interaction
 rows remain visually distinct from the editable composer."
   (let ((mode (or mode (mevedel-view--effective-permission-mode))))
-    (if mevedel-view--pending-input-edit
-        (propertize
-         (format "\n[Editing %s] %s"
-                 (plist-get mevedel-view--pending-input-edit :label)
-                 mevedel-view--input-prompt)
-         'font-lock-face 'mevedel-view-input-prompt)
-      (if (mevedel-view--plan-mode-p)
-        (pcase-let* ((`(,label ,_) (mevedel-view--permission-mode-display mode))
-                     (text (format "\n[Plan · %s] %s"
-                                   label mevedel-view--input-prompt)))
-          (add-text-properties
-           0 (length text)
-           '(font-lock-face mevedel-view-input-prompt)
-           text)
-          (add-text-properties
-           2 (+ 9 (length label))
-           '(font-lock-face mevedel-view-plan-mode)
-           text)
-          text)
-      (if (eq mode 'ask)
-        (propertize (concat "\n" mevedel-view--input-prompt)
-                    'font-lock-face 'mevedel-view-input-prompt)
-        (pcase-let* ((`(,label ,face)
-                      (mevedel-view--permission-mode-display mode))
-                     (text (format "\n[%s] %s"
-                                   label mevedel-view--input-prompt))
-                     (label-start 2)
-                     (label-end (+ label-start (length label))))
-          (add-text-properties
-           0 (length text)
-           '(font-lock-face mevedel-view-input-prompt)
-           text)
-          (add-text-properties
-           label-start label-end
-           `(font-lock-face ,face)
-           text)
-          text))))))
+    (if mevedel-view--composer-scope
+        (let* ((record (plist-get mevedel-view--composer-scope :record))
+               (action (plist-get mevedel-view--composer-scope :action))
+               (action-label
+                (mevedel--directive-action-label
+                 (if (eq action 'discuss)
+                     (cond
+                      ((plist-get mevedel-view--composer-scope :attempt-index)
+                       'discuss-result)
+                      ((and record
+                            (memq 'continue-discussion
+                                  (mevedel-directive-actions record)))
+                       'continue-discussion)
+                      (t 'discuss))
+                   action)))
+               (request
+                (and record
+                     (truncate-string-to-width
+                      (replace-regexp-in-string
+                       "[ \t\n\r]+" " "
+                      (mevedel-directive-request record))
+                      80 nil nil "…")))
+               (request-label
+                (or request
+                    (plist-get mevedel-view--composer-scope :directive-id)))
+               (permission-display
+                (mevedel-view--permission-mode-display mode))
+               (permission-label (car permission-display))
+               (permission-face (cadr permission-display)))
+          (concat
+           "\n"
+           (propertize (format "◆ %s · %s\n" action-label request-label)
+                       'font-lock-face 'mevedel-view-directive-scope-banner)
+           (propertize "  isolated from chat · " 'font-lock-face 'shadow)
+           (propertize permission-label 'font-lock-face permission-face)
+           (when (mevedel-view--plan-mode-p)
+             (concat
+              (propertize " · " 'font-lock-face 'shadow)
+              (propertize "Plan paused"
+                          'font-lock-face 'mevedel-view-plan-mode)))
+           (propertize " · C-c C-k Back\n" 'font-lock-face 'shadow)
+           (propertize "◆ > "
+                       'font-lock-face 'mevedel-view-directive-scope)))
+      (if mevedel-view--pending-input-edit
+          (propertize
+           (format "\n[Editing %s] %s"
+                   (plist-get mevedel-view--pending-input-edit :label)
+                   mevedel-view--input-prompt)
+           'font-lock-face 'mevedel-view-input-prompt)
+	(if (mevedel-view--plan-mode-p)
+            (pcase-let* ((`(,label ,_) (mevedel-view--permission-mode-display mode))
+			 (text (format "\n[Plan · %s] %s"
+                                       label mevedel-view--input-prompt)))
+              (add-text-properties
+               0 (length text)
+               '(font-lock-face mevedel-view-input-prompt)
+               text)
+              (add-text-properties
+               2 (+ 9 (length label))
+               '(font-lock-face mevedel-view-plan-mode)
+               text)
+              text)
+	  (if (eq mode 'ask)
+              (propertize (concat "\n" mevedel-view--input-prompt)
+			  'font-lock-face 'mevedel-view-input-prompt)
+            (pcase-let* ((`(,label ,face)
+			  (mevedel-view--permission-mode-display mode))
+			 (text (format "\n[%s] %s"
+                                       label mevedel-view--input-prompt))
+			 (label-start 2)
+			 (label-end (+ label-start (length label))))
+              (add-text-properties
+               0 (length text)
+               '(font-lock-face mevedel-view-input-prompt)
+               text)
+              (add-text-properties
+               label-start label-end
+               `(font-lock-face ,face)
+               text)
+              text)))))))
 
 
 ;;
@@ -585,11 +687,15 @@ composer body.")
     t))
 
 (defun mevedel-view-cancel-composer-state ()
-  "Cancel the armed session fork or the active pending-input edit."
+  "Cancel the active composer mode, including directive scope."
   (interactive)
-  (if mevedel-view--armed-session-fork
-      (mevedel-view-cancel-session-fork)
-    (mevedel-pending-inputs-cancel-edit)))
+  (cond
+   (mevedel-view--armed-session-fork
+    (mevedel-view-cancel-session-fork))
+   (mevedel-view--pending-input-edit
+    (mevedel-pending-inputs-cancel-edit))
+   (mevedel-view--composer-scope
+    (mevedel-view-back-to-chat))))
 
 (defun mevedel-view--arm-session-fork (fork-type)
   "Arm FORK-TYPE from the settled assistant response at point."
@@ -1051,6 +1157,8 @@ ARG is passed through from the interactive prefix."
 (defun mevedel-view-composer-initialize ()
   "Initialize composer editing support in the current chat view."
   (unless mevedel-view--agent-transcript-p
+    (setq mevedel-view--composer-scope nil
+          mevedel-view--composer-drafts (make-hash-table :test #'equal))
     (require 'mevedel-mentions)
     (require 'mevedel-skills-ui)
     (require 'mevedel-transcript)
@@ -1358,6 +1466,94 @@ When FORCE is non-nil, replace the current draft unconditionally."
             (+ start (plist-get snapshot :point-offset))))
       t)))
 
+(defun mevedel-view--composer-scope-key (&optional scope)
+  "Return the draft key for SCOPE or ordinary chat."
+  (if-let* ((scope (or scope mevedel-view--composer-scope)))
+      (list (plist-get scope :directive-id)
+            (plist-get scope :action)
+            (plist-get scope :attempt-index))
+    'chat))
+
+(defun mevedel-view--switch-composer-scope (scope)
+  "Switch to SCOPE, preserving separate composer drafts."
+  (let ((session (mevedel-view--session)))
+    (unless session
+      (user-error "No active session for composer scope"))
+    (puthash (mevedel-view--composer-scope-key)
+             (mevedel-view--composer-snapshot session)
+             mevedel-view--composer-drafts)
+    (setq mevedel-view--composer-scope scope)
+    (mevedel-view-refresh-input-prompt)
+    (mevedel-view--restore-composer-snapshot
+     (or (gethash (mevedel-view--composer-scope-key scope)
+                  mevedel-view--composer-drafts)
+         '(:text "" :point-offset 0 :dropped-file-grants nil))
+     session t)
+    (force-mode-line-update t)
+    scope))
+
+(defun mevedel-view-back-to-chat ()
+  "Leave directive scope and restore the ordinary chat draft."
+  (interactive)
+  (when mevedel-view--composer-scope
+    (mevedel-view--switch-composer-scope nil)
+    (message "mevedel: composer returned to chat scope")))
+
+(defun mevedel-view--directive-record (directive workspace)
+  "Resolve DIRECTIVE to a workspace record and WORKSPACE."
+  (require 'mevedel-overlays)
+  (cond
+   ((overlayp directive)
+    (let* ((owner (mevedel--topmost-instruction directive 'directive))
+           (workspace
+            (mevedel--instruction-buffer-workspace (overlay-buffer owner))))
+      (list (mevedel--directive-record owner) workspace)))
+   ((and workspace (mevedel-directive-p directive)
+         (memq directive (mevedel-workspace-directives workspace)))
+    (list directive workspace))
+   (t (user-error "No directive selected"))))
+
+(defun mevedel-view-enter-directive-scope
+    (directive action &optional attempt-index workspace)
+  "Open DIRECTIVE's shared session view in sticky ACTION scope."
+  (unless (memq action '(discuss plan request-changes retry))
+    (error "Unknown directive composer action: %S" action))
+  (pcase-let* ((`(,record ,workspace)
+                (mevedel-view--directive-record directive workspace))
+               (actions (mevedel-directive-actions record)))
+    (unless (pcase action
+              ('discuss
+               (or (memq 'discuss actions)
+                   (memq 'continue-discussion actions)
+                   (memq 'discuss-result actions)))
+              ('plan
+               (memq (plist-get (mevedel-directive-plan record) :status)
+                     '(draft proposed)))
+              (_ (memq action actions)))
+      (user-error "Directive action is not available: %s"
+                  (mevedel--directive-action-label action)))
+    (let* ((data-buffer
+            (car (mevedel--directive-session-buffer record workspace)))
+           (view-buffer
+            (buffer-local-value 'mevedel--view-buffer data-buffer))
+           (scope
+            (list :directive-id (mevedel-directive-id record)
+                  :action action
+                  :attempt-index
+                  (or attempt-index
+                      (and (eq action 'discuss)
+                           (memq 'discuss-result actions)
+                           (length (mevedel-directive-attempts record))))
+                  :record record
+                  :workspace workspace)))
+      (unless (buffer-live-p view-buffer)
+        (error "Directive session has no live view"))
+      (with-current-buffer view-buffer
+        (mevedel-view--switch-composer-scope scope)
+        (goto-char (point-max)))
+      (pop-to-buffer view-buffer)
+      view-buffer)))
+
 (defun mevedel-view--clear-input ()
   "Clear the user's composer text, leaving the prompt in place."
   (mevedel-view--ensure-interactive-chat-view)
@@ -1405,6 +1601,15 @@ When FORCE is non-nil, replace the current draft unconditionally."
   (when-let* ((sess (or session (mevedel-view--session))))
     (or (mevedel-session-pending-input-delivery-paused-p sess)
         (mevedel-session-pending-plan-approval sess)
+        (when-let* ((workflow (mevedel-session-directive-planning sess)))
+          (not
+           (cl-find-if
+            (lambda (entry)
+              (let ((scope (plist-get entry :scope)))
+                (and (eq (plist-get scope :action) 'plan)
+                     (equal (plist-get scope :directive-id)
+                            (plist-get workflow :directive-id)))))
+            (mevedel-session-pending-follow-ups sess))))
         (plist-get (mevedel-session-plan-metadata sess)
                    :implementation-retry)
         (mevedel-view--reserved-goal-handoff-id sess)
@@ -1424,6 +1629,7 @@ When FORCE is non-nil, replace the current draft unconditionally."
 (defun mevedel-view--occupied-root-workflow-p (session)
   "Return non-nil when SESSION owns work that makes later input a follow-up."
   (or (mevedel-session-pending-plan-approval session)
+      (mevedel-session-directive-planning session)
       (plist-get (mevedel-session-plan-metadata session)
                  :implementation-retry)
       (mevedel-view--reserved-goal-handoff-id session)
@@ -1461,8 +1667,12 @@ When FORCE is non-nil, replace the current draft unconditionally."
       (cl-incf index)
       (push (format "  %d. %s"
                     index
-                    (mevedel-view--pending-input-preview
-                     (mevedel-view--pending-input-text entry)))
+                    (concat
+                     (when-let* ((scope (plist-get entry :scope)))
+                       (format "[◆ %s] "
+                               (mevedel-view-composer-scope-label scope)))
+                     (mevedel-view--pending-input-preview
+                      (mevedel-view--pending-input-text entry))))
             lines))
     (when (> (length entries) 3)
       (push (format "  %d more" (- (length entries) 3)) lines))
@@ -1511,6 +1721,7 @@ When FORCE is non-nil, replace the current draft unconditionally."
             (mevedel-session-enqueue-pending-input
              session 'follow-up
              (list :input input
+                   :scope (mevedel-view--queued-scope)
                    :dropped-file-grants dropped-file-grants
                    :queued-at-time (float-time)
                    :queued-at-goal-id
@@ -2070,7 +2281,9 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
       (when (buffer-local-value 'mevedel-session--read-only-mode
                                 mevedel--data-buffer)
         (user-error "Session is open read-only (another host holds the lock)"))
-      (let ((input (mevedel-view--bind-input-mentions session)))
+      (let ((input (if mevedel-view--composer-scope
+                       (mevedel-view--input-text)
+                     (mevedel-view--bind-input-mentions session))))
         (when (string-empty-p input)
           (user-error "Nothing to send"))
         (when (mevedel-skills--parse-slash-line input)
@@ -2160,6 +2373,58 @@ SNAPSHOT is the exact Source composer state transferred on publication."
            binding copy))))
     copy))
 
+(defun mevedel-view--queued-scope (&optional scope)
+  "Return the serializable queue identity for directive SCOPE."
+  (when-let* ((scope (or scope mevedel-view--composer-scope)))
+    (list :directive-id (plist-get scope :directive-id)
+          :action (plist-get scope :action)
+          :attempt-index (plist-get scope :attempt-index))))
+
+(defun mevedel-view--dispatch-directive-input (scope input)
+  "Dispatch directive-scoped INPUT according to SCOPE."
+  (let* ((session (mevedel-view--session))
+         (workspace (mevedel-session-workspace session))
+         (id (plist-get scope :directive-id))
+         (record
+          (or (and (mevedel-directive-p (plist-get scope :record))
+                   (plist-get scope :record))
+              (cl-find id (mevedel-workspace-directives workspace)
+                       :key #'mevedel-directive-id :test #'equal))))
+    (unless record
+      (user-error "Directive no longer exists: %s" id))
+    (let ((directive
+           (plist-get
+            (mevedel--directive-action-context record workspace)
+            :directive)))
+      (pcase (plist-get scope :action)
+        ('discuss
+         (mevedel--discuss-directive-turn
+          directive input (plist-get scope :attempt-index)))
+        ('plan
+         (require 'mevedel-directive-plan)
+         (mevedel-directive-plan-continue directive input))
+        ('request-changes
+         (mevedel--request-directive-changes directive input))
+        ('retry
+         (mevedel--retry-directive directive input))
+        (_ (error "Unknown directive composer action: %S"
+                  (plist-get scope :action)))))))
+
+(defun mevedel-view--send-directive-input (input)
+  "Send INPUT in the current sticky directive scope."
+  (let ((session (mevedel-view--session)))
+    (when (or (buffer-local-value 'mevedel--current-request
+                                  mevedel--data-buffer)
+              (and (mevedel-view--occupied-root-workflow-p session)
+                   (not (eq (plist-get mevedel-view--composer-scope :action)
+                            'plan))))
+      (user-error "The workflow is occupied -- use C-c TAB to queue this directive follow-up"))
+    (when (mevedel-skills--parse-slash-line input)
+      (user-error "Slash commands are unavailable in directive scope"))
+    (mevedel-view--dispatch-directive-input mevedel-view--composer-scope input)
+    (mevedel-view-history-add input)
+    (mevedel-view--clear-input)))
+
 (defun mevedel-view-send ()
   "Send the current composer text to the LLM via the data buffer.
 Extracts text from the input zone, plans all bound `$skill' mentions,
@@ -2189,12 +2454,14 @@ their local dispatch path."
                                       mevedel--data-buffer))
          (snapshot (and session
                         (mevedel-view--composer-snapshot session)))
-         (input (if session
+         (input (if (and session (not mevedel-view--composer-scope))
                     (mevedel-view--bind-input-mentions session)
                   (mevedel-view--input-text))))
     (when (string-empty-p input)
       (user-error "Nothing to send"))
-    (let* ((slash-parsed (mevedel-skills--parse-slash-line input))
+    (if mevedel-view--composer-scope
+        (mevedel-view--send-directive-input input)
+      (let* ((slash-parsed (mevedel-skills--parse-slash-line input))
            (fork-target mevedel-view--armed-session-fork)
            (active-request
             (buffer-local-value 'mevedel--current-request
@@ -2306,7 +2573,7 @@ their local dispatch path."
               (mevedel-view--submit-planned-input
                input
                (lambda ()
-                 (mevedel-view-history-add input))))))))))
+                 (mevedel-view-history-add input)))))))))))
   ;; Accepted sends clear the draft and land at the new composer end.
   ;; Rejected sends preserve the exact input-relative point.
   (unless (mevedel-view--point-in-input-region-p)
@@ -2627,8 +2894,20 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                            session))
                      (string-empty-p (mevedel-view--input-text)))
             (when-let* ((queue (mevedel-view--pending-follow-ups session)))
-              (let* ((entry (car queue))
+              (let* ((workflow (mevedel-session-directive-planning session))
+                     (entry
+                      (if workflow
+                          (cl-find-if
+                           (lambda (candidate)
+                             (let ((scope (plist-get candidate :scope)))
+                               (and (eq (plist-get scope :action) 'plan)
+                                    (equal (plist-get scope :directive-id)
+                                           (plist-get workflow
+                                                      :directive-id)))))
+                           queue)
+                        (car queue)))
                      (input (mevedel-view--pending-input-text entry))
+                     (scope (plist-get entry :scope))
                      (submission (plist-get entry :submission))
                      (dropped-file-grants
                       (plist-get entry :dropped-file-grants)))
@@ -2657,25 +2936,36 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                             (and (mevedel-session-goal session)
                                  (mevedel-goal-id
                                   (mevedel-session-goal session)))))
-                         (when (eq entry
-                                   (car (mevedel-view--pending-follow-ups
-                                         session)))
-                           (mevedel-view--set-pending-follow-ups
-                            (cdr (mevedel-view--pending-follow-ups session))
-                            session))
+                         (mevedel-view--set-pending-follow-ups
+                          (delq entry
+                                (mevedel-view--pending-follow-ups session))
+                          session)
                          (mevedel-view--interaction-rebuild))))
-                  (if submission
-                      (mevedel-view--dispatch-prepared-outcome
-                       submission data-buffer
-                       :before-send before-send
-                       :after-insert after-insert
-                       :on-block (lambda ()
-                                   (mevedel-view--interaction-rebuild)))
+                  (cond
+                   (scope
+                    (condition-case err
+                        (progn
+                          (funcall before-send)
+                          (mevedel-view--dispatch-directive-input scope input)
+                          (funcall after-insert))
+                      (error
+                       (mevedel-view--interaction-rebuild)
+                       (message
+                        "mevedel: queued directive follow-up failed: %s"
+                        (error-message-string err)))))
+                   (submission
+                    (mevedel-view--dispatch-prepared-outcome
+                     submission data-buffer
+                     :before-send before-send
+                     :after-insert after-insert
+                     :on-block (lambda ()
+                                 (mevedel-view--interaction-rebuild))))
+                   (t
                     (mevedel-view--submit-planned-input
                      input before-send
                      (lambda ()
                        (mevedel-view--interaction-rebuild))
-                     nil after-insert)))))))))))
+                     nil after-insert))))))))))))
 
 (defun mevedel-view--run-follow-up-drain (data-buffer)
   "Drain one pending follow-up for DATA-BUFFER if it is live."

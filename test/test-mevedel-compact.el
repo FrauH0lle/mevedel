@@ -2749,7 +2749,34 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should (equal "prepared"
                      (mevedel--compact-run-state-prepared-summary state)))
       (should (eq ready
-                  (mevedel--compact-run-state-summary-ready state))))))
+                  (mevedel--compact-run-state-summary-ready state)))))
+
+  :doc "omits complete directive turns from summarizer history"
+  (with-temp-buffer
+    (insert "ordinary before\n")
+    (insert (mevedel--format-hook-audit-record
+             '(:type directive-turn-boundary :edge start
+               :directive-id "d1" :action discuss :turn 2)))
+    (insert "directive prompt\ndirective answer\n")
+    (insert (mevedel--format-hook-audit-record
+             '(:type directive-turn-boundary :edge end
+               :directive-id "d1" :action discuss :turn 2
+               :outcome success :sequence 1)))
+    (insert "ordinary after\n")
+    (let ((state
+           (mevedel--compact-run-state-create
+            :aggressive t
+            :target '(:body-start 1 :invocation root))))
+      (cl-letf (((symbol-function 'mevedel--compact-prompt)
+                 (lambda (&rest _) "system")))
+        (mevedel--compact-run-prepare
+         state (point-max) '(:summary-policy policy)
+         nil nil "prepared" #'identity))
+      (let ((history (mevedel--compact-run-state-old-content state)))
+        (should (string-match-p "ordinary before" history))
+        (should (string-match-p "ordinary after" history))
+        (should-not (string-match-p "directive prompt" history))
+        (should-not (string-match-p "directive answer" history))))))
 
 (mevedel-deftest mevedel--compact-run ()
   ,test
@@ -3919,7 +3946,64 @@ missing or zero prompt-side usage cannot become the active baseline"
             (mevedel-compact-tail-turns 2)
             (mevedel-compact-tail-budget 0.25))
         (should (= (mevedel--compact-tail-start (point-max) nil)
-                   u2-start))))))
+                   u2-start)))))
+
+  :doc "retains a directive boundary pair when its turn enters the tail"
+  (with-temp-buffer
+    (insert "u1\n")
+    (let ((response-start (point)))
+      (insert "a1\n")
+      (put-text-property response-start (point) 'gptel 'response))
+    (let ((boundary-start (point)))
+      (insert (mevedel--format-hook-audit-record
+               '(:type directive-turn-boundary :edge start
+                 :directive-id "d1" :action discuss :turn 2)))
+      (insert "directive prompt\n")
+      (let ((response-start (point)))
+        (insert "directive answer\n")
+        (put-text-property response-start (point) 'gptel 'response))
+      (insert (mevedel--format-hook-audit-record
+               '(:type directive-turn-boundary :edge end
+                 :directive-id "d1" :action discuss :turn 2
+                 :outcome success :sequence 1)))
+      (insert "u3\n")
+      (let ((response-start (point)))
+        (insert "a3\n")
+        (put-text-property response-start (point) 'gptel 'response))
+      (let ((mevedel-compact-context-limit 200000)
+            (mevedel-compact-tail-turns 2)
+            (mevedel-compact-tail-budget 0.25))
+        (should (= boundary-start
+                   (mevedel--compact-tail-start (point-max) nil)))))))
+
+(mevedel-deftest mevedel--compact-rebuild-prompt-buffer ()
+  ,test
+  (test)
+  :doc "reapplies directive context projection after rebuilding the prompt"
+  (let ((source (generate-new-buffer " *compact-source*"))
+        (prompt (generate-new-buffer " *compact-prompt*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer source
+            (insert "ordinary\n")
+            (insert (mevedel--format-hook-audit-record
+                     '(:type directive-turn-boundary :edge start
+                       :directive-id "d1" :action discuss :turn 2)))
+            (insert "directive body\n")
+            (insert (mevedel--format-hook-audit-record
+                     '(:type directive-turn-boundary :edge end
+                       :directive-id "d1" :action discuss :turn 2
+                       :outcome success :sequence 1))))
+          (with-current-buffer prompt
+            (mevedel--compact-rebuild-prompt-buffer
+             prompt source nil nil nil)
+            (goto-char (point-min))
+            (should-not (get-text-property (point) 'gptel))
+            (search-forward "directive body")
+            (should (eq 'ignore (get-text-property (match-beginning 0)
+                                                    'gptel)))))
+      (kill-buffer source)
+      (kill-buffer prompt))))
 
 (mevedel-deftest mevedel--compact-pending-text-from-prompt-buffer ()
   ,test

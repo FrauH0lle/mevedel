@@ -79,6 +79,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-plan-read-only
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-require-path
                   "mevedel-agents" (invocation))
 (declare-function mevedel-agent-invocation-runtime-execution-results
@@ -106,6 +108,7 @@
 (declare-function mevedel-agent-invocation-transcript-status
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+(declare-function mevedel-plan-read-only-request-p "mevedel-agents" ())
 (defvar mevedel-agent-task-path-property)
 
 ;; `mevedel-execution'
@@ -151,6 +154,7 @@
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 
 ;; `mevedel-telemetry'
@@ -825,7 +829,9 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
           (mevedel-agent-invocation-parent-session invocation) session
           (mevedel-agent-invocation-parent-data-buffer invocation) parent-buffer
           (mevedel-agent-invocation-parent-turn invocation)
-          (1+ (or (and session (mevedel-session-turn-count session)) 0))
+          (mevedel-current-turn session)
+          (mevedel-agent-invocation-plan-read-only invocation)
+          (mevedel-plan-read-only-request-p)
           (mevedel-agent-invocation-parent-tool-use-id invocation)
           parent-tool-use-id
           (mevedel-agent-invocation-sandbox-summary-cell invocation)

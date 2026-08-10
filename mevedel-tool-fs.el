@@ -278,11 +278,16 @@ session file history."
                        mevedel--current-request))
            (missing (make-symbol "missing")))
       (when (eq missing (gethash abs-path snapshots missing))
-        (let ((original (when (file-exists-p abs-path)
-                          (with-temp-buffer
-                            (insert-file-contents abs-path)
-                            (buffer-string)))))
-          (puthash abs-path original snapshots))))))
+        (condition-case err
+            (let ((original (when (file-exists-p abs-path)
+                              (with-temp-buffer
+                                (insert-file-contents abs-path)
+                                (buffer-string)))))
+              (puthash abs-path original snapshots))
+          (error
+           (puthash abs-path
+                    (list :gap (error-message-string err))
+                    snapshots)))))))
 
 
 ;;

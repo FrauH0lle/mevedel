@@ -88,6 +88,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-plan-read-only
+                  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-defer-steering-p
@@ -113,10 +115,13 @@
                   "mevedel-skills-invoke" (session records))
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-plan-read-only
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-activate-dropped-file-grants
                   "mevedel-structs" (session paths))
 (declare-function mevedel-session-pending-input-delivery-paused-p
                   "mevedel-structs" (session))
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 
 ;; `mevedel-view-interaction'
@@ -189,7 +194,16 @@
                   (or (and (equal name "UpdateGoal")
                            (not active-root-goal-p))
                       (and session
-                           (mevedel-session-plan-mode session)
+                           (or (mevedel-session-plan-mode session)
+                               (and (buffer-live-p buffer)
+                                    (buffer-local-value
+                                     'mevedel--current-request buffer)
+                                    (mevedel-request-plan-read-only
+                                     (buffer-local-value
+                                      'mevedel--current-request buffer)))
+                               (and invocation
+                                    (mevedel-agent-invocation-plan-read-only
+                                     invocation)))
                            (when-let* ((registered
                                        (mevedel-tool-get name)))
                              (or (equal name "Eval")

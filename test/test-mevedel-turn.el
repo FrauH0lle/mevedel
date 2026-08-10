@@ -213,12 +213,12 @@
             (should (eq request (nth 4 failure)))))
       (kill-buffer chat-buf))))
 
-(mevedel-deftest mevedel--turn-increment
+(mevedel-deftest mevedel--turn-commit
   (:before-each (mevedel-workspace-clear-registry)
    :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "increments the request buffer session turn count"
+  :doc "commits the request's reserved turn exactly once"
   (let* ((ws (mevedel-workspace-get-or-create
               'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
@@ -227,9 +227,27 @@
     (unwind-protect
         (progn
           (with-current-buffer chat-buf
-            (setq-local mevedel--session session))
-          (dotimes (_ 3)
-            (mevedel--turn-increment fsm))
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create
+                         :session session :turn 1)))
+          (mevedel--turn-commit fsm)
+          (should (= 1 (mevedel-session-turn-count session)))
+          (should-error (mevedel--turn-commit fsm) :type 'error))
+      (kill-buffer chat-buf)))
+
+  :doc "rejects drift between the committed and reserved clocks"
+  (let* ((session (mevedel-session--create :turn-count 3))
+         (chat-buf (generate-new-buffer " *mevedel-turn-drift*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create
+                         :session session :turn 5)))
+          (should-error (mevedel--turn-commit fsm) :type 'error)
           (should (= 3 (mevedel-session-turn-count session))))
       (kill-buffer chat-buf))))
 
@@ -356,7 +374,7 @@
           (with-current-buffer chat-buf
             (setq-local mevedel--current-request 'live))
           (cl-letf (((symbol-function 'display-warning) #'ignore)
-                    ((symbol-function 'mevedel--turn-increment)
+                    ((symbol-function 'mevedel--turn-commit)
                      (lambda (_fsm) (push 'turn events)))
                     ((symbol-function 'mevedel--compact-record-token-baseline)
                      (lambda (_fsm) (push 'baseline events)))
@@ -402,7 +420,7 @@
   :doc "errors persist once while aborts skip autosave and follow-up drainage"
   (let (events drained)
     (cl-letf (((symbol-function 'display-warning) #'ignore)
-              ((symbol-function 'mevedel--turn-increment)
+              ((symbol-function 'mevedel--turn-commit)
                (lambda (_fsm) (push 'turn events)))
               ((symbol-function 'mevedel--compact-record-token-baseline)
                (lambda (_fsm) (push 'baseline events)))
@@ -497,7 +515,7 @@
             (setq-local mevedel--current-request request))
           (cl-letf (((symbol-function 'display-warning) #'ignore)
                     ((symbol-function 'mevedel-telemetry-record) #'ignore)
-                    ((symbol-function 'mevedel--turn-increment) #'ignore)
+                    ((symbol-function 'mevedel--turn-commit) #'ignore)
                     ((symbol-function 'mevedel--turn-record-settlement)
                      #'ignore)
                     ((symbol-function

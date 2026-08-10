@@ -86,7 +86,8 @@ recommends those elements while leaving Codex room to choose the next action.
 - Find a better folder for the tool description markdown files
 - Ensure all tools have the examples and their descriptions in markdown files
 
-- 
+- implement a `/btw` command which opens a side chat
+  - should this be purely temporary? Would make it easier or?
 
 ## Entry format
 
