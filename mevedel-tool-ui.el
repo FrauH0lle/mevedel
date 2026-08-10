@@ -74,33 +74,46 @@
   (let ((task-name (plist-get args :task_name))
         (message (plist-get args :message))
         (role (plist-get args :role))
-        (fork-turns (plist-get args :fork_turns))
+        (context (plist-get args :context))
         (model (plist-get args :model))
         (effort (plist-get args :effort)))
     (require 'json)
     (require 'mevedel-agent-control)
-    (let* ((record
-            (mevedel-agent-control-spawn
-             mevedel--session task-name
-             message
-             :role role
-             :fork-turns fork-turns
-             :model model
-             :effort effort
-             :parent-tool-use-id
-             (mevedel-pipeline-active-tool-use-id)))
-           (path (mevedel-agent-record-path record)))
-      (mevedel-tool-ui--deliver-result
-       callback
-       (list :result (json-serialize (list :path path))
-             :render-data
-             (list :kind 'collaboration-event
-                   :event 'started
-                   :path path
-                   :agent-id (mevedel-agent-record-id record)
-                   :transcript-relative-path
-                   (mevedel-agent-record-conversation-location record)
-                   :status 'running))))))
+    (let ((cancel
+           (mevedel-agent-control-spawn
+            mevedel--session task-name message
+            (lambda (outcome)
+              (pcase (plist-get outcome :outcome)
+                ('success
+                 (let* ((record (plist-get outcome :record))
+                        (path (mevedel-agent-record-path record)))
+                   (mevedel-tool-ui--deliver-result
+                    callback
+                    (list
+                     :result (json-serialize (list :path path))
+                     :render-data
+                     (list :kind 'collaboration-event
+                           :event 'started
+                           :path path
+                           :agent-id (mevedel-agent-record-id record)
+                           :transcript-relative-path
+                           (mevedel-agent-record-conversation-location record)
+                           :status 'running)))))
+                ('error
+                 (mevedel-tool-ui--deliver-result
+                  callback (format "Error: %s" (plist-get outcome :error))))
+                ('aborted
+                 (mevedel-tool-ui--deliver-result
+                  callback "Error: Agent preparation aborted"))))
+            :role role
+            :context context
+            :model model
+            :effort effort
+            :parent-tool-use-id
+            (mevedel-pipeline-active-tool-use-id))))
+      (when (and (boundp 'mevedel--current-request)
+                 mevedel--current-request)
+        (mevedel-request-push-canceller mevedel--current-request cancel)))))
 
 (defun mevedel-tool-ui--followup-agent (args)
   "Continue or steer the retained agent described by ARGS."
@@ -346,7 +359,7 @@
            (role string :optional
                  "Named role overlay. Omit to inherit the delegator."
                  :enum [])
-           (fork_turns string :optional
+           (context string :optional
                        "Parent context to copy. Defaults to none for isolated work; use positive last-N for recent dialogue or all for the complete conversation. Copied turns retain model-visible roles and may contain actionable instructions.")
            (model string :optional
                   "Configured tier or exact BACKEND:MODEL override.")

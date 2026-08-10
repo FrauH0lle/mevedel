@@ -1726,7 +1726,8 @@ allowed-tools:
       (cl-letf (((symbol-function 'mevedel-agent-get)
                  (lambda (_) agent))
                 ((symbol-function 'mevedel-agent-control-spawn)
-                 (lambda (actual-session task-name message &rest keys)
+                 (lambda (actual-session task-name message callback
+                          &rest keys)
                    (let* ((path (concat "/root/" task-name))
                           (retained
                            (mevedel-agent-record--create
@@ -1743,11 +1744,13 @@ allowed-tools:
                                  :task-name task-name
                                  :message message
                                  :keys keys))
+                     (funcall callback
+                              (list :outcome 'success :record retained))
                      (funcall
                       (plist-get keys :result-handler)
                       (list :type 'RESULT :sender path :recipient "/root"
                             :outcome 'completed :payload "done"))
-                     retained))))
+                     #'ignore))))
         (mevedel-skills-dispatch-prepared-fork
          prepared (lambda (value) (setq outcome value)))))
     (should (eq session (plist-get dispatched :session)))
@@ -1755,7 +1758,7 @@ allowed-tools:
     (should (equal "prepared body" (plist-get dispatched :message)))
     (let ((keys (plist-get dispatched :keys)))
       (should (eq agent (plist-get keys :agent)))
-      (should (equal "none" (plist-get keys :fork-turns)))
+      (should (equal "none" (plist-get keys :context)))
       (should (equal '(("Read" :action allow))
                      (plist-get keys :skill-permission-rules)))
       (should (equal '(:tier fast) (plist-get keys :model)))
@@ -1783,14 +1786,18 @@ allowed-tools:
       (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) agent))
                 ((symbol-function 'mevedel-agent-control-spawn)
-                 (lambda (_session _task _message &rest keys)
+                 (lambda (_session _task _message callback &rest keys)
+                   (let ((record
+                          (mevedel-agent-record--create
+                           :path "/root/skill_demo" :activity 'idle)))
+                     (funcall callback
+                              (list :outcome 'success :record record)))
                    (funcall
                     (plist-get keys :result-handler)
                     '(:type RESULT :sender "/root/skill_demo"
                       :recipient "/root" :outcome interrupted
                       :payload "Stopped"))
-                   (mevedel-agent-record--create
-                    :path "/root/skill_demo" :activity 'idle))))
+                   #'ignore)))
         (mevedel-skills-invoke
          skill nil (lambda (value) (setq outcome value)) :origin 'model)))
     (should (eq 'error (plist-get outcome :status)))
@@ -1825,15 +1832,19 @@ allowed-tools:
       (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) agent))
                 ((symbol-function 'mevedel-agent-control-spawn)
-                 (lambda (_session _task message &rest keys)
+                 (lambda (_session _task message callback &rest keys)
                    (setq captured (cons message keys))
+                   (let ((record
+                          (mevedel-agent-record--create
+                           :path "/root/skill_demo" :activity 'idle)))
+                     (funcall callback
+                              (list :outcome 'success :record record)))
                    (funcall
                     (plist-get keys :result-handler)
                     '(:type RESULT :sender "/root/skill_demo"
                       :recipient "/root" :outcome completed
                       :payload "agent finished"))
-                   (mevedel-agent-record--create
-                    :path "/root/skill_demo" :activity 'idle))))
+                   #'ignore)))
         (mevedel-skills-invoke
          skill "the task" (lambda (value) (setq outcome value))
          :origin 'user
@@ -1870,14 +1881,18 @@ allowed-tools:
       (setq-local mevedel--session session)
       (setq-local mevedel-agents--specs nil)
       (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
-                 (lambda (_session _task _message &rest keys)
+                 (lambda (_session _task _message callback &rest keys)
                    (setq dispatched-agent (plist-get keys :agent))
+                   (let ((record
+                          (mevedel-agent-record--create
+                           :path "/root/skill_demo" :activity 'idle)))
+                     (funcall callback
+                              (list :outcome 'success :record record)))
                    (funcall
                     (plist-get keys :result-handler)
                     '(:type RESULT :sender "/root/skill_demo"
                       :recipient "/root" :outcome completed :payload "result"))
-                   (mevedel-agent-record--create
-                    :path "/root/skill_demo" :activity 'idle))))
+                   #'ignore)))
         (let (outcome)
           (mevedel-skills-invoke
            skill nil (lambda (value) (setq outcome value)) :origin 'model)
@@ -2075,14 +2090,18 @@ description: Yell
     (with-temp-buffer
       (setq mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
-                 (lambda (_session _task _message &rest keys)
+                 (lambda (_session _task _message callback &rest keys)
+                   (let ((record
+                          (mevedel-agent-record--create
+                           :path "/root/skill_isolated" :activity 'idle)))
+                     (funcall callback
+                              (list :outcome 'success :record record)))
                    (funcall
                     (plist-get keys :result-handler)
                     '(:type RESULT :sender "/root/skill_isolated"
                       :recipient "/root" :outcome completed
                       :payload "Child result"))
-                   (mevedel-agent-record--create
-                    :path "/root/skill_isolated" :activity 'idle))))
+                   #'ignore)))
         (mevedel-skills--invoke-handler
          (lambda (value) (setq envelope value))
          '(:name "isolated"))))
@@ -2868,14 +2887,18 @@ spanning lines")))
         (cl-letf (((symbol-function 'mevedel-agent-get)
                    (lambda (n) (and (equal n "explorer") agent)))
                   ((symbol-function 'mevedel-agent-control-spawn)
-                   (lambda (_session _task _message &rest keys)
+                   (lambda (_session _task _message callback &rest keys)
+                     (let ((record
+                            (mevedel-agent-record--create
+                             :path "/root/skill_delegate" :activity 'idle)))
+                       (funcall callback
+                                (list :outcome 'success :record record)))
                      (funcall
                       (plist-get keys :result-handler)
                       '(:type RESULT :sender "/root/skill_delegate"
                         :recipient "/root" :outcome completed
                         :payload "agent finished"))
-                     (mevedel-agent-record--create
-                      :path "/root/skill_delegate" :activity 'idle)))
+                     #'ignore))
                   ((symbol-function 'mevedel-session-persistence-save)
                    (lambda (session buffer &optional settled)
                      (setq save-called (list session buffer settled))

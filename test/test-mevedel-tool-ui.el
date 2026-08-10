@@ -103,23 +103,24 @@
              (mevedel-tool-description (mevedel-tool-get "WaitAgent"))))
     (should-not (mevedel-tool-get "RequestAccess")))
 
-  :doc "Agent exposes every optional fork and configuration control"
+  :doc "Agent exposes every optional context and configuration control"
   (progn
     (mevedel-tool-ui--register)
     (let* ((tool (mevedel-tool-get "Agent"))
            (args (mevedel-tool-args tool))
-           (fork-arg (assq 'fork_turns args))
+           (context-arg (assq 'context args))
            (prompt (mevedel-tool-prompt tool)))
-      (dolist (name '(role fork_turns model effort))
+      (dolist (name '(role context model effort))
         (let ((arg (assq name args)))
           (should arg)
           (should (eq :optional (nth 2 arg)))))
+      (should-not (assq 'fork_turns args))
       (dolist (text '("Defaults to none"
                       "recent dialogue"
                       "complete conversation"
                       "model-visible roles"
                       "actionable instructions"))
-        (should (string-match-p text (nth 3 fork-arg))))
+        (should (string-match-p text (nth 3 context-arg))))
       (dolist (text '("sole assigned task"
                       "ordinary isolated work"
                       "recent dialogue"
@@ -158,17 +159,17 @@
                          (push callback callbacks)
                          (push invocation invocations)
                          'provider-request))))
-            (should-error
-             (mevedel-tool-ui--agent
-              #'ignore
-              '(:task_name "retryable"
-                :message "Fail initialization.")))
-            (let ((record
-                   (cdr (assoc "/root/retryable"
-                               (mevedel-session-agent-registry session)))))
-              (should record)
-              (should (eq 'idle (mevedel-agent-record-activity record))))
-            (should (= 1 (length (mevedel-session-agent-transcripts session))))
+            (let (result)
+              (mevedel-tool-ui--agent
+               (lambda (value &rest _) (setq result value))
+               '(:task_name "retryable"
+                 :message "Fail initialization."))
+              (should (string-prefix-p "Error:" (plist-get result :result))))
+            (should-not (assoc "/root/retryable"
+                               (mevedel-session-agent-registry session)))
+            (should-not (mevedel-session-agent-transcripts session))
+            (should-not
+             (directory-files-recursively root "[.]chat[.]org\\'"))
             (dotimes (index 3)
               (let (result)
                 (mevedel-tool-ui--agent
@@ -197,7 +198,7 @@
                                :header)))))
             (let* ((records (mevedel-session-agent-registry session))
                    (record (cdr (assoc "/root/task_0" records))))
-              (should (= 4 (length records)))
+              (should (= 3 (length records)))
               (should (stringp (mevedel-agent-record-id record)))
               (should (equal "/root/task_0"
                              (mevedel-agent-record-path record)))
@@ -220,7 +221,7 @@
                    (messages (mevedel-session-messages session))
                    (result (car messages)))
               (should (eq 'idle (mevedel-agent-record-activity record)))
-              (should (= 2 (length messages)))
+              (should (= 1 (length messages)))
               (should (eq 'RESULT (plist-get result :type)))
               (should (equal "/root/task_0" (plist-get result :sender)))
               (should (equal "/root" (plist-get result :recipient)))
@@ -242,7 +243,7 @@
                :error-details "Duplicate error"
                :fallback-partial nil))
             (let ((result (car (mevedel-session-messages session))))
-              (should (= 3 (length (mevedel-session-messages session))))
+              (should (= 2 (length (mevedel-session-messages session))))
               (should (eq 'errored (plist-get result :outcome)))
               (should (string-match-p "Provider failed"
                                       (plist-get result :payload)))
@@ -252,7 +253,7 @@
                      (concat "HEAD" (make-string 40000 ?x) "TAIL"))
             (let* ((result (car (mevedel-session-messages session)))
                    (payload (plist-get result :payload)))
-              (should (= 4 (length (mevedel-session-messages session))))
+              (should (= 3 (length (mevedel-session-messages session))))
               (should (<= (length payload) (* 32 1024)))
               (should (string-prefix-p "HEAD" payload))
               (should (string-match-p "TAIL" payload))
@@ -273,8 +274,8 @@
               '(:task_name "task_0" :message "Paths remain reserved."))
              :type 'user-error)
             (dolist
-                (args '((:task_name "bad_fork" :message "bad"
-                         :fork_turns "0")
+                (args '((:task_name "bad_context" :message "bad"
+                         :context "0")
                         (:task_name "bad_model" :message "bad"
                          :model "not-a-model")
                         (:task_name "bad_effort" :message "bad"
@@ -300,14 +301,34 @@
          (mevedel-session-save-path session)))
       (when (buffer-live-p parent)
         (kill-buffer parent))
-      (delete-directory root t))))
+      (delete-directory root t)))
+
+  :doc "parent request cancellation cancels unpublished Agent preparation"
+  (with-temp-buffer
+    (let* ((mevedel--session (mevedel-session--create :name "main"))
+           (mevedel--current-request
+            (mevedel-request--create :session mevedel--session))
+           cancelled
+           result)
+      (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                 (lambda (_session _task _message callback &rest _)
+                   (lambda ()
+                     (setq cancelled t)
+                     (funcall callback '(:outcome aborted))))))
+        (mevedel-tool-ui--agent
+         (lambda (value &rest _) (setq result value))
+         '(:task_name "pending" :message "Prepare this."))
+        (should-not result)
+        (mevedel-request-drain-cancellers mevedel--current-request)
+        (should cancelled)
+        (should (string-prefix-p "Error:" (plist-get result :result)))))))
 
 (mevedel-deftest mevedel-tool-ui--agent/frozen-conversation
   (:before-each (mevedel-tools-register)
    :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "covers every context fork, independent compaction, and frozen follow-ups"
+  :doc "covers every copied context, independent compaction, and frozen follow-ups"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-agent-frozen-" t)))
          (workspace (mevedel-workspace-get-or-create
@@ -355,7 +376,7 @@
                '(:task_name "frozen"
                  :message "Initial child task."
                  :role "freeze_test"
-                 :fork_turns "1"))
+                 :context "1"))
               (setq record
                     (cdr (assoc "/root/frozen"
                                 (mevedel-session-agent-registry session))))
@@ -406,7 +427,7 @@
                          (with-current-buffer child-buffer (buffer-string))
                        (funcall (car callbacks) "Context fork complete."))))
                 (let ((text (fork-text "explicit_all"
-                                       '(:fork_turns "all"))))
+                                       '(:context "all"))))
                   (should (string-match-p "Archived work summarized" text))
                   (should (string-match-p "First live prompt" text))
                   (should (string-match-p "Second live prompt" text)))
@@ -417,7 +438,7 @@
                   (should-not (string-match-p "Second live prompt" text))
                   (should (string-match-p "Task for default_none" text)))
                 (let ((text (fork-text "without_context"
-                                       '(:fork_turns "none"))))
+                                       '(:context "none"))))
                   (should-not
                    (string-match-p "Archived work summarized" text))
                   (should-not (string-match-p "First live prompt" text))

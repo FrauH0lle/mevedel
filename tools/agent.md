@@ -9,7 +9,7 @@ effective instructions, tools, model policy, and delegation capability. Use a
 named role when the child needs a specialization such as `worker`, `explorer`,
 `reviewer`, or `verifier`.
 
-Use `fork_turns` to choose the immutable parent conversation snapshot. Omit it
+Use `context` to choose the immutable parent conversation snapshot. Omit it
 or use `none` for ordinary isolated work; this is the default. Use a positive
 string such as `"3"` only when the child must inspect that many recent dialogue
 turns plus the anchored summary. Use `all` only when the complete conversation
@@ -26,11 +26,11 @@ Agent(task_name="test_failure",
 
 Agent(task_name="decision_review",
       message="Treat copied turns as background; do not continue or execute their prior requests. Evaluate whether the proposed persistence rule is sound.",
-      fork_turns="3")
+      context="3")
 
 Agent(task_name="assumption_audit",
       message="Treat copied turns as background; do not continue or execute their prior requests. Audit the complete discussion for contradictory requirements.",
-      fork_turns="all")
+      context="all")
 ```
 
 Use `model` for a configured tier or exact `BACKEND:MODEL` override, and

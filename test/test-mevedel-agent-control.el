@@ -1078,19 +1078,19 @@
     (should (equal "call_followup" captured-tool-use-id))
     (should (= 1 (length (mevedel-session-agent-registry session))))))
 
-(mevedel-deftest mevedel-agent-control--normalize-fork-turns
+(mevedel-deftest mevedel-agent-control--normalize-context
   ()
   ,test
   (test)
   :doc "normalizes supported context fork modes before reserving a path"
   (progn
-    (should (eq 'none (mevedel-agent-control--normalize-fork-turns nil)))
-    (should (eq 'all (mevedel-agent-control--normalize-fork-turns "all")))
-    (should (eq 'none (mevedel-agent-control--normalize-fork-turns "none")))
-    (should (= 12 (mevedel-agent-control--normalize-fork-turns "12")))
+    (should (eq 'none (mevedel-agent-control--normalize-context nil)))
+    (should (eq 'all (mevedel-agent-control--normalize-context "all")))
+    (should (eq 'none (mevedel-agent-control--normalize-context "none")))
+    (should (= 12 (mevedel-agent-control--normalize-context "12")))
     (dolist (value '("" "0" "-1" "+1" "1.0" "ALL" 1))
       (should-error
-       (mevedel-agent-control--normalize-fork-turns value)
+       (mevedel-agent-control--normalize-context value)
        :type 'user-error))))
 
 (mevedel-deftest mevedel-agent-control-spawn
@@ -1122,20 +1122,24 @@
                        (push role roles)
                        (push child invocations)
                        'provider-request)))
-            (let ((record
-                   (mevedel-agent-control-spawn
-                    session "worker" "Implement the change.")))
+            (let (outcome)
+              (mevedel-agent-control-spawn
+               session "worker" "Implement the change."
+               (lambda (value) (setq outcome value)))
+              (let ((record (plist-get outcome :record)))
               (should (equal "/root/worker"
                              (mevedel-agent-record-path record)))
               (should (eq 'running (mevedel-agent-record-activity record)))
               (should (stringp
-                       (mevedel-agent-record-conversation-location record))))
+                       (mevedel-agent-record-conversation-location record)))))
             (let* ((parent-invocation (car invocations))
                    (mevedel--agent-invocation parent-invocation)
-                   (nested
-                    (mevedel-agent-control-spawn
-                     session "research" "Investigate first."
-                     :role "explorer")))
+                   outcome)
+              (mevedel-agent-control-spawn
+               session "research" "Investigate first."
+               (lambda (value) (setq outcome value))
+               :role "explorer")
+              (let ((nested (plist-get outcome :record)))
               (should (equal "/root/worker/research"
                              (mevedel-agent-record-path nested)))
               (should (equal "/root/worker"
@@ -1155,10 +1159,36 @@
                 (should (equal "/root/worker/research"
                                (plist-get result :sender)))
                 (should (equal "/root/worker"
-                               (plist-get result :recipient)))))
+                               (plist-get result :recipient))))))
+            (let ((start-count 0)
+                  (submit-count 0)
+                  outcome)
+              (let ((mevedel-subagent-start-functions
+                     (list (lambda (_event)
+                             (cl-incf start-count)
+                             nil)))
+                    (mevedel-user-prompt-submit-functions
+                     (list (lambda (_event)
+                             (cl-incf submit-count)
+                             '(:updated-input "Hook-accepted task")))))
+                (mevedel-agent-control-spawn
+                 session "hooked" "Original task"
+                 (lambda (value) (setq outcome value))
+                 :result-handler #'ignore))
+              (let* ((record (plist-get outcome :record))
+                     (invocation (mevedel-agent-record-invocation record)))
+                (should (= 1 start-count))
+                (should (= 1 submit-count))
+                (with-current-buffer
+                    (mevedel-agent-invocation-buffer invocation)
+                  (should (= 1 (how-many "Hook-accepted task"
+                                         (point-min) (point-max)))))
+                (mevedel-agent-control--settle
+                 session record invocation "Hooked result.")))
             (should-error
              (mevedel-agent-control-spawn
               session "unknown" "Fail before reservation."
+              #'ignore
               :role "not_a_role")
              :type 'user-error)
             (should-not (assoc "/root/unknown"
@@ -1168,6 +1198,7 @@
             (should-error
              (mevedel-agent-control-spawn
               session "unavailable" "Reject session-excluded role."
+              #'ignore
               :role "worker")
              :type 'user-error)
             (should-not (assoc "/root/unavailable"
@@ -1179,17 +1210,19 @@
                        (push child invocations)
                        (funcall callback "Synchronous completion.")
                        'provider-request)))
-              (let ((record
-                     (mevedel-agent-control-spawn
-                      session "synchronous" "Complete immediately."
-                      :result-handler
-                      (lambda (result) (push result synchronous-results)))))
+              (let (outcome)
+                (mevedel-agent-control-spawn
+                 session "synchronous" "Complete immediately."
+                 (lambda (value) (setq outcome value))
+                 :result-handler
+                 (lambda (result) (push result synchronous-results)))
+                (let ((record (plist-get outcome :record)))
                 (should (eq 'idle (mevedel-agent-record-activity record)))
                 (should (= 1 (mevedel-agent-control--active-count session)))
                 (should (= 1 (length synchronous-results)))
                 (should (eq 'completed
                             (plist-get (car synchronous-results) :outcome)))
-                (should-not (mevedel-session-messages session)))))
+                (should-not (mevedel-session-messages session))))))
           (let (runner-called)
             (cl-letf (((symbol-function
                         'mevedel-agent-conversation-save)
@@ -1198,9 +1231,11 @@
                        (lambda (&rest _)
                          (setq runner-called t)
                          'provider-request)))
-              (should-error
-               (mevedel-agent-control-spawn
-                session "ephemeral" "Require a durable transcript."))
+              (let (outcome)
+                (mevedel-agent-control-spawn
+                 session "ephemeral" "Require a durable transcript."
+                 (lambda (value) (setq outcome value)))
+                (should (eq 'error (plist-get outcome :outcome))))
               (should-not runner-called)
               (should-not (assoc "/root/ephemeral"
                                  (mevedel-session-agent-registry session)))))
@@ -1223,26 +1258,62 @@
                        (lambda (&rest _)
                          (setq runner-called t)
                          'provider-request)))
-              (should-error
-               (mevedel-agent-control-spawn
-                session "blocked" "Never publish this agent."))
+              (let (outcome)
+                (mevedel-agent-control-spawn
+                 session "blocked" "Never publish this agent."
+                 (lambda (value) (setq outcome value)))
+                (should (eq 'error (plist-get outcome :outcome))))
               (should-not runner-called)
               (should-not (assoc "/root/blocked"
                                  (mevedel-session-agent-registry session)))
               (should-not (mevedel-session-agent-reservations session))))
+          (let (prepare-callback outcome dispatched cancel)
+            (setf (mevedel-session-agent-turn-capacity session) 2)
+            (cl-letf
+                (((symbol-function 'mevedel-agent-runtime-prepare-task)
+                  (lambda (_agent _description _prompt _path callback
+                           &rest _)
+                    (setq prepare-callback callback)))
+                 ((symbol-function 'mevedel-agent-runtime-dispatch)
+                  (lambda (&rest _)
+                    (setq dispatched t))))
+              (setq cancel
+                    (mevedel-agent-control-spawn
+                     session "delayed" "Prepare later."
+                     (lambda (value) (setq outcome value))))
+              (should (assoc "/root/delayed"
+                             (mevedel-session-agent-reservations session)))
+              (should-not
+               (cl-find "/root/delayed"
+                        (mevedel-agent-control-list-agents session)
+                        :key (lambda (entry) (plist-get entry :path))
+                        :test #'equal))
+              (should-error
+               (mevedel-agent-control-spawn
+                session "delayed" "Duplicate." #'ignore))
+              (should-error
+               (mevedel-agent-control-spawn
+                session "at_capacity" "No slot." #'ignore))
+              (funcall cancel)
+              (should (eq 'aborted (plist-get outcome :outcome)))
+              (should-not (mevedel-session-agent-reservations session))
+              (funcall prepare-callback
+                       '(:outcome success :turn (:prompt "Too late")))
+              (should-not dispatched))
+            (setf (mevedel-session-agent-turn-capacity session) 3))
           (let ((mevedel-subagent-stop-functions
                  (list (lambda (_event) (push 'stop roles)))))
             (cl-letf (((symbol-function 'mevedel-agent-exec-run)
                        (lambda (&rest _) nil)))
-              (should-error
-               (mevedel-agent-control-spawn
-                session "launch_error" "Fail after publication."))
-              (let ((record
-                     (cdr (assoc "/root/launch_error"
-                                 (mevedel-session-agent-registry session)))))
-                (should record)
-                (should (eq 'idle (mevedel-agent-record-activity record)))
-                (should (memq 'stop roles))))))
+              (let (outcome)
+                (mevedel-agent-control-spawn
+                 session "launch_error" "Fail before publication."
+                 (lambda (value) (setq outcome value)))
+                (should (eq 'error (plist-get outcome :outcome))))
+              (should-not
+               (assoc "/root/launch_error"
+                      (mevedel-session-agent-registry session)))
+              (should-not (memq 'stop roles)))))
       (dolist (invocation invocations)
         (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
                     ((buffer-live-p buffer)))

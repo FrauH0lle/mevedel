@@ -412,7 +412,7 @@ rendering the visible transcript and shows a compacted-conversation
 separator in its place, while the summary remains model-visible for
 future requests.
 
-Agent context forks read this effective live representation rather than the
+Copied Agent contexts read this effective live representation rather than the
 segment archive. `all` copies the complete current buffer. A positive
 last-N fork copies the leading summary anchor, including an agent transcript's
 original task anchor, plus N recent live turns. `none` copies no conversation

@@ -1,6 +1,6 @@
 # Isolate agent tasks by default
 
-Status: accepted
+Status: superseded by ADR 0095
 
 Omitted `fork_turns` starts a child with fresh instructions, role
 configuration, and its complete initial task but no parent dialogue. Explicit

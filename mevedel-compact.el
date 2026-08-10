@@ -1045,16 +1045,16 @@ new turn.  BODY-START defaults to the main-session body start."
                (setq after-response nil)))))))
     (nreverse starts)))
 
-(defun mevedel-compact-context-snapshot (fork-turns)
-  "Return the current effective conversation selected by FORK-TURNS.
+(defun mevedel-compact-context-snapshot (context)
+  "Return the current effective conversation selected by CONTEXT.
 
-FORK-TURNS is `all', `none', or a positive integer.  The snapshot copies
+CONTEXT is `all', `none', or a positive integer.  The snapshot copies
 text properties because gptel uses them to distinguish user, response, and
 tool spans.  Positive limits retain the anchored summary, when present, and
 the requested number of most recent live turns.  This function reads only the
 current buffer, so turns already rotated into compacted segments cannot be
 reconstructed into a child conversation."
-  (pcase fork-turns
+  (pcase context
     ('none "")
     ('all (buffer-substring (point-min) (point-max)))
     ((pred (lambda (value) (and (integerp value) (> value 0))))
@@ -1066,13 +1066,13 @@ reconstructed into a child conversation."
             (starts (mevedel--compact-turn-starts-before
                      (point-max) body-start))
             (count (length starts))
-            (tail-start (if (<= count fork-turns)
+            (tail-start (if (<= count context)
                             body-start
-                          (nth (- count fork-turns) starts))))
+                          (nth (- count context) starts))))
        (concat (and summary
                     (buffer-substring (point-min) body-start))
                (buffer-substring tail-start (point-max)))))
-    (_ (error "Invalid normalized context fork: %S" fork-turns))))
+    (_ (error "Invalid normalized agent context: %S" context))))
 
 (defun mevedel--compact-directive-ranges ()
   "Return complete directive ranges using current-buffer positions."

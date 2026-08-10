@@ -165,10 +165,13 @@ WaitAgent adapters. Ask's questionnaire, handler, renderer, and schema live in
 permission pipeline, not a model-visible tool.
 
 Agent's required inputs are `task_name` and `message`. Its optional `role`,
-`fork_turns`, `model`, and `effort` inputs are validated before publication:
-forks accept only `all`, `none`, or positive decimal strings; model selectors
+`context`, `model`, and `effort` inputs are validated before reservation:
+context accepts only `all`, `none`, or positive decimal strings; model selectors
 use the shared tier/provider parser; and effort support is delegated to the
-resolved gptel model. Invalid controls leave no retained path reservation.
+resolved gptel model. A valid request reserves path and capacity while its
+ordinary task hooks prepare the final task asynchronously. The path is not
+published until durable setup and provider dispatch succeed; cancellation or
+failure releases the reservation.
 The same shared resource-grant interface authorizes native filesystem tools and
 additive Bash/batch-Eval mounts; command authorization remains independent.
 When one Bash or batch-Eval invocation is missing both operation authority and

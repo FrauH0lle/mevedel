@@ -1073,7 +1073,7 @@ to `review'."
                  '(:status error :reason no-session
                    :message "Validation requires an active session"))
       (require 'mevedel-agent-control)
-      (let (path invocation cancelled-p settled-p)
+      (let (path invocation preparation-cancel cancelled-p settled-p)
         (cl-labels
             ((finish
               (result)
@@ -1090,28 +1090,47 @@ to `review'."
               ()
               (unless (or settled-p cancelled-p)
                 (setq cancelled-p t)
-                (mevedel-agent-control-interrupt session path))))
+                (if path
+                    (mevedel-agent-control-interrupt session path)
+                  (when preparation-cancel
+                    (funcall preparation-cancel)))))
+             (prepared
+              (outcome)
+              (pcase (plist-get outcome :outcome)
+                ('success
+                 (setq path
+                       (mevedel-agent-record-path
+                        (plist-get outcome :record))))
+                ((or 'error 'aborted)
+                 (unless cancelled-p
+                   (finish
+                    (list :type 'RESULT
+                          :outcome 'errored
+                          :payload
+                          (or (plist-get outcome :error)
+                              "Agent preparation was cancelled"))))))))
           (condition-case err
-              (let ((record
-                     (mevedel-agent-control-spawn
-                      session
-                      (mevedel-review--next-task-name session command)
-                      message
-                      :role (mevedel-review--command-agent-name command)
-                      :fork-turns "none"
-                      :description
-                      (or hint (mevedel-review--command-description command))
-                      :skill-permission-rules
-                      (if (eq command 'verify)
-                          (mevedel-review--verify-permission-rules)
-                        (mevedel-review--permission-rules))
-                      :on-invocation
-                      (lambda (value)
-                        (setq invocation value)
-                        (when progress-callback
-                          (funcall progress-callback value)))
-                      :result-handler #'finish)))
-                (setq path (mevedel-agent-record-path record))
+              (progn
+                (setq preparation-cancel
+                      (mevedel-agent-control-spawn
+                       session
+                       (mevedel-review--next-task-name session command)
+                       message #'prepared
+                       :role (mevedel-review--command-agent-name command)
+                       :context "none"
+                       :description
+                       (or hint (mevedel-review--command-description command))
+                       :skill-permission-rules
+                       (if (eq command 'verify)
+                           (mevedel-review--verify-permission-rules)
+                         (mevedel-review--permission-rules))
+                       :on-invocation
+                       (lambda (value)
+                         (setq invocation value
+                               path (mevedel-agent-invocation-path value))
+                         (when progress-callback
+                           (funcall progress-callback value)))
+                       :result-handler #'finish))
                 (unless settled-p
                   (mevedel-request-push-canceller
                    mevedel--current-request #'cancel)))

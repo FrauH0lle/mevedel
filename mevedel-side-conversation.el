@@ -45,7 +45,7 @@
 
 ;; `mevedel-compact'
 (declare-function mevedel-compact-context-snapshot
-                  "mevedel-compact" (fork-turns))
+                  "mevedel-compact" (context))
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-effective-rules

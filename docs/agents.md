@@ -2,21 +2,21 @@
 
 The model-facing `Agent` tool starts a retained child asynchronously. It
 accepts a lowercase `task_name` path segment, a complete `message`, and
-optional `role`, `fork_turns`, `model`, and `effort` controls, then returns the
-committed canonical path immediately.
+optional `role`, `context`, `model`, and `effort` controls, then returns the
+committed canonical path after preparation and provider dispatch succeed.
 An omitted role selects `default` and inherits the delegator's effective
 instructions, tools, model policy, and delegation capability. A named role
 supplies its own configuration rather than intersecting its tools with the
 delegator's. Children are created below the caller, so recursive delegation
 forms paths such as `/root/implementation/tests`.
 
-`fork_turns` defaults to `none`, so the complete initial `message` is the
+`context` defaults to `none`, so the complete initial `message` is the
 child's sole assigned task and no parent dialogue is copied. Explicit `all`
 copies the complete effective parent conversation, and a positive decimal
 string such as `"3"` copies the anchored summary plus the three most recent
 live turns. The copy retains gptel's user/response/tool span properties,
 including actionable user instructions, and is taken from the current
-post-compaction buffer only. Callers use non-`none` forks only when the child
+post-compaction buffer only. Callers use copied context only when the child
 must inspect parent dialogue and identify that dialogue as background in the
 initial task. Archived raw segments are never reconstructed. The initial task
 is appended after this immutable snapshot; parent turns added later are not
@@ -51,8 +51,13 @@ timeout wakes it. A `MAIL` wake-up is not sender completion; only the canonical
 path, returns its previous activity, and leaves its identity, conversation,
 mailbox, descendants, and future follow-up capability intact.
 
-Creation runs `SubagentStart` exactly once, then runs `UserPromptSubmit` for
-the initial task before publishing the identity. Every idle-agent follow-up
+Creation validates and freezes its inputs, privately reserves the canonical
+path and a tree-wide capacity slot, runs `SubagentStart` exactly once, then
+runs `UserPromptSubmit` for the initial task. The hook-accepted task is passed
+to dispatch without rerunning either hook. The reservation is absent from
+`ListAgents` and path resolution until a durable transcript and provider FSM
+exist. Failure or parent cancellation releases it synchronously and suppresses
+late preparation callbacks. Every idle-agent follow-up
 runs `UserPromptSubmit` again but not `SubagentStart`. A blocked follow-up is
 not appended as a user turn; its additional hook context stays with that
 identity and is consumed once by its next accepted task. Every completed,
@@ -137,17 +142,18 @@ the reporting tone, while reviewer relies on its strict output contract.
 
 ```mermaid
 flowchart TD
-    A[Agent privately reserves path and capacity] --> B[Freeze configuration]
-    B --> C[Run SubagentStart once]
-    C --> D[Run UserPromptSubmit]
-    D --> E[Persist and publish retained identity]
-    E --> F[Run child turn asynchronously]
-    F --> G[Settle and run SubagentStop exactly once]
-    G --> H[Release capacity and persist idle record]
-    H --> I[Queue RESULT for spawn parent]
-    I --> J{Parent needs result now?}
-    J -- Yes --> K[WaitAgent wakes]
-    J -- No --> L[Parent continues independently]
+    A[Validate Agent request] --> B[Privately reserve path and capacity]
+    B --> C[Freeze context and configuration]
+    C --> D[Run SubagentStart once]
+    D --> E[Run UserPromptSubmit once]
+    E --> F[Persist transcript and start provider FSM]
+    F --> G[Publish retained identity and Agent result]
+    G --> H[Settle and run SubagentStop exactly once]
+    H --> I[Release capacity and persist idle record]
+    I --> J[Queue RESULT for spawn parent]
+    J --> K{Parent needs result now?}
+    K -- Yes --> L[WaitAgent wakes]
+    K -- No --> M[Parent continues independently]
 ```
 
 Every agent turn uses this path. A caller that needs the result explicitly
