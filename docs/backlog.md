@@ -157,31 +157,6 @@ become implemented, obsolete, or unjustified.
 
 ## Tools
 
-### Support TRAMP-backed workspaces across tools and execution
-
-- **Source:** gptel-agent commit `5eb9fac`; `mevedel-tool-fs.el`,
-  `mevedel-execution.el`, `mevedel-sandbox.el`, hooks, and environment
-  discovery.
-- **What's owed:** Define coherent TRAMP behavior for path normalization before
-  permission checks, native filesystem tools, external helpers, managed Bash,
-  hooks, process termination, confinement disclosure, and session-owned
-  artifacts. Reuse Emacs's `:file-handler`, `process-file`, `file-local-name`,
-  remote `executable-find`, and nearby temporary-file support where
-  appropriate.
-- **Why deferred:** This is an execution-boundary redesign rather than a small
-  upstream code steal. Mevedel currently assumes local helper scratch
-  directories, locally mountable Bubblewrap paths, and local PID/process-group
-  control. Remote absolute-path semantics, cross-host authority, confinement
-  policy, and deterministic integration testing require explicit design.
-- **Status check:** Relative and explicit TRAMP paths already benefit from
-  Emacs file handlers for some direct reads and writes. Glob/Grep helpers,
-  Bash, project hooks, environment detection, media subprocesses, and process
-  lifecycle are not coherently remote-aware. No TRAMP test surface exists.
-- **Blast radius:** Partial support could interpret remote absolute paths as
-  local paths, authorize a different resource than the handler uses, misreport
-  confinement, invoke tools on the wrong host, or leave remote processes and
-  artifacts unmanaged.
-
 ### Bedrock backend support for deferred tool loading
 
 - **Source:** `mevedel-tools.el` (`mevedel-tools--handle-deferred-inject`)
