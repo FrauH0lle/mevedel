@@ -20,6 +20,7 @@
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-prompt)
 (require 'mevedel-permission-queue)
+(require 'mevedel-telemetry)
 ;; gptel-request needed for mevedel-define-tool tests
 (require 'gptel-request nil t)
 (require 'gptel-anthropic nil t)
@@ -362,6 +363,108 @@
 
 
 ;;
+;;; Path normalization step
+
+(mevedel-deftest mevedel-pipeline--normalize-path-value ()
+		 ,test
+		 (test)
+		 :doc "substitutes environment references before expanding"
+		 (let ((process-environment
+			(cons "MEVEDEL_TEST_ROOT=/tmp/probe" process-environment)))
+		   (should (equal "/tmp/probe/x"
+				  (mevedel-pipeline--normalize-path-value
+				   "$MEVEDEL_TEST_ROOT/x"))))
+		 :doc "expands a relative path against `default-directory'"
+		 (let ((default-directory "/tmp/root/"))
+		   (should (equal "/tmp/root/a/b"
+				  (mevedel-pipeline--normalize-path-value "a/b"))))
+		 :doc "keeps an unresolvable reference literal on both sides"
+		 (let ((default-directory "/tmp/root/"))
+		   (should (equal "/tmp/root/$UNSET_MEVEDEL_VAR/x"
+				  (mevedel-pipeline--normalize-path-value
+				   "$UNSET_MEVEDEL_VAR/x"))))
+		 :doc "leaves non-string and empty values untouched"
+		 (progn
+		   (should (equal "" (mevedel-pipeline--normalize-path-value "")))
+		   (should (null (mevedel-pipeline--normalize-path-value nil)))
+		   (should (equal 7 (mevedel-pipeline--normalize-path-value 7)))))
+
+(mevedel-deftest mevedel-pipeline--step-normalize-paths ()
+		 ,test
+		 (test)
+		 :doc "canonicalizes only `path'-typed args"
+		 (let* ((default-directory "/tmp/root/")
+			(tool (mevedel-tool--create
+			       :name "Mixed"
+			       :args '((file_path path :required "Path")
+				       (label string :required "Label"))))
+			(ctx (list :tool tool
+				   :args '(:file_path "a/b" :label "c/d")))
+			updated)
+		   (mevedel-pipeline--step-normalize-paths
+		    ctx (lambda (c) (setq updated c)) #'ignore)
+		   (should (equal "/tmp/root/a/b"
+				  (plist-get (plist-get updated :args) :file_path)))
+		   (should (equal "c/d"
+				  (plist-get (plist-get updated :args) :label))))
+		 :doc "leaves args untouched when nothing needs canonicalizing"
+		 (let* ((tool (mevedel-tool--create
+			       :name "Absolute"
+			       :args '((file_path path :required "Path"))))
+			(args '(:file_path "/tmp/already"))
+			(ctx (list :tool tool :args args))
+			updated)
+		   (mevedel-pipeline--step-normalize-paths
+		    ctx (lambda (c) (setq updated c)) #'ignore)
+		   (should (eq args (plist-get updated :args))))
+		 :doc "authorization and handler observe one identical path"
+		 (let* ((root (file-name-as-directory
+				 (make-temp-file "mevedel-normalize-" t)))
+			(workspace (mevedel-workspace--create :root root))
+			(session (mevedel-session--create
+				  :name "path-normalization"
+				  :workspace workspace
+				  :working-directory root
+				  :permission-mode 'full-auto))
+			(mevedel--session session)
+			(process-environment
+			 (cons (concat "MEVEDEL_TEST_ROOT=" (directory-file-name root))
+			       process-environment))
+			(expected (file-name-concat root "secret"))
+			(get-path-values nil)
+			handler-value
+			(tool (mevedel-tool--create
+			       :name "PathEcho"
+			       :category "mevedel"
+			       :handler (lambda (args)
+					  (setq handler-value
+						(plist-get args :file_path))
+					  '(:result "ok"))
+			       :args '((file_path path :required "Path"))
+			       :get-path (lambda (args)
+					   (let ((path (plist-get args :file_path)))
+					     (push path get-path-values)
+					     path))
+			       :read-only-p t
+			       :async-p nil))
+			result)
+		   (mevedel-tool-register tool)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (mevedel-pipeline-run-tool
+			  tool (lambda (value) (setq result value))
+			  '(:file_path "$MEVEDEL_TEST_ROOT/secret"))
+			 (should (equal "ok" result))
+			 (should get-path-values)
+			 ;; The decision chain must see the substituted target, not the
+			 ;; literal "$MEVEDEL_TEST_ROOT/secret" the handler would resolve.
+			 (should (seq-every-p (lambda (value) (equal expected value))
+					      get-path-values))
+			 (should (equal expected handler-value)))
+		     (mevedel-tool-clear-registry)
+		     (delete-directory root t))))
+
+;;
 ;;; Handler step
 
 (mevedel-deftest mevedel-pipeline-active-tool-use-id ()
@@ -621,31 +724,12 @@
 			       :name "ReadTool"
 			       :read-only-p t))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 12))
-		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
-		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
-		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-permission))
-		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-capture-coverage))
-		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-handler))
-		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-repair-reminder))
-		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-render-transform))
-		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-specialist-nudges))
-		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-goal-budget-warning))
-		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-attach-media-data)))
-		 :doc "write tool includes snapshot step"
-		 (let* ((tool (mevedel-tool--create
-			       :name "WriteTool"
-			       :read-only-p nil
-			       :snapshot-p t))
-			(steps (mevedel-pipeline--build-steps tool)))
 		   (should (= (length steps) 13))
 		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
 		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
-		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-permission))
-		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-capture-coverage))
-		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-snapshot))
+		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-normalize-paths))
+		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-permission))
+		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-capture-coverage))
 		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-handler))
 		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-repair-reminder))
 		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-render-transform))
@@ -654,12 +738,33 @@
 		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-goal-budget-warning))
 		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-attach-render-data))
 		   (should (eq (nth 12 steps) #'mevedel-pipeline--step-attach-media-data)))
+		 :doc "write tool includes snapshot step"
+		 (let* ((tool (mevedel-tool--create
+			       :name "WriteTool"
+			       :read-only-p nil
+			       :snapshot-p t))
+			(steps (mevedel-pipeline--build-steps tool)))
+		   (should (= (length steps) 14))
+		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
+		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
+		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-normalize-paths))
+		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-permission))
+		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-capture-coverage))
+		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-snapshot))
+		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-handler))
+		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-repair-reminder))
+		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-render-transform))
+		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-specialist-nudges))
+		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-post-tool-hooks))
+		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 12 steps) #'mevedel-pipeline--step-attach-render-data))
+		   (should (eq (nth 13 steps) #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "mutating tool without snapshot declaration skips snapshot step"
 		 (let* ((tool (mevedel-tool--create
 			       :name "MkDir"
 			       :read-only-p nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 12))
+		   (should (= (length steps) 13))
 		   (should-not
 		    (memq #'mevedel-pipeline--step-snapshot steps)))
 		 :doc "includes persist step when max-result-size is set"
@@ -668,20 +773,20 @@
 			       :read-only-p t
 			       :max-result-size 1000))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 14 (length steps)))
-		   (should (eq (nth 5 steps)
-			       #'mevedel-pipeline--step-repair-reminder))
+		   (should (= 15 (length steps)))
 		   (should (eq (nth 6 steps)
+			       #'mevedel-pipeline--step-repair-reminder))
+		   (should (eq (nth 7 steps)
 			       #'mevedel-pipeline--step-render-transform))
-		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-persist))
-		   (should (eq (nth 8 steps)
-			       #'mevedel-pipeline--step-specialist-nudges))
+		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-persist))
 		   (should (eq (nth 9 steps)
+			       #'mevedel-pipeline--step-specialist-nudges))
+		   (should (eq (nth 10 steps)
 			       #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-persist))
-		   (should (eq (nth 11 steps)
-		               #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-persist))
 		   (should (eq (nth 12 steps)
+		               #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 13 steps)
 			       #'mevedel-pipeline--step-attach-render-data))
 			   (should (eq (car (last steps))
 			       #'mevedel-pipeline--step-attach-media-data)))
@@ -691,7 +796,7 @@
 			       :read-only-p t
 			       :max-result-size nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 12 (length steps)))
+		   (should (= 13 (length steps)))
 		   (should-not (memq #'mevedel-pipeline--step-persist steps))
 		   (should (memq #'mevedel-pipeline--step-specialist-nudges steps))
 		   (should (memq #'mevedel-pipeline--step-attach-render-data steps))
