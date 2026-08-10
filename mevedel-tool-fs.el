@@ -746,8 +746,7 @@ text limit and may be sent by models as a defaulted optional value."
   (let ((normalized (copy-sequence args)))
     (when-let* ((file-path (plist-get normalized :file_path)))
       (when (stringp file-path)
-        (plist-put normalized :file_path
-                   (expand-file-name (substitute-in-file-name file-path)))))
+        (plist-put normalized :file_path (expand-file-name file-path))))
     (when (equal (plist-get normalized :pages) "")
       (plist-put normalized :pages nil))
     (dolist (key '(:offset :limit :max_width :max_height :max_tokens))
@@ -1332,7 +1331,7 @@ and optional :path."
       (error "Pattern must not be empty"))
     (unless (executable-find "rg")
       (error "`ripgrep` not installed"))
-    (setq path (expand-file-name (substitute-in-file-name (or path "."))))
+    (setq path (expand-file-name (or path ".")))
     (unless (and (file-readable-p path) (file-directory-p path))
       (error "Path %s is not a readable directory" path))
     (if-let ((normalized
@@ -1398,7 +1397,7 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                          (mevedel-tool-integer-arg args :context))))
     (unless (executable-find "rg")
       (error "`ripgrep` not installed"))
-    (setq path (expand-file-name (substitute-in-file-name path)))
+    (setq path (expand-file-name path))
     (unless (file-readable-p path)
       (error "Path %s is not readable" path))
     (let* ((search-root path)

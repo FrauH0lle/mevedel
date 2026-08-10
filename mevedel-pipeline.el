@@ -573,6 +573,44 @@ signal handler."
                 (list (mevedel-tool-repair-format-issues tool issues)))
       (funcall next context))))
 
+(defun mevedel-pipeline--normalize-path-value (value)
+  "Return VALUE canonicalized into an absolute filesystem path.
+
+Environment references are substituted before expansion, because
+handlers used to do that themselves after authorization had already
+run against the unsubstituted string.  A malformed substitution leaves
+VALUE untouched; the handler then opens that same literal string, so
+the authorized resource still matches the used one."
+  (if (or (not (stringp value)) (string-empty-p value))
+      value
+    (expand-file-name
+     (condition-case nil
+         (substitute-in-file-name value)
+       (error value)))))
+
+(defun mevedel-pipeline--step-normalize-paths (context next _fail)
+  "Canonicalize `path'-typed arguments in CONTEXT before authorization.
+
+Runs after the pre-tool hooks, which may rewrite arguments, and before
+the permission step, so the path the decision chain authorizes is
+byte-identical to the one the handler receives.  Handlers must not
+re-resolve these arguments.  FAIL is unused: normalization cannot fail,
+since an unresolvable value is passed through verbatim."
+  (let* ((tool (plist-get context :tool))
+         (args (plist-get context :args))
+         (updated nil))
+    (when (listp args)
+      (dolist (spec (mevedel-tool-args tool))
+        (when (eq (cadr spec) 'path)
+          (let* ((key (intern (concat ":" (symbol-name (car spec)))))
+                 (value (plist-get (or updated args) key))
+                 (normalized (mevedel-pipeline--normalize-path-value value)))
+            (unless (equal value normalized)
+              (setq updated
+                    (plist-put (or updated (copy-sequence args))
+                               key normalized)))))))
+    (funcall next (if updated (plist-put context :args updated) context))))
+
 (defun mevedel-pipeline--current-request ()
   "Return the current mevedel request struct, if any."
   (and (boundp 'mevedel--current-request)
@@ -2262,21 +2300,22 @@ explicit `:updated-result' changes the model-visible tool result."
 Returns a list of step functions based on TOOL's behavioral flags:
   1. validate            -- always included
   2. pre-tool-hooks      -- always included
-  3. permission          -- always included
-  4. capture-coverage    -- records mutation paths without exact snapshots
-  5. snapshot            -- included when snapshot-p
-  6. handler             -- always included
-  7. repair-reminder     -- appends feedback for committed input repairs
-  8. render-transform    -- always included; no-op when tool has none
-  9. persist             -- included when max-result-size is set
-  10. specialist-nudges  -- bounded guidance for generic code tools
-  11. post-tool-hooks    -- always included
-  12. persist            -- included when max-result-size is set; bounds
+  3. normalize-paths     -- canonicalizes `path'-typed args for authorization
+  4. permission          -- always included
+  5. capture-coverage    -- records mutation paths without exact snapshots
+  6. snapshot            -- included when snapshot-p
+  7. handler             -- always included
+  8. repair-reminder     -- appends feedback for committed input repairs
+  9. render-transform    -- always included; no-op when tool has none
+  10. persist            -- included when max-result-size is set
+  11. specialist-nudges  -- bounded guidance for generic code tools
+  12. post-tool-hooks    -- always included
+  13. persist            -- included when max-result-size is set; bounds
                             hook-updated results
-  13. Goal budget warning -- appends one early 100% warning when crossed
-  14. attach-render-data -- always included; no-op when handler returned
+  14. Goal budget warning -- appends one early 100% warning when crossed
+  15. attach-render-data -- always included; no-op when handler returned
                             neither render-data nor explicit status
-  15. attach-media-data  -- always included; no-op when handler returned
+  16. attach-media-data  -- always included; no-op when handler returned
                              no media"
   (let ((steps nil))
     (push #'mevedel-pipeline--step-attach-media-data steps)
@@ -2295,6 +2334,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
       (push #'mevedel-pipeline--step-snapshot steps))
     (push #'mevedel-pipeline--step-capture-coverage steps)
     (push #'mevedel-pipeline--step-permission steps)
+    (push #'mevedel-pipeline--step-normalize-paths steps)
     (push #'mevedel-pipeline--step-pre-tool-hooks steps)
     (push #'mevedel-pipeline--step-validate steps)
     steps))
