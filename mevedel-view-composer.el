@@ -98,6 +98,7 @@
 (declare-function mevedel-mentions-install "mevedel-mentions" nil)
 (declare-function mevedel-mentions-prepare-user-input
 		  "mevedel-mentions" (text &optional session))
+(defvar mevedel-mentions--agent-enabled-p)
 
 ;; `mevedel-overlays'
 (declare-function mevedel--directive-action-context
@@ -178,6 +179,10 @@
 (declare-function mevedel-session-persistence-worktree-fork
 		  "mevedel-session-persistence" (buffer target))
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-side-conversation'
+(declare-function mevedel-side-conversation-send
+                  "mevedel-side-conversation" ())
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill "mevedel-skills-core"
@@ -315,7 +320,10 @@
 		  (text))
 
 ;; `mevedel-view'
+(declare-function mevedel-view--abort-data-buffer
+                  "mevedel-view" (data-buffer))
 (defvar mevedel-view--interaction-marker)
+(defvar mevedel-view--side-conversation-p)
 (defvar mevedel-view--status-marker)
 
 ;; `mevedel-view-agent'
@@ -773,6 +781,13 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
   "<backtab>" #'mevedel-view-cycle-permission-mode
   "S-TAB" #'mevedel-view-cycle-permission-mode)
 
+(defvar-keymap mevedel-view--side-conversation-keymap
+  :doc "Keymap active over an ephemeral side-conversation composer."
+  "C-c RET" #'mevedel-view-send
+  "C-c TAB" #'mevedel-view-send-follow-up
+  "C-c C-k" #'mevedel-view-abort
+  "C-y" #'mevedel-view-yank-dwim)
+
 (define-key mevedel-view--composer-keymap
             [remap move-beginning-of-line]
             #'mevedel-view-history-beginning-of-line)
@@ -1165,17 +1180,20 @@ ARG is passed through from the interactive prefix."
     (require 'mevedel-transcript-audit)
     (require 'mevedel-utilities)
     (require 'mevedel-view-history)
-    (mevedel-view-history-load mevedel--session)
-    (add-hook 'completion-at-point-functions
-              #'mevedel-view-slash-capf nil t)
+    (setq-local mevedel-mentions--agent-enabled-p
+                (not mevedel-view--side-conversation-p))
     (mevedel-mentions-install)
-    (mevedel-skills-install-font-lock)
     (mevedel-view--install-dnd)
-    (add-hook 'post-command-hook
-              #'mevedel-view--refresh-skill-argument-hint nil t)
-    (add-hook 'after-change-functions
-              #'mevedel-view--refresh-skill-argument-hint-after-change
-              nil t)
+    (unless mevedel-view--side-conversation-p
+      (mevedel-view-history-load mevedel--session)
+      (add-hook 'completion-at-point-functions
+                #'mevedel-view-slash-capf nil t)
+      (mevedel-skills-install-font-lock)
+      (add-hook 'post-command-hook
+                #'mevedel-view--refresh-skill-argument-hint nil t)
+      (add-hook 'after-change-functions
+                #'mevedel-view--refresh-skill-argument-hint-after-change
+                nil t))
     (add-hook 'kill-buffer-hook
               #'mevedel-view--cancel-pending-skill-submission nil t)
     (setq mevedel-view--composer-keymap-overlay
@@ -1183,7 +1201,10 @@ ARG is passed through from the interactive prefix."
            (mevedel-view--input-start) (point-max)
            (current-buffer) nil t))
     (overlay-put mevedel-view--composer-keymap-overlay
-                 'keymap mevedel-view--composer-keymap)))
+                 'keymap
+                 (if mevedel-view--side-conversation-p
+                     mevedel-view--side-conversation-keymap
+                   mevedel-view--composer-keymap))))
 
 ;;
 ;;; Input forwarding
@@ -2260,6 +2281,8 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
   "Queue the composer as a follow-up, or send normally while idle."
   (interactive)
   (mevedel-view--ensure-interactive-chat-view)
+  (when mevedel-view--side-conversation-p
+    (user-error "/btw does not queue follow-ups; wait for the active response"))
   (mevedel-view--assert-live-tip)
   (when mevedel-view--pending-input-edit
     (user-error "Save or cancel the pending-input edit first"))
@@ -2426,12 +2449,20 @@ SNAPSHOT is the exact Source composer state transferred on publication."
     (mevedel-view--clear-input)))
 
 (defun mevedel-view-send ()
+  "Send the current root or ephemeral side-conversation composer text."
+  (interactive)
+  (if mevedel-view--side-conversation-p
+      (progn
+        (require 'mevedel-side-conversation)
+        (mevedel-side-conversation-send))
+    (mevedel-view--send-root)))
+
+(defun mevedel-view--send-root ()
   "Send the current composer text to the LLM via the data buffer.
 Extracts text from the input zone, plans all bound `$skill' mentions,
 renders the original text in the history region, and dispatches either
 one coherent request or one leading fork command.  Slash commands retain
 their local dispatch path."
-  (interactive)
   (mevedel-view--ensure-interactive-chat-view)
   (mevedel-view--assert-live-tip t)
   (when mevedel-view--pending-input-edit
@@ -2489,9 +2520,10 @@ their local dispatch path."
                               (funcall (cdr (assoc (nth 0 slash-parsed)
                                                   mevedel-slash-commands))
                                        (nth 1 slash-parsed)))))
-                (when (stringp result) (message "%s" result))
-                (mevedel-view-history-add input)
-                (mevedel-view--clear-input)))
+                (unless (eq result 'mevedel-view-sent)
+                  (when (stringp result) (message "%s" result))
+                  (mevedel-view-history-add input)
+                  (mevedel-view--clear-input))))
              (slash-parsed
               (funcall restore)
               (user-error
@@ -3000,10 +3032,8 @@ removed only when the resulting prompt reaches its transcript commit boundary."
   (mevedel-view--stop-request-progress)
   (when-let* ((data-buf mevedel--data-buffer)
               (_ (buffer-live-p data-buf)))
-    ;; Delegate to mevedel-abort which handles the full teardown
-    (with-current-buffer data-buf
-      (when (fboundp 'mevedel-abort)
-        (funcall #'mevedel-abort)))))
+    (require 'mevedel-view)
+    (mevedel-view--abort-data-buffer data-buf)))
 
 
 

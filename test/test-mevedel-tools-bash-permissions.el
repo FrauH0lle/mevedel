@@ -102,7 +102,28 @@
                    (plist-get queued :missing-additional-permissions)))
     (funcall (plist-get queued :callback) 'allow-once)
     (should (car cell))
-    (should (eq 'allow-once settled))))
+    (should (eq 'allow-once settled)))
+  :doc "constrains one-shot mutation prompts and outcomes"
+  (let ((remember-cell (list '(:operation t)))
+        queued
+        settled)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (setq queued entry))))
+      (mevedel-tool-exec--request-permission
+       (list :kind 'bash
+             :callback (lambda (outcome) (setq settled outcome))
+             :include-always t
+             :remember-authority-cell remember-cell
+             :reusable-operation-p t)
+       '(:one-shot-mutations-p t)))
+    (should (plist-get queued :once-only))
+    (should-not (plist-get queued :include-always))
+    (should-not (plist-get queued :remember-authority-cell))
+    (should-not (plist-get queued :reusable-operation-p))
+    (funcall (plist-get queued :callback) 'allow-session)
+    (should (eq 'allow-once settled))
+    (should (equal '(:operation t) (car remember-cell)))))
 
 
 (mevedel-deftest mevedel-tool-exec--bash-commands-summary ()
@@ -415,7 +436,15 @@ additive child permissions are available only to batch Eval"
     (should
      (equal (list grant)
             (mevedel-tool-exec--direct-resource-grants
-             `(:session ,session))))))
+             `(:session ,session)))))
+  :doc "treats normalized resource grants as authoritative even when empty"
+  (cl-letf (((symbol-function
+              'mevedel-permission--load-persistent-resource-grants)
+             (lambda (_workspace)
+               (ert-fail "reloaded persistent resource grants"))))
+    (should-not
+     (mevedel-tool-exec--direct-resource-grants
+      '(:workspace workspace :resource-grants nil)))))
 
 (mevedel-deftest mevedel-tool-exec--remembered-additional-profile ()
   ,test
@@ -1424,6 +1453,32 @@ an exact user-authored escalation rule skips the prompt"
        (lambda (result) (setq outcome result))))
     (should-not enqueued)
     (should (eq 'allow outcome)))
+  :doc "one-shot qualified allow:
+an inherited escalation rule still requires one-time sandbox approval"
+  (let* ((session (mevedel-session--create :name "one-shot-escalation"))
+         (mevedel--session session)
+         (mevedel-permission-mode 'full-auto)
+         (mevedel-permission-rules
+          '(("Bash" :pattern "pwd"
+                    :sandbox-permissions require-escalated
+                    :action allow)))
+         entry outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (queued &optional _session)
+                 (setq entry queued)
+                 (funcall (plist-get queued :callback) 'allow-session))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       `(:command "pwd"
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?"
+         :permission-context
+         (:session ,session :one-shot-mutations-p t))
+       (lambda (result) (setq outcome result))))
+    (should (eq 'sandbox (plist-get entry :kind)))
+    (should (plist-get entry :once-only))
+    (should (eq 'allow outcome))
+    (should-not (mevedel-session-permission-rules session)))
   :doc "ordinary allow is insufficient:
 an unqualified command rule cannot authorize full escalation"
   (let ((mevedel-permission-mode 'full-auto)
@@ -1951,6 +2006,23 @@ the decision log identifies complete confinement bypass authority"
      (eq 'allow
          (mevedel-tools--check-bash-permission
           "echo $HOME" :permission-context '(:mode full-auto :buckets nil)))))
+  :doc "one-shot mutations:
+\`mevedel-tools--check-bash-permission' keeps inspection automatic but asks
+for effects despite reusable authority"
+  (let ((mevedel-permission-rules nil)
+        (context
+         '(:mode full-auto
+           :one-shot-mutations-p t
+           :buckets
+           ((:request . (("Bash" :pattern "make test" :action allow)))))))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "git status" :permission-context context)))
+    (should
+     (eq 'ask
+         (mevedel-tools--check-bash-permission
+          "make test" :permission-context context))))
   :doc "protected path:
 \`mevedel-tools--check-bash-permission' asks before protected resources"
   (let ((mevedel-permission-rules nil)
@@ -2498,6 +2570,40 @@ default Bash keeps bare dot inspection automatic"
             (should-not (equal "git log --oneline secret-token"
                                (plist-get entry :specifier-value)))))
       (delete-directory dir t)))
+  :doc "side Bash decisions forward no command-derived values to parent audit"
+  (let* ((parent (mevedel-session--create :name "parent"))
+         (session (mevedel-session--create
+                   :name "side" :audit-session parent
+                   :permission-mode 'ask))
+         (mevedel-permission-rules
+          '(("Bash" :pattern "git log:*" :action allow)))
+         (mevedel-bash-dangerous-commands nil)
+         calls outcome)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-telemetry-record)
+                 (lambda (target event &rest props)
+                   (push (list target event props) calls))))
+        (mevedel-tool-exec--check-permission-async
+         nil '(:command "git log --oneline secret-token"
+                        :permission-decision-metadata t)
+         (lambda (result) (setq outcome result)))))
+    (should (eq 'allow (plist-get outcome :outcome)))
+    (let ((call
+           (cl-find-if
+            (lambda (entry)
+              (and (eq parent (car entry))
+                   (eq 'permission-decision (cadr entry))))
+            calls)))
+      (should call)
+      (let ((props (nth 2 call)))
+        (should (eq 'btw (plist-get props :conversation-scope)))
+        (should (eq 'bash-classifier (plist-get props :via)))
+        (should (eq :pattern (plist-get props :specifier-key)))
+        (should-not (plist-member props :specifier-value))
+        (should-not
+         (string-match-p (regexp-opt '("git" "secret-token"))
+                         (prin1-to-string props))))))
   :doc "does not call guardian when permission resolves without prompting"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules
@@ -2984,7 +3090,24 @@ default Bash keeps bare dot inspection automatic"
              (lambda (_session _buffer) "/tmp/tool-results")))
     (should (equal "/tmp/tool-results/executions"
                    (mevedel-tool-exec--execution-artifact-directory
-                    'session)))))
+                    'session))))
+  :doc "ephemeral Bash requests do not materialize retained artifacts"
+  (let* ((root (make-temp-file "mevedel-ephemeral-bash-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "bash" :root root :name "bash"))
+         (session (mevedel-session--create
+                   :name "side" :workspace workspace))
+         (request (mevedel-request--create
+                   :session session :ephemeral-p t)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--current-request request)
+          (should-not
+           (mevedel-tool-exec--execution-artifact-directory session))
+          (should-not (mevedel-session-save-path session))
+          (should-not (file-exists-p
+                       (file-name-concat root ".mevedel"))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-tool-exec--execution-facts-xml ()
   ,test
@@ -3161,6 +3284,34 @@ default Bash keeps bare dot inspection automatic"
                            :execution-control)))
     (should (plist-get (plist-get result :render-data)
                        :observation-output-p)))
+  :doc "side execution observations use the durable audit target"
+  (let* ((parent (mevedel-session--create :name "parent"))
+         (session (mevedel-session--create
+                   :name "side" :audit-session parent))
+         captured)
+    (let ((mevedel--session session)
+          (mevedel--current-request nil)
+          (mevedel--agent-invocation nil))
+      (cl-letf (((symbol-function 'mevedel-execution-observe)
+                 (lambda (_session _owner _execution-id callback &rest _)
+                   (funcall
+                    callback
+                    '(:output ""
+                      :facts (:execution-id "exec-1" :state running
+                              :wall-time-seconds 1.0 :output-bytes 0
+                              :output-lines 0 :omitted-output-bytes 0
+                              :tty nil)))))
+                ((symbol-function 'mevedel-telemetry-record)
+                 (lambda (target event &rest props)
+                   (setq captured (list target event props)))))
+        (mevedel-tool-exec--write-stdin
+         #'ignore '(:execution_id "exec-1" :chars "private input"))))
+    (should (eq parent (car captured)))
+    (should (eq 'execution-observe-requested (cadr captured)))
+    (should (eq 'btw
+                (plist-get (nth 2 captured) :conversation-scope)))
+    (should-not
+     (string-match-p "private input" (prin1-to-string (nth 2 captured)))))
   :doc "marks input writes separately from empty output polls"
   (let ((session (mevedel-session--create :name "test"))
         result)
@@ -4060,6 +4211,39 @@ the execution boundary owns the session's single unavailable warning"
          (eq 'deny
              (mevedel-check-permission
               name :tool-struct tool :content nil :mode 'full-auto))))))
+  :doc "one-shot execution control asks for PTY input but not containment"
+  (mevedel-tool-exec--register)
+  (let ((write-stdin (mevedel-tool-get "WriteStdin"))
+        (stop (mevedel-tool-get "StopExecution"))
+        (mevedel-permission-rules nil)
+        (mevedel-protected-paths nil))
+    (should
+     (eq 'ask
+         (mevedel-check-permission
+          "WriteStdin" :tool-struct write-stdin
+          :content '(:execution_id "exec-1" :chars "yes\n")
+          :mode 'full-auto :one-shot-mutations-p t)))
+    (should
+     (eq 'allow
+         (mevedel-check-permission
+          "StopExecution" :tool-struct stop
+          :content '(:execution_id "exec-1")
+          :mode 'full-auto :one-shot-mutations-p t)))
+    (dolist (chars (list nil "" "\C-c"))
+      (should
+       (eq 'allow
+           (mevedel-check-permission
+            "WriteStdin" :tool-struct write-stdin
+            :content `(:execution_id "exec-1" :chars ,chars)
+            :mode 'full-auto :one-shot-mutations-p t))))
+    (dolist (name '("WriteStdin" "StopExecution"))
+      (let ((mevedel-permission-rules `((,name :action deny))))
+        (should
+         (eq 'deny
+             (mevedel-check-permission
+              name :tool-struct (mevedel-tool-get name)
+              :content '(:execution_id "exec-1" :chars "\C-c")
+              :mode 'full-auto :one-shot-mutations-p t))))))
   :doc "registers Eval mode and preserve_ui optional arguments"
   (mevedel-tool-exec--register)
   (let* ((tool (mevedel-tool-get "Eval"))

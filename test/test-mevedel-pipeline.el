@@ -1342,7 +1342,23 @@
        (lambda (_context outcome) (setq settled-outcome outcome))
       nil 'allow)
       (should queued)
-      (should-not settled-outcome))))
+      (should-not settled-outcome)))
+  :doc "one-shot prompts retain their authoritative side data buffer"
+  (let ((side-buffer (generate-new-buffer " *mevedel-side-queue*"))
+        queued)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (_event _payload callback &rest _)
+                     (funcall callback nil)))
+                  ((symbol-function 'mevedel-permission--enqueue)
+                   (lambda (entry &optional _session) (setq queued entry))))
+          (mevedel-pipeline--request-permission
+           `(:one-shot-mutations-p t :buffer ,side-buffer)
+           '(:kind generic :mutation-p t :callback ignore) nil
+           #'ignore)
+          (should (plist-get queued :once-only))
+          (should (eq side-buffer (plist-get queued :data-buffer))))
+      (kill-buffer side-buffer))))
 
 (mevedel-deftest mevedel-pipeline--step-permission ()
 		 ,test
@@ -2532,6 +2548,109 @@
 		   (mevedel-pipeline-run-tool
 		    tool (lambda (r) (setq result r)) '(:msg "hello"))
 		   (should (equal result "hello")))
+		 :doc "side tool lifecycle audit uses the durable target without content"
+		 (let* ((parent (mevedel-session--create :name "parent"))
+			(side (mevedel-session--create
+			       :name "side" :audit-session parent
+			       :permission-mode 'full-auto))
+			(tool (mevedel-tool--create
+			       :name "PrivateEcho"
+			       :handler (lambda (_args) '(:result "private-result"))
+			       :args '((file_path string :required "Path"))
+			       :read-only-p t))
+			calls result)
+		   (with-temp-buffer
+		     (setq-local mevedel--session side)
+		     (cl-letf (((symbol-function 'mevedel-telemetry-record)
+				(lambda (session event &rest props)
+				  (push (list session event props) calls))))
+		       (mevedel-pipeline-run-tool
+			tool (lambda (value) (setq result value))
+			'(:file_path "/private/path"))))
+		   (should (equal "private-result" result))
+		   (dolist (event '(tool-received tool-finished))
+		     (let ((call (cl-find event calls :key #'cadr)))
+		       (should (eq parent (car call)))
+		       (should (eq 'btw
+				   (plist-get (nth 2 call) :conversation-scope)))
+		       (should-not
+			(string-match-p
+			 (regexp-opt '("/private/path" "private-result"))
+			 (prin1-to-string (nth 2 call)))))))
+		 :doc "side permission decisions forward only whitelisted audit fields"
+		 (let* ((root (make-temp-file "mevedel-side-audit-" t))
+			(workspace (mevedel-workspace--create
+				    :type 'project :id "audit" :root root
+				    :name "audit"))
+			(path (file-name-concat root "private"))
+			(parent (mevedel-session--create
+				 :name "parent" :workspace workspace))
+			(side (mevedel-session--create
+			       :name "side" :audit-session parent
+			       :workspace workspace :working-directory root
+			       :permission-mode 'full-auto))
+			(tool (mevedel-tool--create
+			       :name "PrivateEdit"
+			       :handler (lambda (_args) '(:result "changed"))
+			       :args '((file_path string :required "Path"))
+			       :get-path (lambda (args) (plist-get args :file_path))))
+			(mevedel-protected-paths nil)
+			calls result)
+		   (unwind-protect
+		       (progn
+			 (with-temp-buffer
+			   (setq-local mevedel--session side)
+			   (cl-letf (((symbol-function 'mevedel-telemetry-record)
+				      (lambda (session event &rest props)
+					(push (list session event props) calls))))
+			     (mevedel-pipeline-run-tool
+			      tool (lambda (value) (setq result value))
+			      (list :file_path path))))
+			 (should (equal "changed" result))
+			 (let ((call
+				(cl-find-if
+				 (lambda (entry)
+				   (and (eq parent (car entry))
+					(eq 'permission-decision (cadr entry))))
+				 calls)))
+			   (should call)
+			   (should (eq 'btw
+				       (plist-get (nth 2 call) :conversation-scope)))
+			   (should (eq :path
+				       (plist-get (nth 2 call) :specifier-key)))
+			   (should-not (plist-member (nth 2 call) :specifier-value))
+			   (should-not
+			    (string-match-p (regexp-quote path)
+					    (prin1-to-string (nth 2 call))))))
+		     (delete-directory root t)))
+		 :doc "one-shot request prompts for mutations without storing authority"
+		 (let* ((session (mevedel-session--create
+				  :name "one-shot" :permission-mode 'full-auto))
+			(request (mevedel-request--create
+				  :session session
+				  :one-shot-mutations-p t
+				  :skill-permission-rules
+				  '(("Edit" :action allow))))
+			(tool (mevedel-tool--create
+			       :name "Edit"
+			       :handler (lambda (_args) '(:result "changed"))))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			entry result)
+		   (with-temp-buffer
+		     (setq-local mevedel--session session)
+		     (setq-local mevedel--current-request request)
+		     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+				(lambda (queued &optional _session)
+				  (setq entry queued)
+				  ;; Even a non-UI reusable outcome must collapse to once.
+				  (funcall (plist-get queued :callback)
+					   'allow-session))))
+		       (mevedel-pipeline-run-tool
+			tool (lambda (value) (setq result value)) nil)))
+		   (should (plist-get entry :once-only))
+		   (should (equal "changed" result))
+		   (should-not (mevedel-session-permission-rules session)))
 		 :doc "normal sessions omit per-step telemetry spans"
 		 (let* ((session (mevedel-session--create
 				  :name "normal-telemetry"
@@ -3752,6 +3871,34 @@
 				  (file-name-concat save-path "tool-results")
 				  nil "\\.txt$")))
 		     (delete-directory tmpdir t)))
+		 :doc "ephemeral requests bound oversized results without materializing"
+		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
+			(ws (mevedel-workspace--create :root tmpdir))
+			(session (mevedel-session--create
+				  :name "ephemeral" :workspace ws))
+			(request (mevedel-request--create
+				  :session session :ephemeral-p t))
+			(tool (mevedel-tool--create
+			       :name "BigResult" :max-result-size 10))
+			(big-result (concat (make-string 1000 ?h)
+					    (make-string 3000 ?m)
+					    (make-string 1000 ?t)))
+			(mevedel-pipeline--preview-size 20)
+			next-ctx)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (mevedel-pipeline--step-persist
+			  (list :tool tool :result big-result :session session
+				:request request :buffer (current-buffer))
+			  (lambda (context) (setq next-ctx context)) #'ignore)
+			 (let ((preview (plist-get next-ctx :result)))
+			   (should (< (length preview) (length big-result)))
+			   (should (string-match-p "ephemeral request" preview))
+			   (should-not (string-prefix-p "<persisted-output>" preview)))
+			 (should-not (mevedel-session-save-path session))
+			 (should-not (file-exists-p
+				      (file-name-concat tmpdir ".mevedel"))))
+		     (delete-directory tmpdir t)))
 		 :doc "uses global cap when tool limit exceeds it"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
 			(ws (mevedel-workspace--create :root tmpdir))
@@ -3997,6 +4144,34 @@
 		      (string-search mevedel-tool-media--data-open
 				     (mevedel-pipeline--strip-side-channel-blocks
 				      r)))))
+		 :doc "ephemeral media remains in memory without materializing the session"
+		 (let* ((root (make-temp-file "mevedel-ephemeral-media-" t))
+			(workspace (mevedel-workspace--create
+				    :type 'project :id "media" :root root
+				    :name "media"))
+			(session (mevedel-session--create
+				  :name "side" :workspace workspace))
+			(request (mevedel-request--create
+				  :session session :ephemeral-p t))
+			out)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (mevedel-pipeline--step-attach-media-data
+			  (list :result "hello"
+				:media '((:path "/private/image.png"
+					  :mime "image/png"
+					  :kind image
+					  :data "captured"))
+				:session session :request request
+				:buffer (current-buffer))
+			  (lambda (context) (setq out context)) #'ignore)
+			 (should (string-search
+				  mevedel-tool-media--data-open
+				  (plist-get out :result)))
+			 (should-not (mevedel-session-save-path session))
+			 (should-not (file-exists-p
+				      (file-name-concat root ".mevedel"))))
+		     (delete-directory root t)))
 		 :doc "with media envelope: inline base64 is summarized before append"
 		 (let* ((result (concat "<media-file>\n"
 					"path: /tmp/a.png\n"

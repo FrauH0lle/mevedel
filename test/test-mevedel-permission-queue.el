@@ -186,6 +186,46 @@
     (should (= 1 (length (mevedel-session-permission-log-pending session))))
     (should-not (mevedel-permission-log-path session)))
 
+  :doc "side queue lifecycle forwards only whitelisted durable audit fields"
+  (let* ((parent (test-pq--make-session))
+         (side (test-pq--make-session))
+         calls)
+    (setf (mevedel-session-audit-session side) parent)
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               #'ignore)
+              ((symbol-function 'mevedel-telemetry-record)
+               (lambda (session event &rest props)
+                 (push (list session event props) calls))))
+      (mevedel-permission--enqueue
+       (list :kind 'sandbox :tool-name "Bash"
+             :specifier-key :path :specifier-value "/private/path"
+             :resource-path "/private/resource"
+             :resource-access 'write :protected-path t
+             :additional-permissions '(:network t)
+             :justification "private justification"
+             :origin "/root" :callback #'ignore)
+       side))
+    (let ((call
+           (cl-find-if
+            (lambda (entry)
+              (and (eq parent (car entry))
+                   (eq 'permission-enqueued (cadr entry))))
+            calls)))
+      (should call)
+      (let ((props (nth 2 call)))
+        (should (eq 'btw (plist-get props :conversation-scope)))
+        (should (eq 'sandbox (plist-get props :kind)))
+        (should (eq :path (plist-get props :specifier-key)))
+        (should (eq 'write (plist-get props :resource-access)))
+        (dolist (key '(:specifier-value :resource-path
+                       :additional-permissions :justification))
+          (should-not (plist-member props key)))
+        (should-not
+         (string-match-p
+          (regexp-opt '("/private/path" "/private/resource"
+                        "private justification"))
+          (prin1-to-string props))))))
+
   :doc "permission queue writes enqueue and resolve diagnostics"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-permission-log-" t)))

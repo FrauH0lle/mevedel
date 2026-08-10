@@ -22,6 +22,9 @@
 ;; `mevedel-chat'
 (defvar mevedel--session)
 
+;; `mevedel-structs'
+(declare-function mevedel-session-audit-target "mevedel-structs" (session))
+
 ;; `mevedel-tool-repair'
 (defvar mevedel-tool-repair--in-flight)
 (defvar mevedel-tool-repair--max-audit-records)
@@ -33,7 +36,7 @@
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
-(declare-function mevedel-telemetry-record
+(declare-function mevedel-telemetry-record-audit
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-transcript-audit'
@@ -239,23 +242,24 @@
   (condition-case nil
       (when session
         (let* ((event (mevedel-tool-repair--safe-event event))
-               (log (append (mevedel-session-repair-log session) (list event))))
+               (log (append (mevedel-session-repair-log session) (list event)))
+               (audit-session (mevedel-session-audit-target session)))
           (when (> (length log) mevedel-tool-repair-log-limit)
             (setq log (last log mevedel-tool-repair-log-limit)))
           (setf (mevedel-session-repair-log session) log)
           (mevedel-tool-repair--persist-event session event)
-          (when (and (fboundp 'mevedel-telemetry-record)
-                     (or (and (fboundp 'mevedel-telemetry-detailed-p)
-                              (mevedel-telemetry-detailed-p session))
-                         (not (eq (plist-get event :outcome) 'valid))
-                         (plist-get event :rules)
-                         (plist-get event :issue-kinds)))
-            (apply #'mevedel-telemetry-record
+          (when (or (mevedel-telemetry-detailed-p audit-session)
+                    (not (eq (plist-get event :outcome) 'valid))
+                    (plist-get event :rules)
+                    (plist-get event :issue-kinds))
+            (apply #'mevedel-telemetry-record-audit
                    session 'tool-input-repair
-                   :stage 'settled
-                   :repair-count (length (plist-get event :rules))
-                   :issue-count (length (plist-get event :issue-kinds))
-                   event)))
+                   (append
+                    (list :stage 'settled
+                          :repair-count (length (plist-get event :rules))
+                          :issue-count
+                          (length (plist-get event :issue-kinds)))
+                    event))))
         t)
     (error
      (ignore-errors

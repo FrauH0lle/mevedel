@@ -61,21 +61,20 @@
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission
                   "mevedel-permissions" (tool-name &rest args))
+(declare-function mevedel-permission--invocation-context
+                  "mevedel-permissions" (&rest args))
 
 ;; `mevedel-persistence'
 (declare-function mevedel--restore-file-instructions
                   "mevedel-persistence" (file &optional message))
 
 ;; `mevedel-structs'
-(declare-function mevedel-session-active-dropped-file-grants
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-mentions-shown "mevedel-structs" (session))
-(declare-function mevedel-session-permission-mode "mevedel-structs" (session))
-(declare-function mevedel-session-permission-rules "mevedel-structs" (session))
 (declare-function mevedel-session-turn-count "mevedel-structs" (session))
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (session))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 
 ;; `mevedel-tool-fs'
@@ -109,6 +108,9 @@
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+
+(defvar-local mevedel-mentions--agent-enabled-p t
+  "Whether mention completion offers retained agents in this buffer.")
 
 
 ;;
@@ -619,11 +621,20 @@ optional strings from the `#L<start>[-<end>]' suffix."
          (expanded (or bound-path (expand-file-name path)))
          (session (plist-get info :session))
          (workspace-root (plist-get info :workspace-root))
-         (session-rules (and session
-                             (mevedel-session-permission-rules session)))
-         (exact-allowed-paths
-          (and session
-               (mevedel-session-active-dropped-file-grants session)))
+         (chat-buffer (or (plist-get info :chat-buffer) (current-buffer)))
+         (permission-context
+          (with-current-buffer chat-buffer
+            (require 'mevedel-permissions)
+            (mevedel-permission--invocation-context
+             :tool-name "Read"
+             :session session
+             :workspace (and session (mevedel-session-workspace session))
+             :request (and (boundp 'mevedel--current-request)
+                           mevedel--current-request)
+             :buffer chat-buffer
+             :path expanded
+             :workspace-root workspace-root
+             :allowed-roots (mevedel-mentions--allowed-roots info))))
          (display-path (concat path range-label))
          (dedup-key (cons 'file (cons expanded range-label)))
          (deny-placeholder
@@ -656,13 +667,7 @@ to the user."
      ((not (eq 'allow
                (mevedel-check-permission
                 "Read"
-                :tool-struct (ignore-errors (mevedel-tool-ensure "Read"))
-                :path expanded
-                :session-rules session-rules
-                :mode (and session (mevedel-session-permission-mode session))
-                :workspace-root workspace-root
-                :allowed-roots (mevedel-mentions--allowed-roots info)
-                :exact-allowed-paths exact-allowed-paths)))
+                :normalized-context permission-context)))
       (funcall deny-placeholder "permission denied"))
      ((file-directory-p expanded)
       (condition-case err
@@ -1262,7 +1267,10 @@ exit-function positions point between the braces."
         (let ((start (1- (point)))
               (end orig-point))
           (list start end
-                '("@ref:" "@ref:{}" "@file:" "@agent:" "@mcp:")
+                (append '("@ref:" "@ref:{}" "@file:")
+                        (and mevedel-mentions--agent-enabled-p
+                             '("@agent:"))
+                        '("@mcp:"))
                 :exclusive 'no
                 :annotation-function
                 (lambda (cand)
@@ -1387,7 +1395,8 @@ bare `@' prefix; the other capfs fire once the prefix is complete."
   (add-hook 'completion-at-point-functions #'mevedel-mention-capf nil t)
   (add-hook 'completion-at-point-functions #'mevedel-ref-capf nil t)
   (add-hook 'completion-at-point-functions #'mevedel-file-capf nil t)
-  (add-hook 'completion-at-point-functions #'mevedel-agent-capf nil t)
+  (when mevedel-mentions--agent-enabled-p
+    (add-hook 'completion-at-point-functions #'mevedel-agent-capf nil t))
   (add-hook 'completion-at-point-functions #'mevedel-mcp-capf nil t))
 
 (provide 'mevedel-mentions)

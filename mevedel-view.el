@@ -193,6 +193,15 @@
   :type 'integer
   :group 'mevedel)
 
+(defvar-local mevedel-view--side-conversation-p nil
+  "Non-nil when this view displays an ephemeral `/btw' conversation.")
+
+(defvar-local mevedel-view--transcript-start nil
+  "Data-buffer marker before which transcript projection is hidden.")
+
+(defvar-local mevedel-view--abort-function nil
+  "Optional data-buffer function used to abort work without root lifecycle.")
+
 
 (defface mevedel-view-separator
   '((t :inherit shadow :extend t))
@@ -566,7 +575,9 @@ inserts the initial separator with input marker.
 OPTIONS is a plist.  When `:agent-transcript-p' is non-nil, create
 a read-only transcript inspection view instead of an interactive chat
 view.  When `:preserve-data-view-buffer' is non-nil, leave DATA-BUF's
-  existing `mevedel--view-buffer' binding untouched."
+existing `mevedel--view-buffer' binding untouched.  A
+`:side-conversation-p' view omits durable input history, and
+`:transcript-start' hides inherited model context from projection."
   (require 'mevedel-view-composer)
   (require 'mevedel-view-agent)
   (require 'mevedel-view-history)
@@ -578,6 +589,10 @@ view.  When `:preserve-data-view-buffer' is non-nil, leave DATA-BUF's
       (delete-overlay mevedel-view--composer-keymap-overlay))
     (mevedel-view-mode)
     (mevedel-surface--enforce-ephemeral)
+    (setq-local mevedel-view--side-conversation-p
+                (plist-get options :side-conversation-p)
+                mevedel-view--transcript-start
+                (plist-get options :transcript-start))
     (setq-local mevedel--data-buffer data-buf)
     (setq-local mevedel--session
                 (and (buffer-live-p data-buf)
@@ -617,7 +632,8 @@ view.  When `:preserve-data-view-buffer' is non-nil, leave DATA-BUF's
     (mevedel-view-composer-initialize)
     ;; Kill-buffer lifecycle: view killed -> clear ref on data buffer
     (add-hook 'kill-buffer-hook #'mevedel-view--on-view-killed nil t)
-    (add-hook 'kill-buffer-hook #'mevedel-view-history-save nil t)
+    (unless mevedel-view--side-conversation-p
+      (add-hook 'kill-buffer-hook #'mevedel-view-history-save nil t))
     (unless mevedel-view--agent-transcript-p
       (setq header-line-format '(:eval (mevedel-view--status-strip)))))
   (unless (plist-get options :preserve-data-view-buffer)
@@ -660,11 +676,13 @@ new view buffer is created."
 
 (defun mevedel-view--abort-data-buffer (data-buffer)
   "Abort active work owned by DATA-BUFFER."
-  (when (and (buffer-live-p data-buffer)
-             (buffer-local-value 'mevedel--session data-buffer)
-             (fboundp 'mevedel-abort))
+  (when (buffer-live-p data-buffer)
     (condition-case err
-        (mevedel-abort data-buffer)
+        (with-current-buffer data-buffer
+          (if mevedel-view--abort-function
+              (funcall mevedel-view--abort-function data-buffer)
+            (when (and mevedel--session (fboundp 'mevedel-abort))
+              (mevedel-abort data-buffer))))
       (error
        (display-warning
         'mevedel

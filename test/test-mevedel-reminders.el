@@ -391,10 +391,10 @@
 ;;
 ;;; Block formatting
 
-(mevedel-deftest mevedel-reminders--format-block
-  (:doc "`mevedel-reminders--format-block' wraps content in XML tags")
+(mevedel-deftest mevedel-reminders-format-block
+  (:doc "`mevedel-reminders-format-block' wraps content in XML tags")
   (should (equal "<system-reminder>\nhello\n</system-reminder>"
-                 (mevedel-reminders--format-block "hello"))))
+                 (mevedel-reminders-format-block "hello"))))
 
 
 ;;

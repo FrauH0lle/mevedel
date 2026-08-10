@@ -46,6 +46,8 @@
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
+(declare-function mevedel-telemetry-record-audit
+                  "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
 
@@ -114,6 +116,9 @@ Nil keeps all entries."
   :type '(choice (integer :tag "Entries")
                  (const :tag "Unlimited" nil))
   :group 'mevedel)
+
+(defvar-local mevedel-hooks--context-frozen-p nil
+  "Non-nil when this buffer's session hook rules are the complete rule set.")
 
 (defcustom mevedel-hooks-persist-log t
   "When non-nil, append hook log entries to persisted session directories."
@@ -213,6 +218,11 @@ plist.")
                  PostToolUse PostToolUseFailure PreCompact PostCompact
                  SubagentStart SubagentStop Stop StopFailure SessionEnd)
   "Known hook event names.")
+
+(defconst mevedel-hooks-tool-events
+  '(PreToolUse PermissionRequest PermissionDenied
+               PostToolUse PostToolUseFailure)
+  "Hook events fired by the tool pipeline for a single tool call.")
 
 (defconst mevedel-hooks--function-hook-alist
   '((UserPromptSubmit . mevedel-user-prompt-submit-functions)
@@ -649,35 +659,37 @@ Plugin runtime data is scoped to WORKSPACE when provided."
 (defun mevedel-hooks-effective-rules
     (&optional session workspace request invocation)
   "Return effective hook rules for SESSION, WORKSPACE, REQUEST, and INVOCATION."
-  (let* ((workspace (or workspace
-                        (and session (mevedel-session-workspace session))))
-         rules)
-    (setq rules (mevedel-hooks--append-rule-layer
-                 rules mevedel-hook-rules))
-    (dolist (file (mevedel-hooks--user-config-files))
-      (setq rules
-            (append rules
-                    (mevedel-hooks--annotate-rules-source
-                     (mevedel-hooks--read-config-file file)
-                     'user-file))))
-    (setq rules (append rules (mevedel-hooks--plugin-config-rules workspace)))
-    (dolist (file (mevedel-hooks--project-config-files workspace))
-      (setq rules
-            (append rules
-                    (mevedel-hooks--annotate-rules-source
-                     (mevedel-hooks--read-config-file file)
-                     'project-file))))
-    (when session
+  (if mevedel-hooks--context-frozen-p
+      (copy-tree (and session (mevedel-session-hook-rules session)))
+    (let* ((workspace (or workspace
+                          (and session (mevedel-session-workspace session))))
+           rules)
       (setq rules (mevedel-hooks--append-rule-layer
-                   rules (mevedel-session-hook-rules session))))
-    (when (mevedel-request-p request)
-      (setq rules (mevedel-hooks--append-rule-layer
-                   rules (mevedel-request-hook-rules request))))
-    (when (and (fboundp 'mevedel-agent-invocation-p)
-               (mevedel-agent-invocation-p invocation))
-      (setq rules (mevedel-hooks--append-rule-layer
-                   rules (mevedel-agent-invocation-hook-rules invocation))))
-    rules))
+                   rules mevedel-hook-rules))
+      (dolist (file (mevedel-hooks--user-config-files))
+        (setq rules
+              (append rules
+                      (mevedel-hooks--annotate-rules-source
+                       (mevedel-hooks--read-config-file file)
+                       'user-file))))
+      (setq rules (append rules (mevedel-hooks--plugin-config-rules workspace)))
+      (dolist (file (mevedel-hooks--project-config-files workspace))
+        (setq rules
+              (append rules
+                      (mevedel-hooks--annotate-rules-source
+                       (mevedel-hooks--read-config-file file)
+                       'project-file))))
+      (when session
+        (setq rules (mevedel-hooks--append-rule-layer
+                     rules (mevedel-session-hook-rules session))))
+      (when (mevedel-request-p request)
+        (setq rules (mevedel-hooks--append-rule-layer
+                     rules (mevedel-request-hook-rules request))))
+      (when (and (fboundp 'mevedel-agent-invocation-p)
+                 (mevedel-agent-invocation-p invocation))
+        (setq rules (mevedel-hooks--append-rule-layer
+                     rules (mevedel-agent-invocation-hook-rules invocation))))
+      rules)))
 
 ;;;###autoload
 (defun mevedel-hooks-trust-project (&optional workspace)
@@ -718,8 +730,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
 (defun mevedel-hooks--matcher-target (event event-plist)
   "Return matcher target for EVENT from EVENT-PLIST."
   (pcase event
-    ((or 'PreToolUse 'PermissionRequest 'PermissionDenied
-         'PostToolUse 'PostToolUseFailure)
+    ((guard (memq event mevedel-hooks-tool-events))
      (plist-get event-plist :tool-name))
     ((or 'SubagentStart 'SubagentStop)
      (plist-get event-plist :role))
@@ -1171,19 +1182,19 @@ EVENT labels each generated hook event block."
         (setq log (last log mevedel-hooks-log-limit)))
       (setf (mevedel-session-hook-log session) log))
     (mevedel-hooks--persist-log-entry session entry)
-    (when (fboundp 'mevedel-telemetry-record)
-      (let ((handler (plist-get entry :handler)))
-        (mevedel-telemetry-record
-         session 'hook-handler
-         :hook-event (plist-get entry :event)
-         :handler-id (and handler
-                          (mevedel-hooks--telemetry-handler-id handler))
-         :handler-type (and (listp handler) (plist-get handler :type))
-         :handler-source (and (listp handler) (plist-get handler :source))
-         :status (plist-get entry :status)
-         :duration-ms (and (numberp (plist-get entry :elapsed))
-                           (round (* 1000 (plist-get entry :elapsed))))
-         :exit-status (plist-get entry :exit-status))))))
+    (let ((handler (plist-get entry :handler)))
+      (mevedel-telemetry-record-audit
+       session 'hook-handler
+       :hook-event (plist-get entry :event)
+       :handler-id (and handler
+                        (mevedel-hooks--telemetry-handler-id handler))
+       :handler-type (and (listp handler) (plist-get handler :type))
+       :handler-source (and (listp handler)
+                            (plist-get handler :source))
+       :status (plist-get entry :status)
+       :duration-ms (and (numberp (plist-get entry :elapsed))
+                         (round (* 1000 (plist-get entry :elapsed))))
+       :exit-status (plist-get entry :exit-status)))))
 
 (defun mevedel-hooks--telemetry-handler-id (handler)
   "Return a stable non-payload identifier for declarative HANDLER."
@@ -1438,7 +1449,7 @@ record only that context was added, without duplicating the body."
         process-environment))))
 
 (defun mevedel-hooks--run-command-handler
-    (event handler event-plist session callback)
+    (event handler event-plist session request callback)
   "Run command HANDLER for EVENT and call CALLBACK with decision."
   (let* ((command (plist-get handler :command))
          (timeout (mevedel-hooks--command-timeout handler))
@@ -1492,6 +1503,16 @@ record only that context was added, without duplicating the body."
                (with-current-buffer buffer
                  (buffer-substring-no-properties (point-min) (point-max)))
              ""))
+         (cancel ()
+           (unless settled
+             (setq settled t)
+             (when (timerp timer) (cancel-timer timer))
+             (when (and process (process-live-p process))
+               (delete-process process))
+             (when (and stderr-process (process-live-p stderr-process))
+               (delete-process stderr-process))
+             (when (buffer-live-p stdout-buffer) (kill-buffer stdout-buffer))
+             (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))))
          (finish (status reason)
            (unless settled
              (setq settled t)
@@ -1550,6 +1571,8 @@ record only that context was added, without duplicating the body."
                (when (buffer-live-p stdout-buffer) (kill-buffer stdout-buffer))
                (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))
                (funcall callback decision)))))
+      (when request
+        (mevedel-request-push-canceller request #'cancel))
       (condition-case err
           (let ((process-environment
                  (mevedel-hooks--command-process-environment handler)))
@@ -1645,7 +1668,7 @@ stable public event payload."
          (mevedel-hooks--failure-decision handler reason))))))
 
 (defun mevedel-hooks--run-handlers
-    (event handlers event-plist session decision callback
+    (event handlers event-plist session request decision callback
            &optional dispatch-buffer context-handlers)
   "Run HANDLERS for EVENT serially, then call CALLBACK."
   (if (and dispatch-buffer
@@ -1653,8 +1676,8 @@ stable public event payload."
            (not (eq (current-buffer) dispatch-buffer)))
       (with-current-buffer dispatch-buffer
         (mevedel-hooks--run-handlers
-         event handlers event-plist session decision callback dispatch-buffer
-         context-handlers))
+         event handlers event-plist session request decision callback
+         dispatch-buffer context-handlers))
     (if (or (null handlers)
             (mevedel-hooks-terminal-decision-p decision event))
         (progn
@@ -1701,7 +1724,7 @@ stable public event payload."
                     :context-chars (and context (length context))
                     :context-deduplicated nil))
                  (mevedel-hooks--run-handlers
-                  event (cdr handlers) next-plist session next callback
+                  event (cdr handlers) next-plist session request next callback
                   dispatch-buffer next-context-handlers))))
           (pcase (plist-get handler :type)
             ('elisp
@@ -1710,7 +1733,7 @@ stable public event payload."
                event handler event-plist session)))
             ('command
              (mevedel-hooks--run-command-handler
-              event handler event-plist session #'advance))
+              event handler event-plist session request #'advance))
             (_ (advance nil))))))))
 
 (defun mevedel-hooks-run-event
@@ -1822,13 +1845,13 @@ decision plist."
                             :threshold-ms
                             (round (* 1000 mevedel-hooks-slow-threshold))))))))))
           (mevedel-hooks--run-handlers
-           event handlers payload session nil #'finish dispatch-buffer))))))
+           event handlers payload session request nil #'finish
+           dispatch-buffer))))))
 
 (defun mevedel-hooks--target-key-for-event (event)
   "Return the primary matcher payload key for EVENT, or nil."
   (pcase event
-    ((or 'PreToolUse 'PermissionRequest 'PermissionDenied
-         'PostToolUse 'PostToolUseFailure)
+    ((guard (memq event mevedel-hooks-tool-events))
      :tool-name)
     ((or 'SubagentStart 'SubagentStop)
      :role)

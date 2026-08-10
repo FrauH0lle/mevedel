@@ -35,7 +35,10 @@
                   "mevedel-reminders" (buffer path))
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-one-shot-mutations-p
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 
 (defconst mevedel-tool-patch--begin "*** Begin Patch")
@@ -924,7 +927,11 @@ file buttons, rewritten links, or inline images."
 
 (defun mevedel-tool-patch--effective-mode ()
   "Return the active permission mode for patch review."
-  (or (and (boundp 'mevedel-pipeline--auto-apply-edit-p)
+  (or (and (boundp 'mevedel--current-request)
+           mevedel--current-request
+           (mevedel-request-one-shot-mutations-p mevedel--current-request)
+           'ask)
+      (and (boundp 'mevedel-pipeline--auto-apply-edit-p)
            mevedel-pipeline--auto-apply-edit-p
            'edits)
       (and (boundp 'mevedel--session)

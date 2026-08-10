@@ -59,6 +59,7 @@
                     mevedel-view--clear-input
                     mevedel-view-refresh-input-prompt
                     mevedel-view-send
+                    mevedel-view--send-root
                     mevedel-view--forward-input
                     mevedel-view--run-prompt-submit-hook))
     (should (equal "mevedel-view-composer"
@@ -155,19 +156,6 @@
         (unless (string-suffix-p "\n" body)
           (insert "\n"))))
     skill-file))
-
-(defun mevedel-view-test--dry-run-request-data ()
-  "Return current gptel request data after normal prompt transforms."
-  (let ((fsm
-         (gptel-request
-           nil
-           :buffer (current-buffer)
-           :dry-run t
-           :transforms
-           (cons #'mevedel-view--transform-model-input
-                 (remove #'mevedel-view--transform-model-input
-                         gptel-prompt-transform-functions)))))
-    (format "%S" (plist-get (gptel-fsm-info fsm) :data))))
 
 (defun mevedel-view-test--complete-skill (candidate)
   "Replace the current `$' completion fragment with CANDIDATE."
@@ -1645,7 +1633,6 @@
           (should (equal (if (string= command "stop") "exec-000001" "")
                          seen))
           (should (string-empty-p (mevedel-view--input-text))))))))
-
 (mevedel-deftest mevedel-view-send/dollar-text ()
   ,test
   (test)
@@ -3224,7 +3211,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (with-temp-buffer
             (insert "stored prompt")
             (mevedel-view--transform-model-input fsm)
-            (should (equal "derived prompt" (buffer-string))))
+            (should (equal "derived prompt" (buffer-string)))
+            (should-not (plist-member (gptel-fsm-info fsm)
+                                      :mevedel-model-context))
+            (should-not (plist-member (gptel-fsm-info fsm)
+                                      :mevedel-model-input)))
           (with-current-buffer chat-buffer
             (should-not mevedel--pending-model-input)))
       (kill-buffer chat-buffer))))

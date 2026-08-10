@@ -936,6 +936,26 @@
     (should (= 1 (plist-get (cdr captured) :repair-count)))
     (should (= 1 (plist-get (cdr captured) :issue-count))))
 
+  :doc "side repair outcomes use the durable audit target"
+  (let* ((parent (mevedel-session--create :name "parent"))
+         (side (mevedel-session--create
+                :name "side" :audit-session parent))
+         captured)
+    (cl-letf (((symbol-function 'mevedel-telemetry-record)
+               (lambda (session event &rest props)
+                 (setq captured (list session event props)))))
+      (mevedel-tool-repair-log-event
+       side
+       '(:time "now" :origin "/root" :backend backend
+               :model model :tool "Read" :outcome repaired
+               :repair-enabled t :rules (array-to-list) :paths ((names))
+               :issue-kinds (wrong-shape) :execution executed
+               :result success)))
+    (should (eq parent (car captured)))
+    (should (eq 'tool-input-repair (cadr captured)))
+    (should (eq 'btw
+                (plist-get (nth 2 captured) :conversation-scope))))
+
   :doc "keeps routine valid outcomes out of normal unified telemetry"
   (let ((session (mevedel-session--create :name "main"))
         captured)

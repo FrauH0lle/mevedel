@@ -11,8 +11,8 @@ and targeted handle refresh. `mevedel-view-interaction.el` owns interaction
 descriptor registration, ordering, callback overlays, and redraw.
 `mevedel-view-render.el` owns transcript rendering, folding, source mapping,
 and navigation. `mevedel-view-stream.el` owns streaming, request progress,
-and gptel stream integration. The data buffer remains the model-visible
-transcript.
+and gptel stream integration. `mevedel-side-conversation.el` owns transient
+`/btw` conversations. The data buffer remains the model-visible transcript.
 
 ## Buffer Roles
 
@@ -339,6 +339,40 @@ Source-first chooser with identity, working-directory, sharing, branch,
 recovery, and latest-prompt context. Switching uses ordinary session restore,
 rerenders source-backed history, and positions the target at the exact stable
 fork point. Each view retains its own composer draft and working directory.
+
+## Ephemeral `/btw` Side Conversations
+
+`/btw [PROMPT]` opens one multi-turn side conversation owned by the current
+root session. It may be invoked while the root response is streaming. The side
+receives an invocation-time copy of the effective post-compaction context and
+request configuration. Additional gptel text and media context is materialized
+at that point rather than retaining live files, buffers, or overlays. Fresh
+`@file`, `@ref`, and `@mcp` mentions are still resolved for each accepted side
+prompt. For an active root turn, the copy ends after the accepted user prompt
+plus any complete assistant/tool material; partial text and unfinished tool
+calls are omitted. A hidden model-visible reminder marks that parent turn
+incomplete and reference-only. Later root activity is never synchronized or
+merged. Synchronous and callback-style gptel context formatters are both
+materialized before the side accepts input.
+
+The inherited context stays in the side data buffer for gptel but is below the
+view's projection boundary, so the side opens with only its origin header and
+new turns visible. The side has its own transient session, request lifecycle,
+permission queue, stream rendering, and composer. It has no session/input
+history, persistence, compaction, queued follow-ups, slash commands, skills,
+Goal/Plan/task state, or ordinary session hooks. `C-c RET` sends only while the
+side is idle and `C-c C-k` aborts the current side response without closing the
+conversation. Aborting appends the same structural incomplete boundary so a
+follow-up cannot mistake partial prose for a settled answer. Closing the side
+discards it; closing the parent also closes its side. Neither operation rolls
+back already approved workspace effects.
+
+A parent owns at most one side. Bare `/btw` focuses it; `/btw PROMPT` submits
+only when its composer is empty and no side response is active. Refused inline
+delivery preserves both composers and their points. Side redraws use the same
+draft-preserving view machinery as root redraws. `/btw` requires an accepted
+parent prompt and is available only from the live root chat or Plan composer;
+directive, historical, agent, and side scopes cannot create one.
 
 While managed Bash work is live, the status zone shows its session-wide count
 as an `Executions` fragment. Activating it opens the execution cockpit. The

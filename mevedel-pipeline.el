@@ -68,6 +68,12 @@
                   "mevedel-permissions" (&rest args))
 (declare-function mevedel-permission--normalize-outcome
                   "mevedel-permissions" (outcome))
+(declare-function mevedel-permission--one-shot-mutations-p
+                  "mevedel-permissions" (request &optional explicit))
+(declare-function mevedel-permission--one-shot-prompt-entry
+                  "mevedel-permissions" (entry &optional data-buffer))
+(declare-function mevedel-permission--one-shot-prompt-outcome
+                  "mevedel-permissions" (outcome))
 (declare-function mevedel-permission--path-protected-p
                   "mevedel-permissions" (path))
 (declare-function mevedel-permission-decision-raw-outcome
@@ -83,6 +89,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-directive-uuid "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (declare-function mevedel-request-note-untracked-effect
                   "mevedel-structs" (request source reason))
@@ -91,7 +98,9 @@
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
-(declare-function mevedel-telemetry-record
+(declare-function mevedel-telemetry-forwarded-audit-p
+                  "mevedel-telemetry" (session))
+(declare-function mevedel-telemetry-record-audit
                   "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
@@ -200,25 +209,35 @@ of omitted characters."
         result result length mevedel-pipeline--preview-size)
        :text))))
 
-(defun mevedel-pipeline--tool-results-dir (session buffer)
+(defun mevedel-pipeline--tool-results-dir (session buffer &optional request)
   "Return SESSION's tool-results directory, materializing when possible.
 
 When SESSION has no save path yet, use
 `mevedel-session-persistence--shallow-ensure-files' with BUFFER so
 oversized tool output produced during the first turn can still be
-owned by the session.  Returns nil when there is no session or shallow
-materialization fails."
-  (when session
-    (let ((save-path (or (mevedel-session-save-path session)
-                         (when (and buffer (buffer-live-p buffer))
-                           (require 'mevedel-session-persistence)
-                           (mevedel-session-persistence--shallow-ensure-files
-                            session buffer)))))
-      (when save-path
-        (require 'mevedel-workspace)
-        (mevedel-workspace-ensure-generated-state-ignored
-         (mevedel-session-workspace session))
-        (file-name-concat save-path "tool-results")))))
+owned by the session.  REQUEST defaults to BUFFER's active request.
+Ephemeral requests never materialize or reuse a durable directory.
+Returns nil when there is no session, the request is ephemeral, or
+shallow materialization fails."
+  (let ((request
+         (or request
+             (and buffer
+                  (buffer-live-p buffer)
+                  (local-variable-p 'mevedel--current-request buffer)
+                  (buffer-local-value 'mevedel--current-request buffer)))))
+    (when (and session
+               (not (and request
+                         (mevedel-request-ephemeral-p request))))
+      (let ((save-path (or (mevedel-session-save-path session)
+                           (when (and buffer (buffer-live-p buffer))
+                             (require 'mevedel-session-persistence)
+                             (mevedel-session-persistence--shallow-ensure-files
+                              session buffer)))))
+        (when save-path
+          (require 'mevedel-workspace)
+          (mevedel-workspace-ensure-generated-state-ignored
+           (mevedel-session-workspace session))
+          (file-name-concat save-path "tool-results"))))))
 
 (defun mevedel-pipeline--persist-result (result tool session &optional buffer)
   "Save RESULT to disk and return a preview string.
@@ -245,15 +264,19 @@ available, falls back to `mevedel-pipeline--truncate-result'."
                 "</persisted-output>"))
     (mevedel-pipeline--truncate-result result tool)))
 
-(defun mevedel-pipeline--truncate-result (result tool)
+(defun mevedel-pipeline--truncate-result (result tool &optional ephemeral-p)
   "Truncate RESULT to a preview without persisting to disk.
 
 Used when the result exceeds the size limit but no session-owned
-persistence directory is available.  TOOL is used only for the tool
-name in the message."
-  (concat (format "Output too large (%d chars) and no session persistence \
+persistence directory is available, or when EPHEMERAL-P forbids creating
+one.  TOOL is used only for the tool name in the message."
+  (concat (if ephemeral-p
+              (format "Output too large (%d chars; tool: %s). Full output \
+discarded for ephemeral request.\n\n"
+                      (length result) (mevedel-tool-name tool))
+            (format "Output too large (%d chars) and no session persistence \
 directory available to persist full result (tool: %s).\n\n"
-                  (length result) (mevedel-tool-name tool))
+                    (length result) (mevedel-tool-name tool)))
           "Preview (head and tail):\n"
           (mevedel-pipeline--head-tail-preview result)
           "\n"))
@@ -723,7 +746,8 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
                        mevedel-permission-mode))
              (raw (mevedel-permission-decision-raw-outcome decision))
              (outcome (or (plist-get decision :outcome)
-                          (mevedel-permission--normalize-outcome raw))))
+                          (mevedel-permission--normalize-outcome raw)))
+             (specifier (mevedel-pipeline--permission-specifier-props context)))
         (apply #'mevedel-permission-log
                session 'permission-decision
                (append
@@ -732,10 +756,29 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
                       :mode mode
                       :outcome outcome
                       :via (plist-get decision :via))
-                (mevedel-pipeline--permission-specifier-props context)
+                specifier
                 (when (plist-member decision :bucket)
                   (list :bucket (plist-get decision :bucket)))
-                props))))))
+                props))
+        ;; The detailed permission log remains side-local because it may
+        ;; contain resource paths and human justifications.  Forward only a
+        ;; fixed value-free subset to a distinct durable audit target.
+        (when (mevedel-telemetry-forwarded-audit-p session)
+          (apply #'mevedel-telemetry-record-audit
+                 session 'permission-decision
+                 (append
+                  (list :tool-name tool-name
+                        :origin (mevedel-pipeline--permission-origin context)
+                        :mode mode :outcome outcome
+                        :via (plist-get decision :via))
+                  (when (plist-member specifier :specifier-key)
+                    (list :specifier-key
+                          (plist-get specifier :specifier-key)))
+                  (when (plist-member specifier :protected-path)
+                    (list :protected-path
+                          (and (plist-get specifier :protected-path) t)))
+                  (when (plist-member decision :bucket)
+                    (list :bucket (plist-get decision :bucket))))))))))
 
 (defun mevedel-pipeline--permission-decision-with-via
     (decision via &rest props)
@@ -896,7 +939,20 @@ MODEL-REASON and PROVENANCE are included in the hook event when available."
 SETTLE receives the updated CONTEXT and the permission outcome.
 ASK-DECISION is logged only when hooks leave queue admission unresolved.
 FALLBACK-OUTCOME settles an unresolved request without queue admission."
-  (let ((workspace (plist-get context :workspace)))
+  (let* ((one-shot-p (plist-get context :one-shot-mutations-p))
+         (entry (if one-shot-p
+                    (mevedel-permission--one-shot-prompt-entry
+                     entry (plist-get context :buffer))
+                  entry))
+         (original-settle settle)
+         (settle
+          (if one-shot-p
+              (lambda (updated outcome)
+                (funcall original-settle updated
+                         (mevedel-permission--one-shot-prompt-outcome
+                          outcome)))
+            settle))
+         (workspace (plist-get context :workspace)))
     (mevedel-pipeline--run-hook-event
      'PermissionRequest
      (mevedel-hooks-tool-event-plist
@@ -937,7 +993,7 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                       (plist-put updated :permission-denial-provenance
                                  'PermissionRequest)
                       `(deny . ,reason))))
-          ((eq permission-decision 'allow)
+          ((and (eq permission-decision 'allow) (not one-shot-p))
            (setq updated
                  (mevedel-pipeline--record-hook-audit
                   updated
@@ -949,7 +1005,8 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                   :via 'permission-request-hook))
            (funcall settle updated 'allow))
           (t
-           (if (and fallback-outcome (null permission-decision))
+           (if (and fallback-outcome (null permission-decision)
+                    (not one-shot-p))
                (funcall settle updated fallback-outcome)
              (when ask-decision
                (mevedel-pipeline--log-permission-decision
@@ -1000,6 +1057,10 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
          (workspace (plist-get context :workspace))
          (request (plist-get context :request))
          (invocation (plist-get context :invocation))
+         (one-shot-mutations-p
+          (mevedel-permission--one-shot-mutations-p request))
+         (context
+          (plist-put context :one-shot-mutations-p one-shot-mutations-p))
          (permission-context
           (mevedel-permission--invocation-context
            :tool tool
@@ -1008,6 +1069,7 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
            :workspace workspace
            :request request
            :invocation invocation
+           :one-shot-mutations-p one-shot-mutations-p
            :buffer (plist-get context :buffer)
            :path (plist-get context :permission-path)
            :permission-request
@@ -1162,6 +1224,7 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
         (list :kind 'generic
               :tool-name tool-name
               :args args
+              :mutation-p (not (mevedel-tool-read-only-p tool))
               :specifier-key rule-key
               :specifier-value rule-value
               :protected-path
@@ -2041,7 +2104,8 @@ without changing handler return shapes."
                              result media
                              (mevedel-pipeline--tool-results-dir
                               (plist-get context :session)
-                              (plist-get context :buffer))
+                              (plist-get context :buffer)
+                              (plist-get context :request))
                              (plist-get context :tool-use-id))))
       (funcall next context))))
 
@@ -2087,11 +2151,16 @@ possibly-updated context."
       ;; the handler may have run (and called back) from inside a
       ;; `with-temp-buffer' wrapper.
       (let ((session (plist-get context :session))
-            (buffer (plist-get context :buffer)))
+            (buffer (plist-get context :buffer))
+            (request (plist-get context :request)))
         (funcall next
                  (plist-put context :result
-                            (mevedel-pipeline--persist-result
-                             result tool session buffer))))))))
+                            (if (and request
+                                     (mevedel-request-ephemeral-p request))
+                                (mevedel-pipeline--truncate-result
+                                 result tool t)
+                              (mevedel-pipeline--persist-result
+                               result tool session buffer)))))))))
 
 (defun mevedel-pipeline--step-post-tool-hooks (context next _fail)
   "Run post-tool hooks for CONTEXT, then call NEXT.
@@ -2280,7 +2349,8 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
          (cancel-cell (list nil))
          (sandbox-summary-cell (list nil))
          (context (list :tool tool :args args
-                        :session session :workspace workspace
+                        :session session
+                        :workspace workspace
                         :request request :invocation invocation :fsm fsm
                         :tool-use-id tool-use-id
                         :repair-entry repair-entry
@@ -2311,20 +2381,17 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
             (cond
              ((not called)
               (setq called t)
-              (when (and session (fboundp 'mevedel-telemetry-record))
-                (mevedel-telemetry-record
-                 session 'tool-finished
-                 :tool-name (mevedel-tool-name tool)
-                 :tool-use-id tool-use-id
-                 :request-id (and request
-                                  (fboundp 'mevedel-request-id)
-                                  (mevedel-request-id request))
-                 :outcome (if (and (stringp result)
-                                   (string-prefix-p "Error:" result))
-                              'error
-                            'success)
-                 :result-chars (and (stringp result) (length result))
-                 :result-bytes (and (stringp result) (string-bytes result))))
+              (mevedel-telemetry-record-audit
+               session 'tool-finished
+               :tool-name (mevedel-tool-name tool)
+               :tool-use-id tool-use-id
+               :request-id (and request (mevedel-request-id request))
+               :outcome (if (and (stringp result)
+                                 (string-prefix-p "Error:" result))
+                            'error
+                          'success)
+               :result-chars (and (stringp result) (length result))
+               :result-bytes (and (stringp result) (string-bytes result)))
               (mevedel-tool-repair-record-result repair-entry result)
               (condition-case err
                   (funcall callback result)
@@ -2353,16 +2420,13 @@ delivery: %S"
        (lambda ()
          (when-let* ((cancel (car cancel-cell)))
            (funcall cancel)))))
-    (when (and session (fboundp 'mevedel-telemetry-record))
-      (mevedel-telemetry-record
-       session 'tool-received
-       :tool-name (mevedel-tool-name tool)
-       :tool-use-id tool-use-id
-       :request-id (and request
-                        (fboundp 'mevedel-request-id)
-                        (mevedel-request-id request))
-       :origin (mevedel-current-origin)
-       :read-only (and (mevedel-tool-read-only-p tool) t)))
+    (mevedel-telemetry-record-audit
+     session 'tool-received
+     :tool-name (mevedel-tool-name tool)
+     :tool-use-id tool-use-id
+     :request-id (and request (mevedel-request-id request))
+     :origin (mevedel-current-origin)
+     :read-only (and (mevedel-tool-read-only-p tool) t))
     (mevedel-pipeline--run steps once-callback context)))
 
 

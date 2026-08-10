@@ -118,6 +118,19 @@ Return the plugin root directory."
 ;;
 ;;; View test helpers
 
+(defun mevedel-view-test--dry-run-request-data ()
+  "Return current gptel request data after normal prompt transforms."
+  (let ((fsm
+         (gptel-request
+           nil
+           :buffer (current-buffer)
+           :dry-run t
+           :transforms
+           (cons #'mevedel-view--transform-model-input
+                 (remove #'mevedel-view--transform-model-input
+                         gptel-prompt-transform-functions)))))
+    (format "%S" (plist-get (gptel-fsm-info fsm) :data))))
+
 (defun mevedel-view-test--insert-composer-draft (draft &optional point-offset)
   "Insert DRAFT into the editable composer and move point by POINT-OFFSET."
   (let ((start (mevedel-view--input-start))

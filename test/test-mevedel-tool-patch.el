@@ -779,7 +779,13 @@
   (:doc "Direct edit authority overrides the ambient mode") ,test (test)
   (let ((mevedel-pipeline--auto-apply-edit-p t)
         (mevedel-permission-mode 'ask))
-    (should (eq 'edits (mevedel-tool-patch--effective-mode)))))
+    (should (eq 'edits (mevedel-tool-patch--effective-mode))))
+  :doc "One-shot requests force review over direct edit authority"
+  (let ((mevedel--current-request
+         (mevedel-request--create :one-shot-mutations-p t))
+        (mevedel-pipeline--auto-apply-edit-p t)
+        (mevedel-permission-mode 'full-auto))
+    (should (eq 'ask (mevedel-tool-patch--effective-mode)))))
 
 (mevedel-deftest mevedel-tool-patch--get-paths
   (:doc "Extracts every source and destination path") ,test (test)

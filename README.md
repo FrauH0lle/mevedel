@@ -1027,7 +1027,8 @@ User skill invocations may block chat input while asynchronous preparation or an
 awaited fork completes.
 
 Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/model`,
-`/compact`, `/mode`, `/edits`, `/goal`, `/init`, `/review`, and `/verify`.
+`/compact`, `/btw`, `/mode`, `/edits`, `/goal`, `/init`, `/review`, and
+`/verify`.
 Project and user skills add `$<skill-name>` invocations by name.
 
 Skill frontmatter can also declare file `paths`, shell commands, hooks, model

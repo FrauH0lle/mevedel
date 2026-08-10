@@ -377,7 +377,7 @@ interval it fires once enough turns have passed since the last fire."
           (t (or (null last-fired)
                  (>= (- turn-count last-fired) interval)))))))
 
-(defun mevedel-reminders--format-block (content)
+(defun mevedel-reminders-format-block (content)
   "Wrap CONTENT in a `<system-reminder>' XML block."
   (format "<system-reminder>\n%s\n</system-reminder>" content))
 
@@ -393,7 +393,7 @@ strings in the order the reminders appear."
   (let ((blocks nil))
     (dolist (reminder reminders)
       (when (mevedel-reminders--should-fire-p reminder turn-count ctx)
-        (push (mevedel-reminders--format-block
+        (push (mevedel-reminders-format-block
                (funcall (mevedel-reminder-content reminder) ctx))
               blocks)
         (setf (mevedel-reminder-last-fired reminder) turn-count)))
@@ -512,7 +512,7 @@ when BUFFER has a live request or agent invocation that owns the event."
           (let ((items (plist-get mevedel-reminders--turn-events :items)))
             (prog1
                 (mapcar (lambda (entry)
-                          (mevedel-reminders--format-block (cdr entry)))
+                          (mevedel-reminders-format-block (cdr entry)))
                         items)
               (when (assq 'diagnostics items)
                 (mevedel-reminders--diagnostics-clear-pending buffer))

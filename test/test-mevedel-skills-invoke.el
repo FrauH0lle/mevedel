@@ -288,7 +288,10 @@
               (with-temp-buffer
                 (mevedel-skills--transform-apply-request-model-policy fsm)
                 (should (eq 'fast-model gptel-model))
-                (should (eq 'high gptel-reasoning-effort)))))
+                (should (eq 'high gptel-reasoning-effort))
+                (should (eq 'high
+                            (plist-get (gptel-fsm-info fsm)
+                                       :reasoning-effort))))))
         (put 'gptel-reasoning-effort 'custom-type old-custom)
         (put 'fast-model :reasoning-effort old-effort)
         (kill-buffer chat)))))

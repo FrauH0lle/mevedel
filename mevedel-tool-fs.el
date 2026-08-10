@@ -47,7 +47,7 @@
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--tool-results-dir
-                  "mevedel-pipeline" (session buffer))
+                  "mevedel-pipeline" (session buffer &optional request))
 
 ;; `mevedel-structs'
 (declare-function mevedel-current-origin "mevedel-structs" ())

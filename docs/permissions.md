@@ -205,6 +205,30 @@ mode, sandbox mode, session permission rules, and resource grants at the fork
 point. Subsequent authority changes are local to the source or fork unless they
 modify the shared workspace permission store.
 
+An ephemeral `/btw` side also copies that policy, but every side request carries
+an immutable one-shot mutation boundary. Analyzer-proven read-only Bash and
+read-only tools remain automatic when the ordinary policy allows them. Other
+mutations ask even under `full-auto` or an inherited allow rule, and the prompt
+offers only allow-once, deny-once, or feedback; defensive outcome normalization
+prevents hooks or non-UI callers from creating reusable authority. ApplyPatch's
+mandatory hunk review itself satisfies this boundary, so it does not show a
+duplicate generic permission prompt. Explicit denies and protected-resource
+checks still precede approval. Oversized side tool results are bounded and
+discarded in memory rather than materializing an ephemeral session on disk.
+The side publishes only explicit file/search/code/web inspection tools,
+ApplyPatch, Bash, and managed-execution controls. Eval, delegation, Ask,
+tasks, Goals, skills, tutor/introspection tools, deferred tools, and arbitrary
+MCP tool schemas are absent.
+
+The side freezes session, workspace-persistent, global-rule, protected-path,
+sandbox, and additional-root authority at creation; later configuration changes
+cannot broaden or narrow it. Mutation approval warns when the parent request is
+still active because both requests affect the same workspace. The side owns a
+separate permission queue and execution state, while allowlisted redacted audit
+events are attributed to `/btw` and written through the durable parent session.
+Side prompts, command text, paths, patch contents, results, and justifications
+are never copied into that parent audit stream.
+
 Files dropped into the view buffer can add exact, session-scoped `Read`
 grants when the next sent prompt still mentions the same path. These
 grants are in-memory only, do not grant the containing directory, do not

@@ -409,7 +409,7 @@ Skill-scoped model and effort policy applies to direct skill dispatches."
     mevedel-model-workloads)
   "Frozen request state installed buffer-locally for retained agent turns.")
 
-(defun mevedel-agent-exec--request-snapshot (policy)
+(defun mevedel-agent-exec-request-snapshot (policy)
   "Return one frozen request-local snapshot with model POLICY applied."
   (cl-loop
    for symbol in mevedel-agent-exec--request-local-symbols
@@ -437,7 +437,7 @@ MODEL-POLICY may supply a tuple already validated before spawn admission."
                  agent-type invocation))))
        (mevedel-agent-configuration--create
         :agent agent
-        :request-locals (mevedel-agent-exec--request-snapshot policy))))))
+        :request-locals (mevedel-agent-exec-request-snapshot policy))))))
 
 
 ;;

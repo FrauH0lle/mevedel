@@ -281,6 +281,7 @@
 		  (cl-x) t)
 (declare-function mevedel-request-untracked-effects "mevedel-structs"
                   (cl-x) t)
+(declare-function mevedel-session-audit-session "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-create "mevedel-structs"
 		  (name workspace &optional working-directory))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -413,6 +414,53 @@ interactive display."
   (setq-local gptel-org-ignore-elements '(property-drawer))
   (require 'mevedel-utilities)
   (mevedel--optimize-transcript-buffer))
+
+(defun mevedel-chat-prepare-transcript-buffer ()
+  "Prepare the current buffer as a gptel org transcript data buffer.
+
+Sets the transcript major mode, disables Org's element cache, keeps
+model responses as raw Markdown (`gptel-org-convert-response' nil), and
+enables `gptel-mode'.  The major-mode change calls
+`kill-all-local-variables', so buffer-locals set before this call are
+wiped unless permanent-local."
+  (let ((org-agenda-file-menu-enabled nil)
+        (org-element-use-cache nil)
+        (org-element-cache-persistent nil))
+    (require 'mevedel-utilities)
+    (mevedel--transcript-org-mode))
+  (mevedel--chat-buffer-disable-org-element-cache)
+  (setq-local gptel-org-convert-response nil)
+  (setq-local gptel-org-branching-context nil)
+  (require 'gptel)
+  (gptel-mode +1))
+
+(defun mevedel-chat-install-request-hooks ()
+  "Install buffer-local tool-repair and view-stream request hooks.
+
+Repairs raw model input before view hooks observe the call and before
+gptel maps the arguments into the pipeline wrapper.  Renders incremental
+view updates on tool boundaries so the user sees progress per tool call,
+and debounces mid-turn text updates a few times per second while the LLM
+is producing text; tool-boundary hooks cancel the pending timer and
+render immediately, so this never delays tool-call feedback."
+  (require 'mevedel-view-stream)
+  (require 'mevedel-tool-repair)
+  (add-hook 'gptel-post-response-functions
+            #'mevedel-view-stream-render-response nil t)
+  (add-hook 'gptel-pre-tool-call-functions
+            #'mevedel-tool-repair-pre-tool-call -100 t)
+  (add-hook 'gptel-post-tool-call-functions
+            #'mevedel-tool-repair-post-tool-call -100 t)
+  (add-hook 'gptel-post-response-functions
+            #'mevedel-tool-repair-clear-ledger nil t)
+  (add-hook 'kill-buffer-hook #'mevedel-tool-repair-clear-ledger nil t)
+  (add-hook 'gptel-pre-tool-call-functions
+            #'mevedel-view-stream-spinner-hook nil t)
+  (add-hook 'gptel-pre-tool-call-functions
+            #'mevedel-view-stream-pre-tool nil t)
+  (add-hook 'gptel-post-tool-call-functions
+            #'mevedel-view-stream-post-tool nil t)
+  (add-hook 'gptel-post-stream-hook #'mevedel-view-stream-schedule nil t))
 
 (defun mevedel--chat-buffer (session-name &optional create workspace working-directory)
   "Get or create the mevedel chat buffer SESSION-NAME for WORKSPACE.
@@ -571,33 +619,9 @@ session struct. SOURCE is \"startup\", \"resume\", or \"fork\"."
               #'mevedel-session-persistence--release-on-kill nil t)
     (add-hook 'kill-buffer-hook
               #'mevedel--run-session-end-hooks nil t)
-    (add-hook 'gptel-post-response-functions
-              #'mevedel-view-stream-render-response nil t)
+    (mevedel-chat-install-request-hooks)
     (add-hook 'gptel-post-response-functions
               #'mevedel-plan-mode--post-response t t)
-    ;; Repair raw model input before view hooks observe the call and before
-    ;; gptel maps the arguments into the pipeline wrapper.
-    (require 'mevedel-tool-repair)
-    (add-hook 'gptel-pre-tool-call-functions
-              #'mevedel-tool-repair-pre-tool-call -100 t)
-    (add-hook 'gptel-post-tool-call-functions
-              #'mevedel-tool-repair-post-tool-call -100 t)
-    (add-hook 'gptel-post-response-functions
-              #'mevedel-tool-repair-clear-ledger nil t)
-    (add-hook 'kill-buffer-hook #'mevedel-tool-repair-clear-ledger nil t)
-    (add-hook 'gptel-pre-tool-call-functions
-              #'mevedel-view-stream-spinner-hook nil t)
-    ;; Incremental view updates on tool boundaries so the user sees
-    ;; progress per tool call, not only at turn end.
-    (add-hook 'gptel-pre-tool-call-functions
-              #'mevedel-view-stream-pre-tool nil t)
-    (add-hook 'gptel-post-tool-call-functions
-              #'mevedel-view-stream-post-tool nil t)
-    ;; Debounced mid-turn text update: streams text chunks into the
-    ;; view a few times per second while the LLM is producing text.
-    ;; Tool-boundary hooks cancel the pending timer and render
-    ;; immediately, so this never delays tool-call feedback.
-    (add-hook 'gptel-post-stream-hook #'mevedel-view-stream-schedule nil t)
     ;; Install slash-command and $skill completion-at-point.
     (add-hook 'completion-at-point-functions #'mevedel-slash-capf nil t)
     ;; Populate session skills from workspace skill dirs
@@ -624,21 +648,9 @@ session struct. SOURCE is \"startup\", \"resume\", or \"fork\"."
 (defun mevedel--chat-buffer-setup (buf workspace session-name &optional working-directory)
   "Set up chat buffer BUF in WORKSPACE with SESSION-NAME and WORKING-DIRECTORY."
   (with-current-buffer buf
-    ;; Set major mode first -- this calls `kill-all-local-variables'.
-    ;; Buffer-locals set before this point are wiped unless
-    ;; permanent-local.  The data buffer is locked to `org-mode' so
-    ;; the persistence layer has a single format to round-trip via
-    ;; `gptel-org--save-state'.
-    (let ((org-agenda-file-menu-enabled nil)
-          (org-element-use-cache nil)
-          (org-element-cache-persistent nil))
-      (require 'mevedel-utilities)
-      (mevedel--transcript-org-mode))
-    (mevedel--chat-buffer-disable-org-element-cache)
-    (setq-local gptel-org-convert-response nil)
-    (setq-local gptel-org-branching-context nil)
-    ;; Enable `gptel-mode'
-    (gptel-mode +1)
+    ;; The data buffer is locked to `org-mode' so the persistence layer
+    ;; has a single format to round-trip via `gptel-org--save-state'.
+    (mevedel-chat-prepare-transcript-buffer)
     ;; Create session after mode setup so it isn't wiped
     (setq-local mevedel--session
                 (mevedel-session-create
@@ -693,9 +705,9 @@ with workspace."
 Scans live buffers for those with a `mevedel--session' whose workspace
 matches WORKSPACE by type and id.
 
-Skips view buffers and buffers whose `mevedel--agent-invocation' is
-bound.  Those buffers carry a session for local context but they are
-not themselves chat data buffers."
+Skips view, retained-agent, and side-conversation buffers.  Those buffers
+carry a session for local context but are not themselves root chat data
+buffers."
   (let ((ws-type (mevedel-workspace-type workspace))
         (ws-id (mevedel-workspace-id workspace))
         sessions)
@@ -704,6 +716,9 @@ not themselves chat data buffers."
                  (not (buffer-local-value 'mevedel--data-buffer buf))
                  (not (buffer-local-value 'mevedel--agent-invocation buf)))
         (when-let* ((session (buffer-local-value 'mevedel--session buf))
+                    ;; Transient conversations audit into a durable
+                    ;; parent session and are not root chat buffers.
+                    ((not (mevedel-session-audit-session session)))
                     (sw (mevedel-session-workspace session))
                     ((eq (mevedel-workspace-type sw) ws-type))
                     ((equal (mevedel-workspace-id sw) ws-id)))

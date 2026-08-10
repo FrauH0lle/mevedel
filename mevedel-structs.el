@@ -369,6 +369,7 @@ workspace."
   telemetry-pending  ; transient lifecycle telemetry awaiting materialization
   hook-context-pending ; transient hook context injected into the next prompt
   execution-state   ; transient opaque state owned by `mevedel-execution'
+  audit-session     ; transient durable target for sanitized audit events
   ;; Persistence -- nil until lazy materialization.
   save-path         ; absolute path to the session directory under .mevedel/sessions/
   session-id        ; string: stable session identifier (matches save-path basename)
@@ -515,6 +516,14 @@ Set when a session is created, never cleared during buffer lifetime.")
 
 ;;
 ;;; Session helpers
+
+(defun mevedel-session-audit-target (session)
+  "Return SESSION's sanitized audit target, defaulting to SESSION.
+
+Transient conversations may set `mevedel-session-audit-session' to a
+durable parent.  Runtime state and unsanitized subsystem logs continue to
+belong to SESSION; only explicitly sanitized audit events use this target."
+  (or (and session (mevedel-session-audit-session session)) session))
 
 (defun mevedel-session-buffer-name (session-name workspace)
   "Return the buffer name for SESSION-NAME in WORKSPACE.
@@ -715,6 +724,8 @@ Created at request start, cleared in the termination handler."
   untracked-effects ; alist: source -> reason capture cannot be complete
   directive-uuid    ; UUID of directive being processed, if any
   plan-read-only    ; immutable Plan capability boundary for this request
+  one-shot-mutations-p ; non-read-only tools require one-time approval
+  ephemeral-p       ; suppress request-owned durable conversation artifacts
   pending-plan      ; pending plan action plist
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
   started-at        ; wall-clock time when the request began

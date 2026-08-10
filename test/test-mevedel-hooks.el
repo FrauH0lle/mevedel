@@ -92,6 +92,32 @@
             (mevedel-hooks--telemetry-handler-id
              '(:type command :source project :command "two"))))))
 
+(mevedel-deftest mevedel-hooks--log
+  (:doc "keeps detailed side logs transient and forwards value-free audit")
+  (let* ((parent (mevedel-session--create :name "parent"))
+         (side (mevedel-session--create
+                :name "side" :audit-session parent))
+         (entry '(:event PreToolUse
+                  :handler (:type command :source project
+                            :command "private-command")
+                  :status allowed :elapsed 0.25 :exit-status 0
+                  :stdout "private-output" :reason "private-reason"))
+         calls)
+    (cl-letf (((symbol-function 'mevedel-telemetry-record)
+               (lambda (session event &rest props)
+                 (push (list session event props) calls))))
+      (mevedel-hooks--log side entry))
+    (should (equal (list entry) (mevedel-session-hook-log side)))
+    (should-not (mevedel-session-hook-log parent))
+    (pcase-let ((`((,session ,event ,props)) calls))
+      (should (eq parent session))
+      (should (eq 'hook-handler event))
+      (should (eq 'btw (plist-get props :conversation-scope)))
+      (should-not
+       (string-match-p
+        (regexp-opt '("private-command" "private-output" "private-reason"))
+        (prin1-to-string props))))))
+
 (mevedel-deftest mevedel-hooks--run-handlers
   (:doc "emits a paired handler lifecycle span with context size")
   (let* ((root (make-temp-file "mevedel-hook-handler-span-" t))
@@ -112,7 +138,7 @@
            'UserPromptSubmit
            (list (list :type 'elisp :source 'project
                        :function (lambda (_) '(:additional-context "abc"))))
-           nil session nil (lambda (decision) (setq result decision)))
+           nil session nil nil (lambda (decision) (setq result decision)))
           (should (eq 'hook-handler-lifecycle (caar starts)))
           (should (eq 'continued (plist-get (car finishes) :outcome)))
           (should (> (plist-get (car finishes) :context-chars) 0))
@@ -919,6 +945,46 @@
 			 (should (= (length (mevedel-session-hook-log session)) 1)))
 		     (delete-directory root t))))
 
+(mevedel-deftest mevedel-hooks-run-event/request-cancellation
+  (:doc "request cancellation stops a command hook before delayed effects")
+  (let* ((root (make-temp-file "mevedel-hooks-command-cancel" t))
+         (ready-file (file-name-concat root "ready"))
+         (late-file (file-name-concat root "late"))
+         (session (mevedel-hooks-test--session root))
+         (request (mevedel-request--create :session session))
+         (mevedel-hooks-slow-threshold nil)
+         (mevedel-hook-rules
+          `((PreToolUse
+             ((:matcher "Bash"
+               :hooks
+               ((:type command
+                 :command
+                 ,(format "printf ready > %s; sleep 0.2; printf late > %s"
+                          (shell-quote-argument ready-file)
+                          (shell-quote-argument late-file))
+                 :timeout 5)))))))
+         callback-called)
+    (unwind-protect
+        (progn
+          (skip-unless (not (eq system-type 'windows-nt)))
+          (mevedel-hooks-run-event
+           'PreToolUse '(:tool-name "Bash")
+           (lambda (_) (setq callback-called t))
+           session nil request)
+          (let ((deadline (+ (float-time) 2)))
+            (while (and (not (file-exists-p ready-file))
+                        (< (float-time) deadline))
+              (accept-process-output nil 0.01)))
+          (should (file-exists-p ready-file))
+          (mevedel-request-drain-cancellers request)
+          (let ((deadline (+ (float-time) 0.5)))
+            (while (< (float-time) deadline)
+              (accept-process-output nil 0.01)))
+          (should-not (file-exists-p late-file))
+          (should-not callback-called))
+      (mevedel-request-drain-cancellers request)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-hooks-context-audit-records
   (:doc "attributes merged context to handlers in execution order")
   (let* ((root (make-temp-file "mevedel-hooks-context-audit" t))
@@ -1634,8 +1700,8 @@
                              (lambda () (apply function args)))
                        nil))
                     ((symbol-function 'mevedel-hooks--run-handlers)
-                     (lambda (_event _handlers _payload _session _context
-                              callback _dispatch-buffer)
+                     (lambda (_event _handlers _payload _session _request
+                              _context callback _dispatch-buffer)
                        (setq handler-finish callback))))
             (with-current-buffer data-buf
               (mevedel-hooks-run-event

@@ -275,7 +275,8 @@ Policy never changes after this realization boundary."
                 (plist-get mevedel-skills--pending-request-context :effort)))))
         (setq-local gptel-backend (plist-get policy :backend))
         (setq-local gptel-model (plist-get policy :model))
-        (setq-local gptel-reasoning-effort (plist-get policy :effort))))))
+        (setq-local gptel-reasoning-effort (plist-get policy :effort))
+        (plist-put info :reasoning-effort gptel-reasoning-effort)))))
 
 ;;
 ;;; Argument tokenization

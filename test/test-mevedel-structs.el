@@ -26,6 +26,16 @@
 ;;
 ;;; Session transient state
 
+(mevedel-deftest mevedel-session-audit-target ()
+  ,test
+  (test)
+  :doc "defaults to the runtime session and honors a transient audit target"
+  (let* ((parent (mevedel-session--create :name "parent"))
+         (side (mevedel-session--create :name "side")))
+    (should (eq side (mevedel-session-audit-target side)))
+    (setf (mevedel-session-audit-session side) parent)
+    (should (eq parent (mevedel-session-audit-target side)))))
+
 (mevedel-deftest mevedel-request-note-untracked-effect
   (:doc "deduplicates capture gaps by their mutation source")
   (let ((request (mevedel-request--create)))

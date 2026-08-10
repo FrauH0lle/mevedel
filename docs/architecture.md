@@ -61,8 +61,10 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   the current session-owned Goal, and a transient bounded tool-input repair
   log. Lifecycle events emitted before session materialization wait in the
   transient `telemetry-pending` queue and flush to the diagnostic stream; the
-  queue is never persisted as resumable state. Its transient `execution-state`
-  slot is opaque outside
+  queue is never persisted as resumable state. A transient side conversation
+  may point `audit-session` at its parent solely for redacted audit events; its
+  runtime queues and unsanitized logs remain side-owned. The transient
+  `execution-state` slot is opaque outside
   `mevedel-execution.el`; process records, timers, spools, and process groups
   never enter the general session model or persisted sidecar.
 - **`mevedel-goal`**: identity, objective, lifecycle status and reason,
@@ -72,7 +74,8 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   owning session and agent origin, its once-reserved session turn identity,
   request start time, accumulated active-work pause time, file-snapshots,
   directive UUID, immutable Plan read-only authority, pending plan, cancellers,
-  skill-scoped permission rules, user-attached skill records, and hook rules.
+  skill-scoped permission rules, user-attached skill records, hook rules, and
+  transient one-shot-mutation/ephemeral-artifact boundaries.
   Skill model and effort policy is consumed before
   gptel realizes an owning request rather than stored for late mutation.
 - **`mevedel-tool`**: name, handler, description, summary, prompt,
