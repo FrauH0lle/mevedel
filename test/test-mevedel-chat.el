@@ -2005,6 +2005,8 @@
 			  (session (mevedel-session-create "main" workspace))
 			  (outcomes nil))
 		     (setq-local mevedel--session session)
+		     (setq-local mevedel--compaction-cancel
+		                 (lambda () (push '(compaction . aborted) outcomes)))
 		     (mevedel-request-begin session)
 		     (setf (mevedel-session-permission-queue session)
 			   (list (list :kind 'generic
@@ -2026,7 +2028,8 @@
 		     (should (null mevedel--current-request))
 		     (should (= 1 (length
 				   (mevedel-session-pending-reminders session))))
-		     (should (equal '((plan . aborted) (permission . aborted))
+		     (should (equal '((compaction . aborted)
+		                      (plan . aborted) (permission . aborted))
 				    outcomes))))
 
 			 :doc "saves data buffer after abort teardown"

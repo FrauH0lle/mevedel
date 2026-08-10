@@ -478,10 +478,11 @@ The string `none' removes the limit."
 ;;
 ;;; Root-turn attribution and settlement
 
-(defun mevedel-goal--compaction-request-p (info)
-  "Return non-nil when INFO describes a compaction request."
+(defun mevedel-goal--context-summary-request-p (info)
+  "Return non-nil when INFO describes a context-summary request."
   (when-let* ((context (plist-get info :context)))
-    (and (listp context) (plist-get context :mevedel-compaction))))
+    (and (listp context)
+         (plist-get context :mevedel-context-summary))))
 
 (defun mevedel-goal-capture-request (fsm)
   "Capture active Goal attribution on root request FSM exactly once."
@@ -490,7 +491,7 @@ The string `none' removes the limit."
     (when (and (not (plist-member info :mevedel-goal-id))
                (not (or (plist-get info :mevedel-agent-invocation)
                         (mevedel-tools--buffer-local-agent-invocation buffer)))
-               (not (mevedel-goal--compaction-request-p info))
+               (not (mevedel-goal--context-summary-request-p info))
                (buffer-live-p buffer))
       (with-current-buffer buffer
         (when-let* ((session mevedel--session)

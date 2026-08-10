@@ -140,7 +140,7 @@ notice that tells the model to create topic files and link them from the
 chosen root's `MEMORY.md`.
 
 Agent profiles select memory explicitly. The bundled worker includes it;
-Explorer, verifier, reviewer, guardian, and compaction profiles do not. Custom
+Explorer, verifier, reviewer, guardian, and context-summary profiles do not. Custom
 agents include the `memory` component only when their role needs durable
 memory context.
 

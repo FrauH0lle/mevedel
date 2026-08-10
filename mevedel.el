@@ -54,6 +54,7 @@
 (require 'mevedel-file-state)
 (require 'mevedel-models)
 (require 'mevedel-telemetry)
+(require 'mevedel-context-summary)
 (require 'mevedel-plan)
 (require 'mevedel-plan-handoff)
 (require 'mevedel-plan-mode)

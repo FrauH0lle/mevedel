@@ -83,8 +83,9 @@ active elapsed time instead and exclude actionable user-input waits.
 - agent dispatch, provider send, first response, settlement, waits, and UI
   status ownership transitions;
 - queued user messages with enqueue/dequeue events and dwell time;
-- compaction threshold inputs, provider summary work, hook work, segment-save
-  stages, publication, and total duration;
+- compaction threshold inputs, hook work, segment-save stages, publication,
+  and total duration, plus context-summary provider/model/effort, outcome, and
+  token usage without raw evidence or generated text;
 - skill-roster advertisement and model/user skill invocation outcomes; and
 - profiler environment snapshots, prompt failures, and saved artifacts.
 

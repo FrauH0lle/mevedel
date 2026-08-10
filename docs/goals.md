@@ -46,7 +46,7 @@ hash. A valid artifact receives exact read authority for that request. A
 missing, moved, mutated, or mismatched artifact pauses the Goal before provider
 dispatch; transcript prose is never a fallback source of Plan authority.
 
-Child-agent, compaction, and control requests are not Goal turns. A root turn
+Child-agent, context-summary, and control requests are not Goal turns. A root turn
 captures its Goal identity at request start and charges tokens, wall time, and
 one turn at canonical success or failure settlement. Token accounting uses
 normalized provider input plus output usage, excluding cached-input counts,

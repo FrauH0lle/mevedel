@@ -52,7 +52,7 @@ session backend, model, and reasoning effort."
     (verifier :tier balanced)
     (reviewer :tier strong)
     (guardian :tier fast)
-    (compaction :tier balanced))
+    (summarization :tier balanced))
   "Alist mapping workloads to tier or exact-provider policy.
 
 Each entry is (WORKLOAD :tier TIER :provider PROVIDER :effort EFFORT).
