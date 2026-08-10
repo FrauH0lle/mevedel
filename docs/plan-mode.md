@@ -86,7 +86,7 @@ For example:
 A single leading user-invoked inline skill may override the planning model or
 effort for that request. Instruction skills and model-side Skill calls do not.
 Retained agents keep their own workload policies. Plan Summary preparation
-continues to use the `compaction` workload.
+uses the shared `summarization` workload.
 
 ## Tool boundary
 

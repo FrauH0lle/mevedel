@@ -13,6 +13,7 @@
           "helpers"))
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
+(require 'mevedel-tool-media)
 (require 'mevedel-utilities)
 
 (defmacro mevedel-transcript-test--with-buffer (&rest body)
@@ -1319,6 +1320,73 @@ TOOL-PROP."
       (should (mevedel-transcript--tool-block-retry-gap-p
                (point-min) (point-max)))
       (should (equal before (match-data))))))
+
+(mevedel-deftest mevedel-transcript-project-evidence ()
+  ,test
+  (test)
+  :doc "projects model-visible transcript roles as immutable neutral evidence"
+  (with-temp-buffer
+    (org-mode)
+    (insert "User request\n")
+    (let ((reasoning-start (point)))
+      (insert "#+begin_reasoning\nReasoning\n#+end_reasoning\n")
+      (put-text-property reasoning-start (point) 'gptel 'ignore))
+    (let ((response-start (point)))
+      (insert "Assistant answer\n")
+      (put-text-property response-start (point) 'gptel 'response))
+    (let ((ignored-start (point)))
+      (insert "<!-- mevedel-render-data -->\n(:secret t)\n<!-- /mevedel-render-data -->\n")
+      (put-text-property ignored-start (point) 'gptel 'ignore))
+    (let ((evidence
+           (mevedel-transcript-project-evidence
+            (list (cons (point-min) (point-max)))
+            :skill-provenance '("$tdd (instruction, turn 2)"))))
+      (erase-buffer)
+      (insert "replacement")
+      (should (string-match-p "provenance: user" evidence))
+      (should (string-match-p "User request" evidence))
+      (should (string-match-p "provenance: reasoning" evidence))
+      (should (string-match-p "Reasoning" evidence))
+      (should (string-match-p "provenance: assistant" evidence))
+      (should (string-match-p "Assistant answer" evidence))
+      (should-not (string-match-p "secret" evidence))
+      (should (string-match-p "provenance: skill-invocation" evidence))
+      (should (string-match-p (regexp-quote "$tdd (instruction, turn 2)")
+                              evidence))))
+
+  :doc "separates bounded tool calls/results and replaces native media"
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_tool (Read :file_path \"big.png\")\n")
+    (let* ((tool-start (point))
+           (result
+            (mevedel-tool-media-attach-result
+             (concat "(:name \"Read\" :args (:file_path \"big.png\"))\n\n"
+                     (make-string 200 ?x))
+             '((:kind image :mime "image/png" :data "QUJD"
+                       :path "diagram.png"))
+             nil "call-read")))
+      (insert result "\n#+end_tool\n")
+      (put-text-property tool-start (point) 'gptel '(tool . "call-read")))
+    (let ((evidence
+           (mevedel-transcript-project-evidence
+            (list (cons (point-min) (point-max)))
+            :tool-output-max 20)))
+      (should (string-match-p "provenance: tool-call" evidence))
+      (should (string-match-p "file_path" evidence))
+      (should (string-match-p "provenance: tool-result" evidence))
+      (should (string-match-p "tool output truncated" evidence))
+      (should (string-match-p
+               (regexp-quote
+                "[media: image; MIME image/png; path diagram.png]")
+               evidence))
+      (should-not (string-match-p "QUJD" evidence))
+      (should (= 1 (let ((start 0) (count 0))
+                     (while (string-match "provenance: tool-call" evidence
+                                          start)
+                       (setq count (1+ count)
+                             start (match-end 0)))
+                     count))))))
 
 (provide 'test-mevedel-transcript)
 ;;; test-mevedel-transcript.el ends here

@@ -166,7 +166,7 @@
           (let ((compact
                  (gptel-make-fsm
                   :info (list :buffer buffer
-                              :context '(:mevedel-compaction t)))))
+                              :context '(:mevedel-context-summary t)))))
             (mevedel-goal-capture-request compact)
             (should-not (plist-get (gptel-fsm-info compact)
                                    :mevedel-goal-id))))

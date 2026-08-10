@@ -11,6 +11,16 @@
 (eval-when-compile (require 'cl-lib))
 (require 'subr-x)
 
+;; `cl-seq'
+(declare-function cl-every "cl-seq" (predicate sequence &rest sequences))
+
+;; `mevedel-tool-media'
+(declare-function mevedel-tool-media-extract
+                  "mevedel-tool-media"
+                  (result-string &optional tool-results-dir
+                                 expected-tool-use-id
+                                 allow-payload-tool-use-id))
+
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-audit-spans
                   "mevedel-transcript-audit" (text &optional type))
@@ -1336,6 +1346,176 @@ assistant turn."
           (push seg out))))
     (nreverse out)))
 
+
+;;
+;;; Context-summary evidence
+
+(defun mevedel-transcript--summary-truncation-marker (omitted)
+  "Return the evidence marker for OMITTED tool-result characters."
+  (format "\n[mevedel: tool output truncated; omitted %d chars]\n" omitted))
+
+(defun mevedel-transcript--summary-truncate-string (string limit)
+  "Return tool argument STRING shortened to LIMIT characters."
+  (if (> (length string) limit)
+      (concat (substring string 0 limit)
+              (format "\n[mevedel: string argument truncated; omitted %d chars]"
+                      (- (length string) limit)))
+    string))
+
+(defun mevedel-transcript--summary-truncate-args (value limit)
+  "Return tool argument VALUE with strings shortened to LIMIT characters."
+  (cond
+   ((stringp value)
+    (mevedel-transcript--summary-truncate-string value limit))
+   ((vectorp value)
+    (vconcat
+     (mapcar (lambda (item)
+               (mevedel-transcript--summary-truncate-args item limit))
+             value)))
+   ((consp value)
+    (cons (mevedel-transcript--summary-truncate-args (car value) limit)
+          (mevedel-transcript--summary-truncate-args (cdr value) limit)))
+   (t value)))
+
+(defun mevedel-transcript--summary-tool-sexp-start (text)
+  "Return the readable tool-call plist start in TEXT, or nil."
+  (if (string-prefix-p "#+begin_tool" text)
+      (when-let* ((header-end (string-match "\n" text)))
+        (let ((pos (1+ header-end)))
+          (while (and (< pos (length text))
+                      (memq (aref text pos) '(?\s ?\t ?\n)))
+            (setq pos (1+ pos)))
+          (when (and (string-match "(\\s-*:name\\_>" text pos)
+                     (= (match-beginning 0) pos))
+            pos)))
+    (when (string-match "\\`[ \t\n]*(\\s-*:name\\_>" text)
+      (match-beginning 0))))
+
+(defun mevedel-transcript--summary-media-placeholder (item)
+  "Return a textual context-summary placeholder for native media ITEM."
+  (format "[media: %s; MIME %s%s]"
+          (or (plist-get item :kind) "unknown")
+          (or (plist-get item :mime) "unknown")
+          (if-let* ((path (plist-get item :path)))
+              (format "; path %s" path)
+            "")))
+
+(defun mevedel-transcript--summary-tool-parts
+    (text cap tool-results-dir tool-id)
+  "Return neutral call/result evidence parts for tool TEXT.
+CAP bounds retained result characters.  TOOL-RESULTS-DIR and TOOL-ID resolve
+trusted native media metadata without returning payload bytes."
+  (require 'mevedel-tool-media)
+  (let* ((extracted
+          (mevedel-tool-media-extract
+           text tool-results-dir tool-id t))
+         (visible (car extracted))
+         (media (cdr extracted))
+         (sexp-start (mevedel-transcript--summary-tool-sexp-start visible))
+         call result)
+    (when sexp-start
+      (condition-case nil
+          (let* ((read-result (read-from-string visible sexp-start))
+                 (form (car read-result))
+                 (form-end (cdr read-result)))
+            (when (and (listp form) (stringp (plist-get form :name)))
+              (setq call
+                    (prin1-to-string
+                     (mevedel-transcript--summary-truncate-args
+                      form (max 80 (min 800 cap)))))
+              (let* ((close (string-match "\n#\\+end_tool[^\n]*\n?\\'"
+                                          visible form-end))
+                     (body (string-trim
+                            (substring visible form-end
+                                       (or close (length visible))))))
+                (setq result
+                      (if (> (length body) cap)
+                          (concat
+                           (substring body 0 cap)
+                           (mevedel-transcript--summary-truncation-marker
+                            (- (length body) cap)))
+                        body)))))
+        (error nil)))
+    (list
+     (or call "(unparseable tool-call metadata)")
+     (string-join
+      (delq nil
+            (append
+             (and result (not (string-empty-p result)) (list result))
+             (mapcar #'mevedel-transcript--summary-media-placeholder media)))
+      "\n"))))
+
+(defun mevedel-transcript--summary-evidence-item (provenance text)
+  "Return one neutral evidence item labelled with PROVENANCE and TEXT."
+  (format "--- evidence item; provenance: %s ---\n%s\n--- end evidence item ---"
+          provenance (string-trim text)))
+
+(cl-defun mevedel-transcript-project-evidence
+    (ranges &key (tool-output-max 8000) tool-results-dir skill-provenance)
+  "Project selected transcript RANGES into frozen neutral evidence.
+
+RANGES is an ordered list of buffer position conses.  TOOL-OUTPUT-MAX bounds
+each tool result while preserving readable call metadata.  TOOL-RESULTS-DIR
+allows native media references to resolve to textual kind, MIME, and path
+placeholders.  SKILL-PROVENANCE is the already selected list of prior skill
+invocation descriptions."
+  (unless (and (listp ranges)
+               (cl-every
+                (lambda (range)
+                  (and (consp range)
+                       (integer-or-marker-p (car range))
+                       (integer-or-marker-p (cdr range))
+                       (<= (car range) (cdr range))))
+                ranges))
+    (error "Invalid transcript evidence ranges"))
+  (unless (natnump tool-output-max)
+    (error "Tool output maximum must be non-negative"))
+  (let (items)
+    (dolist (range ranges)
+      (dolist (segment (mevedel-transcript-segments
+                        (car range) (cdr range)))
+        (pcase-let ((`(,type ,start ,end) segment))
+          (setq start (max (car range) start)
+                end (min (cdr range) end))
+          (unless (or (>= start end)
+                      (memq type '(ignored render-data)))
+            (let ((text (buffer-substring start end)))
+              (unless (string-blank-p (substring-no-properties text))
+                (pcase type
+                  ('tool
+                   (pcase-let
+                       ((`(,call ,result)
+                         (mevedel-transcript--summary-tool-parts
+                          text tool-output-max tool-results-dir
+                          (mevedel-transcript--tool-id-in-range start end))))
+                     (push
+                      (mevedel-transcript--summary-evidence-item
+                       "tool-call" call)
+                      items)
+                     (push
+                      (mevedel-transcript--summary-evidence-item
+                       "tool-result" result)
+                      items)))
+                  (_
+                   (push
+                    (mevedel-transcript--summary-evidence-item
+                     (pcase type
+                       ((or 'user 'prompt) "user")
+                       ('response "assistant")
+                       ('reasoning "reasoning")
+                       ('mailbox "agent-message")
+                       ('reminder "system-reminder")
+                       ('hook-context "hook-context")
+                       (_ (symbol-name type)))
+                     (substring-no-properties text))
+                    items)))))))))
+    (dolist (skill skill-provenance)
+      (unless (stringp skill)
+        (error "Skill provenance must be text"))
+      (push (mevedel-transcript--summary-evidence-item
+             "skill-invocation" skill)
+            items))
+    (mapconcat #'identity (nreverse items) "\n\n")))
 
 (provide 'mevedel-transcript)
 ;;; mevedel-transcript.el ends here

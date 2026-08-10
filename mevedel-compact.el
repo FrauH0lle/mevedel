@@ -40,14 +40,12 @@
 (declare-function gptel--realize-query "ext:gptel-request" (fsm))
 (declare-function gptel-backend-request-params "ext:gptel-request" (backend))
 (declare-function gptel-fsm-info "ext:gptel-request")
-(declare-function gptel-request "ext:gptel-request")
 (defvar gptel--request-alist)
 (defvar gptel--request-params)
 (defvar gptel-backend)
 (defvar gptel-max-tokens)
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
-(defvar gptel-stream)
 (defvar gptel-tools)
 (defvar gptel-use-tools)
 
@@ -314,6 +312,9 @@ token usage remains authoritative once a request has completed."
 (defvar-local mevedel--compaction-in-flight nil
   "Non-nil while a compaction request is active in this buffer.")
 
+(defvar-local mevedel--compaction-cancel nil
+  "Cancellation thunk for the active compaction run, or nil.")
+
 (defvar-local mevedel--compact-auto-disabled nil
   "Non-nil when auto-compaction is disabled for this session.")
 
@@ -397,10 +398,10 @@ thousands of tokens, sometimes as a float."
     (round (* threshold usable))))
 
 (defun mevedel--compact-workload-policy ()
-  "Resolve and return the compaction workload model policy."
+  "Resolve and return the summarization workload model policy."
   (require 'mevedel-models)
   (append '(:max-tokens nil :request-params nil)
-          (mevedel-model-resolve-workload 'compaction)))
+          (mevedel-model-resolve-workload 'summarization)))
 
 (defun mevedel--compact-target-policy ()
   "Return the current request's model policy for compaction budgeting."
@@ -424,12 +425,6 @@ thousands of tokens, sometimes as a float."
   (mevedel--compact-threshold-tokens
    (mevedel--compact-policy-usable-tokens policy)))
 
-(defun mevedel--compact-summary-request-token-estimate (body system-prompt)
-  "Estimate tokens for summary BODY and SYSTEM-PROMPT."
-  (with-temp-buffer
-    (insert system-prompt "\n\n" body)
-    (mevedel--estimate-tokens)))
-
 (defun mevedel--compact-token-usage-count (tokens)
   "Return total prompt/output TOKENS from a gptel token-usage plist."
   (when-let* ((input (mevedel--compact-token-usage-input tokens))
@@ -449,19 +444,19 @@ thousands of tokens, sometimes as a float."
                         values)
           (apply #'+ values))))))
 
-(defun mevedel--compact-compaction-context-p (info)
-  "Return non-nil when INFO belongs to a compaction request."
+(defun mevedel--compact-summary-request-p (info)
+  "Return non-nil when INFO belongs to a context-summary request."
   (let ((context (and (listp info) (plist-get info :context))))
     (and (listp context)
-         (plist-get context :mevedel-compaction))))
+         (plist-get context :mevedel-context-summary))))
 
 (defun mevedel--compact-record-token-baseline (fsm)
   "Record FSM's active-context baseline for future estimates.
 
-Compaction requests are ignored so the summary request's own token
+Context-summary requests are ignored so their token
 count never becomes the baseline for the chat buffer."
   (when-let* ((info (and fsm (gptel-fsm-info fsm)))
-              ((not (mevedel--compact-compaction-context-p info)))
+              ((not (mevedel--compact-summary-request-p info)))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
@@ -982,57 +977,29 @@ When NO-PROPERTIES is non-nil, strip text properties from copied text."
         (setq pos next)))
     (apply #'concat (nreverse parts))))
 
-(defun mevedel--compact-skills-section (session)
-  "Return the anchored `Skills Invoked' section body for SESSION."
+(defun mevedel--compact-skill-provenance (session preserved-tail-turns)
+  "Return skill provenance selected for SESSION's compacted prefix.
+PRESERVED-TAIL-TURNS is the number of newest turns excluded from it."
   (if-let* ((session session)
             (records (mevedel-session-invoked-skills session)))
-      (mapconcat
-       (lambda (rec)
-         (format "- $%s%s (role: %s, origin: %s, turn: %s)"
-                 (mevedel-skill-invocation-record-name rec)
-                 (let ((args (mevedel-skill-invocation-record-args rec)))
-                   (if (and args (not (string-empty-p args)))
-                       (concat " " args)
-                     ""))
-                 (or (mevedel-skill-invocation-record-role rec) "?")
-                 (or (mevedel-skill-invocation-record-origin rec) "?")
-                 (or (mevedel-skill-invocation-record-turn rec) "?")))
-       records "\n")
-    "- (none)"))
-
-(defun mevedel--compact-prompt (&optional previous-summary instructions session)
-  "Return the anchored compaction system prompt.
-PREVIOUS-SUMMARY selects update mode when non-nil.  INSTRUCTIONS are
-manual user instructions.  SESSION supplies invoked skill records."
-  (require 'mevedel-system)
-  (let ((role
-         (mevedel-system-render-prompt-file
-          "prompts/compaction/summary.md"
-          `(("MODE_INSTRUCTIONS" .
-             ,(if previous-summary
-                  (concat
-                   "Update the anchored summary below using the conversation history above.\n"
-                   "The previous summary is authoritative retained context from older compacted history. "
-                   "Do NOT replace it with only the recent conversation.\n"
-                   "Your output must merge BOTH sources: keep still-true details from the previous summary, "
-                   "remove stale or contradicted details, and add new facts from the recent conversation.\n"
-                   "Retire satisfied requests from the previous summary when the recent history proves them complete; "
-                   "keep only their resulting state, outcome, or evidence under Progress/Done.\n"
-                   "If the recent conversation is a separate completed task, preserve the older completed "
-                   "task under Progress/Critical Context/Relevant Files instead of dropping it.\n\n"
-                   "<previous-summary>\n" previous-summary
-                   "\n</previous-summary>\n")
-                "Create a new anchored summary from the conversation history above.\n"))
-            ("SKILLS_INVOKED" . ,(mevedel--compact-skills-section session))
-            ("ADDITIONAL_INSTRUCTIONS" .
-             ,(when (and instructions (not (string-blank-p instructions)))
-                (concat "## Additional Instructions\n" instructions "\n\n")))
-            ("PREVIOUS_SUMMARY_RULE" .
-             ,(when previous-summary
-                "- Do not discard previous-summary details merely because they are not repeated in the recent conversation.\n"))))))
-    (mevedel-system-build-prompt
-     `(:workspace-aware nil
-       :components ((role :text ,role))))))
+      (let ((cutoff (- (or (mevedel-session-turn-count session) 0)
+                       (max 0 (or preserved-tail-turns 0)))))
+        (mapcar
+         (lambda (rec)
+           (format "$%s%s (role: %s, origin: %s, turn: %s)"
+                   (mevedel-skill-invocation-record-name rec)
+                   (let ((args (mevedel-skill-invocation-record-args rec)))
+                     (if (and args (not (string-empty-p args)))
+                         (concat " " args)
+                       ""))
+                   (or (mevedel-skill-invocation-record-role rec) "?")
+                   (or (mevedel-skill-invocation-record-origin rec) "?")
+                   (or (mevedel-skill-invocation-record-turn rec) "?")))
+         (seq-filter
+          (lambda (rec)
+            (<= (or (mevedel-skill-invocation-record-turn rec) 0) cutoff))
+          records)))
+    nil))
 
 (defun mevedel--compact-buffer-active-p (buf)
   "Return non-nil if BUF has an active gptel request."
@@ -1727,7 +1694,6 @@ AUTO is non-nil for automatic compaction."
   aggressive
   archived-tool-use-ids
   auto
-  base-system-prompt
   callback
   chat-buffer
   instructions
@@ -1737,14 +1703,10 @@ AUTO is non-nil for automatic compaction."
   policy
   prepared-summary
   preserved-tail-turns
+  request-cancel
   session
   settled
-  stream
-  summary-applied
-  summary-first-response
-  summary-parts
   summary-ready
-  summary-span
   tail-text
   target
   telemetry-span
@@ -1761,7 +1723,9 @@ AUTO is non-nil for automatic compaction."
           (span (mevedel--compact-run-state-telemetry-span state)))
       (when (buffer-live-p chat-buffer)
         (with-current-buffer chat-buffer
-          (setq-local mevedel--compaction-in-flight nil)))
+          (setq-local mevedel--compaction-in-flight nil)
+          (setq-local mevedel--compaction-cancel nil)))
+      (setf (mevedel--compact-run-state-request-cancel state) nil)
       (when span
         (mevedel-telemetry-finish
          span
@@ -1895,139 +1859,50 @@ the persistent failure counter unchanged."
     (error
      (mevedel--compact-run-fail state (format "%s" err) nil))))
 
-(defun mevedel--compact-run-record-first-response (state)
-  "Record STATE's first summary response once."
-  (unless (mevedel--compact-run-state-summary-first-response state)
-    (setf (mevedel--compact-run-state-summary-first-response state) t)
-    (when (and (mevedel--compact-run-state-session state)
-               (fboundp 'mevedel-telemetry-record))
-      (mevedel-telemetry-record
-       (mevedel--compact-run-state-session state)
-       'compaction-summary-first-response
-       :attempt (mevedel--compact-run-state-attempt state)))))
+(defun mevedel--compact-run-handle-summary
+    (state hook-audits result)
+  "Handle one context-summary RESULT for STATE and HOOK-AUDITS."
+  (when (buffer-live-p (mevedel--compact-run-state-chat-buffer state))
+    (with-current-buffer (mevedel--compact-run-state-chat-buffer state)
+      (pcase (plist-get result :outcome)
+        ('success
+         (mevedel--compact-run-apply-summary
+          state (plist-get result :summary) hook-audits))
+        ('aborted
+         (mevedel--compact-run-fail state "Compaction aborted" nil t))
+        ('error
+         (let ((sizep (eq (plist-get result :error-class) 'size)))
+           (mevedel--compact-run-fail
+            state
+            (format "Compaction failed: %s" (plist-get result :error))
+            (not sizep)
+            sizep)))))))
 
-(defun mevedel--compact-run-finish-summary-telemetry
-    (state outcome info)
-  "Finish STATE's summary telemetry with OUTCOME and INFO."
-  (when-let* ((span (mevedel--compact-run-state-summary-span state)))
-    (mevedel-telemetry-finish
-     span
-     :outcome outcome
-     :input-tokens
-     (and (listp (plist-get info :tokens))
-          (plist-get (plist-get info :tokens) :input))
-     :output-tokens
-     (and (listp (plist-get info :tokens))
-          (plist-get (plist-get info :tokens) :output)))
-    (setf (mevedel--compact-run-state-summary-span state) nil)))
-
-(defun mevedel--compact-run-apply-response-summary
-    (state summary hook-audits)
-  "Apply STATE's response SUMMARY and HOOK-AUDITS once."
-  (unless (mevedel--compact-run-state-summary-applied state)
-    (setf (mevedel--compact-run-state-summary-applied state) t)
-    (mevedel--compact-run-apply-summary state summary hook-audits)))
-
-(defun mevedel--compact-run-handle-response
-    (state response info hook-audits)
-  "Handle one summary RESPONSE with INFO for STATE and HOOK-AUDITS."
-  (with-current-buffer
-      (mevedel--compact-run-state-chat-buffer state)
-    (pcase response
-      ('nil
-       (mevedel--compact-run-finish-summary-telemetry
-        state 'error info)
-       (mevedel--compact-run-fail
-        state
-        (format "Compaction failed: %s"
-                (or (plist-get info :error)
-                    (plist-get info :status)
-                    "unknown error"))
-        t))
-      ('abort
-       (mevedel--compact-run-finish-summary-telemetry
-        state 'aborted info)
-       (mevedel--compact-run-fail
-        state "Compaction aborted" nil))
-      ((pred stringp)
-       (mevedel--compact-run-record-first-response state)
-       (if (plist-get info :stream)
-           (push response
-                 (mevedel--compact-run-state-summary-parts state))
-         (mevedel--compact-run-finish-summary-telemetry
-          state 'success info)
-         (mevedel--compact-run-apply-response-summary
-          state response hook-audits)))
-      ('t
-       (mevedel--compact-run-finish-summary-telemetry
-        state 'success info)
-       (mevedel--compact-run-apply-response-summary
-        state
-        (apply
-         #'concat
-         (nreverse
-          (mevedel--compact-run-state-summary-parts state)))
-        hook-audits)))))
-
-(defun mevedel--compact-run-send-request (state system-prompt hook-audits)
-  "Send STATE's summary request with SYSTEM-PROMPT and HOOK-AUDITS."
-  (setf (mevedel--compact-run-state-summary-parts state) nil
-        (mevedel--compact-run-state-summary-applied state) nil
-        (mevedel--compact-run-state-summary-first-response state) nil
-        (mevedel--compact-run-state-summary-span state)
-        (and (not (mevedel--compact-run-state-prepared-summary state))
-             (mevedel--compact-run-state-session state)
-             (fboundp 'mevedel-telemetry-start)
-             (mevedel-telemetry-start
-              (mevedel--compact-run-state-session state)
-              'compaction-summary-request
-              :attempt (mevedel--compact-run-state-attempt state)
-              :backend
-              (ignore-errors
-                (gptel-backend-name
-                 (plist-get
-                  (mevedel--compact-run-state-policy state) :backend)))
-              :model
-              (plist-get
-               (mevedel--compact-run-state-policy state) :model)
-              :effort
-              (plist-get
-               (mevedel--compact-run-state-policy state) :effort))))
-  (condition-case err
-      (let ((gptel-use-tools nil)
-            (gptel-tools nil))
-        (gptel-with-preset 'gptel-default
-          (let ((gptel-backend
-                 (plist-get
-                  (mevedel--compact-run-state-policy state) :backend))
-                (gptel-model
-                 (plist-get
-                  (mevedel--compact-run-state-policy state) :model))
-                (gptel-reasoning-effort
-                 (plist-get
-                  (mevedel--compact-run-state-policy state) :effort)))
-            (if-let* ((prepared
-                       (mevedel--compact-run-state-prepared-summary state)))
-                (mevedel--compact-run-apply-response-summary
-                 state prepared hook-audits)
-              (gptel-request
-               (mevedel--compact-run-state-old-content state)
-               :system system-prompt
-               :buffer (mevedel--compact-run-state-chat-buffer state)
-               :stream (mevedel--compact-run-state-stream state)
-               :transforms nil
-               :context (list :mevedel-compaction t)
-               :callback
-               (lambda (response info)
-                 (mevedel--compact-run-handle-response
-                  state response info hook-audits)))))))
-    (error
-     (when-let* ((span
-                  (mevedel--compact-run-state-summary-span state)))
-       (mevedel-telemetry-finish
-        span :outcome 'error :error-class (car-safe err))
-       (setf (mevedel--compact-run-state-summary-span state) nil))
-     (mevedel--compact-run-fail state (format "%s" err) t))))
+(defun mevedel--compact-run-send-request (state hook-context hook-audits)
+  "Generate STATE's continuation summary with HOOK-CONTEXT and HOOK-AUDITS."
+  (if-let* ((prepared (mevedel--compact-run-state-prepared-summary state)))
+      (mevedel--compact-run-apply-summary state prepared hook-audits)
+    (require 'mevedel-context-summary)
+    (let ((cancel
+           (mevedel-context-summary-generate
+            (if hook-context
+                (concat
+                 (mevedel--compact-run-state-old-content state)
+                 "\n\n--- evidence item; provenance: hook-context ---\n"
+                 hook-context
+                 "\n--- end evidence item ---")
+              (mevedel--compact-run-state-old-content state))
+            'continuation
+            (apply-partially
+             #'mevedel--compact-run-handle-summary state hook-audits)
+            :session (mevedel--compact-run-state-session state)
+            :previous-summary
+            (plist-get (mevedel--compact-run-state-target state)
+                       :previous-summary)
+            :guidance (mevedel--compact-run-state-instructions state)
+            :policy (mevedel--compact-run-state-policy state))))
+      (unless (mevedel--compact-run-state-settled state)
+        (setf (mevedel--compact-run-state-request-cancel state) cancel)))))
 
 (defun mevedel--compact-run-begin-attempt (state)
   "Run STATE's PreCompact hook and start one summary attempt."
@@ -2058,35 +1933,14 @@ the persistent failure counter unchanged."
                       decision 'PreCompact))
                     (hook-audits
                      (and context
-                          (mevedel--compact-hook-audit-records decision)))
-                    (system-prompt
-                     (if context
-                         (concat
-                          (mevedel--compact-run-state-base-system-prompt state)
-                          "\n\n" context)
-                       (mevedel--compact-run-state-base-system-prompt state)))
-                    (request-tokens
-                     (mevedel--compact-summary-request-token-estimate
-                      (mevedel--compact-run-state-old-content state)
-                      system-prompt))
-                    (usable-tokens
-                     (mevedel--compact-policy-usable-tokens
-                      (mevedel--compact-run-state-policy state))))
-               (if (> request-tokens usable-tokens)
-                   (mevedel--compact-run-fail
-                    state
-                    (format
-                     "Compaction request (%d tokens) exceeds summarizer usable context (%d tokens)"
-                     request-tokens usable-tokens)
-                    nil t)
-                 (message "mevedel: compacting (%dk -> ...)"
-                          (/ (mevedel--compact-run-state-tokens-before state)
-                             1000))
-                 (when (= (mevedel--compact-run-state-attempt state) 1)
-                   (mevedel--compact-target-call target :start))
-                 (require 'gptel)
-                 (mevedel--compact-run-send-request
-                  state system-prompt hook-audits)))))
+                          (mevedel--compact-hook-audit-records decision))))
+               (message "mevedel: compacting (%dk -> ...)"
+                        (/ (mevedel--compact-run-state-tokens-before state)
+                           1000))
+               (when (= (mevedel--compact-run-state-attempt state) 1)
+                 (mevedel--compact-target-call target :start))
+               (mevedel--compact-run-send-request
+                state context hook-audits))))
          session workspace nil
          (mevedel--compact-run-state-invocation state))
       (error
@@ -2107,6 +1961,9 @@ the persistent failure counter unchanged."
           (mevedel--compact-regions-without-directives
            (append (plist-get target :history-prefix-regions)
                    (list (cons body-start compact-end)))))
+         (preserved-tail-turns
+          (mevedel--compact-preserved-tail-turn-count
+           tail-start limit aggressive))
          (archived-tool-use-ids
           (delete-dups
            (mapcan
@@ -2115,19 +1972,16 @@ the persistent failure counter unchanged."
                (car range) (cdr range)))
             history-regions)))
          (old-content
-          (mapconcat
-           (lambda (range)
-             (mevedel--compact-region-with-tool-output-cap
-              (car range) (cdr range)
-              mevedel-compact-body-tool-output-max t))
-           history-regions "")))
+          (mevedel-transcript-project-evidence
+           history-regions
+           :tool-output-max mevedel-compact-body-tool-output-max
+           :skill-provenance
+           (mevedel--compact-skill-provenance
+            (plist-get target :prompt-session)
+            preserved-tail-turns))))
     (setf
      (mevedel--compact-run-state-archived-tool-use-ids state)
      archived-tool-use-ids
-     (mevedel--compact-run-state-base-system-prompt state)
-     (mevedel--compact-prompt
-      (plist-get target :previous-summary)
-      instructions (plist-get target :prompt-session))
      (mevedel--compact-run-state-instructions state) instructions
      (mevedel--compact-run-state-invocation state)
      (plist-get target :invocation)
@@ -2141,8 +1995,7 @@ the persistent failure counter unchanged."
      (mevedel--compact-run-state-prepared-summary state)
      prepared-summary
      (mevedel--compact-run-state-preserved-tail-turns state)
-     (mevedel--compact-preserved-tail-turn-count
-      tail-start limit aggressive)
+     preserved-tail-turns
      (mevedel--compact-run-state-summary-ready state) summary-ready
      (mevedel--compact-run-state-tail-text state)
      (and (not aggressive)
@@ -2186,7 +2039,6 @@ before it is applied."
            :callback callback
            :chat-buffer chat-buffer
            :session session
-           :stream gptel-stream
            :target target
            :telemetry-span telemetry-span
            :tokens-before tokens-before
@@ -2224,6 +2076,16 @@ before it is applied."
           (user-error "Not enough conversation content to compact")))
       (require 'mevedel-hooks)
       (setq mevedel--compaction-in-flight t)
+      (setq mevedel--compaction-cancel
+            (lambda ()
+              (unless (mevedel--compact-run-state-settled state)
+                (when-let* ((cancel
+                             (mevedel--compact-run-state-request-cancel
+                              state)))
+                  (funcall cancel))
+                (unless (mevedel--compact-run-state-settled state)
+                  (mevedel--compact-run-fail
+                   state "Compaction aborted" nil t)))))
       (mevedel--compact-run-begin-attempt state))))
 ;;;###autoload
 (defun mevedel-compact (&optional aggressive instructions)
@@ -2272,7 +2134,7 @@ With prefix argument AGGRESSIVE, compact without preserving a recent
 (defun mevedel--compact-continuation-wait-p (fsm)
   "Return non-nil when FSM is entering WAIT for a tool continuation."
   (when-let* ((info (and fsm (gptel-fsm-info fsm))))
-    (and (not (mevedel--compact-compaction-context-p info))
+    (and (not (mevedel--compact-summary-request-p info))
          (or (eq (car (plist-get info :history)) 'TRET)
              (plist-get info :tool-result)))))
 
@@ -2565,7 +2427,8 @@ state machine."
            (unwind-protect
                (funcall continue)
              (set-marker late-tail-start nil))))
-      (if (or (and (listp context) (plist-get context :mevedel-compaction))
+      (if (or (and (listp context)
+                   (plist-get context :mevedel-context-summary))
               (not (buffer-live-p source-buffer)))
           (continue-with-snapshot)
         (with-current-buffer source-buffer

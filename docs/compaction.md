@@ -3,7 +3,10 @@
 Compaction reduces model-visible history while keeping the persisted
 conversation recoverable. The implementation lives in
 `mevedel-compact.el`; persisted segment rotation is handled by
-`mevedel-session-persistence.el`.
+`mevedel-session-persistence.el`. Model generation is delegated to the
+stateless `mevedel-context-summary.el` generator after
+`mevedel-transcript.el` projects the consumer-selected ranges into neutral
+evidence.
 
 ## Compaction flow
 
@@ -14,8 +17,8 @@ flowchart TD
     C -- No --> D[Send request normally]
     C -- Yes --> E{Session eligible?}
     E -- No --> F[Warn once and continue]
-    E -- Yes --> G[Prepare summary prompt]
-    G --> H[Run no-tools compaction request]
+    E -- Yes --> G[Project selected transcript evidence]
+    G --> H[Generate continuation context summary]
     H --> I{Succeeded?}
     I -- No --> J[Retry or disable auto-compaction]
     I -- Yes --> K[Finalize old segment]
@@ -100,7 +103,7 @@ fractional threshold to a near-zero value.
 This is a breaking configuration change.
 
 Automatic admission resolves both the realized target model and the
-`compaction` workload model.  It triggers when the estimate reaches the
+`summarization` workload model.  It triggers when the estimate reaches the
 smaller model's ratio-derived threshold.
 
 `mevedel--compact-should-compact-p` also checks eligibility:
@@ -119,11 +122,11 @@ Before a request is sent, mevedel still needs a local estimate. It uses
 the historic chars/4 scan when no API baseline is available, ignoring
 regions marked `gptel 'ignore` and excluding file-local variables.
 
-After normal non-compaction requests, API-reported token usage from
+After ordinary non-summary requests, API-reported token usage from
 gptel is recorded as `mevedel--known-token-baseline`. Future estimates
 start from that measured baseline and add chars/4 only for text added
-after the recorded marker. Compaction requests are explicitly excluded
-from this baseline so the summarization call never pollutes chat usage
+after the recorded marker. Context-summary requests are explicitly excluded
+from this baseline so generation never pollutes chat usage
 estimates.
 
 The baseline uses gptel's latest request token plist (`info :tokens`)
@@ -184,8 +187,10 @@ agent FSM's continuation `WAIT`, after the preceding response and tool result
 have settled and immediately before gptel would send the follow-up request.
 Initial requests and streaming responses are never interrupted.
 
-The shared compaction runner owns admission, tail selection, tool-output caps,
-summary requests, retries, preflight, and hooks for both targets.  The private
+The shared compaction runner owns admission, source selection, tail rules,
+retries, and hooks for both targets. The context-summary generator owns the
+tool-free request, complete-request preflight, validation, and cancellation.
+The private
 target adapter supplies the protected transcript bounds and target-specific
 persistence, display, continuation, and failure operations.  Agent hooks run
 with the parent session, workspace, and invocation; their payload uses the
@@ -255,9 +260,8 @@ removed with it by normal session cleanup.  Session Forks copy only canonical
 agent transcripts referenced by the fork's sidecar; they do not copy numbered
 archives.
 
-Compaction requests disable tools (`gptel-use-tools` and `gptel-tools`),
-use a no-tools prompt preamble, respect the active `gptel-stream`
-setting, and use the `compaction` workload policy from the current session's
+Context-summary requests disable tools, force non-streaming operation, and use
+the `summarization` workload policy from the current session's
 `mevedel-model-workloads`. Failures retry up to three attempts with exponential
 backoff. Every retry reacquires current `PreCompact` policy before sending the
 otherwise identical summary request. After repeated failures,
@@ -280,23 +284,35 @@ If automatic compaction fails, mevedel warns with
 cycles, the overflowing follow-up request is not sent after a failed
 compaction.
 
-## Summary prompt
+## Context-summary generation
 
-The summary prompt lives in `prompts/compaction/summary.md` and is
-rendered by `mevedel--compact-prompt` with request-specific template
-values, then passed through an isolated single-component prompt profile.
-It does not receive workspace configuration, environment, memory, skills, or
-main/agent role content. The generated summary is an anchored Markdown document with
-fixed sections:
+The shared prompt lives in `prompts/context-summary/summary.md`. The generator
+receives a frozen evidence string rather than transcript roles and does not
+receive workspace configuration, environment, memory, tools, or main/agent
+role content. Every continuation summary has these headings exactly once and
+in this order:
 
-- Goal
+- Scope
 - Constraints & Preferences
-- Progress / Done / In Progress / Blocked
+- Work & Evidence
 - Key Decisions
-- Next Steps
+- Open Questions & Risks
 - Critical Context
 - Relevant Files
 - Skills Invoked
+- Next Steps
+
+The generator also supports task-focused handoffs for other consumers. A
+handoff shares the first eight headings but omits `Next Steps`; it treats its
+separately supplied task as authority rather than turning unresolved parent
+work into a child assignment. Missing, duplicated, reordered, unexpected, or
+purpose-inappropriate headings fail validation.
+
+The transcript module preserves selected model-visible ordering as labelled
+user, assistant, reasoning, tool-call, and tool-result evidence. It excludes
+hidden UI and audit data, caps tool content while keeping structures balanced,
+and replaces native media with textual kind/MIME/path placeholders. Transcript
+text and hook additions remain untrusted evidence below the fixed prompt.
 
 On first compaction the prompt asks the model to create a new anchored
 summary. On later compactions it provides the previous leading summary
@@ -317,8 +333,9 @@ Steps so the next model can continue it unchanged. There is no separate
 carry-forward path for raw or injected user
 messages. Recent-tail preservation is unchanged.
 
-Skill invocation records from the session are appended to the prompt so
-summaries can preserve user-side and model-side skill usage.
+Relevant skill invocation records are appended as provenance evidence so
+summaries can preserve user-side and model-side methodology without activating
+the skill for the generator.
 
 Compaction neither snapshots Goal state into the segment nor queues a static
 Goal reminder. The durable Goal record remains the sole authority and is

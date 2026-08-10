@@ -277,7 +277,7 @@ The built-in selection is deliberate:
 | Verifier | Verifier role, report tone, tool orchestration, workspace config, environment |
 | Reviewer | Reviewer role, tool orchestration, workspace config, environment |
 | Bash guardian | Guardian role, workspace config, environment |
-| Compaction | Rendered compaction role only |
+| Context summary | Fixed continuation/handoff summary contract only |
 
 The shared tool-orchestration component asks models to batch independent tool
 calls within a bounded stage and keep dependencies, waits, approvals, and
@@ -375,6 +375,14 @@ properties repaired. `mevedel-transcript-restore.el` owns restoration of
 persisted bounds and invokes that normalizer, so persistence and the view do
 not maintain their own transcript grammars. Compaction consumes the same
 canonical spans directly.
+
+`mevedel-transcript-project-evidence` freezes consumer-selected ranges as
+neutral labelled evidence for `mevedel-context-summary.el`. The projection
+preserves ordering while excluding hidden UI/audit spans, bounding tool
+content, and replacing native media with textual metadata. The stateless
+generator owns the isolated non-streaming request, `summarization` workload,
+preflight, heading validation, cancellation, and request telemetry; consumers
+retain source selection, hooks, retries, persistence, and mutation.
 
 View rendering, session prompt indexing/rewind, and compaction all read
 these shared spans. They keep their own policies: the view groups and

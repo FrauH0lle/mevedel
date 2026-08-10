@@ -10,7 +10,7 @@
 (package-file "mevedel.el")
 (files :defaults
        '("agents" "agents/*.md")
-       '("prompts/compaction" "prompts/compaction/*.md")
+       '("prompts/context-summary" "prompts/context-summary/*.md")
        '("prompts/init" "prompts/init/*.md")
        '("prompts/permissions" "prompts/permissions/*.md")
        '("prompts/system" "prompts/system/*.md")

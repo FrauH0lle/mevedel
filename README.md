@@ -1099,7 +1099,7 @@ that can be checked into version control. `AGENTS.local.md` is loaded after
 
 When a prompt profile selects memory, the first 200 lines of each configured
 memory index are included. Main, tutor, and worker profiles select it;
-Explorer, verifier, reviewer, guardian, and compaction do not. The default
+Explorer, verifier, reviewer, guardian, and context-summary requests do not. The default
 memory roots are `.mevedel/memory/`,
 `.agents/memory/`, `~/.mevedel/memory/`, and `~/.agents/memory/`.
 `MEMORY.md` is an index; durable memory bodies live in linked topic files with

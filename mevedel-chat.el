@@ -72,6 +72,7 @@
 ;; `mevedel-compact'
 (declare-function mevedel--compact-transform-auto "mevedel-compact"
 		  (continue fsm))
+(defvar mevedel--compaction-cancel)
 
 ;; `mevedel-directive'
 (declare-function mevedel-directive-actions "mevedel-directive" (directive))
@@ -1918,7 +1919,9 @@ BUF defaults to the current buffer if not specified."
         (when (fboundp 'mevedel-permission-queue-abort-all)
           (mevedel-permission-queue-abort-all))
         (when (fboundp 'mevedel-plan-approval-abort)
-          (mevedel-plan-approval-abort)))
+          (mevedel-plan-approval-abort))
+        (when (functionp mevedel--compaction-cancel)
+          (funcall mevedel--compaction-cancel)))
       ;; Phase 2: loop `gptel-abort'.  It only cancels one request per
       ;; call, so continue until no request owned by this root buffer remains.
       ;; Retained agent turns own separate buffers and continue independently.

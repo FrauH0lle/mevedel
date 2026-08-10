@@ -135,6 +135,7 @@ Chat / view
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing
   mevedel-transcript-restore.el  transcript property restoration via the canonical grammar
+  mevedel-context-summary.el  stateless validated continuation/handoff summary generation
   mevedel-view.el             view mode, zones, and session coordination
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
   mevedel-view-composer.el    composer editing, submission, queueing, fork/send flow
