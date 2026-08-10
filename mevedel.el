@@ -30,8 +30,9 @@
 ;; Main entry point for mevedel.  Provides the `mevedel' and
 ;; `mevedel-tutoring' commands, installation/uninstallation of hooks
 ;; and presets, and the directive-processing commands
-;; (`mevedel-implement-directive', `mevedel-revise-directive',
-;; `mevedel-discuss-directive', `mevedel-tutor-directive').
+;; (`mevedel-implement-directive', `mevedel-discuss-directive',
+;; `mevedel-request-directive-changes', `mevedel-retry-directive', and
+;; `mevedel-tutor-directive').
 ;;
 ;; Acts as the top-level loader that `require's every mevedel module.
 ;; Downstream consumers need only `(require 'mevedel)'.
@@ -45,8 +46,10 @@
 (require 'gptel-agent)
 
 (require 'mevedel-workspace)
+(require 'mevedel-directive)
 (require 'mevedel-overlays)
 (require 'mevedel-mentions)
+(require 'mevedel-directive-persistence)
 (require 'mevedel-persistence)
 (require 'mevedel-file-state)
 (require 'mevedel-models)
@@ -54,6 +57,7 @@
 (require 'mevedel-plan)
 (require 'mevedel-plan-handoff)
 (require 'mevedel-plan-mode)
+(require 'mevedel-directive-plan)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-sandbox)
 (require 'mevedel-execution)
@@ -66,6 +70,7 @@
 (require 'mevedel-turn)
 (require 'mevedel-presets)
 (require 'mevedel-transcript)
+(require 'mevedel-transcript-audit)
 (require 'mevedel-transcript-restore)
 (require 'mevedel-compact)
 (require 'mevedel-view-agent)
@@ -74,6 +79,7 @@
 (require 'mevedel-view-composer)
 (require 'mevedel-view-stream)
 (require 'mevedel-view-zone)
+(require 'mevedel-directive-activity)
 (require 'mevedel-reminders)
 (require 'mevedel-skills-core)
 (require 'mevedel-mention-bindings)
@@ -96,6 +102,7 @@
 ;; `cl-seq'
 (declare-function cl-remove-duplicates "cl-seq" (cl-seq &rest cl-keys))
 (declare-function cl-remove-if "cl-seq" (cl-pred cl-list &rest cl-keys))
+(declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
 
 ;; `gptel'
 (defvar gptel-display-buffer-action)
@@ -104,15 +111,27 @@
 (defvar gptel-prompt-transform-functions)
 
 ;; `mevedel-chat'
+(declare-function mevedel--active-chat-buffer
+                  "mevedel-chat" (&optional workspace))
+(declare-function mevedel--attach-directive-skills
+                  "mevedel-chat" (prompt record chat-buffer))
+(declare-function mevedel--directive-bound-session-buffer
+                  "mevedel-chat" (record workspace))
 (declare-function mevedel--discuss-directive-prompt "mevedel-chat" (content))
+(declare-function mevedel--dispatch-directive-implementation
+                  "mevedel-chat"
+                  (directive record action prompt-fn callback))
 (declare-function mevedel--implement-directive-prompt "mevedel-chat" (content))
+(declare-function mevedel--implement-discussion "mevedel-chat"
+                  (directive &optional callback))
+(declare-function mevedel--implement-discussion-prompt "mevedel-chat"
+                  (content directive))
 (declare-function mevedel--normalize-session-directory
                   "mevedel-chat" (directory workspace))
 (declare-function mevedel--process-directive
-                  "mevedel-chat" (directive preset prompt-fn callback))
+                  "mevedel-chat"
+                  (directive preset prompt-fn callback &optional options))
 (declare-function mevedel--read-session-directory "mevedel-chat" (workspace))
-(declare-function mevedel--revise-directive-prompt
-                  "mevedel-chat" (content &optional patch-buffer directive))
 (declare-function mevedel--start-chat
                   "mevedel-chat"
                   (workspace working-directory prompt-session
@@ -124,6 +143,9 @@
 ;; `mevedel-compact'
 (declare-function mevedel--compact-transform-auto
                   "mevedel-compact" (continue fsm))
+
+;; `mevedel-directive'
+(declare-function mevedel-directive-actions "mevedel-directive" (directive))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-install-tool-result-scrubber
@@ -150,6 +172,13 @@
                   "mevedel-skills-invoke" (fsm))
 
 ;; `mevedel-structs'
+(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-attempts "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-skills "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tool-repair'
@@ -234,51 +263,79 @@ the request)."
                                                       t)
                                                      'directive)))
       (progn
-        (overlay-put directive 'mevedel-directive-action 'implement)
-        (mevedel--process-directive directive (alist-get 'implement mevedel-action-preset-alist)
-                                    #'mevedel--implement-directive-prompt callback))
+        (unless (memq 'implement
+                      (mevedel-directive-actions
+                       (mevedel--directive-record directive)))
+          (user-error "Implement requires a Ready directive"))
+        (mevedel--dispatch-directive-implementation
+         directive (mevedel--directive-record directive) 'implement
+         #'mevedel--implement-directive-prompt callback))
     (user-error "No directive found at point")))
 
 ;;;###autoload
-(defun mevedel-revise-directive (&optional callback)
-  "Propose a revision to a patch based on the directive at point.
+(defun mevedel-request-directive-changes ()
+  "Open Request changes for the implemented directive at point."
+  (interactive)
+  (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
+                                                     (mevedel--instructions-at (point) 'directive)
+                                                      t)
+                                                     'directive)))
+      (progn
+        (unless (memq 'request-changes
+                      (mevedel-directive-actions
+                       (mevedel--directive-record directive)))
+          (user-error "Request changes requires an implemented directive"))
+        (mevedel-view-enter-directive-scope directive 'request-changes))
+    (user-error "No directive found at point")))
 
-If CALLBACK is provided, it will be called when the implementation
-process completes.  The callback will receive two arguments: ERROR (nil
-on success, a string error description on failure, or the symbol
-\\='abort if the request was aborted) and FSM (the gptel-fsm object for
-the request)."
+;;;###autoload
+(defun mevedel-retry-directive ()
+  "Open Retry for the failed or aborted directive at point."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
                                                       (mevedel--instructions-at (point) 'directive)
                                                       t)
                                                      'directive)))
       (progn
-        (overlay-put directive 'mevedel-directive-action 'revise)
-        (mevedel--process-directive directive (alist-get 'revise mevedel-action-preset-alist)
-                                    (lambda (content)
-                                      (mevedel--revise-directive-prompt content nil directive))
-                                    callback))
+        (unless (memq 'retry
+                      (mevedel-directive-actions
+                       (mevedel--directive-record directive)))
+          (user-error "Retry requires a failed or aborted directive"))
+        (mevedel-view-enter-directive-scope directive 'retry))
     (user-error "No directive found at point")))
 
 ;;;###autoload
-(defun mevedel-discuss-directive (&optional callback)
+(defun mevedel-discuss-directive ()
   "Discuss the directive at point.
-
-If CALLBACK is provided, it will be called when the implementation
-process completes.  The callback will receive two arguments: ERROR (nil
-on success, a string error description on failure, or the symbol
-\\='abort if the request was aborted) and FSM (the gptel-fsm object for
-the request)."
+Submit a Ready directive immediately; otherwise focus its follow-up composer."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
                                                       (mevedel--instructions-at (point) 'directive)
                                                       t)
                                                      'directive)))
       (progn
-        (overlay-put directive 'mevedel-directive-action 'discuss)
-        (mevedel--process-directive directive (alist-get 'discuss mevedel-action-preset-alist)
-                                    #'mevedel--discuss-directive-prompt callback))
+        (let ((actions
+               (mevedel-directive-actions
+                (mevedel--directive-record directive))))
+          (unless (cl-intersection
+                   actions '(discuss continue-discussion discuss-result))
+            (user-error "Discussion is unavailable while processing"))
+          (mevedel-view-enter-directive-scope directive 'discuss)
+          (when (memq 'discuss actions)
+            (mevedel--start-directive-discussion directive))))
+    (user-error "No directive found at point")))
+
+;;;###autoload
+(defun mevedel-implement-discussion-directive (&optional callback)
+  "Implement the directive at point using its complete local discussion.
+CALLBACK receives the ordinary directive terminal arguments."
+  (interactive)
+  (if-let* ((directive
+             (mevedel--topmost-instruction
+              (mevedel--highest-priority-instruction
+               (mevedel--instructions-at (point) 'directive) t)
+              'directive)))
+      (mevedel--implement-discussion directive callback)
     (user-error "No directive found at point")))
 
 ;;;###autoload
@@ -303,7 +360,7 @@ request)."
 
 ;;;###autoload
 (defun mevedel-process-directives (&optional process-all)
-  "Process multiple directives sequentially while auto-applying patches.
+  "Process initial directive implementations sequentially in source order.
 
 Collects directives based on context:
 
@@ -313,15 +370,13 @@ Collects directives based on context:
 - If no region and no directive at point, collect all directives in
   buffer
 
-Presents directives to user via `completing-read-multiple' for
-ordering/filtering.
+Presents directives to user via `completing-read-multiple' for filtering.
 
-Without prefix argument, only selected directives are processed in the
-order chosen.
+Without prefix argument, only selected directives are processed.
 
 With PROCESS-ALL or prefix argument (\\[universal-argument]), all
-directives are processed: selected directives are processed first in the
-chosen order, followed by unselected directives in their original order."
+top-level directives are processed without prompting.  Nested directives
+remain details of their topmost parent."
   (interactive "P")
   (let (found-directives)
     ;; Collect directives based on context
@@ -349,9 +404,27 @@ chosen order, followed by unselected directives in their original order."
                                                                                    'directive))))))
                (setq found-directives toplevel-directives)))))
 
+    (setq found-directives
+          (sort
+           found-directives
+           (lambda (a b)
+             (let* ((a-record (mevedel--directive-record a))
+                    (b-record (mevedel--directive-record b))
+                    (a-anchor (mevedel-directive-anchor a-record))
+                    (b-anchor (mevedel-directive-anchor b-record))
+                    (a-order (or (plist-get a-anchor :source-order)
+                                 (list (overlay-start a) (overlay-end a))))
+                    (b-order (or (plist-get b-anchor :source-order)
+                                 (list (overlay-start b) (overlay-end b)))))
+               (or (< (car a-order) (car b-order))
+                   (and (= (car a-order) (car b-order))
+                        (or (< (cadr a-order) (cadr b-order))
+                            (and (= (cadr a-order) (cadr b-order))
+                                 (string-lessp
+                                  (mevedel-directive-id a-record)
+                                  (mevedel-directive-id b-record))))))))))
     (if (null found-directives)
         (user-error "No directives found")
-      ;; Create display strings and mapping for completing-read-multiple
       (let* ((ov-strings (cl-loop for ov in found-directives
                                   collect (format "#%d: %s"
                                                   (overlay-get ov 'mevedel-id)
@@ -359,67 +432,135 @@ chosen order, followed by unselected directives in their original order."
              (ov-map (cl-loop for str in ov-strings
                               for ov in found-directives
                               collect (cons str ov)))
-             ;; Let user select and order directives
-             (prompt (if process-all
-                         "Order directives to process first (unselected will follow, leave empty for all): "
-                       "Select directives to process (in order, leave empty for all): "))
-             (selected-strings (cl-remove-duplicates
-                                (or (completing-read-multiple prompt ov-strings)
-                                    ov-strings)
-                                :test #'equal))
-             ;; Build final directive list based on mode
-             (selected-directives (mapcar (lambda (str) (cdr (assoc str ov-map)))
-                                          selected-strings))
+             (selected-strings
+              (unless process-all
+                (completing-read-multiple
+                 "Select directives to process (source order, leave empty for all): "
+                 ov-strings)))
+             (selected-directives
+              (mapcar (lambda (str) (cdr (assoc str ov-map)))
+                      selected-strings))
              (directives-to-process
-              (if process-all
-                  ;; Process-all mode: selected first, then unselected
-                  (let ((unselected-directives (cl-remove-if (lambda (ov)
-                                                               (memq ov selected-directives))
-                                                             found-directives)))
-                    (append selected-directives unselected-directives))
-                ;; Default mode: only process selected directives
-                selected-directives))
-             (total-count (length directives-to-process)))
+              (if (or process-all (null selected-strings))
+                  found-directives
+                (cl-remove-if-not
+                 (lambda (directive)
+                   (memq directive selected-directives))
+                 found-directives)))
+             (workspace (mevedel-workspace))
+             ;; Records without a live overlay (Source missing) are
+             ;; invisible to the buffer scan above; a process-all batch
+             ;; still owes them an attempt.
+             (records (append
+                       (mapcar #'mevedel--directive-record
+                               directives-to-process)
+                       (when (and workspace
+                                  (or process-all (null selected-strings)))
+                         (cl-remove-if-not
+                          (lambda (record)
+                            (eq 'source-missing
+                                (plist-get (mevedel-directive-anchor record)
+                                           :state)))
+                          (mevedel-workspace-directives workspace)))))
+             (total-count (length records)))
 
         (if (zerop total-count)
-            (message "No directives to process")
-          ;; Process directives sequentially
-          (message "Processing %d directive%s..." total-count (if (= total-count 1) "" "s"))
-          (mevedel--process-directives-sequentially directives-to-process 1 total-count))))))
+            (message "mevedel: no directives to process")
+          (message "mevedel: processing %d directive%s..." total-count (if (= total-count 1) "" "s"))
+          (mevedel--process-directives-sequentially
+           records workspace 1 total-count))))))
 
-(defun mevedel--process-directives-sequentially (directives current total)
-  "Process DIRECTIVES sequentially, showing progress.
+(defun mevedel--process-directives-sequentially
+    (records workspace current total)
+  "Process directive RECORDS in WORKSPACE sequentially, showing progress.
 
 CURRENT is the current directive number (1-indexed).
 TOTAL is the total number of directives."
-  (if (null directives)
-      ;; All done - restore original setting
-      (progn
-        (message "Completed processing %d directive%s" total (if (= total 1) "" "s")))
-    ;; Process next directive
-    (let ((directive (car directives))
-          (remaining (cdr directives)))
-      (message "Processing directive %d/%d: #%d %s"
-               current total
-               (overlay-get directive 'mevedel-id)
-               (mevedel--directive-text directive))
-      ;; Set up callback to process next directive
-      (let ((callback (lambda (err _fsm)
-                        (if err
-                            (progn
-                              ;; Restore original setting and stop processing
-                              (message "Stopped processing at directive %d/%d due to error: %s"
-                                       current total err))
-                          ;; Success - continue with next directive after the
-                          ;; terminal FSM handlers finish clearing the active
-                          ;; request.
-                          (run-at-time
-                           0 nil
-                           #'mevedel--process-directives-sequentially
-                           remaining (1+ current) total)))))
-        (overlay-put directive 'mevedel-directive-action 'implement)
-        (mevedel--process-directive directive 'mevedel-implement
-                                    #'mevedel--implement-directive-prompt callback)))))
+  (if (null records)
+      (message "mevedel: completed processing %d directive%s"
+               total (if (= total 1) "" "s"))
+    (let* ((record (car records))
+           (remaining (cdr records))
+           (actions (mevedel-directive-actions record))
+           (implementation-action
+            (cond ((memq 'implement-this actions) 'implement-this)
+                  ((memq 'implement actions) 'implement))))
+      (cond
+       ((mevedel-directive-attempts record)
+        (message "mevedel: skipping directive %d/%d: existing implementation activity"
+                 current total)
+        (mevedel--process-directives-sequentially
+         remaining workspace (1+ current) total))
+       ((not implementation-action)
+        (message "mevedel: skipping directive %d/%d: ineligible lifecycle state %s"
+                 current total
+                 (capitalize
+                  (symbol-name
+                   (or (mevedel-directive-state record) 'ready))))
+        (mevedel--process-directives-sequentially
+         remaining workspace (1+ current) total))
+       (t
+        (let ((context
+               (condition-case err
+                   (let ((context
+                          (mevedel--directive-action-context
+                           record workspace)))
+                     (if (eq implementation-action 'implement-this)
+                         (mevedel--implement-discussion-prompt
+                          (plist-get context :prompt) record)
+                       (mevedel--implement-directive-prompt
+                        (plist-get context :prompt)))
+                     ;; Pre-validate selected skills in the same session
+                     ;; dispatch will use (bound first) so a stale
+                     ;; selection skips this directive instead of
+                     ;; stopping the batch at dispatch.  With no live
+                     ;; session buffer, dispatch validates alone.
+                     (when-let* (((mevedel-directive-skills record))
+                                 (chat-buffer
+                                  (or (mevedel--directive-bound-session-buffer
+                                       record workspace)
+                                      (mevedel--active-chat-buffer workspace)))
+                                 ((buffer-live-p chat-buffer)))
+                       (mevedel--attach-directive-skills
+                        "" record chat-buffer))
+                     context)
+                 (error
+                  (message "mevedel: skipping directive %d/%d: %s"
+                           current total (error-message-string err))
+                  nil))))
+          (if (null context)
+              (mevedel--process-directives-sequentially
+               remaining workspace (1+ current) total)
+            (let* ((directive (plist-get context :directive))
+                   (callback
+                    (lambda (err _fsm)
+                      (if err
+                          (message
+                           "mevedel: stopped processing at directive %d/%d: implementation %s%s"
+                           current total
+                           (if (eq err 'abort) "aborted" "failed")
+                           (if (eq err 'abort) "" (format ": %s" err)))
+                        ;; Terminal handlers clear the active request before
+                        ;; this zero-delay continuation runs.
+                        (run-at-time
+                         0 nil
+                         #'mevedel--process-directives-sequentially
+                         remaining workspace (1+ current) total)))))
+              (message "mevedel: processing directive %d/%d: #%s %s"
+                       current total
+                       (or (overlay-get directive 'mevedel-id)
+                           (mevedel-directive-id record))
+                       (mevedel-directive-request record))
+              (condition-case err
+                  (if (eq implementation-action 'implement-this)
+                      (mevedel--implement-discussion directive callback)
+                    (mevedel--dispatch-directive-implementation
+                     directive record 'implement
+                     #'mevedel--implement-directive-prompt callback))
+                (error
+                 (message
+                  "mevedel: stopped processing at directive %d/%d: %s"
+                  current total (error-message-string err))))))))))))
 
 ;;;###autoload
 (defun mevedel-instruction-count ()
@@ -565,6 +706,11 @@ always prompt for the session name."
   ;; Inject system reminders after mention expansion but before the request fires
   (add-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform -80)
 
+  ;; Keep directive turns visible in the stored transcript while excluding
+  ;; them from ordinary request copies before provider parsing.
+  (add-hook 'gptel-prompt-transform-functions
+            #'mevedel-transcript-exclude-directive-turns -79)
+
   ;; Auto-compact after mevedel's synchronous prompt transforms so an
   ;; auto-compact send preserves the transformed pending prompt when it
   ;; rebuilds the temporary request buffer.
@@ -614,7 +760,7 @@ always prompt for the session name."
             #'mevedel-tool-exec-handle-execution-event)
     (setq mevedel-execution-mailbox-delivery-function nil))
   ;; Remove presets
-  (dolist (preset '(mevedel-discuss mevedel-implement mevedel-revise))
+  (dolist (preset '(mevedel-discuss mevedel-implement))
     (setf (alist-get preset gptel--known-presets nil 'remove) nil))
 
   ;; Remove mention expansion from gptel
@@ -634,6 +780,10 @@ always prompt for the session name."
 
   ;; Remove reminder injection
   (remove-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform)
+
+  ;; Remove directive context projection
+  (remove-hook 'gptel-prompt-transform-functions
+               #'mevedel-transcript-exclude-directive-turns)
 
   ;; Remove auto-compaction transform
   (remove-hook 'gptel-prompt-transform-functions

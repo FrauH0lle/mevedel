@@ -2,9 +2,9 @@
 
 ;;; Commentary:
 
-;; Workspace, session, request, and task structs that form the foundation for
-;; mevedel's state management, plus canonical task data invariants.  All other
-;; modules reference these definitions.
+;; Workspace, directive, session, request, and task structs that form the
+;; foundation for mevedel's state management, plus canonical task data
+;; invariants.  All other modules reference these definitions.
 
 ;;; Code:
 
@@ -12,6 +12,8 @@
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-plan-read-only
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-require-path
                   "mevedel-agents" (invocation))
 (defvar mevedel--agent-invocation)
@@ -20,10 +22,6 @@
 (declare-function mevedel-permission-queue-sweep-request
                   "mevedel-permission-queue"
                   (request-id &optional session no-render))
-
-;; `mevedel-plan-mode'
-(declare-function mevedel-plan-approval-abort
-                  "mevedel-plan-mode" (&optional session outcome))
 
 ;; `mevedel-sandbox'
 (defvar mevedel-sandbox-mode)
@@ -54,7 +52,67 @@ check project dir first, then global."
 
 
 ;;
-;;; Workspace struct
+;;; Directive and workspace structs
+
+(cl-defstruct (mevedel-subdirective
+               (:constructor mevedel-subdirective--create)
+               (:copier nil))
+  "One current parent-owned nested directive."
+  id
+  request
+  anchor)
+
+(cl-defstruct (mevedel-directive-attempt
+               (:constructor mevedel-directive-attempt--create)
+               (:copier nil))
+  "One immutable terminal implementation attempt."
+  sequence
+  action
+  directive-request
+  request
+  result
+  outcome
+  patch
+  capture
+  covered-files
+  gaps
+  untracked-effects
+  captured-at
+  checkpoint
+  plan
+  plan-context
+  plan-selection
+  consumed-subdirectives)
+
+(cl-defstruct (mevedel-directive-discussion-turn
+               (:constructor mevedel-directive-discussion-turn--create)
+               (:copier nil))
+  "One immutable terminal directive discussion turn."
+  sequence
+  directive-request
+  message
+  request
+  result
+  outcome
+  attempt-index
+  checkpoint)
+
+(cl-defstruct (mevedel-directive (:constructor mevedel-directive--create))
+  "Workspace-owned directive identity and current authored state."
+  id
+  request
+  anchor
+  state
+  session-id
+  planning-enabled
+  ;; Skills attached to implementation prompts, as (:name NAME
+  ;; :source-file FILE) plists keyed by canonical SKILL.md source.
+  skills
+  plan
+  planning
+  attempts
+  discussion
+  subdirectives)
 
 (cl-defstruct (mevedel-workspace (:constructor mevedel-workspace--create))
   "Project-level shared state.
@@ -63,7 +121,73 @@ One workspace per project, shared by all sessions for that project."
   id                ; opaque identifier
   root              ; cached absolute path
   name              ; display name
-  file-cache)       ; mevedel-file-cache struct: LRU workspace file cache
+  file-cache        ; mevedel-file-cache struct: LRU workspace file cache
+  directives)       ; list of workspace-owned mevedel-directive structs
+
+(defun mevedel-directive-set-anchor (directive anchor)
+  "Set DIRECTIVE's current ANCHOR."
+  (setf (mevedel-directive-anchor directive) anchor))
+
+(defun mevedel-directive-set-state (directive state)
+  "Set DIRECTIVE's transient lifecycle STATE."
+  (setf (mevedel-directive-state directive) state))
+
+(defun mevedel-directive-set-planning-enabled (directive enabled)
+  "Set DIRECTIVE's Plan-before-implementation preference to ENABLED."
+  (setf (mevedel-directive-planning-enabled directive) (and enabled t)))
+
+(defun mevedel-directive-set-skills (directive skills)
+  "Set DIRECTIVE's implementation skill selection to SKILLS."
+  (setf (mevedel-directive-skills directive) skills))
+
+(defun mevedel-subdirective-copy (subdirective)
+  "Return an independent snapshot of SUBDIRECTIVE."
+  (mevedel-subdirective--create
+   :id (substring-no-properties (mevedel-subdirective-id subdirective))
+   :request (substring-no-properties (mevedel-subdirective-request subdirective))
+   :anchor (copy-tree (mevedel-subdirective-anchor subdirective))))
+
+(defun mevedel-subdirective-set-anchor (subdirective anchor)
+  "Set SUBDIRECTIVE's current ANCHOR."
+  (setf (mevedel-subdirective-anchor subdirective) anchor))
+
+(defun mevedel-subdirective-set-request (subdirective request)
+  "Set SUBDIRECTIVE's current REQUEST."
+  (setf (mevedel-subdirective-request subdirective) request))
+
+(defun mevedel-directive-sort-subdirectives (directive)
+  "Sort DIRECTIVE's nested details by their source anchors."
+  (setf
+   (mevedel-directive-subdirectives directive)
+   (sort
+    (copy-sequence (mevedel-directive-subdirectives directive))
+    (lambda (a b)
+      (let* ((a-anchor (mevedel-subdirective-anchor a))
+             (b-anchor (mevedel-subdirective-anchor b))
+             (a-start (or (plist-get a-anchor :start) 0))
+             (b-start (or (plist-get b-anchor :start) 0))
+             (a-end (or (plist-get a-anchor :end) a-start))
+             (b-end (or (plist-get b-anchor :end) b-start)))
+        (or (< a-start b-start)
+            (and (= a-start b-start)
+                 (or (> a-end b-end)
+                     (and (= a-end b-end)
+                          (string-lessp (mevedel-subdirective-id a)
+                                        (mevedel-subdirective-id b)))))))))))
+
+(defun mevedel-workspace-add-directive (workspace directive)
+  "Add DIRECTIVE to WORKSPACE."
+  (push directive (mevedel-workspace-directives workspace))
+  directive)
+
+(defun mevedel-workspace-remove-directive (workspace directive)
+  "Remove DIRECTIVE from WORKSPACE."
+  (setf (mevedel-workspace-directives workspace)
+        (delq directive (mevedel-workspace-directives workspace))))
+
+(defun mevedel-workspace-set-directives (workspace directives)
+  "Replace WORKSPACE's directive records with DIRECTIVES."
+  (setf (mevedel-workspace-directives workspace) directives))
 
 
 ;;
@@ -153,7 +277,8 @@ and NAME arguments)."
                   :file-cache (mevedel-file-cache--create
                                :table (make-hash-table :test #'equal)
                                :order nil
-                               :total-bytes 0))
+                               :total-bytes 0)
+                  :directives nil)
                  mevedel-workspace--registry))))
 
 (defun mevedel-workspace-clear-registry ()
@@ -205,6 +330,7 @@ workspace."
   permission-mode   ; current permission mode
   sandbox-mode      ; current child-process confinement policy
   plan-mode         ; non-nil during a sticky Plan conversation
+  directive-planning ; transient active directive-planning record
   preset-name       ; selected mevedel preset symbol
   preset-settings   ; alist of resolved buffer-local mevedel variables
   model-provider    ; exact "BACKEND:MODEL" session selector or nil
@@ -583,9 +709,12 @@ Return the expanded paths activated."
 Created at request start, cleared in the termination handler."
   id                ; process-unique request correlation id
   session           ; back-reference to mevedel-session
+  turn              ; reserved session turn committed at settlement
   fsm               ; owning root gptel FSM, or nil for non-provider requests
   file-snapshots    ; hash-table: filepath -> original content at request start
+  untracked-effects ; alist: source -> reason capture cannot be complete
   directive-uuid    ; UUID of directive being processed, if any
+  plan-read-only    ; immutable Plan capability boundary for this request
   pending-plan      ; pending plan action plist
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
   started-at        ; wall-clock time when the request began
@@ -719,6 +848,20 @@ only call sites that may invoke cancellers."
         (mevedel-agent-invocation-require-path inv))
       "/root"))
 
+(defun mevedel-current-turn (session)
+  "Return SESSION's active reserved turn or next turn."
+  (if (and (mevedel-request-p mevedel--current-request)
+           (eq session (mevedel-request-session mevedel--current-request)))
+      (mevedel-request-turn mevedel--current-request)
+    (1+ (or (mevedel-session-turn-count session) 0))))
+
+(defun mevedel-request-note-untracked-effect (request source reason)
+  "Record one untracked filesystem effect SOURCE and REASON on REQUEST."
+  (unless (assoc source (mevedel-request-untracked-effects request))
+    (push (cons source reason)
+          (mevedel-request-untracked-effects request)))
+  (mevedel-request-untracked-effects request))
+
 (defun mevedel-request-begin (session &optional directive-uuid)
   "Create a new request for SESSION, guarding against stale requests.
 
@@ -739,8 +882,19 @@ the new request struct."
          (request (mevedel-request--create
                    :id id
                    :session session
+                   :turn (1+ (or (mevedel-session-turn-count session) 0))
                    :file-snapshots (make-hash-table :test #'equal)
+                   :untracked-effects nil
                    :directive-uuid directive-uuid
+                   :plan-read-only
+                   (or (eq (plist-get
+                            (mevedel-session-directive-planning session)
+                            :phase)
+                           'planning)
+                       (and (boundp 'mevedel--agent-invocation)
+                            mevedel--agent-invocation
+                            (mevedel-agent-invocation-plan-read-only
+                             mevedel--agent-invocation)))
                    :started-at (current-time)
                    :origin origin)))
     (setq mevedel--current-request request)

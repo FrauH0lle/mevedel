@@ -65,6 +65,11 @@ Important tool metadata:
 before-state participates in the final patch. `ApplyPatch` declares it and
 uses `:get-paths` so permission and snapshot steps cover every affected path.
 
+During directive implementation, the pipeline also records conservative
+untracked-effect markers for non-read-only execution tools and agent dispatch.
+Those markers do not attempt to infer changed paths; they prevent the final
+attempt capture from claiming completeness and become explicit Rewind gaps.
+
 ### Tool input validation and repair
 
 `mevedel-tool-repair.el` mediates raw model calls before gptel dispatches

@@ -2,12 +2,12 @@
 
 ;;; Commentary:
 
-;; Saves and restores instruction overlays across Emacs sessions.
-;; Instructions are file-specific; the save format records buffer
-;; associations, positions, and overlay properties.  When a save file
-;; is loaded against a buffer whose contents have changed, ediff is
-;; used to reconcile overlay positions.  Save files must match the
-;; current mevedel version.
+;; Saves and restores source-bound references and workspace-owned directives
+;; across Emacs sessions.  The save format records directive identity and
+;; authored state separately from file-specific overlay presentations.  When a
+;; save file is loaded against a buffer whose contents have changed, ediff is
+;; used to reconcile overlay positions.  Save files must match the current
+;; mevedel version and directive schema.
 
 ;;; Code:
 
@@ -21,6 +21,43 @@
 ;; `mevedel'
 (declare-function mevedel-version "mevedel" (&optional here message))
 
+;; `mevedel-directive-persistence'
+(declare-function mevedel--deserialize-directives
+                  "mevedel-directive-persistence"
+                  (serialized base-directory))
+(declare-function mevedel--serialize-directives
+                  "mevedel-directive-persistence"
+                  (workspace base-directory))
+
+;; `mevedel-overlays'
+(declare-function mevedel--mark-buffer-source-missing
+                  "mevedel-overlays" (buffer))
+(declare-function mevedel--reattach-directive
+                  "mevedel-overlays" (record workspace buffer start end))
+(declare-function mevedel--reattach-subdirective
+                  "mevedel-overlays"
+                  (record owner workspace buffer start end))
+(declare-function mevedel--reconcile-directive-sources
+                  "mevedel-overlays" (workspace))
+(declare-function mevedel--refresh-directive-anchor
+                  "mevedel-overlays" (directive))
+(declare-function mevedel--subinstruction-of-p
+                  "mevedel-overlays" (sub parent))
+
+;; `mevedel-structs'
+(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-subdirectives
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-subdirective-anchor "mevedel-structs" (cl-x) t)
+(declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-set-directives "mevedel-structs"
+                  (workspace directives))
+
+;; `mevedel-workspace'
+(defvar mevedel--workspace)
+
 (defcustom mevedel-patch-outdated-instructions t
   "Automatically patch instructions when the save file is outdated if non-nil."
   :type 'boolean
@@ -30,6 +67,9 @@
   "If t, `mevedel--restore-file-instructions' becomes inert.
 This is sometimes necessary to prevent various hooks from interfering with the
 instruction restoration process.")
+
+(defvar mevedel--inhibit-source-missing-restore nil
+  "Non-nil while a historical instruction snapshot is being installed.")
 
 ;;;###autoload
 (defun mevedel-save-instructions (path)
@@ -64,9 +104,6 @@ not saved."
   (append (mevedel--instruction-file-metadata content)
           entry))
 
-(defun mevedel--instruction-relative-file-name (file base-directory)
-  "Return FILE relative to BASE-DIRECTORY, tolerating alias spellings."
-  (mevedel--file-relative-name-or-absolute file base-directory))
 
 (defun mevedel--serialize-instructions
     (&optional base-directory include-original-content)
@@ -76,8 +113,12 @@ BASE-DIRECTORY controls how file names are stored.  When non-nil,
 file names are serialized relative to it; otherwise absolute names are
 used.  When INCLUDE-ORIGINAL-CONTENT is non-nil, include full buffer
 contents for position patching if the file changes before restore."
+  (require 'mevedel-directive-persistence)
   (mevedel--instruction-activate-buffer)
+  (mevedel--reconcile-directive-sources
+   (mevedel--instruction-buffer-workspace (current-buffer)))
   (let ((file-alist ())
+        (workspace (mevedel--instruction-buffer-workspace (current-buffer)))
         (base-directory (and base-directory
                              (file-name-as-directory
                               (expand-file-name base-directory)))))
@@ -87,7 +128,7 @@ contents for position patching if the file changes before restore."
                   (when-let* (((buffer-live-p buffer))
                               (buffer-file-name (buffer-file-name buffer)))
                     (let ((file (if base-directory
-                                    (mevedel--instruction-relative-file-name
+                                    (mevedel--file-relative-name-or-absolute
                                      buffer-file-name base-directory)
                                   (expand-file-name buffer-file-name))))
                       (when-let* ((instrs (mevedel--stashed-buffer-instructions
@@ -126,7 +167,11 @@ contents for position patching if the file changes before restore."
                      file-alist)))
     (list :version (mevedel-version)
           :ids (mevedel--instruction-id-state-plist)
+          :directives (and workspace
+                           (mevedel--serialize-directives
+                            workspace base-directory))
           :files file-alist)))
+
 
 (defun mevedel--write-instructions-file
     (path &optional base-directory write-empty quiet include-original-content)
@@ -175,12 +220,54 @@ Returns the number of saved instructions."
     (insert-file-contents path)
     (read (current-buffer))))
 
+(defun mevedel--reset-instructions-preserving-directives
+    (workspace directives)
+  "Clear WORKSPACE presentations while retaining authored DIRECTIVES."
+  (let ((mevedel--instruction-state-key-override
+         (mevedel--instruction-workspace-key workspace)))
+    (dolist (entry (copy-sequence (mevedel--instruction-alist)))
+      (when (and (bufferp (car entry))
+                 (buffer-live-p (car entry)))
+        (mevedel--mark-buffer-source-missing (car entry))))
+    (mevedel--clear-instruction-state workspace)
+    (mevedel-workspace-set-directives workspace directives)))
+
+(defun mevedel--restore-preserved-directives (workspace)
+  "Safely restore Source missing directive presentations in WORKSPACE."
+  (dolist (file
+           (delete-dups
+            (cl-loop
+             for directive in (mevedel-workspace-directives workspace)
+             for anchor = (mevedel-directive-anchor directive)
+             append
+             (append
+              (when-let* (((eq 'source-missing (plist-get anchor :state)))
+                          (file (plist-get anchor :file))
+                          ((stringp file))
+                          ((file-exists-p file)))
+                (list file))
+              (cl-loop
+               for subdirective in
+               (mevedel-directive-subdirectives directive)
+               for file = (plist-get
+                           (mevedel-subdirective-anchor subdirective) :file)
+               when (and (stringp file) (file-exists-p file))
+               collect file)))))
+    (let ((buffer (find-file-noselect file)))
+      (with-current-buffer buffer
+        (setq-local mevedel--workspace workspace))
+      (mevedel--restore-source-missing-directives buffer))))
+
 (defun mevedel--load-instructions-file
-    (path &optional base-directory confirm quiet workspace)
+    (path &optional base-directory confirm quiet workspace directive-records
+          preserve-directives-p)
   "Load instruction overlays from PATH into WORKSPACE.
 
 BASE-DIRECTORY resolves relative file names in PATH.  CONFIRM prompts
-before replacing existing instructions.  QUIET suppresses messages."
+before replacing existing instructions.  QUIET suppresses messages.
+DIRECTIVE-RECORDS retains current authored records; PRESERVE-DIRECTIVES-P
+enables that mode for an empty record list."
+  (require 'mevedel-directive-persistence)
   (setq workspace (or workspace
                       (mevedel--instruction-buffer-workspace
                        (current-buffer))))
@@ -193,13 +280,25 @@ before replacing existing instructions.  QUIET suppresses messages."
       (user-error "Aborted")))
   (let* ((save-file (mevedel--read-instructions-file path))
          (file-alist (plist-get save-file :files))
+         (serialized-directives (plist-get save-file :directives))
          (id-counter-plist (plist-get save-file :ids)))
     (unless (equal (plist-get save-file :version) (mevedel-version))
       (user-error "Unsupported instruction file version: %s"
                   (or (plist-get save-file :version) "missing")))
     (unless (listp file-alist)
       (user-error "Malformed mevedel instruction list"))
-    (mevedel--clear-instruction-state workspace)
+    (unless (and (plist-member save-file :directives)
+                 (listp serialized-directives))
+      (user-error "Malformed mevedel directive list"))
+    (if (or preserve-directives-p directive-records)
+        (mevedel--reset-instructions-preserving-directives
+         workspace directive-records)
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-workspace-set-directives
+       workspace
+       (mevedel--deserialize-directives
+        serialized-directives
+        (or base-directory (file-name-parent-directory path)))))
     (cl-destructuring-bind (&key id-counter used-ids retired-ids) id-counter-plist
       (let ((hm (make-hash-table)))
         (cl-loop for used-id in used-ids
@@ -225,11 +324,14 @@ before replacing existing instructions.  QUIET suppresses messages."
                                               (plist-get plist :instructions))
                                             (mapcar #'cdr (mevedel--instruction-alist))))
                             :initial-value 0)))
-      (cl-loop for (file . _) in (mevedel--instruction-alist)
-               do (progn
-                    (cl-multiple-value-bind (_ restored kia) (mevedel--restore-file-instructions file t)
+      (let ((mevedel--inhibit-source-missing-restore t))
+        (cl-loop for (file . _) in (mevedel--instruction-alist)
+                 do (cl-multiple-value-bind (_ restored kia)
+                        (mevedel--restore-file-instructions file t workspace)
                       (cl-incf total-restored restored)
                       (cl-incf total-kia kia))))
+      (when (or preserve-directives-p directive-records)
+        (mevedel--restore-preserved-directives workspace))
       (when (and (not quiet) confirm)
         (message "Restored %d out of %d instructions from %s%s"
                  total-restored
@@ -276,9 +378,14 @@ reverted, and restores them afterward."
                                    (insert-file-contents file)
                                    (buffer-substring-no-properties (point-min) (point-max)))))
                             (mevedel--stash-buffer buffer file-contents))
-                        (setf (mevedel--instruction-alist)
-                              (assq-delete-all
-                               buffer (mevedel--instruction-alist))))))))
+                        (mevedel--mark-buffer-source-missing buffer))))))
+                nil t)
+      (add-hook 'post-command-hook
+                (lambda ()
+                  (when-let* ((file (buffer-file-name buffer))
+                              ((not (file-exists-p file)))
+                              ((mevedel--buffer-has-instructions-p buffer)))
+                    (mevedel--mark-buffer-source-missing buffer)))
                 nil t))
     (add-hook 'before-revert-hook
               (lambda ()
@@ -411,6 +518,72 @@ When RANGE is non-nil, it is a cons cell limiting valid bounds."
       (mevedel--instruction-anchor-resolve-text
        overlay-start overlay-end anchor range)))))
 
+(defun mevedel--restore-subdirectives-in-buffer (workspace buffer file)
+  "Restore parent-owned directive details for FILE in BUFFER."
+  (let ((mevedel--instruction-state-key-override
+         (mevedel--instruction-workspace-key workspace)))
+    (mevedel--instruction-activate-workspace workspace)
+    (let ((restored 0)
+          (instructions
+           (cdr (assq buffer (mevedel--instruction-alist)))))
+      (dolist (owner (mevedel-workspace-directives workspace))
+        (when-let* ((parent
+                     (cl-find (mevedel-directive-id owner) instructions
+                              :key (lambda (instruction)
+                                     (overlay-get instruction 'mevedel-uuid))
+                              :test #'equal)))
+          (dolist (record (mevedel-directive-subdirectives owner))
+            (let ((anchor (mevedel-subdirective-anchor record)))
+              (when (and (stringp (plist-get anchor :file))
+                         (file-equal-p file (plist-get anchor :file)))
+                (if-let* ((overlay
+                           (cl-find (mevedel-subdirective-id record)
+                                    instructions
+                                    :key (lambda (instruction)
+                                           (overlay-get instruction
+                                                        'mevedel-uuid))
+                                    :test #'equal)))
+                    (when (mevedel--subinstruction-of-p overlay parent)
+                      (mevedel--refresh-directive-anchor overlay))
+                  (with-current-buffer buffer
+                    (when-let* ((bounds
+                                 (mevedel--instruction-anchor-resolve
+                                  (plist-get anchor :start)
+                                  (plist-get anchor :end)
+                                  (plist-get anchor :evidence)
+                                  (cons (overlay-start parent)
+                                        (overlay-end parent)))))
+                      (mevedel--reattach-subdirective
+                       record owner workspace buffer
+                       (car bounds) (cdr bounds))
+                      (cl-incf restored)))))))))
+      restored)))
+
+(defun mevedel--restore-source-missing-directives (buffer)
+  "Reattach exact unambiguous source-missing directives returning in BUFFER."
+  (let* ((workspace (mevedel--instruction-buffer-workspace buffer))
+         (file (buffer-file-name buffer))
+         (restored 0))
+    (when (and workspace file)
+      (dolist (record (mevedel-workspace-directives workspace))
+        (let ((anchor (mevedel-directive-anchor record)))
+          (when (and (eq 'source-missing (plist-get anchor :state))
+                     (file-equal-p file (plist-get anchor :file)))
+            (with-current-buffer buffer
+              ;; Without evidence there is nothing to resolve against;
+              ;; the raw 0/0 fallback would signal inside find-file.
+              (when-let* ((evidence (plist-get anchor :evidence))
+                          (bounds
+                           (mevedel--instruction-anchor-resolve
+                            0 0 evidence nil)))
+                (mevedel--reattach-directive
+                 record workspace buffer (car bounds) (cdr bounds))
+                (cl-incf restored))))))
+      (cl-incf restored
+               (mevedel--restore-subdirectives-in-buffer
+                workspace buffer file)))
+    restored))
+
 (defun mevedel--instruction-restore-order (instructions)
   "Return INSTRUCTIONS ordered so parents are restored before children."
   (sort (copy-sequence instructions)
@@ -453,16 +626,20 @@ Return the restored overlay, or nil when unresolved."
               (puthash uuid bounds parent-ranges))
             ov))))))
 
-(cl-defun mevedel--restore-file-instructions (file &optional message)
+(cl-defun mevedel--restore-file-instructions (file &optional message workspace)
   "Restore FILE and its INSTRUCTIONS.
 
 Returns tree values: restored buffer, the amount of instructions restored, and
 the amount of instructions lost to the patching process, if any.
 
-If MESSAGE is non-nil, message the intent of patching outdated files."
+If MESSAGE is non-nil, message the intent of patching outdated files.
+When WORKSPACE is non-nil, associate the restored buffer with it before
+restoring overlays."
   (let ((mevedel--inhibit-file-patching t))
-    (when-let* ((buffer (find-buffer-visiting file)))
-      (mevedel--instruction-activate-buffer buffer))
+    (when-let* (((not mevedel--inhibit-source-missing-restore))
+                (buffer (find-buffer-visiting file)))
+      (mevedel--instruction-activate-buffer buffer)
+      (mevedel--restore-source-missing-directives buffer))
     (unless (and (file-exists-p file)
                  (assoc file (mevedel--instruction-alist)))
       (cl-return-from mevedel--restore-file-instructions (cl-values nil 0 0)))
@@ -475,6 +652,8 @@ If MESSAGE is non-nil, message the intent of patching outdated files."
             (restored 0)
             (kia 0))
         (with-current-buffer buffer
+          (when workspace
+            (setq-local mevedel--workspace workspace))
           (mevedel--setup-buffer-hooks buffer)
           (cl-labels ((restore-overlays
                        (dstbuf instr-maybe-plists &optional raw-position-ok)

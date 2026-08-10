@@ -4,7 +4,7 @@
 
 ;; Sequential step-based execution engine for mevedel tools.  Each tool
 ;; invocation runs through a standard pipeline: validate -> pre-tool-hooks ->
-;; permission -> snapshot -> handler -> repair-reminder -> render-transform ->
+;; permission -> capture-coverage -> snapshot -> handler -> repair-reminder ->
 ;; persist -> specialist-nudges -> post-hooks -> re-persist ->
 ;; Goal-budget-warning -> attach-render-data -> attach-media.
 ;; Interactive handlers own any confirmation needed after the pipeline's
@@ -82,7 +82,10 @@
                   "mevedel-specialist-nudges" (context))
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-directive-uuid "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
+(declare-function mevedel-request-note-untracked-effect
+                  "mevedel-structs" (request source reason))
 (defvar mevedel--session)
 
 ;; `mevedel-telemetry'
@@ -1230,6 +1233,29 @@ pipeline."
       (mevedel--snapshot-file-if-needed path))
     (funcall next context)))
 
+(defun mevedel-pipeline--untracked-filesystem-effects-p (tool)
+  "Return non-nil when TOOL can mutate files outside exact snapshots."
+  (or (and (not (mevedel-tool-read-only-p tool))
+           (or (memq 'eval (mevedel-tool-groups tool))
+               (and (memq 'edit (mevedel-tool-groups tool))
+                    (not (mevedel-tool-snapshot-p tool)))))
+      (member (mevedel-tool-name tool) '("Agent" "FollowupAgent"))))
+
+(defun mevedel-pipeline--step-capture-coverage (context next _fail)
+  "Record untracked directive filesystem effects from CONTEXT, then call NEXT."
+  (let ((tool (plist-get context :tool))
+        (request (plist-get context :request)))
+    (when (and request
+               (mevedel-request-directive-uuid request)
+               (mevedel-pipeline--untracked-filesystem-effects-p tool))
+      (mevedel-request-note-untracked-effect
+       request
+       (mevedel-tool-name tool)
+       (if (member (mevedel-tool-name tool) '("Agent" "FollowupAgent"))
+           "Delegated work can modify files outside parent snapshots"
+         "Tool execution can modify files outside exact path snapshots")))
+    (funcall next context)))
+
 (defun mevedel-pipeline--record-use (tool)
   "Record that TOOL was invoked on the current turn.
 
@@ -2168,19 +2194,20 @@ Returns a list of step functions based on TOOL's behavioral flags:
   1. validate            -- always included
   2. pre-tool-hooks      -- always included
   3. permission          -- always included
-  4. snapshot            -- included when snapshot-p
-  5. handler             -- always included
-  6. repair-reminder     -- appends feedback for committed input repairs
-  7. render-transform    -- always included; no-op when tool has none
-  8. persist             -- included when max-result-size is set
-  9. specialist-nudges   -- bounded guidance for generic code tools
-  10. post-tool-hooks    -- always included
-  11. persist            -- included when max-result-size is set; bounds
+  4. capture-coverage    -- records mutation paths without exact snapshots
+  5. snapshot            -- included when snapshot-p
+  6. handler             -- always included
+  7. repair-reminder     -- appends feedback for committed input repairs
+  8. render-transform    -- always included; no-op when tool has none
+  9. persist             -- included when max-result-size is set
+  10. specialist-nudges  -- bounded guidance for generic code tools
+  11. post-tool-hooks    -- always included
+  12. persist            -- included when max-result-size is set; bounds
                             hook-updated results
-  12. Goal budget warning -- appends one early 100% warning when crossed
-  13. attach-render-data -- always included; no-op when handler returned
+  13. Goal budget warning -- appends one early 100% warning when crossed
+  14. attach-render-data -- always included; no-op when handler returned
                             neither render-data nor explicit status
-  14. attach-media-data  -- always included; no-op when handler returned
+  15. attach-media-data  -- always included; no-op when handler returned
                              no media"
   (let ((steps nil))
     (push #'mevedel-pipeline--step-attach-media-data steps)
@@ -2197,6 +2224,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
     (push #'mevedel-pipeline--step-handler steps)
     (when (mevedel-tool-snapshot-p tool)
       (push #'mevedel-pipeline--step-snapshot steps))
+    (push #'mevedel-pipeline--step-capture-coverage steps)
     (push #'mevedel-pipeline--step-permission steps)
     (push #'mevedel-pipeline--step-pre-tool-hooks steps)
     (push #'mevedel-pipeline--step-validate steps)

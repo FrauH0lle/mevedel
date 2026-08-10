@@ -1683,6 +1683,21 @@ the decision log identifies complete confinement bypass authority"
                      (plist-put context :buckets
                                 '((:session ("Bash" :pattern "rm file"
                                              :action allow))))))))))
+  :doc "directive planning denies effectful Bash even in Full-auto"
+  (let* ((mevedel-permission-rules nil)
+         (session
+          (mevedel-session--create
+           :name "directive-plan"
+           :directive-planning '(:directive-id "d1" :phase planning)))
+         (mevedel--current-request
+          (mevedel-request--create :session session :plan-read-only t))
+         (context (list :mode 'full-auto :session session :buckets nil)))
+    (should (eq 'allow
+                (mevedel-tools--check-bash-permission
+                 "pwd" :permission-context context)))
+    (should (eq 'deny
+                (mevedel-tools--check-bash-permission
+                 "make test" :permission-context context))))
   :doc "Plan mode follows a retained agent's parent session"
   (let* ((session (mevedel-session--create :name "plan" :plan-mode t))
          (mevedel-permission-rules nil))

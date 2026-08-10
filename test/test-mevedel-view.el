@@ -2,6 +2,8 @@
 
 ;;; Commentary:
 
+;; Contract tests for chat-view coordination and shared surface behavior.
+
 ;;; Code:
 
 (require 'ert)
@@ -197,6 +199,7 @@
     (with-current-buffer view-buf
       (should (eq mevedel--data-buffer data-buf))
       (should mevedel-view--input-marker)
+      (should (derived-mode-p 'mevedel-surface-mode))
       (should (derived-mode-p 'mevedel-view-mode))
       (should-not buffer-read-only))
     (with-current-buffer data-buf

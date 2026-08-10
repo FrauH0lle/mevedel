@@ -71,9 +71,13 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-directive-planning
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-follow-ups
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-plan-approval
-		  "mevedel-structs" (cl-x) t)
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs"
@@ -152,6 +156,8 @@
   (let ((session (mevedel-plan-mode--current-session session)))
     (unless session
       (user-error "No mevedel session for Plan mode"))
+    (when (mevedel-session-directive-planning session)
+      (user-error "Finish or cancel directive planning before entering Plan"))
     (when-let* ((goal (mevedel-session-goal session)))
       (unless (eq (mevedel-goal-status goal) 'complete)
         (user-error "Finish or clear the current Goal before entering Plan")))
@@ -365,6 +371,15 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
 (defvar-local mevedel-plan-mode--instructions-entry nil
   "Plan approval entry edited by the current instructions buffer.")
 
+(defun mevedel-plan-mode--selection-changed (entry)
+  "Persist ENTRY's changed selection and redraw its approval."
+  (let ((selection (plist-get entry :selection))
+        (session (plist-get entry :session)))
+    (if-let* ((callback (plist-get entry :selection-changed)))
+        (funcall callback selection)
+      (mevedel-plan--metadata-put session :selection selection))
+    (mevedel-plan-approval-render session)))
+
 (defun mevedel-plan-mode--save-instructions ()
   "Save the current Plan implementation instructions and close the editor."
   (interactive)
@@ -385,9 +400,8 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                instructions session)))))
     (plist-put selection :instructions
                instructions)
-    (mevedel-plan--metadata-put session :selection selection)
     (kill-buffer (current-buffer))
-    (mevedel-plan-approval-render session)))
+    (mevedel-plan-mode--selection-changed entry)))
 
 (defun mevedel-plan-mode--cancel-instructions ()
   "Close the current Plan instructions editor without saving."
@@ -440,9 +454,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
          (append selected
                  (list (list :name (mevedel-skill-name skill)
                              :source-file source-file)))))
-      (mevedel-plan--metadata-put
-       (plist-get entry :session) :selection selection)
-      (mevedel-plan-approval-render (plist-get entry :session)))))
+      (mevedel-plan-mode--selection-changed entry))))
 
 (defun mevedel-plan-mode--skills-label (selection)
   "Return the compact selected-skills label for SELECTION."
@@ -463,6 +475,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
   (require 'mevedel-interaction-prompt)
   (let ((chat-buffer (plist-get entry :chat-buffer))
         (selection (plist-get entry :selection))
+        (directive-p (plist-get entry :directive))
         overlay)
     (cl-labels
         ((deliver (outcome)
@@ -487,32 +500,24 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
            (plist-put selection :mode
                       (mevedel-plan-mode--next-mode
                        (plist-get selection :mode)))
-           (mevedel-plan--metadata-put
-            (plist-get entry :session) :selection selection)
-           (mevedel-plan-approval-render (plist-get entry :session)))
+           (mevedel-plan-mode--selection-changed entry))
          (cycle-context ()
            (interactive)
            (plist-put selection :context
                       (mevedel-plan-mode--next-context
                        (plist-get selection :location)
                        (plist-get selection :context)))
-           (mevedel-plan--metadata-put
-            (plist-get entry :session) :selection selection)
-           (mevedel-plan-approval-render (plist-get entry :session)))
+           (mevedel-plan-mode--selection-changed entry))
          (cycle-execution ()
            (interactive)
            (plist-put selection :execution
                       (mevedel-plan-mode--next-execution
                        (plist-get selection :execution)))
-           (mevedel-plan--metadata-put
-            (plist-get entry :session) :selection selection)
-           (mevedel-plan-approval-render (plist-get entry :session)))
+           (mevedel-plan-mode--selection-changed entry))
          (cycle-location ()
            (interactive)
            (mevedel-plan-mode--next-location selection)
-           (mevedel-plan--metadata-put
-            (plist-get entry :session) :selection selection)
-           (mevedel-plan-approval-render (plist-get entry :session)))
+           (mevedel-plan-mode--selection-changed entry))
          (edit-budget ()
            (interactive)
            (let* ((current (plist-get selection :goal-token-budget))
@@ -531,9 +536,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                      (user-error
                       "Goal token budget must be a positive integer or empty")))))
              (plist-put selection :goal-token-budget budget)
-             (mevedel-plan--metadata-put
-              (plist-get entry :session) :selection selection)
-             (mevedel-plan-approval-render (plist-get entry :session))))
+             (mevedel-plan-mode--selection-changed entry)))
          (open-model ()
            (interactive)
            (require 'mevedel-menu)
@@ -545,10 +548,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
             (lambda (provider effort)
               (plist-put selection :model-provider provider)
               (plist-put selection :reasoning-effort effort)
-              (mevedel-plan--metadata-put
-               (plist-get entry :session) :selection selection)
-              (mevedel-plan-approval-render
-               (plist-get entry :session)))))
+              (mevedel-plan-mode--selection-changed entry))))
          (toggle-skill ()
            (interactive)
            (mevedel-plan-mode--toggle-skill entry))
@@ -573,7 +573,8 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
         (mevedel-queue--entry-metadata-put entry :view-buffer target)
         (with-current-buffer target
           (let* ((keymap (make-sparse-keymap))
-                 (warning (mevedel-plan-mode--worktree-warning entry))
+                 (warning (and (not directive-p)
+                               (mevedel-plan-mode--worktree-warning entry)))
                  (execution (plist-get selection :execution))
                  (budget (plist-get selection :goal-token-budget))
                  (body
@@ -584,44 +585,48 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                          (plist-get entry :body) 'markdown-mode)
                       (plist-get entry :body))
                     "\n\n"
-                    (propertize "Implementation"
+                    (propertize (if directive-p
+                                    "Directive implementation"
+                                  "Implementation")
                                 'font-lock-face 'mevedel-view-plan-mode)
                     "\n\n"
-                    (mevedel--prompt-key "l")
-                    "  Location    "
-                    (propertize
-                     (capitalize
-                      (symbol-name (plist-get selection :location)))
-                     'font-lock-face 'bold)
-                    "\n"
-                    (mevedel--prompt-key "c")
-                    "  Context     "
-                    (propertize
-                     (capitalize
-                      (symbol-name (plist-get selection :context)))
-                     'font-lock-face 'bold)
-                    " — "
-                    (mevedel-plan-mode--context-description
-                     (plist-get selection :context))
-                    "\n"
-                    (mevedel--prompt-key "e")
-                    "  Execution   "
-                    (propertize
-                     (capitalize (symbol-name execution))
-                     'font-lock-face 'bold)
-                    " — "
-                    (mevedel-plan-mode--execution-description execution)
-                    "\n"
-                    (when (eq execution 'goal)
+                    (unless directive-p
                       (concat
-                       (mevedel--prompt-key "b")
-                       "  Budget      "
+                       (mevedel--prompt-key "l")
+                       "  Location    "
                        (propertize
-                        (if budget
-                            (format "%d tokens" budget)
-                          "Unlimited")
+                        (capitalize
+                         (symbol-name (plist-get selection :location)))
                         'font-lock-face 'bold)
-                       "\n"))
+                       "\n"
+                       (mevedel--prompt-key "c")
+                       "  Context     "
+                       (propertize
+                        (capitalize
+                         (symbol-name (plist-get selection :context)))
+                        'font-lock-face 'bold)
+                       " — "
+                       (mevedel-plan-mode--context-description
+                        (plist-get selection :context))
+                       "\n"
+                       (mevedel--prompt-key "e")
+                       "  Execution   "
+                       (propertize
+                        (capitalize (symbol-name execution))
+                        'font-lock-face 'bold)
+                       " — "
+                       (mevedel-plan-mode--execution-description execution)
+                       "\n"
+                       (when (eq execution 'goal)
+                         (concat
+                          (mevedel--prompt-key "b")
+                          "  Budget      "
+                          (propertize
+                           (if budget
+                               (format "%d tokens" budget)
+                             "Unlimited")
+                           'font-lock-face 'bold)
+                          "\n"))))
                     (mevedel--prompt-key "m")
                     "  Mode        "
                     (propertize
@@ -661,8 +666,8 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                     " implement    "
                     (mevedel--prompt-key "f")
                     " feedback    "
-                    (mevedel--prompt-key "q")
-                    " hide    "
+                    (unless directive-p
+                      (concat (mevedel--prompt-key "q") " hide    "))
                     (mevedel--prompt-key "C-g")
                     " cancel\n")
                    'mevedel-view-plan-mode)))
@@ -675,13 +680,15 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
             (define-key keymap (kbd "M") #'open-model)
             (define-key keymap (kbd "s") #'toggle-skill)
             (define-key keymap (kbd "i") #'edit-instructions)
-            (define-key keymap (kbd "e") #'cycle-execution)
-            (define-key keymap (kbd "l") #'cycle-location)
-            (define-key keymap (kbd "c") #'cycle-context)
-            (when (eq execution 'goal)
-              (define-key keymap (kbd "b") #'edit-budget))
+            (unless directive-p
+              (define-key keymap (kbd "e") #'cycle-execution)
+              (define-key keymap (kbd "l") #'cycle-location)
+              (define-key keymap (kbd "c") #'cycle-context)
+              (when (eq execution 'goal)
+                (define-key keymap (kbd "b") #'edit-budget)))
             (define-key keymap (kbd "f") #'feedback)
-            (define-key keymap (kbd "q") #'hide)
+            (unless directive-p
+              (define-key keymap (kbd "q") #'hide))
             (define-key keymap (kbd "C-g") #'cancel)
             (setq overlay
                   (mevedel-view--interaction-register
@@ -819,6 +826,14 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
                (plist-get outcome :accept)
                (mevedel-session-pending-steering session))
       (user-error "Resolve pending steering before implementing the plan"))
+    (when (and (plist-get entry :directive)
+               (proper-list-p outcome)
+               (plist-get outcome :accept)
+               (cl-some
+                (lambda (queued)
+                  (eq (plist-get (plist-get queued :scope) :action) 'plan))
+                (mevedel-session-pending-follow-ups session)))
+      (user-error "Resolve pending planning follow-ups before implementing"))
     (if (not (eq entry pending))
         (display-warning 'mevedel
                          "Plan approval: stale settlement ignored" :warning)

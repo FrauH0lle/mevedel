@@ -16,6 +16,7 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-plan-read-only-request-p "mevedel-agents" ())
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-plan-mode'
@@ -39,9 +40,9 @@
                   "mevedel-skills-ui" ())
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-skill-permission-rules
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-goal-plan-read-path
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-active-dropped-file-grants
                   "mevedel-structs" (cl-x) t)
@@ -51,6 +52,7 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 (defvar mevedel-user-dir)
@@ -1028,15 +1030,17 @@ happen for a non-read-only tool."
           (plist-put (copy-sequence context) :content content))))
 
 (defun mevedel-permission--plan-mode-p (&optional session)
-  "Return non-nil when the owning session is in Plan mode."
-  (when (fboundp 'mevedel-plan-mode-active-p)
-    (mevedel-plan-mode-active-p
-     (or session
-         (and (boundp 'mevedel--session) mevedel--session)
-         (and (boundp 'mevedel--agent-invocation)
-              mevedel--agent-invocation
-              (mevedel-agent-invocation-parent-session
-               mevedel--agent-invocation))))))
+  "Return non-nil when the owning session is planning read-only work."
+  (let ((owner
+         (or session
+             (and (boundp 'mevedel--session) mevedel--session)
+             (and (boundp 'mevedel--agent-invocation)
+                  mevedel--agent-invocation
+                  (mevedel-agent-invocation-parent-session
+                   mevedel--agent-invocation)))))
+    (or (mevedel-plan-read-only-request-p)
+        (and (fboundp 'mevedel-plan-mode-active-p)
+             (mevedel-plan-mode-active-p owner)))))
 
 (cl-defun mevedel-permission--preflight
     (tool-name &key tool-struct path pattern domain name content

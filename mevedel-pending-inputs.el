@@ -79,6 +79,8 @@
                   "mevedel-view-composer" (session))
 (declare-function mevedel-view--composer-snapshot
                   "mevedel-view-composer" (session))
+(declare-function mevedel-view-composer-scope-label
+                  "mevedel-view-composer" (&optional scope))
 (declare-function mevedel-view--pending-input-preview
                   "mevedel-view-composer" (input))
 (declare-function mevedel-view--pending-input-text
@@ -153,8 +155,11 @@
       (pcase (plist-get item :state)
         ('failed-turn "Needs review")
         (state (capitalize (symbol-name state))))
-      (mevedel-view--pending-input-preview
-       (mevedel-view--pending-input-text entry))))))
+      (concat
+       (when-let* ((scope (plist-get entry :scope)))
+         (format "[◆ %s] " (mevedel-view-composer-scope-label scope)))
+       (mevedel-view--pending-input-preview
+        (mevedel-view--pending-input-text entry)))))))
 
 (defun mevedel-pending-inputs--header (items context)
   "Return the cockpit header for ITEMS and CONTEXT."
@@ -520,6 +525,8 @@
                  :test #'equal)))))))
     (unless (eq (plist-get item :category) 'follow-up)
       (user-error "Pending input is already steering"))
+    (when (plist-get entry :scope)
+      (user-error "Directive follow-ups cannot be converted to steering"))
     (when mevedel-pending-inputs--converting-id
       (user-error "Pending-input conversion is still running"))
     (unless (and fsm

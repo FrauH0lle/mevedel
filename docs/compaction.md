@@ -342,6 +342,13 @@ not create fake preserved turns.
 Compaction consumes the transcript module's detailed structural types rather
 than maintaining an independent control-form classifier.
 
+Directive boundaries participate in the same structural scan. Directive turns
+are excluded from the ordinary-chat summary request, and any directive turn
+copied into the verbatim tail keeps both boundary records and its canonical
+user, response, and tool roles. The next ordinary request can therefore project
+the retained turn out again without losing MevView rendering or directive turn
+identity.
+
 Tool blocks in both the preserved tail and summary request body are made
 structurally safe under character caps: persisted `#+begin_tool` /
 `#+end_tool` markers stay balanced, large string arguments are shortened as

@@ -4,6 +4,8 @@ The view modules render a compact user-facing projection of the authoritative
 gptel data buffer. `mevedel-view.el` owns the mode, zones, and session
 coordination. `mevedel-view-composer.el` owns the editable composer,
 submission hooks, pending input, and send/fork dispatch.
+`mevedel-surface-mode`, derived from `text-mode`, supplies shared ephemeral
+buffer behavior for non-transcript surfaces.
 `mevedel-view-agent.el` owns agent transcript inspection, live agent status,
 and targeted handle refresh. `mevedel-view-interaction.el` owns interaction
 descriptor registration, ordering, callback overlays, and redraw.
@@ -15,14 +17,18 @@ transcript.
 ## Buffer Roles
 
 - **Data buffer**: org-mode gptel buffer. Holds `mevedel--session`,
-  `mevedel--workspace`, tool results, hidden render-data blocks, and
-  persisted gptel metadata.
+  `mevedel--workspace`, the canonical mixed chat/directive transcript, tool
+  results, hidden render-data blocks, and persisted gptel metadata.
 - **View buffer**: `mevedel-view-mode`. Holds `mevedel--data-buffer`,
   compact Markdown-rendered turns, status and interaction zones, and the
   input zone.
 - **Agent transcript view**: rendered read-only projection of a sub-agent
   transcript. Running agents use the live agent buffer; terminal agents use
   the saved transcript file.
+- **Directive inspector**: explicit read-only projection of one workspace
+  directive record for durable access after compaction, archive, or source
+  loss. It replaces the currently displayed view and never owns a composer,
+  streaming target, or interaction registry.
 
 An open running-agent transcript view follows the main view's update cadence:
 streamed text uses `mevedel-view-stream-render-delay`, tool boundaries use
@@ -91,6 +97,35 @@ create or focus an inspection window automatically.
 
 The view is reconstructable from the data buffer. Avoid storing durable
 conversation state only in view overlays or text properties.
+
+Directive requests render in the ordinary session view as first-class turns.
+The directive header carries id, action, turn, and an exclusion badge; the
+submitted prompt is folded, while responses, tool blocks, permission prompts,
+Ask, agents, tasks, and progress use the existing renderer and interaction
+zones. Settled directive turns older than the newest chronological turn fold
+to one-line summaries by default. A newest directive turn remains expanded so
+its response stays visible; explicit fold state wins. Every summary expands
+back to the actual turn, which is never replaced by a compact event row.
+
+The shared composer has either chat scope or an explicit directive id/action
+scope. Entering through Discuss, Continue discussion, Discuss result, Request
+changes, Retry, or Implement this stashes the chat draft and shows a compact
+directive header, a distinct prompt prefix, and modeline state. The header names
+the next scoped action; its secondary line shows chat isolation, the effective
+permission mode, `Plan paused` when applicable, and `C-c C-k` for Back to chat.
+Directive scope is sticky across sends and exits only through Back to chat;
+leaving restores the chat draft, and resume always starts in chat scope. Queued
+inputs retain the scope in which they were accepted. Status, agent, task, and
+interaction redraws preserve the active scoped draft and point exactly,
+including a multiline draft whose first editable character is `>`.
+
+Directive prompt construction remains independent of this visible chronology.
+A follow-up uses only durable discussion turns for the current authored request;
+Implement this adds the complete matching discussion, Discuss result can target
+one selected attempt, Request changes uses fresh directive context and the
+immediately preceding successful attempt, and Retry uses the preceding failure
+or abort. Submitted subdirectives disappear only after success, while failed and
+aborted attempts leave them editable in source.
 
 ## Render flow
 
@@ -212,6 +247,41 @@ chrome; they do not belong to the model-visible transcript. The input
 prompt starts with a read-only blank separator line so status,
 interaction, and request-progress rows stay visually distinct from the
 composer.
+
+## Directive Turns And Inspector
+
+The source actions and `mevedel-list-directives` resolve the topmost workspace
+directive record, bind or resume its execution session, and display that
+session's ordinary MevView. Starting an action appends a directive turn at the
+chronological tip; it never opens another live rendering surface. Full request,
+response, tool, and interaction content remains visible there while provider
+prompt projection keeps it outside ordinary-chat context.
+
+Follow-up actions put the shared composer into directive scope. Prompt preview
+shows the complete next isolated request, including discussion, requested
+changes, retry guidance, or selected-attempt context. Attempt actions can open
+the reusable patch viewer or invoke the session's ordinary Rewind impact and
+confirmation flow through the attempt's exact turn checkpoint; neither path
+creates another history owner.
+
+The explicit read-only directive inspector renders the current request,
+lifecycle and anchor state, implementation attempts, and discussion turns from
+the workspace record. It is the durable access path after compaction, source
+loss, or archive. Opening it replaces the current displayed view rather than
+splitting beside MevView. It owns no composer, streaming, or interaction
+callbacks; View patch, Reattach, Rewind before..., Archive, and scope-entering
+actions dispatch to the record or execution session. Its activity entries fold
+by default as an overview. Source overlays expose the Activity action only after
+the directive owns a planning, discussion, or implementation turn.
+
+Plan-before-implementation is configured per top-level directive through the
+source overlay or inspector Settings menu. The main action menu stays compact:
+Settings contains the Plan toggle and model/effort selector, whose label becomes
+`planning model/effort` only while Plan is on. An enabled presentation shows a
+compact `PLAN: ON` hint. Planning and approval derive Planning, Plan Ready, and
+Plan Accepted presentation states without replacing the directive's underlying
+lifecycle. A cancelled proposal remains a draft and exposes Continue Plan,
+which restores the isolated directive composer scope.
 
 ## Status Strip And Cockpit Routing
 

@@ -62,6 +62,7 @@
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-plan-read-only-request-p "mevedel-agents" ())
 (declare-function mevedel-agent-invocation-runtime-settled-p
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-set-deferred-expired
@@ -71,6 +72,7 @@
 (declare-function mevedel-agent-max-turns "mevedel-agents" (agent) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
+(defvar mevedel--agent-invocation)
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-auto-eligible-p "mevedel-compact" ())
@@ -94,6 +96,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-current-session
@@ -612,7 +615,9 @@ sessions rather than spamming every turn."
   (mevedel-reminder-create
    :type 'plan-mode
    :recipe '(plan-mode)
-   :trigger #'mevedel-session-plan-mode
+   :trigger (lambda (session)
+              (or (mevedel-session-plan-mode session)
+                  (mevedel-plan-read-only-request-p)))
    :content
    (lambda (_session)
      (concat

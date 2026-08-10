@@ -163,16 +163,20 @@
 (declare-function mevedel-tools--handle-steering-inject
                   "mevedel-tools" (fsm &optional skip-compaction-gate))
 
+;; `mevedel-transcript-audit'
+(declare-function mevedel--format-hook-audit-record
+                  "mevedel-transcript-audit" (record))
+(declare-function mevedel-transcript-audit-records
+                  "mevedel-transcript-audit" (text &optional type))
+(declare-function mevedel-transcript-buffer-directive-ranges
+                  "mevedel-transcript-audit" (&optional allow-open))
+(declare-function mevedel-transcript-exclude-directive-turns
+                  "mevedel-transcript-audit" (&optional _fsm))
+
 ;; `mevedel-utilities'
-(declare-function mevedel--format-hook-audit-record "mevedel-utilities"
-                  (record))
 (declare-function mevedel--same-file-p "mevedel-utilities" (a b))
 (declare-function mevedel--strip-hook-audit-blocks "mevedel-utilities"
                   (text))
-
-;; `mevedel-transcript-audit'
-(declare-function mevedel-transcript-audit-records
-                  "mevedel-transcript-audit" (text &optional type))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
@@ -1099,6 +1103,29 @@ reconstructed into a child conversation."
                (buffer-substring tail-start (point-max)))))
     (_ (error "Invalid normalized context fork: %S" fork-turns))))
 
+(defun mevedel--compact-directive-ranges ()
+  "Return complete directive ranges using current-buffer positions."
+  (require 'mevedel-transcript-audit)
+  (mevedel-transcript-buffer-directive-ranges))
+
+(defun mevedel--compact-regions-without-directives (regions)
+  "Return REGIONS with complete directive turns removed."
+  (let ((directives (mevedel--compact-directive-ranges))
+        result)
+    (dolist (region regions)
+      (let ((cursor (car region))
+            (end (cdr region)))
+        (dolist (directive directives)
+          (let ((directive-start (plist-get directive :start))
+                (directive-end (plist-get directive :end)))
+            (when (and (< directive-start end) (> directive-end cursor))
+              (when (< cursor directive-start)
+                (push (cons cursor (min directive-start end)) result))
+              (setq cursor (max cursor directive-end)))))
+        (when (< cursor end)
+          (push (cons cursor end) result))))
+    (nreverse result)))
+
 (defun mevedel--compact-tail-start (limit aggressive &optional body-start)
   "Return tail start before LIMIT, or LIMIT when AGGRESSIVE.
 The tail starts after the response preceding the preserved recent turns.
@@ -1129,7 +1156,11 @@ BODY-START defaults to the main-session body start."
                     (> (- limit start) budget-chars))
           (cl-decf turns)
           (setq start (start-for turns))))
-      start)))
+      (or (cl-loop for range in (mevedel--compact-directive-ranges)
+                   when (and (> start (plist-get range :start))
+                             (< start (plist-get range :end)))
+                   return (plist-get range :start))
+          start))))
 
 (defun mevedel--compact-pending-text-from-prompt-buffer ()
   "Return pending request text from the current prompt buffer.
@@ -1182,7 +1213,9 @@ compaction was in flight remain in place."
               (goto-char prompt-history-start)
               (insert compacted-prefix))
           (erase-buffer)
-          (insert-buffer-substring source-buffer))))))
+          (insert-buffer-substring source-buffer))
+        (require 'mevedel-transcript-audit)
+        (mevedel-transcript-exclude-directive-turns)))))
 
 (defun mevedel--compact-system-reminder-block (body)
   "Return BODY wrapped as a model-visible system reminder block."
@@ -2067,8 +2100,9 @@ the persistent failure counter unchanged."
           (mevedel--compact-tail-start limit aggressive body-start))
          (compact-end (max body-start tail-start))
          (history-regions
-          (append (plist-get target :history-prefix-regions)
-                  (list (cons body-start compact-end))))
+          (mevedel--compact-regions-without-directives
+           (append (plist-get target :history-prefix-regions)
+                   (list (cons body-start compact-end)))))
          (archived-tool-use-ids
           (delete-dups
            (mapcan

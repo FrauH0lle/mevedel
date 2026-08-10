@@ -542,6 +542,44 @@
 ;;
 ;;; Step list builder
 
+(mevedel-deftest mevedel-pipeline--untracked-filesystem-effects-p
+  ()
+  ,test
+  (test)
+  :doc "classifies shell/eval and delegated mutation surfaces"
+  (should
+   (mevedel-pipeline--untracked-filesystem-effects-p
+    (mevedel-tool--create :name "Bash" :groups '(eval))))
+  (should
+   (mevedel-pipeline--untracked-filesystem-effects-p
+    (mevedel-tool--create :name "Agent" :groups '(util) :read-only-p t)))
+  (should
+   (mevedel-pipeline--untracked-filesystem-effects-p
+    (mevedel-tool--create :name "MkDir" :groups '(edit))))
+  (should-not
+   (mevedel-pipeline--untracked-filesystem-effects-p
+    (mevedel-tool--create :name "Edit" :groups '(edit) :snapshot-p t)))
+  (should-not
+   (mevedel-pipeline--untracked-filesystem-effects-p
+    (mevedel-tool--create :name "Read" :groups '(read) :read-only-p t))))
+
+(mevedel-deftest mevedel-pipeline--step-capture-coverage
+  ()
+  ,test
+  (test)
+  :doc "marks accepted directive tools whose filesystem effects are untracked"
+  (let* ((request (mevedel-request--create :directive-uuid "directive"))
+         (tool (mevedel-tool--create :name "Eval" :groups '(eval)))
+         next-context)
+    (mevedel-pipeline--step-capture-coverage
+     (list :tool tool :request request)
+     (lambda (context) (setq next-context context))
+     #'ignore)
+    (should next-context)
+    (should (equal '("Eval")
+                   (mapcar #'car
+                           (mevedel-request-untracked-effects request))))))
+
 (mevedel-deftest mevedel-pipeline--step-snapshot ()
   ,test
   (test)
@@ -583,29 +621,11 @@
 			       :name "ReadTool"
 			       :read-only-p t))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 11))
-		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
-		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
-		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-permission))
-		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-handler))
-		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-repair-reminder))
-		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-render-transform))
-		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-specialist-nudges))
-		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-goal-budget-warning))
-		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-attach-media-data)))
-		 :doc "write tool includes snapshot step"
-		 (let* ((tool (mevedel-tool--create
-			       :name "WriteTool"
-			       :read-only-p nil
-			       :snapshot-p t))
-			(steps (mevedel-pipeline--build-steps tool)))
 		   (should (= (length steps) 12))
 		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
 		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
 		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-permission))
-		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-snapshot))
+		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-capture-coverage))
 		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-handler))
 		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-repair-reminder))
 		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-render-transform))
@@ -614,12 +634,32 @@
 		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-goal-budget-warning))
 		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-attach-render-data))
 		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-attach-media-data)))
+		 :doc "write tool includes snapshot step"
+		 (let* ((tool (mevedel-tool--create
+			       :name "WriteTool"
+			       :read-only-p nil
+			       :snapshot-p t))
+			(steps (mevedel-pipeline--build-steps tool)))
+		   (should (= (length steps) 13))
+		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
+		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
+		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-permission))
+		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-capture-coverage))
+		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-snapshot))
+		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-handler))
+		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-repair-reminder))
+		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-render-transform))
+		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-specialist-nudges))
+		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-post-tool-hooks))
+		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-attach-render-data))
+		   (should (eq (nth 12 steps) #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "mutating tool without snapshot declaration skips snapshot step"
 		 (let* ((tool (mevedel-tool--create
 			       :name "MkDir"
 			       :read-only-p nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 11))
+		   (should (= (length steps) 12))
 		   (should-not
 		    (memq #'mevedel-pipeline--step-snapshot steps)))
 		 :doc "includes persist step when max-result-size is set"
@@ -628,20 +668,20 @@
 			       :read-only-p t
 			       :max-result-size 1000))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 13 (length steps)))
-		   (should (eq (nth 4 steps)
-			       #'mevedel-pipeline--step-repair-reminder))
+		   (should (= 14 (length steps)))
 		   (should (eq (nth 5 steps)
+			       #'mevedel-pipeline--step-repair-reminder))
+		   (should (eq (nth 6 steps)
 			       #'mevedel-pipeline--step-render-transform))
-		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-persist))
-		   (should (eq (nth 7 steps)
-			       #'mevedel-pipeline--step-specialist-nudges))
+		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-persist))
 		   (should (eq (nth 8 steps)
+			       #'mevedel-pipeline--step-specialist-nudges))
+		   (should (eq (nth 9 steps)
 			       #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-persist))
-		   (should (eq (nth 10 steps)
-		               #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-persist))
 		   (should (eq (nth 11 steps)
+		               #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 12 steps)
 			       #'mevedel-pipeline--step-attach-render-data))
 			   (should (eq (car (last steps))
 			       #'mevedel-pipeline--step-attach-media-data)))
@@ -651,7 +691,7 @@
 			       :read-only-p t
 			       :max-result-size nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 11 (length steps)))
+		   (should (= 12 (length steps)))
 		   (should-not (memq #'mevedel-pipeline--step-persist steps))
 		   (should (memq #'mevedel-pipeline--step-specialist-nudges steps))
 		   (should (memq #'mevedel-pipeline--step-attach-render-data steps))

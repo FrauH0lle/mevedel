@@ -34,6 +34,9 @@
 ;; `gptel-request'
 (declare-function gptel-tool-args "ext:gptel-request" (cl-x) t)
 
+;; `mevedel-agent-conversation'
+(defvar mevedel--agent-invocation)
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-normalize-rules
                   "mevedel-hooks" (rules &optional scope))
@@ -63,9 +66,11 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
+(declare-function mevedel-request-plan-read-only "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 
 ;; `mevedel-system'
@@ -299,7 +304,7 @@ PARENT-DATA-BUFFER points back at the parent chat (data) buffer;
 PARENT-SESSION points at the top-level session (transcripts always live
 under the top-level session's `agents/' subdirectory). PARENT-TURN is
 the in-flight parent turn number at allocation time, computed as
-`(1+ (mevedel-session-turn-count parent-session))' so it reflects
+`mevedel-current-turn' so it reflects
 the current turn rather than the last completed one.  BUFFER is
 the agent's own gptel buffer; TRANSCRIPT-RELATIVE-PATH is the
 path to its on-disk transcript file relative to the top-level
@@ -316,6 +321,7 @@ and render-data markers are runtime-only caches for cheap live updates."
   (deferred-used nil :type list)
   (deferred-expired nil :type list)
   (specialist-nudge-state nil :type list)
+  (plan-read-only nil :type boolean)
   ;; Persistence
   (agent-id nil :type (or null string))
   (path nil :type (or null string))
@@ -364,6 +370,16 @@ and render-data markers are runtime-only caches for cheap live updates."
   runtime-budget-timer
   (runtime-execution-results nil :type list)
   (runtime-settled-p nil :type boolean))
+
+(defun mevedel-plan-read-only-request-p ()
+  "Return non-nil when the ambient request or invocation is Plan read-only."
+  (or (and (boundp 'mevedel--current-request)
+           mevedel--current-request
+           (mevedel-request-plan-read-only mevedel--current-request))
+      (and (boundp 'mevedel--agent-invocation)
+           mevedel--agent-invocation
+           (mevedel-agent-invocation-plan-read-only
+            mevedel--agent-invocation))))
 
 (defun mevedel-agent-invocation-require-path (invocation)
   "Return INVOCATION's canonical path, or signal an error."

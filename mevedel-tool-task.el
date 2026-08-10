@@ -229,7 +229,7 @@ The JSON object from gptel may arrive as either form; normalize once."
 
 (defun mevedel-tool-task--write-turn (session)
   "Return the task-write turn for SESSION."
-  (1+ (or (mevedel-session-turn-count session) 0)))
+  (mevedel-current-turn session))
 
 (defun mevedel-tool-task--mark-write (session)
   "Record a successful task write on SESSION."

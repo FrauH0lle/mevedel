@@ -127,6 +127,8 @@
                   "mevedel-permissions" (path roots))
 (declare-function mevedel-permission--path-protected-p
                   "mevedel-permissions" (path))
+(declare-function mevedel-permission--plan-mode-p
+                  "mevedel-permissions" (&optional session))
 (declare-function mevedel-permission--qualified-buckets
                   "mevedel-permissions" (buckets qualifier value))
 (declare-function mevedel-permission--resource-granted-p
@@ -1421,14 +1423,8 @@ authorize dangerous or complex syntax."
     (when (mevedel-tool-exec--bash-explicit-deny-p buckets command analysis)
       (cl-return-from mevedel-tools--check-bash-permission 'deny))
 
-    (when (and (fboundp 'mevedel-plan-mode-active-p)
-               (mevedel-plan-mode-active-p
-                (or (plist-get permission-context :session)
-                    (and (boundp 'mevedel--session) mevedel--session)
-                    (and (boundp 'mevedel--agent-invocation)
-                         mevedel--agent-invocation
-                         (mevedel-agent-invocation-parent-session
-                          mevedel--agent-invocation))))
+    (when (and (mevedel-permission--plan-mode-p
+                (plist-get permission-context :session))
                (not (eq class 'read-only)))
       (cl-return-from mevedel-tools--check-bash-permission 'deny))
 

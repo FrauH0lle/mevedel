@@ -1,5 +1,27 @@
 # Session Persistence
 
+Settled directive work remains a complete first-class turn in its execution
+session segment. Its canonical user, response, and `(tool . id)` properties are
+saved through the normal transcript/GPTEL_BOUNDS path so resume and MevView use
+the ordinary renderer. Paired hidden directive-boundary audit records retain
+the directive id, action, and canonical turn identity; ordinary-chat request
+assembly finds those boundaries in gptel's temporary prompt copy and marks the
+enclosed body `gptel 'ignore`, including tool spans.
+
+The workspace-owned implementation attempt or discussion turn also retains the
+exact submitted request, terminal result, and matching
+`(:session-id ... :turn ...)` checkpoint; implementation attempts additionally
+retain the authored-request snapshot, capture timestamp, capture metadata, and
+patch. Bash/Eval/execution-control or agent activity that may mutate files
+outside the ordinary tool snapshot seam is retained as an explicit capture gap;
+such an attempt is never labeled complete, and Rewind surfaces the gap before
+restoring. This bounded duplication separates durable follow-up/inspection context
+from transcript presentation. Every accepted request reserves its turn identity
+before tools run, and that same identity keys pre-turn snapshots, transcript
+metadata, the prompt/Rewind index, and the workspace record. A directive reuses
+its bound live or persisted session. If that session no longer exists, rebinding
+requires explicit confirmation and does not rewrite historical checkpoints.
+
 Sessions auto-save lazily and per-completed-turn. Compaction rotates
 segments rather than rewriting in place.
 
@@ -70,8 +92,10 @@ The data buffer is locked to `org-mode` so `gptel-org--save-state`
 can round-trip text-property bounds via `GPTEL_BOUNDS`. The sidecar
 holds session-wide state that doesn't live in the buffer text:
 permission rules, exact session resource grants, tasks, prompt-index (driving
-the rewind picker and latest resume preview), `:file-snapshots` (per-turn map
-of tracked files to backup names), workspace identity, `:working-directory`,
+the rewind picker and latest resume preview), `:file-snapshots` (per-turn
+pre-turn checkpoints of tracked files, including absent markers and known
+capture gaps; post-turn copies remain alongside them for historical Fork),
+workspace identity, `:working-directory`,
 fork lineage (`:fork-type`, `:forked-from-session-id`,
 `:forked-from-turn`, and `:forked-from-fork-point-id`), and
 Worktree Fork origin (`:worktree-source-root`, `:worktree-directory`,
@@ -258,25 +282,43 @@ while `C-n`/`C-p` move through user queries. These navigation actions change
 neither transcript nor session state; Rewind remains a separate explicit
 operation.
 
-Rewind is an in-place transaction. It discards later transcript and session
-artifacts, restores every captured working-tree file in the plan, and keeps
+Rewind is an in-place transaction. It discards the selected turn and every
+later transcript and session artifact, restores every captured working-tree
+file to immediately before the selected turn, and keeps
 the same session identity, name, directory, working directory, and lineage.
+The impact lists the discarded prompt suffix in order, including ordinary chat
+and complete directive turns, alongside restored files and every known gap.
 External working-tree changes to captured files are overwritten. Git HEAD and
 the index are not changed, so the impact identifies staged files whose index
 content will diverge from the restored working tree. Failure rolls back both
 session and file changes, including a live transcript already replaced during
 publication. A failed rollback reports every inconsistent path and retains its
 temporary recovery directory; a successful Rewind removes those rollback
-bytes. Rewind creates neither a child session nor a redo variant. Existing
+bytes. Every settled model turn, including the first, owns a durable pre-turn
+checkpoint. The impact marks coverage as complete or lists known gaps; gaps do
+not disable Rewind and are never presented as restored paths. Rewind creates
+neither a child session nor a redo variant. Existing
 child sessions and worktrees are not removed; children forked after the target
 become detached from the Source's visible history.
+
+Workspace-owned directive identity is not historical session state. Rewind
+retains each authored directive and its current request, removes only model
+activity at or after the target turn in that execution session, and recomputes
+the lifecycle from what survives. A surviving request edit remains Ready with
+a request-changed qualifier. Subdirectives consumed by discarded successful
+attempts return to their parent from immutable attempt snapshots; subdirectives
+authored later remain current, and neither receives independent activity.
+Historical instruction snapshots restore source presentation only; a source
+file restored by Rewind uses the normal safe anchor reattachment path. The
+directive turn or read-only inspector's Rewind action resolves an
+effectful attempt's exact execution session and pre-turn checkpoint, then uses
+this same Rewind transaction and impact confirmation.
 
 Only a committed Rewind emits `SessionStart(rewind)`; it does not emit
 `SessionEnd`. Any context produced by that event belongs to the next accepted
 prompt. Cancellation, rollback, and an empty impact emit no Rewind lifecycle
-event. Selecting the latest response is still useful when captured files or
-live workflow state need undoing; only a target with no transcript, file, or
-state impact reports `Already at this state`.
+event. Selecting the latest response discards that response and its prompt,
+even when it is the first turn in the session.
 
 Current session settings survive. Tasks, Goal, retained agents and mailboxes,
 pending Plan state, permission queues, and execution state are cleared because
@@ -449,7 +491,6 @@ All in `mevedel-session-persistence.el`:
 
 - `mevedel-sessions-directory` (default `.mevedel/sessions/`)
 - `mevedel-session-max-age-days` (default 30)
-- `mevedel-file-history-max-snapshots` (default 100)
 - `mevedel-file-history-max-snapshot-bytes` (default 1 MB)
 - `mevedel-view-input-history-size` (in `mevedel-view-history.el`,
   default 500)

@@ -1,0 +1,8 @@
+# Render directive turns in the shared session view
+
+Status: accepted
+Supersedes: ADR 0088
+
+Directive requests remain conversationally isolated, but their complete prompt, response, tools, permissions, agents, and interactions render as first-class turns in the bound execution session's ordinary view. The canonical transcript keeps normal user, response, and tool roles; durable directive boundaries let request-time prompt projection exclude those turns from ordinary-chat provider context, while explicit directive prompts are still assembled only from the workspace record and directive-local history. One accepted request reserves one session turn identity for snapshots, attempt links, transcript metadata, and Rewind, preserving a single chronological undo chain without a separate directive session or compact-event proxy. Follow-ups use a loud, sticky directive scope in the shared composer, while durable inspection after compaction or source loss uses an explicit read-only inspector that replaces the displayed view and never owns streaming or a composer.
+
+A dedicated session per directive was rejected because interleaved file mutations would create competing checkpoint histories and make Rewind able to clobber later work from another session. The superseded hybrid was also rejected because streaming into the session and then deleting and copying the result into a workspace activity surface created two renderers, two interaction owners, and drifting turn clocks; bounded duplication remains only where the workspace record retains exact attempt material for follow-up prompt construction and durable inspection.

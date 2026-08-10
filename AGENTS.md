@@ -95,6 +95,7 @@ Entry point
 
 Data model
   mevedel-structs.el          workspace, session, request, task data invariants
+  mevedel-directive.el        directive lifecycle, plan invalidation, rewind
   mevedel-turn.el             canonical success/failure turn settlement
   mevedel-workspace.el        workspace detection and registry
   mevedel-models.el           model tier/provider resolution
@@ -128,6 +129,8 @@ Data model
 
 Chat / view
   mevedel-chat.el             session lifecycle
+  mevedel-directive-activity.el  read-only workspace directive inspector
+  mevedel-directive-plan.el   directive-owned planning and approval workflow
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing
   mevedel-transcript-restore.el  transcript property restoration via the canonical grammar
@@ -147,6 +150,7 @@ Chat / view
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
   mevedel-overlays.el         instruction overlays (references/directives)
   mevedel-mentions.el         @ref and @file mention expansion
+  mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      save/load instructions
   mevedel-session-persistence.el  session save/resume/rewind/fork
   mevedel-compact.el          conversation compaction (split-on-compact)
@@ -263,8 +267,9 @@ warnings.
 ### Key interactive commands
 - `mevedel-create-reference` / `mevedel-create-directive`
 - `mevedel-save-instructions` / `mevedel-load-instructions`
-- `mevedel-implement-directive` / `mevedel-revise-directive` /
-  `mevedel-discuss-directive` / `mevedel-tutor-directive`
+- `mevedel-implement-directive` / `mevedel-discuss-directive` /
+  `mevedel-request-directive-changes` / `mevedel-retry-directive` /
+  `mevedel-tutor-directive`
 - `mevedel` / `mevedel-tutoring`
 - `mevedel-resume` / `mevedel-rewind` / `mevedel-save-session` /
   `mevedel-rename-session`

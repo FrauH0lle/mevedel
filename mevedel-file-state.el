@@ -244,7 +244,12 @@ updated `mevedel-file-interaction'."
               (state (mevedel-file-state-from-file path)))
     (mevedel-file-cache-put cache state))
   (mevedel-session-record-interaction
-   session path kind (mevedel-session-turn-count session) offset limit))
+   session path kind
+   (if (and (mevedel-request-p mevedel--current-request)
+            (eq session (mevedel-request-session mevedel--current-request)))
+       (mevedel-current-turn session)
+     (or (mevedel-session-turn-count session) 0))
+   offset limit))
 
 (defun mevedel-session-read-is-duplicate-p (session path offset limit)
   "Return non-nil if the previous Read of PATH covers the same range.

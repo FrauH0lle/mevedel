@@ -192,6 +192,8 @@
     (unwind-protect
         (with-current-buffer parent
           (setq-local mevedel--session session)
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :plan-read-only t))
           (cl-letf
               (((symbol-function
                  'mevedel-agent-exec-freeze-configuration)
@@ -240,6 +242,8 @@
                     (lambda (inv response event)
                       (push (list inv response event) settlements)))))
               (should (eq invocation seen-invocation))
+              (should
+               (mevedel-agent-invocation-plan-read-only invocation))
               (should (eq 'provider-fsm
                           (mevedel-agent-invocation-runtime-fsm invocation)))
               (should (equal "/root/explore"

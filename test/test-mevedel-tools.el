@@ -1273,6 +1273,59 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (plist-get
                          (plist-get (gptel-fsm-info fsm) :data)
                          :tools)))))
+      (kill-buffer buf)))
+
+  :doc "keeps delegated directive planning read-only after root settlement"
+  (let* ((session (mevedel-tools-test--make-session))
+         (agent (mevedel-agent--create :name "worker"))
+         (invocation (mevedel-agent-invocation-create agent))
+         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx invocation))
+         (buf (car buf+fsm))
+         (fsm (cdr buf+fsm))
+         (tools (mapcar (lambda (name)
+                          (mevedel-tool-gptel-tool
+                           (mevedel-tool-get name "mevedel")))
+                        '("Read" "ApplyPatch" "Eval"))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-parent-session invocation) session
+                (mevedel-agent-invocation-plan-read-only invocation) t
+                (mevedel-session-directive-planning session)
+                '(:directive-id "d1" :phase approval))
+          (plist-put (gptel-fsm-info fsm) :tools tools)
+          (mevedel-tools--handle-plan-tool-filter fsm)
+          (should (equal '("Read")
+                         (mapcar #'gptel-tool-name
+                                 (plist-get (gptel-fsm-info fsm) :tools)))))
+      (kill-buffer buf)))
+
+  :doc "uses a directive's planning phase but not its implementation phase"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx session))
+         (buf (car buf+fsm))
+         (fsm (cdr buf+fsm))
+         (tools (mapcar (lambda (name)
+                          (mevedel-tool-gptel-tool
+                           (mevedel-tool-get name "mevedel")))
+                        '("Read" "ApplyPatch" "Eval"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :plan-read-only t)))
+          (plist-put (gptel-fsm-info fsm) :tools tools)
+          (mevedel-tools--handle-plan-tool-filter fsm)
+          (should (equal '("Read")
+                         (mapcar #'gptel-tool-name
+                                 (plist-get (gptel-fsm-info fsm) :tools))))
+          (with-current-buffer buf
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :plan-read-only nil)))
+          (plist-put (gptel-fsm-info fsm) :tools tools)
+          (mevedel-tools--handle-plan-tool-filter fsm)
+          (should (equal '("Read" "ApplyPatch" "Eval")
+                         (mapcar #'gptel-tool-name
+                                 (plist-get (gptel-fsm-info fsm) :tools)))))
       (kill-buffer buf))))
 
 (mevedel-deftest mevedel-tools--handle-deferred-inject

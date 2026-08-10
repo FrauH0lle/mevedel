@@ -6,13 +6,67 @@ Plan mode is a sticky planning workflow independent of the session's stored
 the composer continues to cycle only
 `ask` -> `edits` -> `full-auto` -> `ask`,
 including while Plan is active. The composer displays both dimensions as
-`[Plan · MODE]`. A session with an unfinished Goal cannot enter Plan; a
+`[Plan · MODE]`. Directive scope pauses Plan dispatch while preserving Plan for
+the return to chat; its composer chrome shows MODE and `Plan paused`. A session
+with an unfinished Goal cannot enter Plan; a
 completed Goal is historical and does not block it.
 
 `/plan PROMPT` enters Plan and sends `PROMPT` through the ordinary
 `UserPromptSubmit` and skill-preparation transaction. Ordinary follow-up turns,
 including implementation requests, remain planning input until the user exits
 Plan or accepts a proposal.
+
+## Directive Plan before implementation
+
+A top-level directive can independently enable **Plan before implementation**
+from its overlay or inspector Settings menu. Nested directive presentations use
+their owner's setting. The setting is off by default and does not enter sticky
+session Plan mode. Implement, Implement this, Request changes, and Retry first
+send the exact eventual implementation request through a read-only planning
+turn. Discuss and Tutor are unchanged. Batch processing remains sequential: an
+enabled directive reaches approval and implementation before the next item
+starts.
+
+Directive planning uses the directive's model and effort override. Its proposal
+uses the ordinary `<proposed_plan>` parser and shared approval interaction. The
+directive card offers only implementation Mode, Model, Skills, Instructions,
+Accept, Feedback, and Cancel: execution is always Direct in the directive's
+bound session and current context. The selected mode and model are request-local
+implementation settings; they do not replace the session policy or the
+directive's planning model. Selection survives proposal feedback, while a fresh
+directive action starts with fresh defaults seeded with the directive's own
+skill selection (deduplicated by skill source); the card's selection at accept
+time is the single authority for that attempt.
+
+## Directive skills
+
+A directive's Settings menu also toggles **skills** on the workspace record,
+selected from the user-invocable roster of the directive's live bound
+execution session, else the workspace's active chat session (with no open
+session, selection is refused). The selection persists with the record, shows
+as a `SKILLS:` label line, and attaches to direct implementation-type prompts
+(Implement, Implement this, Request changes, Retry) with the accepted-plan
+handoff semantics: argument-free instruction mentions stored by canonical
+`SKILL.md` source that ignore skill model/effort, agent, hooks, and permission
+policy. Discuss and Tutor never see the attachments. Skill sources are
+revalidated at every dispatch; a missing, disabled, malformed, or no longer
+user-invocable selection starts no request and leaves the directive retryable,
+and batch processing skips that directive and continues.
+
+The durable presentation progresses through Planning, Plan Ready, Plan
+Accepted, Implementing, and the ordinary terminal lifecycle. Planning turns,
+the current proposal, selection, and the exact accepted implementation prompt
+belong to the workspace directive record. Resume restores a pending proposal;
+cancel keeps the planning history as a draft; Continue Plan re-enters the
+directive composer scope. Editing the owner request or a nested detail
+invalidates an unstarted proposal. Rewind removes planning turns at and after
+the checkpoint and restores an accepted pre-attempt plan when it removes that
+plan's implementation attempt.
+
+Only one root workflow owns a session at a time. Ordinary Plan cannot start
+while directive planning is active, and a directive cannot begin planning while
+ordinary Plan is active. Ordinary chat input uses the existing pending-input
+queue while directive approval owns the session.
 
 ## Planning model policy
 

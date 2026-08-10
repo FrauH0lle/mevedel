@@ -114,6 +114,110 @@ Each span is a plist containing `:record', `:start', and `:end'."
   (mapcar (lambda (span) (plist-get span :record))
           (mevedel-transcript-audit-spans text type)))
 
+(defun mevedel-transcript--audit-block-start (text start)
+  "Return START including TEXT's generated leading newline when present."
+  (if (and (> start 0) (eq (aref text (1- start)) ?\n))
+      (1- start)
+    start))
+
+(defun mevedel-transcript--audit-block-end (text end)
+  "Return END including TEXT's generated trailing newline when present."
+  (if (and (< end (length text)) (eq (aref text end) ?\n))
+      (1+ end)
+    end))
+
+(defun mevedel-transcript-directive-ranges (text &optional allow-open)
+  "Return directive turn ranges parsed from TEXT.
+Signal when directive boundaries are unmatched, nested, or disagree on
+directive identity or reserved turn.  When ALLOW-OPEN is non-nil, include
+one unmatched final start as a running range through the end of TEXT."
+  (let ((spans (mevedel-transcript-audit-spans
+                text 'directive-turn-boundary))
+        open
+        ranges)
+    (dolist (span spans)
+      (let* ((record (plist-get span :record))
+             (edge (plist-get record :edge)))
+        (pcase edge
+          ('start
+           (when open
+             (error "Nested directive turn boundaries"))
+           (setq open span))
+          ('end
+           (unless open
+             (error "Directive turn end has no matching start"))
+           (let ((start-record (plist-get open :record)))
+             (unless (and
+                      (equal (plist-get start-record :directive-id)
+                             (plist-get record :directive-id))
+                      (equal (plist-get start-record :turn)
+                             (plist-get record :turn)))
+               (error "Directive turn boundaries do not match"))
+             (push
+              (list
+               :start (mevedel-transcript--audit-block-start
+                       text (plist-get open :start))
+               :body-start (mevedel-transcript--audit-block-end
+                            text (plist-get open :end))
+               :body-end (mevedel-transcript--audit-block-start
+                          text (plist-get span :start))
+               :end (mevedel-transcript--audit-block-end
+                     text (plist-get span :end))
+               :directive-id (plist-get record :directive-id)
+               :action (plist-get start-record :action)
+               :turn (plist-get record :turn)
+               :outcome (plist-get record :outcome)
+               :activity-kind (plist-get record :activity-kind)
+               :sequence (plist-get record :sequence)
+               :start-record start-record
+               :end-record record)
+              ranges)
+             (setq open nil)))
+          (_ (error "Unknown directive turn boundary edge: %S" edge)))))
+    (when open
+      (if allow-open
+          (let ((record (plist-get open :record)))
+            (push
+             (list
+              :start (mevedel-transcript--audit-block-start
+                      text (plist-get open :start))
+              :body-start (mevedel-transcript--audit-block-end
+                           text (plist-get open :end))
+              :body-end (length text)
+              :end (length text)
+              :directive-id (plist-get record :directive-id)
+              :action (plist-get record :action)
+              :turn (plist-get record :turn)
+              :outcome 'running
+              :start-record record)
+             ranges))
+        (error "Directive turn start has no matching end")))
+    (nreverse ranges)))
+
+(defun mevedel-transcript-buffer-directive-ranges (&optional allow-open)
+  "Return the current buffer's directive ranges as buffer positions.
+ALLOW-OPEN is forwarded to `mevedel-transcript-directive-ranges'."
+  (save-restriction
+    (widen)
+    (let ((base (point-min)))
+      (mapcar
+       (lambda (range)
+         (dolist (key '(:start :body-start :body-end :end))
+           (plist-put range key (+ base (plist-get range key))))
+         range)
+       (mevedel-transcript-directive-ranges
+        (buffer-substring-no-properties (point-min) (point-max))
+        allow-open)))))
+
+(defun mevedel-transcript-exclude-directive-turns (&optional _fsm)
+  "Mark directive bodies ignored in the current request-copy buffer."
+  (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+    (dolist (range (mevedel-transcript-directive-ranges text))
+      (add-text-properties
+       (+ (point-min) (plist-get range :body-start))
+       (+ (point-min) (plist-get range :body-end))
+       '(gptel ignore)))))
+
 (defun mevedel-transcript-audit-only-p (text)
   "Return non-nil when non-whitespace TEXT consists only of audit blocks."
   (and (stringp text)
