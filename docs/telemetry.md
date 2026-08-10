@@ -39,6 +39,13 @@ their subsystem-specific details. Telemetry connects their lifetimes through
 shared session, request, tool-use, execution, interaction, agent, Goal, and
 span identifiers.
 
+An ephemeral `/btw` conversation has no telemetry file of its own. Its
+allowlisted tool, permission, repair, sandbox, and managed-execution audit
+events are redacted again, tagged with `:conversation-scope btw`, and recorded
+through the durable parent session. Conversational events remain transient.
+Side prompts, response prose, commands, tool arguments and results, paths,
+permission profiles, and justifications are not forwarded.
+
 ## Detail tiers
 
 Normal sessions keep tool-, request-, interaction-, execution-, agent-, Goal-,

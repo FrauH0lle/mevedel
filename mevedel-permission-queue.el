@@ -55,6 +55,12 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-forwarded-audit-p
+                  "mevedel-telemetry" (session))
+(declare-function mevedel-telemetry-record-audit
+                  "mevedel-telemetry" (session event &rest props))
+
 ;; `mevedel-tool-exec'
 (declare-function mevedel--prompt-user-for-eval "mevedel-tool-exec"
                   (expression callback &optional origin count entry
@@ -144,14 +150,27 @@ SESSION defaults to the current session."
   (when-let* ((sess (or session
                         (plist-get entry :session)
                         (mevedel-permission-queue--current-session))))
-    (apply #'mevedel-permission-log
-           sess event
-           (apply #'mevedel-permission-queue--log-props
-                  entry
-                  :queue-depth
-                  (+ (length (mevedel-session-permission-queue sess))
-                     (if (eq event 'permission-enqueued) 1 0))
-                  props))))
+    (let ((queue-depth
+           (+ (length (mevedel-session-permission-queue sess))
+              (if (eq event 'permission-enqueued) 1 0))))
+      (apply #'mevedel-permission-log
+             sess event
+             (apply #'mevedel-permission-queue--log-props
+                    entry :queue-depth queue-depth props))
+      ;; Queue entries retain exact resources and human explanations for the
+      ;; transient interaction.  Only this fixed categorical subset may cross
+      ;; into a distinct durable session's unified telemetry.
+      (when (mevedel-telemetry-forwarded-audit-p sess)
+        (let ((safe (list :queue-depth queue-depth)))
+          (dolist (key '(:kind :tool-name :specifier-key :protected-path
+                         :resource-access :origin :command-class :mode
+                         :sandbox-permissions))
+            (when (plist-member entry key)
+              (setq safe (plist-put safe key (plist-get entry key)))))
+          (dolist (key '(:outcome :resolved))
+            (when (plist-member props key)
+              (setq safe (plist-put safe key (plist-get props key)))))
+          (apply #'mevedel-telemetry-record-audit sess event safe))))))
 
 (defun mevedel-permission--enqueue (entry &optional session)
   "Append ENTRY (a plist) to the session permission queue.

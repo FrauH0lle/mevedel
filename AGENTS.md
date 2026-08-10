@@ -129,6 +129,7 @@ Data model
 
 Chat / view
   mevedel-chat.el             session lifecycle
+  mevedel-side-conversation.el  ephemeral /btw conversation lifecycle
   mevedel-directive-activity.el  read-only workspace directive inspector
   mevedel-directive-plan.el   directive-owned planning and approval workflow
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
@@ -278,6 +279,7 @@ warnings.
 - `mevedel-compact`
 - `mevedel-review` / `mevedel-verify`
 - `/plan` / `/plan PROMPT` / `mevedel-retry-plan-implementation`
+- `/btw` / `/btw PROMPT`
 - `mevedel-add/remove/list-project-roots`
 - `mevedel-toggle-tasks` / `mevedel-toggle-hints`
 - `mevedel-display-hints` / `mevedel-clear-hints`

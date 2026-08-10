@@ -145,6 +145,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **skill** — A reusable prompt package discovered from configured skill directories and invoked by `$skill` syntax or model-side `Skill` tool.
 - **skill invocation role** — The interpretation of one skill use as either an instruction or a command. The invocation surface determines the role; the skill does not declare it.
 - **skill instruction invocation** — An embedded `$skill` mention that contributes a prepared skill body to the current consumer without invocation arguments or changes to the consumer's request policy.
+- **required skill attachment** — A skill declared by a parent skill that must be prepared and attached as instruction context whenever the parent is validly invoked. It is not a nested skill invocation. _Avoid_: embedded skill, nested skill invocation
 - **skill command invocation** — A leading `$skill` invocation or model-side `Skill` call that supplies arguments and runs according to the skill's execution context.
 - **skill execution context** — The location in which a skill command runs: `inline` in the current session context or `fork` in a dedicated sub-agent.
 - **skill mention binding** — The association between one user-written `$skill` token and the exact discovered skill source it names, independent of later same-name lookup.

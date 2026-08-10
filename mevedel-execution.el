@@ -56,7 +56,11 @@
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
+(declare-function mevedel-telemetry-forwarded-audit-p
+                  "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+(declare-function mevedel-telemetry-record-audit
                   "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
@@ -88,6 +92,18 @@ Larger unread ranges use the shared newline-aware head-and-tail preview while
 the complete spool remains at the path in the execution facts."
   :type 'integer
   :group 'mevedel)
+
+(defconst mevedel-execution--audit-prop-keys
+  '(:additional-read-count :additional-write-count
+    :after-confined-launch-failure :cache-identity :chunk-bytes :command-hash
+    :duration-ms :exit-code :fallback-offered :fallback-possible :filesystem
+    :full-execution-approval-offered :lane :launch-failure-reason-class
+    :launch-failure-stage :native-resource-capture
+    :native-resource-report-bytes :network :output-bytes :output-limit
+    :overlap-count :preparation-state :proc :protected-path-count :queue-depth
+    :queue-duration-ms :reason-class :sandbox :termination :test-scope
+    :timed-out :tty :workload :yield-time-ms)
+  "Execution properties allowed in a side conversation's durable audit.")
 
 (defcustom mevedel-execution-progress-delay 2
   "Seconds before a managed Bash execution publishes live progress."
@@ -823,14 +839,25 @@ run."
   "Record safe execution EVENT and PROPS for RECORD."
   (let* ((origin (mevedel-execution--record-origin record))
          (session (and (mevedel-execution--origin-p origin)
-                       (mevedel-execution--origin-session origin))))
-    (when (and session (fboundp 'mevedel-telemetry-record))
-      (apply #'mevedel-telemetry-record
+                       (mevedel-execution--origin-session origin)))
+         (props
+          (if (not (mevedel-telemetry-forwarded-audit-p session))
+              props
+            (let ((safe nil))
+              (dolist (key mevedel-execution--audit-prop-keys)
+                (when (plist-member props key)
+                  (setq safe (plist-put safe key (plist-get props key)))))
+              safe))))
+    (when session
+      (apply #'mevedel-telemetry-record-audit
              session event
-             :execution-id (mevedel-execution--record-execution-id record)
-             :tool-use-id (mevedel-execution--origin-tool-use-id origin)
-             :owner (mevedel-execution--origin-owner origin)
-             props))))
+             (append
+              (list :execution-id
+                    (mevedel-execution--record-execution-id record)
+                    :tool-use-id
+                    (mevedel-execution--origin-tool-use-id origin)
+                    :owner (mevedel-execution--origin-owner origin))
+              props)))))
 
 (defun mevedel-execution--next-id (state)
   "Return the next opaque execution id in STATE."
@@ -1630,10 +1657,11 @@ terminal settlement."
                 (condition-case err
                     (mevedel-execution--start-admitted
                      record
-                     (mevedel-sandbox-prepare
-                      command workdir writable-roots additional-permissions
-                      sandbox-permissions
-                      (mevedel-session-sandbox-mode session)))
+                     (with-current-buffer (or data-buffer (current-buffer))
+                       (mevedel-sandbox-prepare
+                        command workdir writable-roots additional-permissions
+                        sandbox-permissions
+                        (mevedel-session-sandbox-mode session))))
                   (error
                    (setf (mevedel-execution--record-error-data record) err
                          (mevedel-execution--record-exit-code record) -1

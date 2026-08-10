@@ -6288,6 +6288,12 @@ turn.  SAVED-STATES restores matching disclosure state."
                render-view-buf
              (buffer-local-value 'mevedel--view-buffer data-buf)))
           (compaction-indicator-inserted nil))
+      (when-let* ((transcript-start
+                   (buffer-local-value
+                    'mevedel-view--transcript-start view-buf))
+                  ((markerp transcript-start))
+                  ((eq (marker-buffer transcript-start) data-buf)))
+        (setq scan-start (max scan-start (marker-position transcript-start))))
       (when (eq (get-text-property scan-start 'face) 'shadow)
         (setq scan-start
               (or (next-single-property-change

@@ -42,6 +42,8 @@
 ;; `mevedel-structs'
 (declare-function mevedel-request-goal-plan-read-path
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-one-shot-mutations-p
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-active-dropped-file-grants
@@ -168,6 +170,25 @@ grant.  `read-only' keeps matched content visible but immutable;
                 :value-type
                 (choice (const inaccessible) (const read-only)))
   :group 'mevedel)
+
+(defvar-local mevedel-permission--context-frozen-p nil
+  "Non-nil when persistent permission authority must not be reloaded.")
+
+(defvar-local mevedel-permission--frozen-persistent-rules nil
+  "Persistent permission rules captured for a frozen request context.")
+
+(defvar-local mevedel-permission--frozen-resource-grants nil
+  "Persistent resource grants captured for a frozen request context.")
+
+(defun mevedel-permission-freeze-context (persistent-rules resource-grants)
+  "Freeze the current buffer's persistent permission authority.
+
+PERSISTENT-RULES and RESOURCE-GRANTS replace on-disk lookups for the
+buffer's lifetime; later persisted changes are not observed.  Callers
+own copying the passed structures."
+  (setq-local mevedel-permission--context-frozen-p t
+              mevedel-permission--frozen-persistent-rules persistent-rules
+              mevedel-permission--frozen-resource-grants resource-grants))
 
 (defun mevedel-permission--current-data-buffer ()
   "Return the session data buffer reachable from `current-buffer', or nil.
@@ -889,12 +910,37 @@ defcustom buckets may otherwise authorize or explicitly ask for LEVEL."
       (plist-put (copy-sequence content) :permission-decision-metadata t)
     content))
 
+(defun mevedel-permission--one-shot-mutations-p (request &optional explicit)
+  "Return the one-shot mutation policy for REQUEST.
+EXPLICIT takes precedence when non-nil."
+  (or explicit
+      (and request (mevedel-request-one-shot-mutations-p request))))
+
+(defun mevedel-permission--one-shot-prompt-entry (entry &optional data-buffer)
+  "Return one-time permission ENTRY owned by DATA-BUFFER."
+  (let ((entry (copy-sequence entry)))
+    (dolist (pair '((:once-only . t)
+                    (:include-always . nil)
+                    (:remember-authority-cell . nil)
+                    (:reusable-operation-p . nil)))
+      (setq entry (plist-put entry (car pair) (cdr pair))))
+    (when data-buffer
+      (setq entry (plist-put entry :data-buffer data-buffer)))
+    entry))
+
+(defun mevedel-permission--one-shot-prompt-outcome (outcome)
+  "Collapse reusable permission OUTCOME to its one-time equivalent."
+  (pcase outcome
+    ((or 'allow-session 'always-allow) 'allow-once)
+    ('deny-session 'deny-once)
+    (_ outcome)))
+
 (cl-defun mevedel-permission--invocation-context
     (&key tool tool-name args session workspace request invocation buffer
           path pattern domain name mode workspace-root allowed-roots
           exact-allowed-paths invocation-rules request-rules session-rules
           persistent-rules resource-grants permission-request
-          warn-no-session-p)
+          one-shot-mutations-p warn-no-session-p)
   "Return normalized permission invocation context.
 
 The context concentrates facts shared by the permission decision
@@ -904,8 +950,9 @@ TOOL, TOOL-NAME, ARGS, SESSION, WORKSPACE, REQUEST, INVOCATION, BUFFER,
 PATH, PATTERN, DOMAIN, NAME, MODE, WORKSPACE-ROOT, ALLOWED-ROOTS,
 EXACT-ALLOWED-PATHS, INVOCATION-RULES, REQUEST-RULES, SESSION-RULES,
 PERSISTENT-RULES, RESOURCE-GRANTS, and WARN-NO-SESSION-P provide the
-context facts.  PERMISSION-REQUEST admits an interactive request at its
-hook boundary before it enters the shared queue."
+context facts.  ONE-SHOT-MUTATIONS-P defaults from REQUEST.
+PERMISSION-REQUEST admits an interactive request at its hook boundary before
+it enters the shared queue."
   (setq tool (or tool
                  (and tool-name (mevedel-tool-ensure tool-name)))
         tool-name (or tool-name (and tool (mevedel-tool-name tool))))
@@ -937,7 +984,9 @@ hook boundary before it enters the shared queue."
             (and session (mevedel-session-permission-rules session)))
         persistent-rules
         (or persistent-rules
-            (and workspace
+            (and mevedel-permission--context-frozen-p
+                 mevedel-permission--frozen-persistent-rules)
+            (and (not mevedel-permission--context-frozen-p) workspace
                  (mevedel-permission--load-persistent-rules workspace)))
         resource-grants
         (or resource-grants
@@ -946,9 +995,14 @@ hook boundary before it enters the shared queue."
                                             request))))
                       (list (list :path path :access 'read)))
                     (and session (mevedel-session-resource-grants session))
-                    (and workspace
+                    (and mevedel-permission--context-frozen-p
+                         mevedel-permission--frozen-resource-grants)
+                    (and (not mevedel-permission--context-frozen-p) workspace
                          (mevedel-permission--load-persistent-resource-grants
                           workspace))))
+        one-shot-mutations-p
+        (mevedel-permission--one-shot-mutations-p
+         request one-shot-mutations-p)
         mode (or mode (and session (mevedel-session-permission-mode session))))
   (when (and warn-no-session-p (not session))
     (display-warning
@@ -979,7 +1033,8 @@ happen for a non-read-only tool."
            :workspace-root workspace-root
            :allowed-roots allowed-roots
            :exact-allowed-paths exact-allowed-paths
-           :resource-grants resource-grants))
+           :resource-grants resource-grants
+           :one-shot-mutations-p one-shot-mutations-p))
          (path (plist-get context :path))
          (pattern (plist-get context :pattern))
          (domain (plist-get context :domain))
@@ -1046,7 +1101,8 @@ happen for a non-read-only tool."
     (tool-name &key tool-struct path pattern domain name content
                invocation-rules request-rules session-rules persistent-rules
                mode session workspace-root allowed-roots exact-allowed-paths
-               resource-access resource-grants normalized-context)
+               resource-access resource-grants one-shot-mutations-p
+               normalized-context)
   "Return normalized permission facts and any decision before the tool slot.
 
 This pure preflight owns specifier extraction, rule buckets, absolute
@@ -1060,7 +1116,8 @@ specifiers.  INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, and
 PERSISTENT-RULES are the ordered rule sources.  MODE selects the permission
 mode.  WORKSPACE-ROOT, ALLOWED-ROOTS, EXACT-ALLOWED-PATHS, and
 RESOURCE-GRANTS define the filesystem boundary.  NORMALIZED-CONTEXT, when
-non-nil, is returned unchanged so a caller can reuse an invocation preflight."
+non-nil, is returned unchanged so a caller can reuse an invocation preflight.
+ONE-SHOT-MUTATIONS-P requires explicit approval for non-read-only tools."
   (if normalized-context
       normalized-context
     (setq mode (or mode mevedel-permission-mode))
@@ -1107,6 +1164,7 @@ non-nil, is returned unchanged so a caller can reuse an invocation preflight."
             :name name
             :mode mode
             :read-only-p read-only-p
+            :one-shot-mutations-p one-shot-mutations-p
             :buckets buckets
             :allowed-roots allowed-roots
             :exact-allowed-paths exact-allowed-paths
@@ -1264,12 +1322,26 @@ exact-match in-bounds path list."
         (mevedel-permission--decision 'ask 'workspace-boundary))))))
 
 (defun mevedel-permission--finish-tool-decision (context slot-decision)
-  "Combine CONTEXT's command SLOT-DECISION with resource authority."
-  (let* ((command-context
+  "Combine CONTEXT's command SLOT-DECISION with resource authority.
+
+Under one-shot mutation policy a slot allow arriving `:via' `tool-slot'
+is discarded so the shared tail re-decides; the tail's one-shot step
+then forces the one-time prompt for mutations.  A slot decision may
+deliberately claim a different `:via' (e.g. `execution-control' for
+WriteStdin polling of an already-approved execution) to keep its allow
+authoritative despite one-shot."
+  (let* ((slot-outcome
+          (and slot-decision
+               (mevedel-permission-decision-raw-outcome slot-decision)))
+         (command-context
           (plist-put (copy-sequence context) :skip-resource-boundary-p t))
          (policy-decision
-          (or slot-decision
-              (mevedel-check-permission--tail-decision command-context)))
+          (if (and (plist-get context :one-shot-mutations-p)
+                   (eq slot-outcome 'allow)
+                   (eq (plist-get slot-decision :via) 'tool-slot))
+              (mevedel-check-permission--tail-decision command-context)
+            (or slot-decision
+                (mevedel-check-permission--tail-decision command-context))))
          (policy-outcome
           (mevedel-permission-decision-raw-outcome policy-decision)))
     (if (eq policy-outcome 'allow)
@@ -1307,6 +1379,9 @@ mode, and native-resource tail."
            (plist-get context :protected-path-p)
            (not (plist-get context :resource-granted-p)))
       (mevedel-permission--decision 'ask 'protected-path))
+     ((and (plist-get context :one-shot-mutations-p)
+           (not (or read-only-p reviewed-edit-p)))
+      (mevedel-permission--decision 'ask 'one-shot-mutation))
      ;; Step 5: pass 2 -- allow/ask innermost-first across buckets.
      ((when-let* ((action-bucket
                    (mevedel-permission--first-non-nil-action-with-bucket

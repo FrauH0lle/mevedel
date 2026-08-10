@@ -442,6 +442,39 @@
                   :tool-struct mock-tool
                   :mode 'ask)
                 'allow)))
+  :doc "one-shot policy overrides a generic tool-slot allow"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create
+                    :name "MockTool"
+                    :check-permission (lambda (_ts _input) 'allow)
+                    :read-only-p nil)))
+    (should
+     (eq 'ask
+         (mevedel-check-permission
+          "MockTool" :tool-struct mock-tool :mode 'full-auto
+          :one-shot-mutations-p t))))
+  :doc "one-shot policy keeps emergency controls automatic"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (control-tool (mevedel-tool--create
+                       :name "StopExecution"
+                       :check-permission
+                       (lambda (_ts _input)
+                         '(:outcome allow :raw-outcome allow
+                           :via execution-control))
+                       :read-only-p nil)))
+    (should
+     (eq 'allow
+         (mevedel-check-permission
+          "StopExecution" :tool-struct control-tool :mode 'full-auto
+          :one-shot-mutations-p t)))
+    (should
+     (eq 'deny
+         (mevedel-check-permission
+          "StopExecution" :tool-struct control-tool :mode 'full-auto
+          :session-rules '(("StopExecution" :action deny))
+          :one-shot-mutations-p t))))
   :doc "tool check-permission returning deny is respected"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)
@@ -502,6 +535,30 @@
                      "ApplyPatch" :tool-struct tool :path "/project/a"
                      :mode mode :workspace-root "/project")
                     'ask)))))
+  :doc "one-shot reviewed edits avoid a duplicate prompt without bypassing policy"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (tool (mevedel-tool--create
+               :name "ApplyPatch" :groups '(edit reviewed-edit))))
+    (should
+     (eq 'allow
+         (mevedel-check-permission
+          "ApplyPatch" :tool-struct tool :path "/project/a"
+          :mode 'full-auto :workspace-root "/project"
+          :one-shot-mutations-p t)))
+    (should
+     (eq 'ask
+         (mevedel-check-permission
+          "ApplyPatch" :tool-struct tool :path "/outside/a"
+          :mode 'full-auto :workspace-root "/project"
+          :one-shot-mutations-p t)))
+    (should
+     (eq 'deny
+         (mevedel-check-permission
+          "ApplyPatch" :tool-struct tool :path "/project/a"
+          :session-rules '(("ApplyPatch" :action deny))
+          :mode 'full-auto :workspace-root "/project"
+          :one-shot-mutations-p t))))
   :doc "Plan mode denies edits and Eval across modes and explicit allows"
   (let* ((mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
@@ -548,6 +605,21 @@
     (should (eq (mevedel-check-permission "Read"
                   :tool-struct mock-tool
                   :mode 'ask)
+                'allow)))
+  :doc "one-shot mutation policy overrides full-auto and inherited allows"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (edit-tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+        (read-tool (mevedel-tool--create :name "Read" :read-only-p t)))
+    (should (eq (mevedel-check-permission
+                 "Edit" :tool-struct edit-tool
+                 :session-rules '(("Edit" :action allow))
+                 :mode 'full-auto :one-shot-mutations-p t)
+                'ask))
+    (should (eq (mevedel-check-permission
+                 "Read" :tool-struct read-tool
+                 :session-rules '(("Read" :action allow))
+                 :mode 'full-auto :one-shot-mutations-p t)
                 'allow)))
   :doc "session rules work alongside defcustom rules"
   (let ((mevedel-permission-rules '(("Edit" :action ask)))
@@ -1754,7 +1826,60 @@ must restore the prior value to avoid cross-test pollution."
          (tool (mevedel-tool--create :name "Bash" :read-only-p nil))
          (context (mevedel-permission--invocation-context
                    :tool tool :permission-request request)))
-    (should (eq request (plist-get context :permission-request)))))
+    (should (eq request (plist-get context :permission-request))))
+
+  :doc "inherits one-shot mutation policy from the request"
+  (let* ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+         (request (mevedel-request--create :one-shot-mutations-p t))
+         (context (mevedel-permission--invocation-context
+                   :tool tool :request request)))
+    (should (plist-get context :one-shot-mutations-p)))
+
+  :doc "uses a frozen persistent permission snapshot without reloading it"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-perm-frozen-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root :name "frozen"
+                     :file-cache nil))
+         (session (mevedel-session--create
+                   :name "frozen" :workspace workspace
+                   :permission-rules '(("Read" :action ask))))
+         (tool (mevedel-tool--create :name "Read" :read-only-p t)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel-permission--context-frozen-p t
+                      mevedel-permission--frozen-persistent-rules
+                      '(("Read" :action deny))
+                      mevedel-permission--frozen-resource-grants
+                      `((:path ,root :access read)))
+          (cl-letf (((symbol-function
+                      'mevedel-permission--load-persistent-rules)
+                     (lambda (_workspace)
+                       (ert-fail "reloaded persistent rules")))
+                    ((symbol-function
+                      'mevedel-permission--load-persistent-resource-grants)
+                     (lambda (_workspace)
+                       (ert-fail "reloaded persistent grants"))))
+            (let* ((context (mevedel-permission--invocation-context
+                             :tool tool :session session
+                             :workspace workspace))
+                   (buckets (plist-get context :buckets)))
+              (should (equal '(("Read" :action deny))
+                             (alist-get :persistent buckets)))
+              (should (equal `((:path ,root :access read))
+                             (plist-get context :resource-grants))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-permission--one-shot-prompt-entry
+  (:doc "captures the side buffer without caching parent activity")
+  (let ((side-buffer (generate-new-buffer " *mevedel-side-permission*")))
+    (unwind-protect
+        (let ((entry (mevedel-permission--one-shot-prompt-entry
+                      '(:kind permission :mutation-p t) side-buffer)))
+          (should (eq side-buffer (plist-get entry :data-buffer)))
+          (should (plist-get entry :once-only))
+          (should-not (plist-member entry :shared-workspace-active-p)))
+      (kill-buffer side-buffer))))
 
 (mevedel-deftest mevedel-permission--checker-args ()
   ,test

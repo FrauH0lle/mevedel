@@ -23,6 +23,12 @@
                   "mevedel-interaction-prompt" (overlay outcome))
 (defvar mevedel--prompt-overlays)
 
+;; `mevedel-side-conversation'
+(declare-function mevedel-side-conversation-mutation-warning
+                  "mevedel-side-conversation" (record effect))
+(declare-function mevedel-side-conversation-mutation-warning-pending-p
+                  "mevedel-side-conversation" (record))
+
 ;; `mevedel-tool-patch'
 (declare-function mevedel-tool-patch--annotate-line-numbers
                   "mevedel-tool-patch" (proposal))
@@ -327,6 +333,9 @@ OPERATION owns TARGET and is retained as interaction metadata."
                          comments (if (= comments 1) "" "s"))
                  'font-lock-face 'warning))
           (ins "\n")
+          (when-let* ((warning (mevedel-side-conversation-mutation-warning
+                                proposal "applying this patch")))
+            (ins warning 'font-lock-face 'warning))
           (when-let* ((conflict (plist-get proposal :conflict)))
             (ins (format "Conflict: %s\n" conflict) 'font-lock-face 'error)
             (ins (concat "Deselect the stale file with SPC to apply the"
@@ -887,32 +896,34 @@ on Update files and patch-level feedback leave selection untouched."
                    'mevedel-patch-proposal)))
     (unless proposal
       (user-error "No patch review at point"))
-    (condition-case err
-        (progn
-          (mevedel-tool-patch--assert-baseline proposal)
-          (let* ((changes (mevedel-tool-patch--planned-changes proposal))
-                 (feedback-p (> (plist-get
-                                 (mevedel-tool-patch--proposal-stats
-                                  proposal)
-                                 :comments)
-                                0))
-                 (callback (plist-get proposal :callback))
-                 (result
-                  (if (or changes feedback-p)
-                      (mevedel-tool-patch--result proposal changes)
-                    (list :result "Error: Patch rejected" :status 'error)))
-                 (overlay (plist-get proposal :overlay)))
-            (if changes
-                (mevedel-tool-patch--apply
-                 (plist-get proposal :data-buffer) changes
-                 (lambda ()
-                   (mevedel--prompt--settle overlay 'approve)
-                   (funcall callback result)))
-              (mevedel--prompt--settle overlay 'approve)
-              (funcall callback result))))
-      (error
-       (plist-put proposal :conflict (error-message-string err))
-       (mevedel-patch-review--render proposal)))))
+    (if (mevedel-side-conversation-mutation-warning-pending-p proposal)
+        (mevedel-patch-review--render proposal)
+      (condition-case err
+          (progn
+            (mevedel-tool-patch--assert-baseline proposal)
+            (let* ((changes (mevedel-tool-patch--planned-changes proposal))
+                   (feedback-p (> (plist-get
+                                   (mevedel-tool-patch--proposal-stats
+                                    proposal)
+                                   :comments)
+                                  0))
+                   (callback (plist-get proposal :callback))
+                   (result
+                    (if (or changes feedback-p)
+                        (mevedel-tool-patch--result proposal changes)
+                      (list :result "Error: Patch rejected" :status 'error)))
+                   (overlay (plist-get proposal :overlay)))
+              (if changes
+                  (mevedel-tool-patch--apply
+                   (plist-get proposal :data-buffer) changes
+                   (lambda ()
+                     (mevedel--prompt--settle overlay 'approve)
+                     (funcall callback result)))
+                (mevedel--prompt--settle overlay 'approve)
+                (funcall callback result))))
+        (error
+         (plist-put proposal :conflict (error-message-string err))
+         (mevedel-patch-review--render proposal))))))
 
 
 (provide 'mevedel-patch-review)

@@ -121,6 +121,10 @@
                   "mevedel-session-persistence" (session buffer &rest args))
 (defvar mevedel-session--read-only-mode)
 
+;; `mevedel-side-conversation'
+(declare-function mevedel-side-conversation-open
+                  "mevedel-side-conversation" (&optional initial-prompt))
+
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--clear-pending-inline-attachments
                   "mevedel-skills-invoke" ())
@@ -209,7 +213,8 @@
   "Completion candidates and annotations for `/goal'.")
 
 (defconst mevedel-skills--slash-command-annotations
-  '(("tokens" . " [command] no args; estimate tokens")
+  '(("btw" . " [command] optional prompt; open an ephemeral side conversation")
+    ("tokens" . " [command] no args; estimate tokens")
     ("model" . " [command] model name")
     ("compact" . " [command] optional summary guidance")
     ("goal" . " [command] objective | auto OBJECTIVE | approval [POLICY] | edit | pause | resume | clear")
@@ -705,8 +710,15 @@ Routes through the lifecycle-aware permission transition path."
       (mevedel-execution-stop-user mevedel--session execution-id)
       (message "mevedel: execution %s stopping" execution-id))))
 
+(defun mevedel-cmd--btw (args)
+  "Open an ephemeral side conversation using ARGS as its first prompt."
+  (require 'mevedel-side-conversation)
+  (mevedel-side-conversation-open args)
+  'mevedel-view-sent)
+
 (defvar mevedel-slash-commands
-  '(("tokens"  . mevedel-cmd--tokens)
+  '(("btw"     . mevedel-cmd--btw)
+    ("tokens"  . mevedel-cmd--tokens)
     ("model"   . mevedel-cmd--model)
     ("compact" . mevedel-cmd--compact)
     ("goal"    . mevedel-cmd--goal)
@@ -730,7 +742,7 @@ Handlers have access to the buffer-local `mevedel--session'.")
 
 (defun mevedel-skills-local-command-active-request-p (name args)
   "Return non-nil when local command NAME with ARGS may run mid-request."
-  (or (member name '("ps" "stop"))
+  (or (member name '("btw" "ps" "stop"))
       (and (string= name "goal")
            (member (car (split-string (or args "") "[ \t\n]+" t))
                    '("pause" "edit")))))

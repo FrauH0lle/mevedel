@@ -39,6 +39,12 @@
 (declare-function mevedel-queue--entry-metadata-put
                   "mevedel-queue" (entry key value))
 
+;; `mevedel-side-conversation'
+(declare-function mevedel-side-conversation-mutation-warning
+                  "mevedel-side-conversation" (record effect))
+(declare-function mevedel-side-conversation-mutation-warning-pending-p
+                  "mevedel-side-conversation" (record))
+
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
                   "mevedel-view-interaction" (descriptor))
@@ -64,7 +70,17 @@
 (defun mevedel-permission--prompt-approve-once ()
   "Allow this tool invocation once."
   (interactive)
-  (mevedel-permission--prompt-finish-or-self-insert 'allow-once))
+  (if-let ((ov (mevedel--prompt--overlay-at-point
+                'mevedel-permission-prompt)))
+      (let ((entry (overlay-get ov 'mevedel-view-interaction-entry)))
+        (if (and (plist-get entry :mutation-p)
+                 (mevedel-side-conversation-mutation-warning-pending-p entry))
+            (progn
+              (require 'mevedel-permission-queue)
+              (mevedel-permission-queue--render-head
+               (plist-get entry :session)))
+          (mevedel--prompt--settle ov 'allow-once)))
+    (mevedel-permission--prompt-self-insert)))
 
 (defun mevedel-permission--prompt-approve-session ()
   "Allow this tool for the rest of the session."
@@ -209,6 +225,10 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                   (mevedel-queue--entry-metadata-put
                    entry :interaction-id id))
                 id)))
+         (parent-active-warning
+          (and (plist-get entry :mutation-p)
+               (mevedel-side-conversation-mutation-warning
+                entry "this approved change")))
          ov)
     (when entry
       (mevedel-queue--entry-metadata-put entry :view-buffer target-buf))
@@ -248,7 +268,12 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                      :origin (or (plist-get entry :origin) "/root")
                      :count (or count 1)
                      :body (mevedel-permission--prompt-body
-                            content include-always
+                            (concat
+                             content
+                             (when parent-active-warning
+                               (propertize parent-active-warning
+                                           'font-lock-face 'warning)))
+                            include-always
                             suppress-allow-session once-only)
                      :priority 100
                      :keymap map
@@ -336,7 +361,8 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
 (defun mevedel-permission--prompt-async-attributed
     (tool-name path include-always origin cont &optional count entry)
   "Display an attributed permission prompt and call CONT with its outcome."
-  (let ((content
+  (let* ((once-only (and entry (plist-get entry :once-only)))
+         (content
          (concat
           (propertize "Permission Request\n"
                       'font-lock-face '(:inherit bold :inherit warning))
@@ -359,7 +385,8 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                             'font-lock-face 'font-lock-constant-face)))))
           "\n")))
     (mevedel-permission--prompt-async-with-content
-     content include-always cont count entry)))
+     content (and include-always (not once-only)) cont count entry
+     once-only once-only)))
 
 (defun mevedel-permission--bash-guardian-label (value)
   "Return a display label for Bash guardian VALUE."
@@ -414,8 +441,10 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
     (command command-class include-always origin cont &optional count entry)
   "Display a Bash permission prompt and call CONT with its outcome."
   (let* ((dangerous (eq command-class 'dangerous))
+         (once-only (and entry (plist-get entry :once-only)))
          (rule-creating-disabled-p
-          (not (and entry (plist-get entry :reusable-operation-p))))
+          (or once-only
+              (not (and entry (plist-get entry :reusable-operation-p)))))
          (commands (and entry (plist-get entry :commands)))
          (commands-summary
           (and entry
@@ -485,7 +514,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
            "\n")))
     (mevedel-permission--prompt-async-with-content
      content (and include-always (not rule-creating-disabled-p))
-     cont count entry rule-creating-disabled-p)))
+     cont count entry rule-creating-disabled-p once-only)))
 
 (defun mevedel-permission--prompt-async-eval
     (content cont &optional count entry)
@@ -503,10 +532,13 @@ JUSTIFICATION is the model's user-facing reason.  ORIGIN, CONT, COUNT, and
 ENTRY follow the shared permission prompt contract."
   (let* ((full-p (eq (plist-get entry :sandbox-permissions)
                      'require-escalated))
+         (once-only (plist-get entry :once-only))
          (missing (plist-get entry :missing-additional-permissions))
          (missing-filesystem-p (plist-get missing :file-system))
          (full-rule-disabled-p
-          (and full-p (not (plist-get entry :include-always))))
+          (and full-p
+               (or once-only
+                   (not (plist-get entry :include-always)))))
          (content
          (concat
           (propertize
@@ -554,15 +586,18 @@ ENTRY follow the shared permission prompt contract."
              'font-lock-face 'font-lock-comment-face)))))
     (mevedel-permission--prompt-async-with-content
      content
-     (and (or missing-filesystem-p full-p)
+     (and (not once-only)
+          (or missing-filesystem-p full-p)
           (or full-p (plist-get entry :remember-authority-cell))
           (plist-get entry :include-always))
      cont count entry
-     (if full-p
-         full-rule-disabled-p
-       (not (plist-get entry :remember-authority-cell)))
-     (and (not full-p)
-          (not (plist-get entry :remember-authority-cell))))))
+     (or once-only
+         (if full-p
+             full-rule-disabled-p
+           (not (plist-get entry :remember-authority-cell))))
+     (or once-only
+         (and (not full-p)
+              (not (plist-get entry :remember-authority-cell)))))))
 
 (provide 'mevedel-permission-prompt)
 

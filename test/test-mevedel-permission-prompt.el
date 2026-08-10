@@ -10,6 +10,7 @@
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-permission-prompt)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permissions)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
@@ -55,7 +56,40 @@
   (with-temp-buffer
     (let ((last-command-event ?a))
       (call-interactively #'mevedel-permission--prompt-approve-once))
-    (should (equal (buffer-string) "a"))))
+    (should (equal (buffer-string) "a")))
+
+  :doc "shows a newly-active parent warning before one-shot mutation approval"
+  (let ((side-buffer (generate-new-buffer " *mevedel-side-late-warning*")))
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((entry
+                  (list :mutation-p t :data-buffer side-buffer
+                        :session 'side-session))
+                 received
+                 rerendered)
+            (insert "prompt")
+            (let ((ov (make-overlay (point-min) (point-max))))
+              (overlay-put ov 'mevedel-permission-prompt t)
+              (overlay-put ov 'mevedel-view-interaction-entry entry)
+              (overlay-put ov 'mevedel--callback
+                           (lambda (outcome) (setq received outcome)))
+              (push ov mevedel--prompt-overlays)
+              (goto-char (point-min))
+              (cl-letf
+                  (((symbol-function
+                     'mevedel-side-conversation-parent-active-p)
+                    (lambda (&optional buffer)
+                      (eq buffer side-buffer)))
+                   ((symbol-function 'mevedel-permission-queue--render-head)
+                    (lambda (_session)
+                      (setq rerendered t)
+                      (plist-put entry :parent-active-warning-shown-p t))))
+                (mevedel-permission--prompt-approve-once)
+                (should rerendered)
+                (should-not received)
+                (mevedel-permission--prompt-approve-once)
+                (should (eq received 'allow-once))))))
+      (kill-buffer side-buffer))))
 
 (mevedel-deftest mevedel-permission--prompt-approve-session
   (:doc "does not settle prompts that suppress session allow")
@@ -244,6 +278,70 @@
       (dolist (key '("c" "n" "p" "s" "A"))
         (should (lookup-key captured-keymap key)))))
 
+  :doc "warns at render time when a mutation can race an active parent"
+  (let ((side-buffer (generate-new-buffer " *mevedel-side-warning*"))
+        (parent-active nil))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((target (current-buffer)) captured-body entry)
+            (cl-letf (((symbol-function
+                        'mevedel-side-conversation-parent-active-p)
+                       (lambda (&optional buffer)
+                         (and (eq buffer side-buffer) parent-active))))
+              (setq entry
+                    (mevedel-permission--one-shot-prompt-entry
+                     '(:mutation-p t) side-buffer))
+              (setq parent-active t)
+              (cl-letf
+                  (((symbol-function 'gptel-agent--block-bg)
+                    (lambda () 'ask))
+                   ((symbol-function 'mevedel--prompt--data-buffer)
+                    (lambda (&optional _buffer) target))
+                   ((symbol-function
+                     'mevedel-view--interaction-target-buffer)
+                    (lambda (_data-buffer) target))
+                   ((symbol-function 'mevedel-view--interaction-register)
+                    (lambda (plist)
+                      (setq captured-body
+                            (substring-no-properties
+                             (plist-get plist :body)))
+                      (make-overlay (point-min) (point-min))))
+                   ((symbol-function 'mevedel--prompt--register-canceller)
+                    #'ignore))
+                (mevedel-permission--prompt-async-with-content
+                 "Body\n" nil #'ignore nil entry t t))
+              (should
+               (string-match-p "parent request is still active"
+                               captured-body))
+              (should (plist-get entry
+                                 :parent-active-warning-shown-p)))))
+      (kill-buffer side-buffer)))
+  :doc "does not describe read-only approval as a workspace change"
+  (with-temp-buffer
+    (let ((target (current-buffer)) captured-body)
+      (cl-letf (((symbol-function
+                  'mevedel-side-conversation-parent-active-p)
+                 (lambda (&optional _buffer) t))
+                ((symbol-function 'gptel-agent--block-bg)
+                 (lambda () 'ask))
+                ((symbol-function 'mevedel--prompt--data-buffer)
+                 (lambda (&optional _buffer) target))
+                ((symbol-function 'mevedel-view--interaction-target-buffer)
+                 (lambda (_data-buffer) target))
+                ((symbol-function 'mevedel-view--interaction-register)
+                 (lambda (plist)
+                   (setq captured-body
+                         (substring-no-properties (plist-get plist :body)))
+                   (make-overlay (point-min) (point-min))))
+                ((symbol-function 'mevedel--prompt--register-canceller)
+                 #'ignore))
+        (mevedel-permission--prompt-async-with-content
+         "Body\n" nil #'ignore nil
+         '(:once-only t :mutation-p nil :data-buffer side)
+         t t))
+      (should-not
+       (string-match-p "parent request is still active" captured-body))))
+
   :doc "does not bind permission actions globally in view mode"
   (dolist (key (list (kbd "RET") (kbd "TAB")
                      "a" "c" "n" "p" "s" "A" "d" "D" "f"))
@@ -277,6 +375,17 @@
       (should-not (lookup-key captured-keymap "s"))
       (should-not (lookup-key captured-keymap "A"))
       (should-not (lookup-key captured-keymap "D")))))
+
+(mevedel-deftest mevedel-permission--prompt-async-attributed
+  (:doc "propagates one-shot prompts to the shared prompt path")
+  (let (captured)
+    (cl-letf (((symbol-function
+                'mevedel-permission--prompt-async-with-content)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-permission--prompt-async-attributed
+       "Edit" nil t "main" #'ignore nil '(:once-only t)))
+    (should (nth 5 captured))
+    (should (nth 6 captured))))
 
 (mevedel-deftest mevedel-permission--prompt-async-sandbox
   (:doc "renders one combined invocation authority request")
@@ -387,7 +496,22 @@
     (should (string-match-p "Reusable allow is disabled" (nth 0 captured)))
     (should-not (nth 1 captured))
     (should (eq t (nth 5 captured)))
-    (should-not (nth 6 captured))))
+    (should-not (nth 6 captured)))
+
+  :doc "propagates one-shot policy through full escalation prompts"
+  (let (captured)
+    (cl-letf (((symbol-function
+                'mevedel-permission--prompt-async-with-content)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-permission--prompt-async-sandbox
+       "Bash" "make test" "Run outside confinement?"
+       "main" #'ignore 1
+       '(:kind sandbox
+         :sandbox-permissions require-escalated
+         :include-always nil
+         :once-only t)))
+    (should (nth 5 captured))
+    (should (nth 6 captured))))
 
 (mevedel-deftest mevedel-permission--format-bash-guardian
   ()
@@ -425,7 +549,7 @@
   (let (captured-include captured-suppress captured-content)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
                (lambda (content include-always _cont &optional _count _entry
-                                suppress-allow-session)
+                                suppress-allow-session _once-only)
                  (setq captured-content content)
                  (setq captured-include include-always)
                  (setq captured-suppress suppress-allow-session))))
@@ -444,7 +568,7 @@
   (let (captured-include captured-suppress captured-content)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
                (lambda (content include-always _cont &optional _count _entry
-                                suppress-allow-session)
+                                suppress-allow-session _once-only)
                  (setq captured-content content)
                  (setq captured-include include-always)
                  (setq captured-suppress suppress-allow-session))))
@@ -463,14 +587,34 @@
   (let (captured-content)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
                (lambda (content _include-always _cont &optional _count _entry
-                                _suppress-allow-session)
+                                _suppress-allow-session _once-only)
                  (setq captured-content (substring-no-properties content)))))
       (mevedel-permission--prompt-async-bash
        "git add -- a && git add -- b" 'unknown t nil #'ignore nil
        (list :commands '("git" "git")
              :commands-summary "git (2)")))
     (should (string-match-p "Detected commands: git (2)" captured-content))
-    (should-not (string-match-p "git, git" captured-content))))
+    (should-not (string-match-p "git, git" captured-content)))
+
+  :doc "one-shot prompts expose no reusable choices"
+  (let (captured-include captured-suppress captured-once-only captured-content)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
+               (lambda (content include-always _cont &optional _count _entry
+                                suppress-allow-session once-only)
+                 (setq captured-content content)
+                 (setq captured-include include-always)
+                 (setq captured-suppress suppress-allow-session)
+                 (setq captured-once-only once-only))))
+      (mevedel-permission--prompt-async-bash
+       "make test" 'unknown t nil #'ignore nil
+       (list :once-only t
+             :reusable-operation-p t
+             :allow-patterns '("make test"))))
+    (should-not captured-include)
+    (should captured-suppress)
+    (should captured-once-only)
+    (should-not (string-match-p
+                 "Session/always allow will add" captured-content))))
 
 (provide 'test-mevedel-permission-prompt)
 

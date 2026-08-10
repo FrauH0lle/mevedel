@@ -648,7 +648,8 @@ missing or zero prompt-side usage cannot become the active baseline"
   :doc "successful auto-compaction preserves later prompt-buffer transforms"
   (let ((source-buf (generate-new-buffer " *mevedel-compact-source*"))
         (prompt-buf (generate-new-buffer " *mevedel-compact-prompt*"))
-        (continued nil))
+        (continued nil)
+        fsm)
     (unwind-protect
         (progn
           (with-current-buffer source-buf
@@ -661,9 +662,9 @@ missing or zero prompt-side usage cannot become the active baseline"
           (with-current-buffer prompt-buf
             (org-mode)
             (insert-buffer-substring source-buf))
-          (let ((fsm (gptel-make-fsm
-                      :info (list :buffer source-buf))))
-            (cl-letf (((symbol-function 'mevedel--compact-should-compact-p)
+          (setq fsm (gptel-make-fsm
+                     :info (list :buffer source-buf)))
+          (cl-letf (((symbol-function 'mevedel--compact-should-compact-p)
                        (lambda (&optional _token-estimate)
                          '(:summary-policy nil :target-pressure nil)))
                       ((symbol-function 'mevedel--compact-run)
@@ -673,7 +674,12 @@ missing or zero prompt-side usage cannot become the active baseline"
                            (insert "Late prefix\n")
                            (when-let* ((start (mevedel--compact-find-boundary)))
                              (goto-char start)
-                             (insert "Late context\n\n")))
+                             (insert "Late context\n\n"))
+                           (goto-char (point-max))
+                           (insert "Concurrent gptel context\n")
+                           (setq gptel-system-prompt
+                                 (concat "Concurrent gptel context\n\n"
+                                         gptel-system-prompt)))
                          (with-current-buffer source-buf
                            (setq-local mevedel--compact-current-request-reminder
                                        "Re-read /tmp/old.el")
@@ -691,13 +697,20 @@ missing or zero prompt-side usage cannot become the active baseline"
               (with-current-buffer prompt-buf
                 (let ((gptel-backend nil)
                       (gptel-model nil)
+                      (gptel-reasoning-effort 'high)
+                      (gptel-system-prompt "Effective system")
                       (gptel-max-tokens nil)
                       (gptel--request-params nil))
                   (mevedel--compact-transform-auto
                    (lambda () (setq continued t))
-                   fsm)))))
+                   fsm))))
           (with-current-buffer prompt-buf
-            (let ((text (buffer-string)))
+            (let* ((text (buffer-string))
+                   (snapshot
+                    (plist-get (gptel-fsm-info fsm)
+                               :mevedel-model-context))
+                   (context-start
+                    (string-match "Concurrent gptel context\n" text)))
               (should continued)
               (should (string-match-p "Summary" text))
               (should (string-match-p "Late prefix" text))
@@ -708,7 +721,19 @@ missing or zero prompt-side usage cannot become the active baseline"
               (should (string-match-p "<system-reminder>\nRe-read /tmp/old.el"
                                       text))
               (should-not (string-match-p "Old prompt" text))
-              (should (string-match-p "Pending prompt" text))))
+              (should (string-match-p "Pending prompt" text))
+              (should context-start)
+              (should-not (string-match-p "Concurrent gptel context"
+                                          snapshot))
+              (should (string-match-p "Late context" snapshot))
+              (should (string-match-p "compact context" snapshot))
+              (let ((locals
+                     (plist-get (gptel-fsm-info fsm)
+                                :mevedel-request-locals)))
+                (should (equal "Effective system"
+                               (alist-get 'gptel-system-prompt locals)))
+                (should (eq 'high
+                            (alist-get 'gptel-reasoning-effort locals))))))
           (with-current-buffer source-buf
             (should-not mevedel--compact-current-request-reminder)
             (should-not mevedel--compact-current-request-hook-context)))

@@ -123,6 +123,10 @@
                   "mevedel-permissions" (buckets tool-name pattern))
 (declare-function mevedel-permission--normalize-outcome
                   "mevedel-permissions" (outcome))
+(declare-function mevedel-permission--one-shot-prompt-entry
+                  "mevedel-permissions" (entry &optional data-buffer))
+(declare-function mevedel-permission--one-shot-prompt-outcome
+                  "mevedel-permissions" (outcome))
 (declare-function mevedel-permission--path-in-allowed-roots-p
                   "mevedel-permissions" (path roots))
 (declare-function mevedel-permission--path-protected-p
@@ -146,7 +150,7 @@
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--tool-results-dir
-                  "mevedel-pipeline" (session buffer))
+                  "mevedel-pipeline" (session buffer &optional request))
 (declare-function mevedel-pipeline-active-tool-use-id
                   "mevedel-pipeline" ())
 
@@ -184,7 +188,9 @@
                   "mevedel-system" (profile &rest keys))
 
 ;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-record
+(declare-function mevedel-telemetry-forwarded-audit-p
+                  "mevedel-telemetry" (session))
+(declare-function mevedel-telemetry-record-audit
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-utilities'
@@ -285,6 +291,18 @@ Fall back to direct queue admission for callers outside the tool pipeline."
                 (if (memq outcome '(allow-session always-allow))
                     'allow-once
                   outcome)))))))
+  (when (plist-get permission-context :one-shot-mutations-p)
+    (let ((callback (plist-get entry :callback)))
+      (setq entry
+            (mevedel-permission--one-shot-prompt-entry
+             entry (plist-get permission-context :buffer)))
+      (setq entry
+            (plist-put
+             entry :callback
+             (lambda (outcome)
+               (funcall callback
+                        (mevedel-permission--one-shot-prompt-outcome
+                         outcome)))))))
   (if-let* ((request (plist-get permission-context :permission-request)))
       (funcall request entry session (plist-get entry :callback))
     (if session
@@ -308,18 +326,34 @@ Fall back to direct queue admission for callers outside the tool pipeline."
   (when-let* ((session
                (or (plist-get permission-context :session)
                    (mevedel-tool-exec--permission-log-session))))
-    (apply #'mevedel-permission-log
-           session 'permission-decision
-           (append (list :tool-name tool-name
-                         :origin
-                         (mevedel-tool-exec--permission-origin
-                          permission-context)
-                         :mode
-                         (mevedel-tool-exec--effective-permission-mode
-                          permission-context)
-                         :outcome (mevedel-permission--normalize-outcome outcome)
-                         :via via)
-                   props))))
+    (let* ((origin (mevedel-tool-exec--permission-origin permission-context))
+           (mode (mevedel-tool-exec--effective-permission-mode
+                  permission-context))
+           (outcome (mevedel-permission--normalize-outcome outcome)))
+      (apply #'mevedel-permission-log
+             session 'permission-decision
+             (append (list :tool-name tool-name :origin origin :mode mode
+                           :outcome outcome :via via)
+                     props))
+      (when (mevedel-telemetry-forwarded-audit-p session)
+        (let ((safe (list :tool-name tool-name :origin origin :mode mode
+                          :outcome outcome :via via)))
+          (when-let* ((key (plist-get props :specifier-key))
+                      ((memq key '(:path :pattern :domain :name))))
+            (setq safe (plist-put safe :specifier-key key)))
+          (when (plist-member props :protected-path)
+            (setq safe
+                  (plist-put safe :protected-path
+                             (and (plist-get props :protected-path) t))))
+          (when-let* ((access (plist-get props :resource-access))
+                      ((memq access '(read write))))
+            (setq safe (plist-put safe :resource-access access)))
+          (dolist (key '(:sandbox-permissions :bucket :command-class))
+            (when-let* ((value (plist-get props key))
+                        ((symbolp value)))
+              (setq safe (plist-put safe key value))))
+          (apply #'mevedel-telemetry-record-audit
+                 session 'permission-decision safe))))))
 
 (defun mevedel-tool-exec--validate-additional-plist (value allowed label)
   "Return VALUE after validating its keys against ALLOWED for LABEL."
@@ -510,14 +544,17 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
 
 (defun mevedel-tool-exec--direct-resource-grants (permission-context)
   "Return direct user resource grants from PERMISSION-CONTEXT."
-  (let* ((session (plist-get permission-context :session))
-         (workspace
-          (or (plist-get permission-context :workspace)
-              (and session (mevedel-session-workspace session)))))
-    (append
-     (and session (mevedel-session-resource-grants session))
-     (and workspace
-          (mevedel-permission--load-persistent-resource-grants workspace)))))
+  (if (plist-member permission-context :resource-grants)
+      (plist-get permission-context :resource-grants)
+    (let* ((session (plist-get permission-context :session))
+           (workspace
+            (or (plist-get permission-context :workspace)
+                (and session (mevedel-session-workspace session)))))
+      (append
+       (and session (mevedel-session-resource-grants session))
+       (and workspace
+            (mevedel-permission--load-persistent-resource-grants
+             workspace))))))
 
 (defun mevedel-tool-exec--remembered-additional-profile
     (tool-name operation permission-context)
@@ -783,6 +820,7 @@ INPUT supplies permission context and delegated trust.  Call CONT once."
           :kind 'sandbox
           :tool-name tool-name
           :detail detail
+          :mutation-p (mevedel-tool-exec--mutation-p tool-name detail)
           :sandbox-permissions 'additive
           :additional-permissions (plist-get state :requested)
           :requested-additional-permissions (plist-get state :requested)
@@ -962,7 +1000,8 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
               "Delegated expansion cannot request full execution escalation")
         'sandbox-policy
         :sandbox-permissions level)))
-     ((eq decision 'allow)
+     ((and (eq decision 'allow)
+           (not (plist-get permission-context :one-shot-mutations-p)))
       (when metadata-p
         (mevedel-tool-exec--log-permission-decision
          tool-name 'allow 'sandbox-full-escalation permission-context
@@ -985,6 +1024,7 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
         :kind 'sandbox
         :tool-name tool-name
         :detail detail
+        :mutation-p (mevedel-tool-exec--mutation-p tool-name detail)
         :sandbox-permissions level
         :justification (plist-get request :justification)
         :specifier-key :pattern
@@ -1016,6 +1056,13 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
   "Return normalized Bash analysis for COMMAND."
   (require 'mevedel-bash-analysis)
   (mevedel-bash-analysis-analyze command))
+
+(defun mevedel-tool-exec--mutation-p (tool-name detail)
+  "Return non-nil unless TOOL-NAME runs DETAIL as a read-only Bash command."
+  (or (not (equal tool-name "Bash"))
+      (not (eq 'read-only
+               (plist-get (mevedel-tool-exec--analyze-bash detail)
+                          :class)))))
 
 (defun mevedel-tool-exec--bash-missing-resource-paths
     (command permission-context request)
@@ -1431,6 +1478,10 @@ authorize dangerous or complex syntax."
     (when (and (not (plist-get permission-context
                                :resource-authority-separated-p))
                (mevedel-tool-exec--bash-protected-path-p command analysis))
+      (cl-return-from mevedel-tools--check-bash-permission 'ask))
+
+    (when (and (plist-get permission-context :one-shot-mutations-p)
+               (not (eq class 'read-only)))
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
     (cond
@@ -2184,6 +2235,7 @@ parity with the sync slot."
                  (entry
                   (list :kind 'bash
                         :command command
+                        :mutation-p (not (eq command-class 'read-only))
                         :specifier-key :pattern
                         :specifier-value command
                         :analysis analysis
@@ -2600,6 +2652,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
   "Poll or write to one owner-scoped yielded execution from ARGS."
   (let* ((execution-id (plist-get args :execution_id))
          (chars (or (plist-get args :chars) ""))
+         (requested-yield-time-ms (plist-get args :yield-time_ms))
          (session (mevedel-tool-exec--permission-log-session))
          (owner (mevedel-current-origin))
          (wait-ms (mevedel-tool-exec--write-wait-time-ms args chars)))
@@ -2611,12 +2664,12 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
       (error "WriteStdin requires an active session"))
     (require 'mevedel-execution)
     (require 'mevedel-telemetry)
-    (mevedel-telemetry-record
+    (mevedel-telemetry-record-audit
      session 'execution-observe-requested
      :execution-id execution-id
      :owner owner
      :input-p (not (string-empty-p chars))
-     :requested-yield-time-ms (plist-get args :yield-time_ms)
+     :requested-yield-time-ms requested-yield-time-ms
      :effective-wait-ms wait-ms)
     (mevedel-execution-observe
      session owner execution-id
@@ -3072,7 +3125,12 @@ Header shows a truncated first line of the command; body fontifies as
     :async-p t
     :max-result-size 30000
     :groups (eval)
-    :check-permission (lambda (_tool _args) 'allow)
+    :check-permission
+    (lambda (_tool args)
+      (let ((chars (plist-get args :chars)))
+        (if (or (null chars) (equal chars "") (equal chars "\C-c"))
+            '(:outcome allow :raw-outcome allow :via execution-control)
+          'allow)))
     :renderer #'mevedel-tool-exec--render-bash)
 
   (mevedel-define-tool
@@ -3092,7 +3150,9 @@ Header shows a truncated first line of the command; body fontifies as
     :async-p t
     :max-result-size 30000
     :groups (eval)
-    :check-permission (lambda (_tool _args) 'allow)
+    :check-permission
+    (lambda (_tool _args)
+      '(:outcome allow :raw-outcome allow :via execution-control))
     :renderer #'mevedel-tool-exec--render-bash)
 
   (mevedel-define-tool

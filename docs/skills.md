@@ -121,7 +121,7 @@ buffer is dirty.
 ## Local Slash Commands
 
 Local slash commands are separate from `$skill` lookup. Built-ins include
-`/tokens`, `/model`, `/compact`, `/init`, `/review`, `/verify`,
+`/tokens`, `/model`, `/compact`, `/btw`, `/init`, `/review`, `/verify`,
 `/worktree`, `/mode`, `/skills`, `/tools`, `/edits`, `/clear`, `/plugin`,
 and `/help`. `/init` sends the repository bootstrap prompt that helps create
 or improve `AGENTS.md`, `AGENTS.local.md`, `.agents` skills and memory,

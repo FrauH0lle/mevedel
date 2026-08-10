@@ -73,6 +73,7 @@
 (require 'mevedel-transcript-audit)
 (require 'mevedel-transcript-restore)
 (require 'mevedel-compact)
+(require 'mevedel-side-conversation)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-interaction)
 (require 'mevedel-view-render)

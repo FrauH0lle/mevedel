@@ -86,9 +86,6 @@ recommends those elements while leaving Codex room to choose the next action.
 - Find a better folder for the tool description markdown files
 - Ensure all tools have the examples and their descriptions in markdown files
 
-- implement a `/btw` command which opens a side chat
-  - should this be purely temporary? Would make it easier or?
-
 ## Entry format
 
 Each entry records its source, owed change, reason for deferral, current
@@ -196,3 +193,18 @@ become implemented, obsolete, or unjustified.
   path.
 - **Blast radius:** Bedrock sessions cannot use deferred-tool loading
   correctly.
+
+### Split the side-conversation test suite into per-function deftests
+
+- **Source:** `test/test-mevedel-side-conversation.el`
+- **What's owed:** The whole module is covered by one ~1,800-line
+  `mevedel-deftest mevedel-view-send/btw` named after a
+  `mevedel-view-composer` function.  Split into per-entry-point deftests
+  (`mevedel-side-conversation-open`, `-send`, `--snapshot`,
+  `--copy-context-sources`) with the module's own names.
+- **Why deferred:** Pure test-file reorganization; every `:doc` case maps
+  to an ADR 0093 clause and all 26 cases pass, so the churn carries risk
+  without behavior gain right now.
+- **Status check:** Still one deftest covering the module.
+- **Blast radius:** Failures report under a misleading test name; pure
+  helpers are only exercised through the full view integration path.

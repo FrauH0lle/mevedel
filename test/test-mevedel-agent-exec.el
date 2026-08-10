@@ -314,7 +314,7 @@ fire-count and payload."
      (mevedel-agent-exec--request-preset "default" nil)
      :type 'error)))
 
-(mevedel-deftest mevedel-agent-exec--request-snapshot
+(mevedel-deftest mevedel-agent-exec-request-snapshot
   ()
   ,test
   (test)
@@ -326,7 +326,7 @@ fire-count and payload."
             (cl-incf calls)
             '("Dynamic system." "Second part."))))
     (let* ((snapshot
-            (mevedel-agent-exec--request-snapshot
+            (mevedel-agent-exec-request-snapshot
              '(:backend frozen-backend :model frozen-model :effort high)))
            (system-prompt (alist-get 'gptel-system-prompt snapshot)))
       (should (= 1 calls))
@@ -360,7 +360,7 @@ fire-count and payload."
          (tiers mevedel-model-tiers)
          (workloads mevedel-model-workloads)
          (snapshot
-          (mevedel-agent-exec--request-snapshot
+          (mevedel-agent-exec-request-snapshot
            '(:backend frozen-backend :model frozen-model :effort high))))
     (should (= (length mevedel-agent-exec--request-local-symbols)
                (length snapshot)))

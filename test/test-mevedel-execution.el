@@ -870,6 +870,47 @@
            (equal (list session "printf ok" '("sh" "-c" "printf ok"))
                   captured)))
       (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
+
+  :doc "delayed admission uses the data buffer's frozen protected-path policy"
+  (let* ((root (make-temp-file "mevedel-managed-policy-" t))
+         (session (test-mevedel-execution--session root))
+         (data-buffer (generate-new-buffer " *mevedel-policy-source*"))
+         (original-policy (default-value 'mevedel-protected-paths))
+         (frozen-policy '(("/frozen/**" . inaccessible)))
+         (ambient-policy '(("/ambient/**" . read-only)))
+         admission captured-policy)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel-protected-paths frozen-policy))
+          (cl-letf
+              (((symbol-function 'mevedel-execution-scheduler-submit)
+                (lambda (_scheduler _mode start &optional _admit-p _reject)
+                  (setq admission start)
+                  nil))
+               ((symbol-function 'mevedel-sandbox-prepare)
+                (lambda (&rest _)
+                  (setq captured-policy (copy-tree mevedel-protected-paths))
+                  '(:state refused :error "test refusal"
+                    :facts (:sandbox refused :filesystem unavailable
+                            :network unavailable :refused t)))))
+            (mevedel-execution-start-bash
+             #'ignore
+             :session session :data-buffer data-buffer
+             :owner "main" :owner-context session
+             :command '("ignored") :tool-args '(:command "ignored")
+             :workdir root :writable-roots (list root)
+             :artifact-directory root :yield-time-ms nil)
+            (should admission)
+            (setq-default mevedel-protected-paths ambient-policy)
+            (with-temp-buffer
+              (funcall admission nil)))
+          (should (equal frozen-policy captured-policy)))
+      (setq-default mevedel-protected-paths original-policy)
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution--telemetry-facts
@@ -884,6 +925,39 @@
     (should (= 4 (plist-get facts :protected-path-count)))
     (should (= 2 (plist-get facts :additional-read-count)))
     (should-not (plist-member facts :reason))))
+
+(mevedel-deftest mevedel-execution--telemetry
+  (:doc "side execution audit uses its target and drops path-bearing fields")
+  (let* ((parent (mevedel-session--create :name "parent"))
+         (side (mevedel-session--create
+                :name "side" :audit-session parent))
+         (origin (mevedel-execution--origin-create
+                  :session side :owner "/root" :tool-use-id "tool-1"))
+         (record (mevedel-execution--record-create
+                  :origin origin :execution-id "exec-1"))
+         captured)
+    (cl-letf (((symbol-function 'mevedel-telemetry-record)
+               (lambda (session event &rest props)
+                 (setq captured (list session event props)))))
+      (mevedel-execution--telemetry
+       record 'execution-enqueued
+       :lane 'read :command-hash "abc123"
+       :test-targets '("/private/test.el")
+       :resource-report-relative-path "private/report.txt"
+       :justification "private justification"))
+    (should (eq parent (car captured)))
+    (should (eq 'execution-enqueued (cadr captured)))
+    (let ((props (nth 2 captured)))
+      (should (eq 'btw (plist-get props :conversation-scope)))
+      (should (eq 'read (plist-get props :lane)))
+      (should (equal "abc123" (plist-get props :command-hash)))
+      (dolist (key '(:test-targets :resource-report-relative-path
+                     :justification))
+        (should-not (plist-member props key)))
+      (should-not
+       (string-match-p (regexp-opt '("/private/test.el" "private/report.txt"
+                                     "private justification"))
+                       (prin1-to-string props))))))
 
 (mevedel-deftest mevedel-execution--sandbox-summary-merge
   (:doc "aggregates logical attempts and keeps the most permissive dimensions")

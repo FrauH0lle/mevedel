@@ -564,6 +564,69 @@
                            (with-temp-buffer
                              (insert-file-contents path)
                              (buffer-string)))))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "A newly active parent is disclosed before the patch can apply"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-parent-race-" t)))
+           (path (file-name-concat root "one.txt"))
+           (parent-data (generate-new-buffer " *mevedel-patch-parent*"))
+           (workspace (mevedel-workspace--create
+                       :type 'test :id root :root root :name "parent-race"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session--create
+                     :name "parent-race" :workspace workspace
+                     :working-directory root :permission-mode 'ask))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Update File: one.txt"
+                     "@@"
+                     "-old"
+                     "+new"
+                     "*** End Patch")
+                   "\n"))
+           result)
+      (unwind-protect
+          (progn
+            (with-temp-file path (insert "old\n"))
+            (with-current-buffer parent-data
+              (setq-local mevedel--current-request nil))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session
+                          mevedel-side-conversation--parent-buffer parent-data)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            (with-current-buffer view-buf
+              (should-not
+               (string-search
+                "parent request is still active"
+                (buffer-substring-no-properties
+                 (point-min) mevedel-view--input-marker))))
+            (with-current-buffer parent-data
+              (setq-local mevedel--current-request t))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "ApplyPatch ·")
+              (mevedel-patch-review-submit)
+              (should-not result)
+              (should
+               (string-search
+                "parent request is still active"
+                (buffer-substring-no-properties
+                 (point-min) mevedel-view--input-marker)))
+              (goto-char (point-min))
+              (search-forward "ApplyPatch ·")
+              (mevedel-patch-review-submit))
+            (should result)
+            (should (equal "new\n"
+                           (with-temp-buffer
+                             (insert-file-contents path)
+                             (buffer-string)))))
+        (when (buffer-live-p parent-data) (kill-buffer parent-data))
         (when (file-directory-p root) (delete-directory root t))))))
 
 (mevedel-deftest mevedel-patch-review-reject
@@ -800,7 +863,23 @@
          (removed (string-search "│ old" body)))
     (should (equal '(shadow)
                    (get-text-property (+ removed 2) 'font-lock-face body)))
-    (should (string-search "✗ @@" body))))
+    (should (string-search "✗ @@" body)))
+
+  :doc "Warns when review can race an active parent request"
+  (let ((data-buffer (generate-new-buffer " *mevedel-side-review*")))
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-side-conversation-parent-active-p)
+                   (lambda (&optional buffer) (eq buffer data-buffer))))
+          (should
+           (string-search
+            "parent request is still active"
+            (mevedel-patch-review--body
+             `(:data-buffer ,data-buffer
+               :operations
+               ((:kind add :rel-path "a" :content "x\n"
+                 :selected t)))))))
+      (kill-buffer data-buffer))))
 
 (mevedel-deftest mevedel-patch-review--render
   (:doc "Registers one preview interaction") ,test (test)

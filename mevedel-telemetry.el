@@ -35,6 +35,7 @@
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-tokens-used "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-turns-run "mevedel-structs" (cl-x))
+(declare-function mevedel-session-audit-target "mevedel-structs" (session))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x))
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x))
 (declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
@@ -312,6 +313,25 @@ keys are always discarded.  Return the sanitized event plist."
        (message "mevedel: telemetry event failed: %s"
                 (error-message-string err))
        nil))))
+
+(defun mevedel-telemetry-forwarded-audit-p (session)
+  "Return non-nil when SESSION audits into a distinct durable session."
+  (let ((target (mevedel-session-audit-target session)))
+    (and target (not (eq target session)))))
+
+(defun mevedel-telemetry-record-audit (session event &rest props)
+  "Record audit EVENT and PROPS on SESSION's durable audit target.
+
+Transient conversations audit into a durable parent session (see
+`mevedel-session-audit-target'); their events are tagged with a
+`:conversation-scope' so consumers can distinguish forwarded events.
+Callers own reducing PROPS to sanitized categorical values before
+anything crosses into the durable target."
+  (when-let* ((target (mevedel-session-audit-target session)))
+    (apply #'mevedel-telemetry-record target event
+           (if (eq target session)
+               props
+             (append '(:conversation-scope btw) props)))))
 
 (defun mevedel-telemetry-flush (session)
   "Persist and clear SESSION telemetry buffered before materialization."
