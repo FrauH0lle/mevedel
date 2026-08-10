@@ -3752,6 +3752,8 @@
 			 (should (string-suffix-p "</persisted-output>" persisted))
 			 ;; Preview should mention the size
 			 (should (string-match-p "500 chars" persisted))
+			 (should (string-match-p "Use Read(file_path=" persisted))
+			 (should (string-match-p "or Grep(pattern=" persisted))
 			 ;; The persisted file should exist and contain the full result
 			 (let ((files (directory-files
 				       (file-name-concat save-path "tool-results")
@@ -3841,7 +3843,9 @@
 		   (should (string-match-p "no session persistence directory available"
 					   truncated))
 		   (should (string-match-p "5000 chars" truncated))
-		   (should (string-match-p "BigTool" truncated)))
+		   (should (string-match-p "BigTool" truncated))
+		   (should (string-match-p "unavailable" truncated))
+		   (should (string-match-p "narrower" truncated)))
 		 :doc "keeps both ends when persistence is unavailable"
 		 (let* ((tool (mevedel-tool--create :name "BigTool" :max-result-size 100))
 			(result (concat (make-string 1000 ?h)
@@ -3864,7 +3868,8 @@
 			   (should (< (length truncated) (length result)))
 			   (should (string-prefix-p "Error:" truncated))
 			   (should (string-match-p "output too large" truncated))
-			   (should (string-match-p "ErrTool" truncated)))
+			   (should (string-match-p "ErrTool" truncated))
+			   (should (string-match-p "narrower scope" truncated)))
 			 :doc "uses neutral prose for structured error status"
 			 (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 100))
 				(result (concat "plain failure " (make-string 5000 ?x)))

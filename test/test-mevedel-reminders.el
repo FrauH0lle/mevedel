@@ -27,6 +27,10 @@
 
 (defvar imenu--index-alist)
 
+;; Declared special here so `let'-binding stays dynamic even when no
+;; loaded module has defined the variable with a value yet.
+(defvar mevedel--agent-invocation)
+
 
 ;;
 ;;; Struct creation
@@ -557,21 +561,28 @@
                    :models '(test)))
          (data (list :messages [(:role "user" :content "task")]))
          (fsm (gptel-make-fsm
-               :info (list :buffer chat-buf :backend backend :data data))))
+               :info (list :buffer chat-buf :backend backend :data data)))
+         committed)
     (unwind-protect
         (with-current-buffer chat-buf
           (setq-local mevedel--session session)
           (setq-local mevedel--current-request request-1)
-          (mevedel-reminders-queue-turn-event chat-buf 'diagnostics "old")
-          (mevedel-reminders-queue-turn-event chat-buf 'diagnostics "new")
+          (mevedel-reminders-queue-turn-event
+           chat-buf 'diagnostics "old" (lambda () (setq committed 'old)))
+          (mevedel-reminders-queue-turn-event
+           chat-buf 'diagnostics "new" (lambda () (setq committed 'new)))
+          (should-not committed)
           (mevedel-reminders--handle-inject fsm)
+          (should (eq committed 'new))
           (should (= 2 (length (plist-get data :messages))))
           (should
            (equal "<system-reminder>\nnew\n</system-reminder>"
                   (plist-get (aref (plist-get data :messages) 1) :content)))
-          (mevedel-reminders-queue-turn-event chat-buf 'diagnostics "late")
+          (mevedel-reminders-queue-turn-event
+           chat-buf 'diagnostics "late" (lambda () (setq committed 'late)))
           (setq-local mevedel--current-request request-2)
           (mevedel-reminders--handle-inject fsm)
+          (should (eq committed 'new))
           (should (= 2 (length (plist-get data :messages)))))
       (kill-buffer chat-buf))))
 
@@ -841,7 +852,8 @@
   (let* ((r (mevedel-reminders-make-verifier-read-only))
          (body (funcall (mevedel-reminder-content r) nil)))
     (should (string-match-p "CANNOT edit" body))
-    (should (string-match-p "VERIFICATION" body))))
+    (should (string-match-p "VERIFICATION" body))
+    (should (string-match-p "environmental limitations" body))))
 
 (mevedel-deftest mevedel-reminders-make-reviewer-read-only
   ()

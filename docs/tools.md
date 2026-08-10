@@ -394,7 +394,11 @@ When `:max-result-size` is set and result exceeds the effective limit
 (min of tool value and 50,000-char global cap), the full result is saved
 to `.mevedel/tool-results/` and replaced with a preview wrapped in
 `<persisted-output>` XML. The LLM can `Read` the file to see the full
-output. Oversized error results are truncated but not persisted according to
+output, and the notice provides exact bounded `Read` continuation and `Grep`
+recovery calls. `Grep` accepts an explicit persisted `tool-results/*.txt` path.
+When persistence is unavailable, the notice says the omitted text is
+unavailable and asks for a narrower rerun. Oversized error results are
+truncated but not persisted according to
 the canonical status produced at the handler boundary. Every
 oversized preview keeps equal head and tail budgets, prefers nearby newline
 boundaries, and reports the exact omitted character count. The persisted file

@@ -39,7 +39,7 @@
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-queue-turn-event
-                  "mevedel-reminders" (buffer key body))
+                  "mevedel-reminders" (buffer key body &optional commit))
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
@@ -1183,6 +1183,7 @@ EVENT labels each generated hook event block."
       (setf (mevedel-session-hook-log session) log))
     (mevedel-hooks--persist-log-entry session entry)
     (let ((handler (plist-get entry :handler)))
+      (require 'mevedel-telemetry)
       (mevedel-telemetry-record-audit
        session 'hook-handler
        :hook-event (plist-get entry :event)

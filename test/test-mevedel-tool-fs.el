@@ -9,6 +9,8 @@
 (require 'mevedel-agents)
 (require 'mevedel-file-state)
 (require 'mevedel-execution)
+(require 'mevedel-reminders)
+(require 'mevedel-system)
 (require 'mevedel-tool-registry)
 (require 'mevedel-view)
 (require 'mevedel-tool-fs)
@@ -371,6 +373,105 @@
 
 ;;
 ;;; Read handler
+
+(mevedel-deftest mevedel-tool-fs--read
+  (:doc "successful Read queues changed deeper workspace instructions once per conversation")
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-read-instructions-" t)))
+           (nested (file-name-concat root "lib"))
+           (deeper (file-name-concat nested "private"))
+           (sibling (file-name-concat nested "other"))
+           (file (file-name-concat deeper "source.el"))
+           (sibling-file (file-name-concat sibling "source2.el"))
+           (workspace (mevedel-workspace-get-or-create
+                       'project root root "read-instructions"))
+           (session (mevedel-session-create "main" workspace root))
+           (request (mevedel-request--create))
+           (draft "> quoted\nsecond line")
+           (backend (gptel-make-openai
+                     "read-instructions" :key "test" :host "example.test"
+                     :models '(test)))
+           (data (list :messages [(:role "user" :content "task")]))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer data-buf :backend backend :data data))))
+      (unwind-protect
+          (progn
+            (make-directory deeper t)
+            (make-directory sibling t)
+            (write-region "root" nil (file-name-concat root "AGENTS.md")
+                          nil 'silent)
+            (write-region "shared" nil (file-name-concat nested "AGENTS.md")
+                          nil 'silent)
+            (write-region "local" nil
+                          (file-name-concat nested "AGENTS.local.md")
+                          nil 'silent)
+            (write-region "code" nil file nil 'silent)
+            (write-region "code" nil sibling-file nil 'silent)
+            (with-current-buffer view-buf
+              (mevedel-view-test--insert-composer-draft draft 4))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (setq-local mevedel--workspace workspace)
+              (setq-local mevedel--current-request request)
+              (mevedel-tool-fs--read (list :file_path file))
+              (let* ((bodies
+                      (cl-loop for entry in (plist-get
+                                             mevedel-reminders--turn-events
+                                             :items)
+                               when (eq (car-safe (car entry))
+                                        'workspace-instructions)
+                               collect (plist-get (cdr entry) :body)))
+                     (body (string-join bodies "\n")))
+                (should (= 2 (length bodies)))
+                (should-not
+                 (string-search (file-name-concat root "AGENTS.md") body))
+                (should (< (string-match "shared" body)
+                           (string-match "local" body)))
+                ;; A same-turn sibling read coalesces the shared ancestor
+                ;; instructions instead of queuing them again.
+                (mevedel-tool-fs--read (list :file_path sibling-file))
+                (should (= 2 (cl-count-if
+                              (lambda (entry)
+                                (eq (car-safe (car entry))
+                                    'workspace-instructions))
+                              (plist-get mevedel-reminders--turn-events
+                                         :items)))))
+              (should-not
+               (mevedel-session-workspace-instruction-hashes session))
+              ;; An abort before injection must not suppress the next delivery.
+              (setq-local mevedel-reminders--turn-events nil)
+              (mevedel-tool-fs--read (list :file_path file))
+              (should mevedel-reminders--turn-events)
+              (mevedel-reminders--handle-inject fsm)
+              (should (mevedel-session-workspace-instruction-hashes session))
+              (mevedel-tool-fs--read (list :file_path file))
+              (should-not mevedel-reminders--turn-events)
+              (write-region "shared changed" nil
+                            (file-name-concat nested "AGENTS.md") nil 'silent)
+              (mevedel-tool-fs--read (list :file_path file))
+              (should
+               (string-search
+                "shared changed"
+                (plist-get
+                 (cdr (cl-find-if
+                       (lambda (entry)
+                         (eq (caar entry) 'workspace-instructions))
+                       (plist-get mevedel-reminders--turn-events :items)))
+                 :body)))
+              (setq-local mevedel-reminders--turn-events nil)
+              (setq-local mevedel--agent-invocation
+                          (mevedel-agent-invocation--create
+                           :path "/root/worker"))
+              (mevedel-tool-fs--read (list :file_path file))
+              (should (cl-find-if
+                       (lambda (entry)
+                         (eq (caar entry) 'workspace-instructions))
+                       (plist-get mevedel-reminders--turn-events :items))))
+            (with-current-buffer view-buf
+              (should (string= draft (mevedel-view--input-text)))
+              (should (= (point) (+ (mevedel-view--input-start) 4)))))
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-tool-fs--read-file ()
   ,test

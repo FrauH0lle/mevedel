@@ -77,6 +77,8 @@ The built-in role configurations are:
   `verifier-read-only` reminder attached at invocation. Final reports must
   end with `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL`; the
   parsed verdict is stored in transcript render-data for the handle badge.
+  PASS requires an adversarial probe, FAIL requires a concrete actionable
+  defect, and PARTIAL is reserved for environmental limitations.
 - **reviewer**: retained leaf code-review agent used by `/review`; per-turn
   `reviewer-read-only` reminder attached at invocation. Reads diffs and
   surrounding code, then returns prioritized findings as JSON.
@@ -246,8 +248,8 @@ buffer strips that synthetic block from normal display.
 `/verify` dispatches the `verifier` agent with verifier-oriented wording:
 inspect adversarially, run or recommend relevant checks when allowed, and
 finish with the verifier prompt's `VERDICT: PASS`, `VERDICT: FAIL`, or
-`VERDICT: PARTIAL` line. Verifier output is inserted without review JSON
-parsing.
+`VERDICT: PARTIAL` line. The workflow accepts only one exact final verdict;
+malformed reports remain visible but are marked rejected.
 
 While either task runs, the parent view shows an inline `Review` or
 `Verify` handle backed by transcript metadata. The handle updates with

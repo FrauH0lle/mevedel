@@ -14,6 +14,19 @@
 
 (require 'subr-x)
 
+;; `gptel'
+(declare-function gptel--model-name "ext:gptel" (model))
+(declare-function gptel--parse-tools "ext:gptel-request" (backend tools))
+(declare-function gptel-backend-name "ext:gptel" (cl-x) t)
+(declare-function gptel-tool-args "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-description "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
+(defvar gptel-backend)
+(defvar gptel-model)
+(defvar gptel-system-prompt)
+(defvar gptel-tools)
+
 ;; `mevedel-goal'
 (declare-function mevedel-goal-active-context "mevedel-goal" (session))
 
@@ -22,10 +35,22 @@
                   "mevedel-skills-prompt" (session &optional buffer))
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-deferred-pending "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-p "mevedel-structs" (cl-x))
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-reasoning-effort "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(defvar mevedel--data-buffer)
+(defvar mevedel--session)
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-all "mevedel-tool-registry" ())
+(declare-function mevedel-tool-gptel-tool "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-prompt-source "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-utilities'
 (declare-function mevedel--environment-info-string "mevedel-utilities"
@@ -689,6 +714,10 @@ request-time context to dynamic components."
             :session session
             :refresh-buffer refresh-buffer))))
 
+(defun mevedel-system--estimated-tokens (string)
+  "Return a rough 4-chars-per-token estimate for STRING."
+  (/ (+ (length string) 3) 4))
+
 (cl-defun mevedel-system-prompt-component-report
     (profile &key workspace working-directory session refresh-buffer)
   "Return ordered audit data for PROFILE in the supplied context."
@@ -705,13 +734,199 @@ request-time context to dynamic components."
                  (t 'text))
         :cache (mevedel-system-prompt-component-cache component)
         :cached (plist-get state :cached)
-        :chars (if (stringp value) (length value) 0))))
+        :source-detail
+        (cond
+         ((mevedel-system-prompt-component-file component)
+          (mevedel-system--prompt-path
+           (mevedel-system-prompt-component-file component)))
+         ((mevedel-system-prompt-component-producer component)
+          (let ((producer
+                 (mevedel-system-prompt-component-producer component)))
+            (if (symbolp producer) (symbol-name producer) "dynamic producer")))
+         (t "inline text"))
+        :chars (if (stringp value) (length value) 0)
+        :bytes (if (stringp value) (string-bytes value) 0)
+        :estimated-tokens (if (stringp value)
+                              (mevedel-system--estimated-tokens value)
+                            0)
+        :omitted (or (not (stringp value)) (string-blank-p value))
+        :value value)))
    (mevedel-system--profile-state
     profile
     :workspace workspace
     :working-directory working-directory
     :session session
     :refresh-buffer refresh-buffer)))
+
+
+;;
+;;; Effective prompt inspector
+
+(defvar-local mevedel-system--prompt-inspector-data-buffer nil
+  "Live mevedel data buffer rendered by this prompt inspector.")
+
+(defun mevedel-system--prompt-inspector-data-buffer ()
+  "Return the active mevedel data buffer for prompt inspection."
+  (let ((buffer
+         (cond
+          ((and (buffer-live-p mevedel-system--prompt-inspector-data-buffer)
+                mevedel-system--prompt-inspector-data-buffer))
+          ((and (boundp 'mevedel--data-buffer)
+                (buffer-live-p mevedel--data-buffer))
+           mevedel--data-buffer)
+          ((bound-and-true-p mevedel--session) (current-buffer)))))
+    (unless (and (buffer-live-p buffer)
+                 (buffer-local-value 'mevedel--session buffer))
+      (user-error "Not in a live mevedel session"))
+    buffer))
+
+(defun mevedel-system--prompt-profile-for-preset (preset)
+  "Return the built-in prompt profile for PRESET, or nil."
+  (pcase preset
+    ('mevedel-tutor 'tutor)
+    ((or 'mevedel-discuss 'mevedel-implement) 'main)
+    (_ nil)))
+
+(defun mevedel-system--effective-system-prompt ()
+  "Return the current buffer's evaluated gptel system prompt."
+  (let ((prompt (and (boundp 'gptel-system-prompt) gptel-system-prompt)))
+    (condition-case err
+        (cond ((functionp prompt) (funcall prompt))
+              ((stringp prompt) prompt)
+              (t ""))
+      (error (format "[prompt unavailable: %s]" (error-message-string err))))))
+
+(defun mevedel-system--tool-prompt-source (tool)
+  "Return a human-readable prompt provenance label for gptel TOOL."
+  (require 'mevedel-tool-registry)
+  (if-let* ((native
+             (cl-find tool (mevedel-tool-all)
+                      :key #'mevedel-tool-gptel-tool :test #'eq)))
+      (let ((source (mevedel-tool-prompt-source native)))
+        (pcase (plist-get source :kind)
+          ('file (format "prompt file %s" (plist-get source :path)))
+          ('inline "inline native prompt")
+          ('description "native short-description fallback")
+          ('wrapped (format "wrapped gptel tool %s/%s"
+                            (plist-get source :category)
+                            (plist-get source :name)))
+          (_ "native prompt provenance unavailable")))
+    "external gptel tool"))
+
+(defun mevedel-system--provider-tool-schema (backend tools)
+  "Return provider-serialized tool schema text for BACKEND and TOOLS."
+  (when (and backend tools)
+    (condition-case nil
+        (progn
+          (require 'json)
+          (json-encode (gptel--parse-tools backend tools)))
+      (error nil))))
+
+(defun mevedel-system--insert-effective-prompt-report (data-buffer)
+  "Insert the effective prompt report for DATA-BUFFER."
+  (let ((target (current-buffer)))
+    (with-current-buffer data-buffer
+      (let* ((session mevedel--session)
+             (preset (mevedel-session-preset-name session))
+             (profile (mevedel-system--prompt-profile-for-preset preset))
+             (prompt (mevedel-system--effective-system-prompt))
+             (tools (delete-dups
+                     (append (and (boundp 'gptel-tools) gptel-tools)
+                             (mevedel-session-deferred-pending session)
+                             nil)))
+             (schema (mevedel-system--provider-tool-schema
+                      (and (boundp 'gptel-backend) gptel-backend) tools))
+             (components
+              (and profile
+                   (mevedel-system-prompt-component-report
+                    profile
+                    :workspace (mevedel-session-workspace session)
+                    :working-directory
+                    (mevedel-session-working-directory session)
+                    :session session
+                    :refresh-buffer data-buffer)))
+             (backend
+              (if (and (boundp 'gptel-backend) gptel-backend)
+                  (condition-case nil (gptel-backend-name gptel-backend)
+                    (error (format "%S" gptel-backend)))
+                "none"))
+             (model
+              (if (and (boundp 'gptel-model) gptel-model)
+                  (condition-case nil (gptel--model-name gptel-model)
+                    (error (format "%S" gptel-model)))
+                "none")))
+        (with-current-buffer target
+          (insert "* Effective Prompt\n\n")
+          (insert (format "Preset: %s\nProfile: %s\nBackend: %s\nModel: %s\n"
+                          (or preset "none") (or profile "unknown") backend model))
+          (insert (format "Reasoning effort: %s\nWorking directory: %s\n"
+                          (or (mevedel-session-reasoning-effort session) "default")
+                          (mevedel-session-working-directory session)))
+          (insert (format "Permission mode: %s\nSandbox mode: %s\n"
+                          (mevedel-session-permission-mode session)
+                          (mevedel-session-sandbox-mode session)))
+          (insert "External instructions: no separately exposed external instruction channel\n\n")
+          (insert "* Ordered Components\n\n")
+          (if components
+              (dolist (component components)
+                (insert (format "** %s\nSource: %s (%s)\nCache: %s; hit: %s\nSize: %d chars, %d bytes, ~%d tokens; omitted: %s\n\n%s\n\n"
+                                (plist-get component :name)
+                                (plist-get component :source-detail)
+                                (plist-get component :source)
+                                (or (plist-get component :cache) "none")
+                                (if (plist-get component :cached) "yes" "no")
+                                (plist-get component :chars)
+                                (plist-get component :bytes)
+                                (plist-get component :estimated-tokens)
+                                (if (plist-get component :omitted) "yes" "no")
+                                (or (plist-get component :value) ""))))
+            (insert "Profile unknown; component breakdown unavailable.\n\n"))
+          (insert "* Exact Final System Prompt\n\n" prompt "\n\n")
+          (insert "* Effective Next-Request Tools\n\n")
+          (if tools
+              (dolist (tool tools)
+                (let* ((description (or (gptel-tool-description tool) ""))
+                       (schema-text (format "%S" (gptel-tool-args tool))))
+                  (insert (format "** %s/%s\nProvenance: %s\nDescription: %d chars, %d bytes, ~%d tokens\nSchema: %d chars, %d bytes, ~%d tokens\n\n%s\n\nSchema definition:\n%s\n\n"
+                                  (or (gptel-tool-category tool) "uncategorized")
+                                  (gptel-tool-name tool)
+                                  (mevedel-system--tool-prompt-source tool)
+                                  (length description) (string-bytes description)
+                                  (mevedel-system--estimated-tokens description)
+                                  (length schema-text) (string-bytes schema-text)
+                                  (mevedel-system--estimated-tokens schema-text)
+                                  description schema-text))))
+            (insert "No tools are effective for the next request.\n\n"))
+          (insert "* Totals\n\n")
+          (if schema
+              (insert (format "Provider tool schema: %d chars, %d bytes, ~%d tokens\nEstimated total: %d chars, ~%d tokens\n"
+                              (length schema) (string-bytes schema)
+                              (mevedel-system--estimated-tokens schema)
+                              (+ (length prompt) (length schema))
+                              (mevedel-system--estimated-tokens
+                               (concat prompt schema))))
+            (insert (format "Provider tool schema: estimate unavailable\nEstimated total: %d system-prompt chars, ~%d tokens (tool schema excluded)\n"
+                            (length prompt)
+                            (mevedel-system--estimated-tokens prompt)))))))))
+
+(defun mevedel-inspect-effective-prompt ()
+  "Display the current session's effective prompt and tool report."
+  (interactive)
+  (let* ((data-buffer (mevedel-system--prompt-inspector-data-buffer))
+         (buffer (get-buffer-create "*mevedel effective prompt*")))
+    (with-current-buffer buffer
+      (special-mode)
+      (outline-minor-mode 1)
+      (setq-local mevedel-system--prompt-inspector-data-buffer data-buffer)
+      (setq-local revert-buffer-function
+                  (lambda (_ignore-auto _noconfirm)
+                    (mevedel-inspect-effective-prompt)))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (mevedel-system--insert-effective-prompt-report data-buffer)
+        (goto-char (point-min))))
+    (display-buffer buffer)
+    buffer))
 
 (provide 'mevedel-system)
 ;;; mevedel-system.el ends here

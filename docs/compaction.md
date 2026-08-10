@@ -311,7 +311,10 @@ retained as actionable next steps; once the history shows a request is
 satisfied, later summaries retain only its resulting state, outcome, or
 evidence under completed work. This rule also applies when updating an older
 summary, so repeated compaction cannot revive completed steering as a standing
-instruction. There is no separate carry-forward path for raw or injected user
+instruction. If the summarized history ends in an unanswered user-facing
+question or imperative, its exact text is retained in Critical Context or Next
+Steps so the next model can continue it unchanged. There is no separate
+carry-forward path for raw or injected user
 messages. Recent-tail preservation is unchanged.
 
 Skill invocation records from the session are appended to the prompt so

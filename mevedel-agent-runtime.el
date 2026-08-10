@@ -342,6 +342,7 @@
            (or (mevedel-agent-invocation-description invocation) "")
            reason
            (or (mevedel-agent-invocation-path invocation) "unknown"))
+   "\n\nTools or commands may have partially changed state. Reconcile current state and verify effects before retrying or claiming success."
    (mevedel-agent-runtime--recovery-text invocation)))
 
 (defun mevedel-agent-runtime--error-response (invocation event)

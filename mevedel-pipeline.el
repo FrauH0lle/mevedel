@@ -259,6 +259,8 @@ available, falls back to `mevedel-pipeline--truncate-result'."
         (concat "<persisted-output>\n"
                 (format "Output too large (%d chars). Full output saved to: %s\n\n"
                         (length result) file)
+                (format "Use Read(file_path=%S, offset=1, limit=2000) and continue with the returned offset, or Grep(pattern=PATTERN, path=%S).\n\n"
+                        file file)
                 "Preview (head and tail):\n"
                 preview "\n"
                 "</persisted-output>"))
@@ -277,6 +279,7 @@ discarded for ephemeral request.\n\n"
             (format "Output too large (%d chars) and no session persistence \
 directory available to persist full result (tool: %s).\n\n"
                     (length result) (mevedel-tool-name tool)))
+          "The omitted content is unavailable; rerun the tool with a narrower scope.\n\n"
           "Preview (head and tail):\n"
           (mevedel-pipeline--head-tail-preview result)
           "\n"))
@@ -292,6 +295,7 @@ neutral preview.  TOOL is used only for the tool name in the message."
   (concat (format "%s too large (%d chars; tool: %s).\n\n"
                   (if legacy-prefix-p "Error: output" "Output")
                   (length result) (mevedel-tool-name tool))
+          "The omitted content is unavailable; rerun the tool with a narrower scope.\n\n"
           "Preview (head and tail):\n"
           (mevedel-pipeline--head-tail-preview result)
           "\n"))

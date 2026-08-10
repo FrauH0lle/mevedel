@@ -140,7 +140,7 @@ prompt buffer.")
 
 (defvar-local mevedel-reminders--turn-events nil
   "Owner-bound reminder events for the current model turn.
-The value is `(:owner OWNER :items ((KEY . BODY) ...))'.")
+The value is `(:owner OWNER :items ((KEY :body BODY :commit FUNCTION) ...))'.")
 
 (defvar-local mevedel-reminders--diagnostic-state nil
   "Per-owner edit diagnostic baselines and pending reports.")
@@ -480,10 +480,11 @@ the current chat buffer has no request-local agent roster yet."
         (and (boundp 'mevedel--current-request)
              mevedel--current-request))))
 
-(defun mevedel-reminders-queue-turn-event (buffer key body)
+(defun mevedel-reminders-queue-turn-event (buffer key body &optional commit)
   "Queue BODY under KEY for BUFFER's current model turn.
-Replacing an existing KEY coalesces repeated observations.  Return non-nil
-when BUFFER has a live request or agent invocation that owns the event."
+Replacing an existing KEY coalesces repeated observations.  Run COMMIT after
+the event reaches the request payload.  Return non-nil when BUFFER has a live
+request or agent invocation that owns the event."
   (when (and (buffer-live-p buffer)
              (stringp body)
              (not (string-empty-p body)))
@@ -494,13 +495,13 @@ when BUFFER has a live request or agent invocation that owns the event."
                 (list :owner owner :items nil)))
         (let ((items (plist-get mevedel-reminders--turn-events :items)))
           (setq items (append (assoc-delete-all key items)
-                              (list (cons key body))))
+                              (list (list key :body body :commit commit))))
           (setq mevedel-reminders--turn-events
                 (plist-put mevedel-reminders--turn-events :items items)))
         t))))
 
-(defun mevedel-reminders--take-turn-event-blocks (buffer)
-  "Return and clear live turn-event blocks queued for BUFFER."
+(defun mevedel-reminders--take-turn-events (buffer)
+  "Return and clear live turn-event blocks and commits queued for BUFFER."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (let ((owner (mevedel-reminders--turn-owner buffer)))
@@ -511,9 +512,17 @@ when BUFFER has a live request or agent invocation that owns the event."
               nil)
           (let ((items (plist-get mevedel-reminders--turn-events :items)))
             (prog1
-                (mapcar (lambda (entry)
-                          (mevedel-reminders-format-block (cdr entry)))
-                        items)
+                (list
+                 :blocks
+                 (mapcar (lambda (entry)
+                           (mevedel-reminders-format-block
+                            (plist-get (cdr entry) :body)))
+                         items)
+                 :commits
+                 (delq nil
+                       (mapcar (lambda (entry)
+                                 (plist-get (cdr entry) :commit))
+                               items)))
               (when (assq 'diagnostics items)
                 (mevedel-reminders--diagnostics-clear-pending buffer))
               (setq mevedel-reminders--turn-events nil))))))))
@@ -525,9 +534,8 @@ when BUFFER has a live request or agent invocation that owns the event."
          (data (plist-get info :data))
          (initial (plist-get info :mevedel-reminder-blocks)))
     (when (and data (buffer-live-p buffer))
-      (let ((blocks (append initial
-                            (mevedel-reminders--take-turn-event-blocks
-                             buffer))))
+      (let* ((events (mevedel-reminders--take-turn-events buffer))
+             (blocks (append initial (plist-get events :blocks))))
         (when blocks
           (let* ((backend (plist-get info :backend))
                  (message
@@ -535,7 +543,8 @@ when BUFFER has a live request or agent invocation that owns the event."
                         backend
                         (list (cons 'prompt (string-join blocks "\n")))))))
             (gptel--inject-prompt
-             backend data message (and initial -1))))
+             backend data message (and initial -1))
+            (mapc #'funcall (plist-get events :commits))))
         (when initial
           (setf (gptel-fsm-info fsm)
                 (plist-put info :mevedel-reminder-blocks nil)))))))
@@ -1667,7 +1676,8 @@ model cannot drift into implementation mode between messages."
 write, or create files. Your job is to try to BREAK the \
 implementation, not confirm it works. Report findings — do not patch \
 them. You MUST end with exactly one of: VERDICT: PASS, VERDICT: FAIL, \
-or VERDICT: PARTIAL.")
+or VERDICT: PARTIAL. PARTIAL is only for environmental limitations, \
+not unfinished feasible checks.")
    :interval nil))
 
 (defun mevedel-reminders-make-reviewer-read-only ()

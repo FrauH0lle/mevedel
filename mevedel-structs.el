@@ -361,6 +361,7 @@ workspace."
   dropped-file-grants ; pending exact-file read grants from drag/drop
   active-dropped-file-grants ; session-scoped exact-file read grants
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
+  workspace-instruction-hashes ; alist: (OWNER PATH) -> SHA-256 content hash
   skills            ; list of mevedel-skill structs available to this session
   hook-rules         ; transient session-scoped declarative hook rules
   hook-log           ; transient per-session hook execution log

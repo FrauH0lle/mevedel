@@ -52,4 +52,7 @@ Shadowed duplicates should be visible in plugin listing output.
 
 Workspace instructions remain in ordinary `AGENTS.md` and `AGENTS.local.md`
 files along the workspace directory chain. mevedel does not read `CLAUDE.md`
-or introduce `.agents/AGENTS.md` as a second instruction location.
+or introduce `.agents/AGENTS.md` as a second instruction location. The initial
+prompt loads the chain through the session working directory; successful
+`Read` calls lazily deliver deeper applicable files as host-generated reminders,
+deduplicated by conversation owner, canonical path, and content hash.

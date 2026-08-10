@@ -757,7 +757,8 @@
                    (mevedel-agent-runtime-interrupt
                     invocation "interrupted by /root")))
               (should (string-match-p "interrupted by /root" response))
-              (should (string-match-p "useful partial work" response)))
+              (should (string-match-p "useful partial work" response))
+              (should (string-match-p "reconcile current state" response)))
             (should (= 1 abort-count))
             (should (= 1 callback-count))
             (should (string-match-p "useful partial work" callback-response))

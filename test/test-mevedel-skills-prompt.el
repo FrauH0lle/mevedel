@@ -328,8 +328,9 @@
                             (plist-get mevedel-reminders--turn-events
                                        :items))))
               (let ((reminder
-                     (cdar (plist-get mevedel-reminders--turn-events
-                                      :items))))
+                     (plist-get
+                      (cdar (plist-get mevedel-reminders--turn-events :items))
+                      :body)))
                 (should (string-match-p "lib/foo\\.el" reminder))
                 (should (string-match-p "elisp" reminder))
                 (should-not (string-match-p "user-only" reminder))

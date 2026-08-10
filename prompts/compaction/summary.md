@@ -58,6 +58,10 @@ Rules:
 - Use terse bullets, not prose paragraphs.
 - Keep unresolved user requests as actionable next steps until the history
   contains concrete evidence that they are satisfied.
+- If the summarized history ends with an unanswered user-facing question or
+  imperative request, preserve its exact text under Critical Context or Next
+  Steps so the next model can ask or execute it unchanged. Do not preserve
+  requests that the history shows were answered.
 - Represent a satisfied user request only as its resulting current state,
   outcome, or evidence under Progress/Done. Do not repeat the original
   satisfied request as a constraint, standing instruction, or next step.

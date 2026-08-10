@@ -235,7 +235,11 @@ an explicit save boundary after prompts, agents, and the current request have
 been cleared, so resumed sessions do not resurrect aborted runtime state.
 Managed execution registries are likewise transient: resume never reattaches
 an operating-system process. After acquiring the session lock, resume
-atomically reconciles running Bash rows across the restored segment and its
+queues a model-visible reconciliation reminder: prior commands may still run
+or have partial effects, so the next turn must inspect current state and prefer
+the newest user request. Aborting a live root request queues the same reminder
+before the explicit save boundary. Resume also atomically reconciles running
+Bash rows across the restored segment and its
 archived predecessors before rendering the view. The scan proceeds newest to
 oldest: a later `execution-archive` or `execution-completion` record marks an
 older copy as archived/superseded. Structured execution rows in later segments
