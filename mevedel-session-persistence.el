@@ -28,6 +28,7 @@
 ;;    :plan-mode nil
 ;;    :permission-rules ((TOOL-NAME ...) ...)
 ;;    :resource-grants ((:path "/abs/path" :access read) ...)
+;;    :workspace-instruction-hashes (((OWNER PATH) . SHA256) ...)
 ;;    :additional-roots (("name" . "/abs/path") ...)
 ;;    :prompt-index ((SEGMENT-N . ((:turn N :pos POS :preview STR :timestamp STR) ...)) ...)
 ;;    :file-snapshots ((TURN-N . ((PATH . (:backup-name STR-OR-NIL
@@ -35,8 +36,9 @@
 ;;                                          :version INT :gap STR-OR-NIL)) ...)) ...))
 ;;
 ;; Hash-table-valued slots on the session struct (`touched-files',
-;; `mentions-shown') are NOT persisted.  Both reset to empty hash
-;; tables on load; the consequence is that an LLM coming back from a
+;; `mentions-shown') are NOT persisted.  Workspace instruction hashes
+;; are persisted as an owner/path alist.  The hash tables reset to empty
+;; on load; the consequence is that an LLM coming back from a
 ;; resume may re-Read files that were already read pre-resume (over-
 ;; dedup is worse than re-expansion).  Tasks are serialized as plists
 ;; in `:tasks' and deserialized on load.  Owner-scoped task status
@@ -394,7 +396,8 @@ add more, and we don't want to act on actions we don't understand).")
     :permission-mode :sandbox-mode :plan-mode :permission-rules :resource-grants
     :preset-name :preset-settings :model-provider :reasoning-effort
     :last-observed-date
-    :agent-types-snapshot :skills-snapshot :additional-roots :tasks
+    :agent-types-snapshot :skills-snapshot :workspace-instruction-hashes
+    :additional-roots :tasks
     :prompt-index :file-snapshots :agent-transcripts :agent-registry
     :agent-turn-capacity :plan-metadata :goal :messages)
   "Keys required in every current-version session sidecar.")
@@ -402,6 +405,24 @@ add more, and we don't want to act on actions we don't understand).")
 
 ;;
 ;;; Workspace serialization
+
+(defun mevedel-session-persistence--sanitize-workspace-instruction-hashes
+    (value)
+  "Return valid persisted workspace instruction hashes from VALUE."
+  (when (proper-list-p value)
+    (cl-loop for entry in value
+             for key = (car-safe entry)
+             for hash = (cdr-safe entry)
+             when (and (proper-list-p key)
+                       (= (length key) 2)
+                       (stringp (car key))
+                       (or (equal (car key) "/root")
+                           (mevedel-agent-path-p (car key)))
+                       (stringp (cadr key))
+                       (file-name-absolute-p (cadr key))
+                       (stringp hash)
+                       (string-match-p "\\`[[:xdigit:]]\\{64\\}\\'" hash))
+             collect (cons (copy-sequence key) hash))))
 
 (defun mevedel-session-persistence--workspace-to-plist (workspace)
   "Convert WORKSPACE to a plist for sidecar storage.
@@ -674,6 +695,8 @@ The resulting plist is round-trippable via
    :last-observed-date     (mevedel-session-last-observed-date session)
    :agent-types-snapshot   (mevedel-session-agent-types-snapshot session)
    :skills-snapshot        (mevedel-session-skills-snapshot session)
+   :workspace-instruction-hashes
+   (copy-tree (mevedel-session-workspace-instruction-hashes session) t)
    :additional-roots       additional-roots
    :tasks                  (mapcar #'mevedel-session-persistence--task-to-plist
                                    (mevedel-session-tasks session))
@@ -816,6 +839,9 @@ their hygiene filters."
                      :agent-types-snapshot
                      (plist-get plist :agent-types-snapshot)
                      :skills-snapshot (plist-get plist :skills-snapshot)
+                     :workspace-instruction-hashes
+                     (mevedel-session-persistence--sanitize-workspace-instruction-hashes
+                      (plist-get plist :workspace-instruction-hashes))
                      :last-task-write-turn
                      (plist-get plist :last-task-write-turn)
                      :task-status-notes task-status-notes
@@ -4081,6 +4107,7 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
      (mevedel-session-dropped-file-grants candidate) nil
      (mevedel-session-active-dropped-file-grants candidate) nil
      (mevedel-session-mentions-shown candidate) (make-hash-table :test #'equal)
+     (mevedel-session-workspace-instruction-hashes candidate) nil
      (mevedel-session-hook-log candidate) nil
      (mevedel-session-repair-log candidate) nil
      (mevedel-session-permission-log-pending candidate) nil
@@ -4633,6 +4660,7 @@ mail are deliberately absent from the returned session."
           :dropped-file-grants nil
           :active-dropped-file-grants nil
           :mentions-shown (make-hash-table :test #'equal)
+          :workspace-instruction-hashes nil
           :skills (copy-tree (mevedel-session-skills session) t)
           :hook-rules
           (copy-tree (mevedel-session-hook-rules session) t)

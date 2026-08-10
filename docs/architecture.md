@@ -52,7 +52,7 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   settlement sequence.
 - **`mevedel-session`**: per-chat state: workspace, working
   directory, tasks, touched-files, permission rules/mode, exact resource grants,
-  reminders,
+  reminders, persisted per-conversation workspace-instruction content hashes,
   deferred tool state, mailbox messages, the retained agent registry,
   transient unpublished agent reservations, root activity and tree capacity, mention
   dedup, queued follow-up user messages, skills, session persistence metadata, agent transcript index,
@@ -78,7 +78,8 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   transient one-shot-mutation/ephemeral-artifact boundaries.
   Skill model and effort policy is consumed before
   gptel realizes an owning request rather than stored for late mutation.
-- **`mevedel-tool`**: name, handler, description, summary, prompt,
+- **`mevedel-tool`**: name, handler, description, summary, prompt and prompt
+  provenance,
   args, optional semantic `repair-input` callback, category,
   read-only/destructive/async/snapshot flags, sync/async
   permission hooks, specifier extractors (`get-path`, `get-pattern`,
@@ -158,6 +159,17 @@ request stops the batch. A zero-delay continuation starts the next item only
 after terminal request cleanup.
 
 ## Workspace context chain
+
+The initial system prompt loads `AGENTS.md` then `AGENTS.local.md` from the
+workspace root through the session working directory. A successful `Read` of a
+deeper file queues any newly applicable instruction files as a host-generated
+same-turn reminder. Content hashes deduplicate unchanged files independently
+for `/root` and each retained agent after delivery and survive session resume;
+Rewind and fork start the lazy-delivery state empty.
+
+`M-x mevedel-inspect-effective-prompt` and `/prompt` open the same read-only
+report of the live preset, profile, prompt components, exact final prompt,
+effective tools, prompt provenance, and provider-schema size estimate.
 
 ```
 Data buffer (authoritative gptel/org buffer; holds mevedel--workspace,

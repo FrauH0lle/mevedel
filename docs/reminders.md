@@ -113,6 +113,15 @@ guidance in the rejection reminder.
 
 ### Runtime status and event reminders
 
+- **Path-scoped workspace instructions:** a successful `Read` below the
+  session working directory queues changed `AGENTS.md` and `AGENTS.local.md`
+  files that were not already in the initial prompt. Delivery is ordered from
+  broad to narrow and deduplicated by conversation owner, path, and content;
+  the content hash is recorded only after the reminder reaches the request.
+- **Recovery reconciliation:** cold resume and abort of a live root request
+  queue one warning that processes or tool effects may be partial. Interrupted
+  retained-agent results carry the equivalent warning directly.
+
 - **Date-change:** `mevedel-reminders-make-date-change` compares the
   current date to the session's `last-observed-date` slot and updates
   the slot after firing.

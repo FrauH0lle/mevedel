@@ -25,6 +25,8 @@ A powerful search tool built on ripgrep.
 - Finding a specific string or pattern in the codebase
 - You know what you are looking for and where it likely is
 - Verifying presence or absence of specific text
+- Searching an explicit persisted `tool-results/*.txt` path from an oversized
+  tool result
 - Quick, focused searches with expected results under 20 matches
 
 ### When NOT to use Grep

@@ -65,6 +65,7 @@ created as a side effect of registration and handles serialization."
                     ;   third-party / wrapped tools have multi-line
                     ;   descriptions that bloat the system reminder).
   prompt            ; string or function: detailed instructions
+  prompt-source     ; plist describing the prompt's registration provenance
   args              ; arg spec list in mevedel format
   repair-input      ; function or nil: tool-owned semantic input repair
   category          ; string: "mevedel" (default)
@@ -687,6 +688,14 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (summary (plist-get props :summary))
          (prompt (plist-get props :prompt))
          (prompt-file (plist-get props :prompt-file))
+         (prompt-source
+          (cond
+           (prompt-file
+            (list :kind 'file
+                  :path (expand-file-name
+                         prompt-file mevedel-tool-registry--source-dir)))
+           ((plist-member props :prompt) '(:kind inline))
+           (t '(:kind description))))
          (args (plist-get props :args))
          (repair-input (plist-get props :repair-input))
          (category (or (plist-get props :category) "mevedel"))
@@ -725,6 +734,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :description ,description
               :summary ,summary
               :prompt resolved-prompt
+              :prompt-source ',prompt-source
               :args ',args
               :repair-input ,repair-input
               :category ,category
@@ -771,6 +781,15 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (summary (plist-get props :summary))
          (prompt-override (plist-get props :prompt))
          (prompt-file (plist-get props :prompt-file))
+         (prompt-source
+          (cond
+           (prompt-file
+            (list :kind 'file
+                  :path (expand-file-name
+                         prompt-file mevedel-tool-registry--source-dir)))
+           ((plist-member props :prompt) '(:kind inline))
+           ((plist-member props :description) '(:kind description))
+           (t nil)))
          (groups (plist-get props :groups))
          (repair-input (plist-get props :repair-input))
          (read-only-p (plist-get props :read-only-p))
@@ -805,6 +824,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       :description-override ,description-override
       :summary ,summary
       :prompt-override ,prompt-override
+      :prompt-source ',prompt-source
       :groups ',groups
       :repair-input ,repair-input
       :read-only-p ,read-only-p
@@ -823,14 +843,16 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
 
 (cl-defun mevedel-tool--register-wrap
     (&key source category-override description-override summary
-          prompt-override groups repair-input read-only-p snapshot-p destructive-p
+          prompt-override prompt-source groups repair-input read-only-p
+          snapshot-p destructive-p
           check-permission check-permission-async
           get-path get-pattern get-domain get-name
           max-result-size display-arg render-transform renderer)
   "Runtime helper: build and register a wrapped tool from SOURCE.
 
 SOURCE must be a `gptel-tool' struct.  CATEGORY-OVERRIDE,
-DESCRIPTION-OVERRIDE, SUMMARY, PROMPT-OVERRIDE, GROUPS, REPAIR-INPUT,
+DESCRIPTION-OVERRIDE, SUMMARY, PROMPT-OVERRIDE, PROMPT-SOURCE, GROUPS,
+REPAIR-INPUT,
 READ-ONLY-P, SNAPSHOT-P, DESTRUCTIVE-P, CHECK-PERMISSION,
 CHECK-PERMISSION-ASYNC, GET-PATH,
 GET-PATTERN, GET-DOMAIN, GET-NAME, MAX-RESULT-SIZE, DISPLAY-ARG,
@@ -857,6 +879,11 @@ RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
              :description description
              :summary summary
              :prompt resolved-prompt
+             :prompt-source
+             (or prompt-source
+                 (list :kind 'wrapped
+                       :category source-category
+                       :name source-name))
              :args mevedel-args
              :repair-input repair-input
              :category target-category

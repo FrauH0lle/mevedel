@@ -1240,8 +1240,9 @@
                 '(:tool-name "Bash" :tool-input (:command "echo hi"))
                 cb session)))
             (let ((body
-                   (cdar (plist-get mevedel-reminders--turn-events
-                                    :items))))
+                   (plist-get
+                    (cdar (plist-get mevedel-reminders--turn-events :items))
+                    :body)))
               (should (string-match-p "PreToolUse hook blocked" body))
               (should (string-match-p "blocked" body)))))
       (delete-directory root t)))

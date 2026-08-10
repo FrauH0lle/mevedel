@@ -239,6 +239,7 @@ memory roots, the configured plans directory, and manually configured roots.
 | `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
 | `mevedel-tutoring`                | Start a tutoring chat session in the current workspace.               |
 | `mevedel-init`                    | Bootstrap or refresh project instruction files.                       |
+| `mevedel-inspect-effective-prompt` | Inspect the live prompt components, exact prompt, and effective tools. |
 | `mevedel-process-directives`      | Batch initial implementations in source order (region, point, or buffer). |
 | `mevedel-abort`                   | Abort any active request in the current buffer.                       |
 | `mevedel-version`                 | Show (or insert with prefix arg) the current mevedel version.         |
@@ -1008,7 +1009,7 @@ A skill is a reusable prompt package described by a `SKILL.md` file. Skills are
 discovered from `.mevedel/skills/`, `.agents/skills/`,
 `~/.mevedel/skills/`, `~/.agents/skills/`, and from the directories listed in
 `mevedel-skill-dirs`. mevedel ships a few bundled skills under `skills/`
-(for example `review`, `analyze-log`, and `remember`); name conflicts are exposed with
+(for example `review`, `analyze-log`, `learn`, and `remember`); name conflicts are exposed with
 deterministic visible prefixes.
 
 A skill can:
@@ -1027,8 +1028,8 @@ User skill invocations may block chat input while asynchronous preparation or an
 awaited fork completes.
 
 Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/model`,
-`/compact`, `/btw`, `/mode`, `/edits`, `/goal`, `/init`, `/review`, and
-`/verify`.
+`/compact`, `/btw`, `/mode`, `/edits`, `/goal`, `/init`, `/prompt`, `/review`,
+and `/verify`.
 Project and user skills add `$<skill-name>` invocations by name.
 
 Skill frontmatter can also declare file `paths`, shell commands, hooks, model

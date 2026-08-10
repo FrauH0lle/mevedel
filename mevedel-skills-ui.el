@@ -155,6 +155,9 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
+;; `mevedel-system'
+(declare-function mevedel-inspect-effective-prompt "mevedel-system" ())
+
 ;; `mevedel-view-composer'
 (declare-function mevedel-view-refresh-input-prompt
                   "mevedel-view-composer" ())
@@ -219,6 +222,7 @@
     ("compact" . " [command] optional summary guidance")
     ("goal" . " [command] objective | auto OBJECTIVE | approval [POLICY] | edit | pause | resume | clear")
     ("plan" . " [command] optional prompt; enter Plan mode")
+    ("prompt" . " [command] no args; inspect the effective prompt and tools")
     ("mode" . " [command] ask | edits | full-auto")
     ("skills" . " [command] list | help NAME | enable NAME | disable NAME")
     ("tools" . " [command] list")
@@ -716,6 +720,11 @@ Routes through the lifecycle-aware permission transition path."
   (mevedel-side-conversation-open args)
   'mevedel-view-sent)
 
+(defun mevedel-cmd--prompt (_args)
+  "Inspect the current session's effective prompt and tools."
+  (require 'mevedel-system)
+  (mevedel-inspect-effective-prompt))
+
 (defvar mevedel-slash-commands
   '(("btw"     . mevedel-cmd--btw)
     ("tokens"  . mevedel-cmd--tokens)
@@ -723,6 +732,7 @@ Routes through the lifecycle-aware permission transition path."
     ("compact" . mevedel-cmd--compact)
     ("goal"    . mevedel-cmd--goal)
     ("plan"    . mevedel-cmd--plan)
+    ("prompt"  . mevedel-cmd--prompt)
     ("mode"    . mevedel-cmd--mode)
     ("skills"  . mevedel-cmd--skills)
     ("tools"   . mevedel-cmd--tools)

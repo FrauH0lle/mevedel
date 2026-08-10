@@ -1402,6 +1402,8 @@ spanning lines")))
                 (cdr (assoc "goal" mevedel-slash-commands))))
     (should (eq 'mevedel-cmd--plan
                 (cdr (assoc "plan" mevedel-slash-commands))))
+    (should (eq 'mevedel-cmd--prompt
+                (cdr (assoc "prompt" mevedel-slash-commands))))
     (mevedel-skills-test--with-chat-buffer session
       (insert "### /pl")
       (goto-char (point-max))

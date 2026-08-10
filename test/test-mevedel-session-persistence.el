@@ -122,6 +122,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
              :updated-at "2026-04-23T18:21:00+0200")))
     (setf (mevedel-session-skills-snapshot session)
           '(("alpha" . "Alpha helper")))
+    (setf (mevedel-session-workspace-instruction-hashes session)
+          (list (cons (list "/root" (file-name-concat root "AGENTS.md"))
+                      (make-string 64 ?a))))
     (setf (mevedel-session-session-id session) "main-2026-04-23T14-30-a9f2")
     (setf (mevedel-session-save-path session)
           (file-name-as-directory
@@ -211,6 +214,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :tasks nil
                :prompt-index nil
                :file-snapshots nil
+               :workspace-instruction-hashes nil
                :agent-transcripts nil
                :agent-registry nil
                :agent-turn-capacity 3
@@ -504,6 +508,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                          (plist-get plist :additional-roots)))
           (should (equal '(("alpha" . "Alpha helper"))
                          (plist-get plist :skills-snapshot)))
+          (should (equal (mevedel-session-workspace-instruction-hashes session)
+                         (plist-get plist :workspace-instruction-hashes)))
           (should (= 3 (length (plist-get plist :permission-rules))))
           (should (= 2 (length (plist-get plist :resource-grants))))
           (should (= 2 (length (plist-get plist :tasks))))
@@ -727,6 +733,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (= 4 (mevedel-session-last-task-write-turn session)))
           (should (equal '(("alpha" . "Alpha helper"))
                          (mevedel-session-skills-snapshot session)))
+          (should (equal
+                   (mevedel-session-workspace-instruction-hashes source)
+                   (mevedel-session-workspace-instruction-hashes session)))
           (should (equal '((nil :note "Main status" :updated-turn 4
                                 :updated-at "2026-04-23T18:20:00+0200")
                            ("main" :note "Agent status" :updated-turn 4

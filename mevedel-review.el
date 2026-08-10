@@ -32,6 +32,10 @@
 (declare-function mevedel-agent-record-path
                   "mevedel-agent-control" (cl-x) t)
 
+;; `mevedel-agent-conversation'
+(declare-function mevedel-agent-conversation-refresh
+                  "mevedel-agent-conversation" (invocation))
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-get "mevedel-agents" (name))
 (declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
@@ -40,6 +44,8 @@
 (declare-function mevedel-agent-invocation-description
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (object))
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-relative-path
@@ -1011,6 +1017,43 @@ permission policy decides whether verifier validation commands may run."
           (with-current-buffer view-buffer
             (mevedel-view--ensure-request-progress data-buffer)))))))
 
+(defun mevedel-review--verify-outcome (outcome invocation)
+  "Validate verifier OUTCOME and record its verdict on INVOCATION."
+  (if (not (and (eq (plist-get outcome :status) 'ok)
+                (eq (plist-get outcome :kind) 'fork)
+                (stringp (plist-get outcome :result))))
+      outcome
+    (let* ((report (plist-get outcome :result))
+           (lines (split-string report "\n"))
+           (nonblank (cl-remove-if #'string-blank-p lines))
+           (verdict-lines
+            (cl-remove-if-not
+             (lambda (line)
+               (string-match-p "\\`VERDICT: \\(PASS\\|FAIL\\|PARTIAL\\)\\'"
+                               line))
+             lines))
+           (final (car (last nonblank))))
+      (if (and (= (length verdict-lines) 1)
+               (equal final (car verdict-lines)))
+          (let ((verdict
+                 (intern (downcase (substring final (length "VERDICT: "))))))
+            (when (mevedel-agent-invocation-p invocation)
+              (setf (mevedel-agent-invocation-verdict invocation) verdict)
+              (when (buffer-live-p
+                     (mevedel-agent-invocation-parent-data-buffer invocation))
+                (require 'mevedel-agent-conversation)
+                (mevedel-agent-conversation-refresh invocation)))
+            (plist-put outcome :verdict verdict))
+        (when (mevedel-agent-invocation-p invocation)
+          (setf (mevedel-agent-invocation-verdict invocation) nil))
+        (setq outcome (plist-put outcome :verification-rejected t))
+        (plist-put
+         outcome :result
+         (concat
+          "Verification report rejected: expected exactly one final "
+          "VERDICT: PASS, VERDICT: FAIL, or VERDICT: PARTIAL line.\n\n"
+          "Original report:\n\n" report))))))
+
 (defun mevedel-review--run-task
     (prompt hint callback &optional submit-context progress-callback command)
   "Run and await the dedicated validation leaf for PROMPT and HINT.
@@ -1030,15 +1073,19 @@ to `review'."
                  '(:status error :reason no-session
                    :message "Validation requires an active session"))
       (require 'mevedel-agent-control)
-      (let (path cancelled-p settled-p)
+      (let (path invocation cancelled-p settled-p)
         (cl-labels
             ((finish
               (result)
               (unless settled-p
                 (setq settled-p t)
                 (unless cancelled-p
-                  (funcall callback
-                           (mevedel-review--result-outcome result)))))
+                  (let ((outcome (mevedel-review--result-outcome result)))
+                    (funcall callback
+                             (if (eq command 'verify)
+                                 (mevedel-review--verify-outcome
+                                  outcome invocation)
+                               outcome))))))
              (cancel
               ()
               (unless (or settled-p cancelled-p)
@@ -1058,7 +1105,11 @@ to `review'."
                       (if (eq command 'verify)
                           (mevedel-review--verify-permission-rules)
                         (mevedel-review--permission-rules))
-                      :on-invocation progress-callback
+                      :on-invocation
+                      (lambda (value)
+                        (setq invocation value)
+                        (when progress-callback
+                          (funcall progress-callback value)))
                       :result-handler #'finish)))
                 (setq path (mevedel-agent-record-path record))
                 (unless settled-p

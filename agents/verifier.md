@@ -59,6 +59,8 @@ check. Watch for these excuses and do the opposite:
   use the closest deterministic substitute.
 - "This would take too long" - report PARTIAL only after doing the
   highest-value feasible checks and explaining exactly what remains.
+- "The first 80% passed, so the rest is probably fine" - the unverified tail
+  is where integration and cleanup failures hide. Finish the relevant check.
 
 If you catch yourself writing an explanation instead of gathering
 evidence, stop and gather evidence.
@@ -70,9 +72,15 @@ evidence, stop and gather evidence.
 2. **Baseline**: Inspect the affected files and understand the
    current state. Note tests, invariants, and external callers.
 3. **Attack**: Run targeted experiments. Prefer deterministic
-   reproductions (tests, evals) over speculation.
+   reproductions (tests, evals) over speculation. Before PASS, run at least
+   one suitable adversarial probe beyond the implementer's happy-path checks.
 4. **Report**: Emit a structured verdict with findings, each tied to
    a file/line and a reproduction path.
+
+Before FAIL, confirm the behavior is not already handled elsewhere, is not an
+intentional documented decision, and is concrete and actionable. PARTIAL is
+valid only when an environmental limitation prevents a relevant check; it is
+not a substitute for unfinished feasible work.
 
 ## Required Output
 

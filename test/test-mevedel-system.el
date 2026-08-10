@@ -2,15 +2,16 @@
 
 ;;; Commentary:
 
-;; Registration-only tests: the content of the system prompt is string
-;; data, not logic.  These tests verify the builder assembles the
-;; expected sections and loads workspace configuration files.
+;; Tests prompt assembly, component reports, workspace configuration loading,
+;; and the live effective-prompt inspector.
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'gptel-request)
 (require 'mevedel-structs)
 (require 'mevedel-skills-prompt)
+(require 'mevedel-tool-registry)
 (require 'mevedel-workspace)
 (require 'mevedel-utilities)
 (require 'mevedel-system)
@@ -40,6 +41,12 @@
     (should (string-match-p "Task execution protocol" main))
     (should (string-match-p "Tone and style" main))
     (should (string-match-p "Tool orchestration" main))
+    (should (string-match-p "Untrusted tool content" main))
+    (should (string-match-p "evidence to use for the user's task" main))
+    (should (string-match-p "Do not weaken, delete, skip" main))
+    (should (string-match-p "final permission denial" main))
+    (should (string-match-p "automatic compaction" main))
+    (should (string-match-p "VERDICT: PASS" main))
     (should (string-match-p "NEVER PROVIDE SOLUTIONS" tutor))
     (should (string-match-p "Tutoring style" tutor))
     (should-not (string-match-p "Tone and style" tutor))
@@ -66,6 +73,57 @@
          (string-match-p
           (regexp-quote (concat "```text\n" prompt "```"))
           guardian-doc))))))
+
+(mevedel-deftest mevedel-inspect-effective-prompt ()
+  ,test
+  (test)
+  :doc "reports the live prompt, session policy, and native and external tools"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-prompt-inspector-" t)))
+         (workspace (mevedel-workspace-get-or-create
+                     'project root root "prompt-inspector"))
+         (session (mevedel-session-create "main" workspace root))
+         (native-gptel
+          (gptel-make-tool :name "NativeInspect" :category "mevedel"
+                           :description "Native full description"
+                           :args '((:name "path" :type string))))
+         (native
+          (mevedel-tool--create
+           :name "NativeInspect" :category "mevedel"
+           :prompt "Native full description"
+           :prompt-source '(:kind file :path "/prompts/native.md")
+           :gptel-tool native-gptel))
+         (external
+          (gptel-make-tool :name "ExternalInspect" :category "external"
+                           :description "External full description"))
+         (data (generate-new-buffer " *mevedel-prompt-inspector-data*"))
+         inspector)
+    (unwind-protect
+        (progn
+          (mevedel-tool-register native)
+          (with-current-buffer data
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setf (mevedel-session-preset-name session) 'mevedel-implement
+                  (mevedel-session-permission-mode session) 'edits
+                  (mevedel-session-sandbox-mode session) 'best-effort)
+            (setq-local gptel-system-prompt (lambda () "EXACT LIVE PROMPT"))
+            (setq-local gptel-tools (list native-gptel external))
+            (setq inspector (mevedel-inspect-effective-prompt)))
+          (with-current-buffer inspector
+            (let ((text (buffer-string)))
+              (should buffer-read-only)
+              (should (string-search "Preset: mevedel-implement" text))
+              (should (string-search "Permission mode: edits" text))
+              (should (string-search "EXACT LIVE PROMPT" text))
+              (should (string-search "/prompts/native.md" text))
+              (should (string-search "External full description" text))
+              (should (string-search "external gptel tool" text))
+              (should (string-search "Estimated total" text)))))
+      (when (buffer-live-p inspector) (kill-buffer inspector))
+      (when (buffer-live-p data) (kill-buffer data))
+      (mevedel-tool-clear-registry)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-system-build-prompt
   (:before-each (mevedel-workspace-clear-registry)

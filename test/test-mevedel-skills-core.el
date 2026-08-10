@@ -250,15 +250,26 @@ paths:
             (should (mevedel-skill-model-invocable-p skill))))
       (delete-directory dir t)))
 
-  :doc "bundled remember and git-worktree skills are discoverable by default"
+  :doc "bundled learn, remember, and git-worktree skills are discoverable by default"
   (mevedel-tool-clear-registry)
   (let* ((skills (mevedel-skills-scan nil nil))
          (worktree (cl-find "git-worktree" skills
                             :key #'mevedel-skill-name :test #'equal))
          (remember (cl-find "remember" skills
                             :key #'mevedel-skill-name :test #'equal))
+         (learn (cl-find "learn" skills
+                         :key #'mevedel-skill-name :test #'equal))
          (body (and worktree (mevedel-skill-load-body worktree)))
-         (remember-body (and remember (mevedel-skill-load-body remember))))
+         (remember-body (and remember (mevedel-skill-load-body remember)))
+         (learn-body (and learn (mevedel-skill-load-body learn))))
+    (should learn)
+    (should (eq 'bundled (mevedel-skill-source learn)))
+    (should (mevedel-skill-user-invocable-p learn))
+    (should (equal "[focus]" (mevedel-skill-argument-hint learn)))
+    (should (string-match-p "applicable `AGENTS.md`" learn-body))
+    (should (string-match-p "existing `user` or" learn-body))
+    (should (string-match-p "Do not create a third" learn-body))
+    (should-not (string-match-p "CLAUDE\\.md" learn-body))
     (should remember)
     (should (eq 'bundled (mevedel-skill-source remember)))
     (should (mevedel-skill-user-invocable-p remember))

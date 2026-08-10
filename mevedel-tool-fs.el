@@ -29,7 +29,11 @@
                   (mime &optional model))
 (defvar gptel-backend)
 
-;; `mevedel-chat'
+;; `mevedel-agent-conversation'
+(defvar mevedel--agent-invocation)
+
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-path "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-run-helper
@@ -49,17 +53,25 @@
 (declare-function mevedel-pipeline--tool-results-dir
                   "mevedel-pipeline" (session buffer &optional request))
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-queue-turn-event
+                  "mevedel-reminders" (buffer key body &optional commit))
+
 ;; `mevedel-structs'
 (declare-function mevedel-current-origin "mevedel-structs" ())
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace-instruction-hashes
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
-(defvar mevedel--workspace)
+
+;; `mevedel-system'
+(declare-function mevedel-system--workspace-config-files
+                  "mevedel-system" (workspace &optional working-directory))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-integer-arg "mevedel-tool-registry"
@@ -67,6 +79,9 @@
 (declare-function mevedel-tool-string-arg "mevedel-tool-registry"
                   (args key &optional default))
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+
+;; `mevedel-workspace'
+(defvar mevedel--workspace)
 
 (defvar mevedel-tool-fs--read-render-cache (make-hash-table :test #'equal)
   "Cache for cheap `Read' renderer header metadata.")
@@ -1192,7 +1207,72 @@ content, not a read failure.\n</system-reminder>" filename))
 
 (defun mevedel-tool-fs--read (args)
   "Return the Read result for ARGS in a canonical handler envelope."
-  (mevedel-tool-fs--handler-result (mevedel-tool-fs--read-file args)))
+  (let ((result (mevedel-tool-fs--handler-result
+                 (mevedel-tool-fs--read-file args))))
+    (mevedel-tool-fs--queue-workspace-instructions
+     (plist-get (mevedel-tool-fs--normalize-read-args args) :file_path))
+    result))
+
+(defun mevedel-tool-fs--workspace-instruction-owner ()
+  "Return the canonical conversation owner for the current Read."
+  (or (and (bound-and-true-p mevedel--agent-invocation)
+           (mevedel-agent-invocation-path mevedel--agent-invocation))
+      "/root"))
+
+(defun mevedel-tool-fs--queue-workspace-instructions (path)
+  "Queue newly applicable workspace instructions after reading PATH."
+  (when-let* ((session (bound-and-true-p mevedel--session))
+              (workspace (mevedel-session-workspace session))
+              ((file-exists-p path))
+              (path (file-truename path))
+              (target-dir (file-name-directory path))
+              (cwd (file-name-as-directory
+                    (file-truename
+                     (mevedel-session-working-directory session))))
+              ((file-in-directory-p target-dir cwd)))
+    (require 'mevedel-reminders)
+    (require 'mevedel-system)
+    (require 'xml)
+    (let ((baseline
+           (mapcar #'file-truename
+                   (mevedel-system--workspace-config-files workspace cwd)))
+          (owner (mevedel-tool-fs--workspace-instruction-owner)))
+      ;; Queue one event per instruction file, broadest scope first, so a
+      ;; shared ancestor read via several sibling directories in the same
+      ;; turn coalesces into a single delivery.
+      (dolist (file (mevedel-system--workspace-config-files
+                     workspace target-dir))
+        (let ((file (file-truename file)))
+          (unless (or (equal file path) (member file baseline))
+            (let* ((content (with-temp-buffer
+                              (insert-file-contents file)
+                              (buffer-string)))
+                   (hash (secure-hash 'sha256 content))
+                   (key (list owner file)))
+              (unless (equal hash
+                             (alist-get
+                              key
+                              (mevedel-session-workspace-instruction-hashes
+                               session)
+                              nil nil #'equal))
+                (mevedel-reminders-queue-turn-event
+                 (current-buffer)
+                 (cons 'workspace-instructions file)
+                 (format
+                  (concat
+                   "The following host-loaded path-scoped workspace "
+                   "instructions apply to the file just read. More deeply "
+                   "nested instructions override broader ones on conflict:"
+                   "\n\n<workspace-instructions path=\"%s\">\n%s\n"
+                   "</workspace-instructions>")
+                  (xml-escape-string file) content)
+                 (lambda ()
+                   (setf (alist-get
+                          key
+                          (mevedel-session-workspace-instruction-hashes
+                           session)
+                          nil nil #'equal)
+                         hash)))))))))))
 
 (defun mevedel-tool-fs--truncate-output-buffer
     (maximum-size &optional guidance)

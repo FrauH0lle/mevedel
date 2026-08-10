@@ -102,6 +102,9 @@ Bundled skills currently include:
   isolation and mirroring the `/worktree` defaults when explicit
   model-driven fallback is needed.
 - `analyze-log` — user-invocable gptel HTTP log analysis helper.
+- `learn` — user-invocable durable write-back helper. Repository-derived
+  contributor facts go to the nearest applicable `AGENTS.md`; stable personal,
+  rationale, and external-reference findings use the existing memory types.
 - `remember` — user-invocable persistent-memory review and cleanup
   proposal helper.
 
@@ -121,7 +124,7 @@ buffer is dirty.
 ## Local Slash Commands
 
 Local slash commands are separate from `$skill` lookup. Built-ins include
-`/tokens`, `/model`, `/compact`, `/btw`, `/init`, `/review`, `/verify`,
+`/tokens`, `/model`, `/compact`, `/btw`, `/init`, `/prompt`, `/review`, `/verify`,
 `/worktree`, `/mode`, `/skills`, `/tools`, `/edits`, `/clear`, `/plugin`,
 and `/help`. `/init` sends the repository bootstrap prompt that helps create
 or improve `AGENTS.md`, `AGENTS.local.md`, `.agents` skills and memory,
@@ -393,7 +396,9 @@ review summary.
 uses the same target text but asks for adversarial
 validation, relevant checks when allowed, and the verifier prompt's final
 `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL` line. Verifier
-output is inserted as-is rather than parsed as review JSON.
+output is not parsed as review JSON, but its exact final verdict is validated
+and stored on the invocation. Missing, duplicated, or non-final verdict lines
+leave the original report visible with a rejection warning.
 
 The parent view displays a live inline `Review` or `Verify` handle while
 the agent runs. This handle is sourced from a hidden canonical collaboration

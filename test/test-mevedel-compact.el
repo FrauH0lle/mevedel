@@ -4260,6 +4260,9 @@ missing or zero prompt-side usage cannot become the active baseline"
     (should (string-match-p "repeat the original" prompt))
     (should (string-match-p "standing instruction" prompt))
     (should (string-match-p
+             "preserve its exact text"
+             prompt))
+    (should (string-match-p
              "Do not summarize Goal lifecycle state" prompt)))
 
   :doc "updates with previous summary and manual instructions"

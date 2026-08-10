@@ -228,7 +228,12 @@
 				    (lambda (workspace)
 				      (setq notified-workspace workspace))))
 			   (mevedel--chat-buffer-init-common
-			    (current-buffer) workspace "startup"))
+			    (current-buffer) workspace "resume"))
+			 (should (= 1 (length
+			               (mevedel-session-pending-reminders session))))
+			 (should (string-match-p
+			          "reconcile current state"
+			          (car (mevedel-session-pending-reminders session))))
 			 (should (eq notified-workspace workspace))
 			 (should (eq validated-workspace workspace))
 			 (should (memq #'mevedel-tool-repair-pre-tool-call
@@ -2019,6 +2024,8 @@
 		     (should (null (mevedel-session-permission-queue session)))
 		     (should (null (mevedel-session-pending-plan-approval session)))
 		     (should (null mevedel--current-request))
+		     (should (= 1 (length
+				   (mevedel-session-pending-reminders session))))
 		     (should (equal '((plan . aborted) (permission . aborted))
 				    outcomes))))
 
@@ -2096,6 +2103,8 @@
 					(lambda (&rest _) (setq interrupted t))))
 			       (mevedel-abort (current-buffer)))
 			     (should-not interrupted)
+			     (should-not
+			      (mevedel-session-pending-reminders session))
 			     (should (eq 'running
 					 (mevedel-agent-record-activity record))))))
 

@@ -284,7 +284,11 @@
 (declare-function mevedel-session-audit-session "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-create "mevedel-structs"
 		  (name workspace &optional working-directory))
+(declare-function mevedel-session-enqueue-pending-reminder "mevedel-structs"
+                  (session body))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-reminders "mevedel-structs"
+                  (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
@@ -553,6 +557,19 @@ workspace."
         :reason "kill-buffer")
        #'ignore mevedel--session workspace nil nil))))
 
+(defun mevedel--queue-reconciliation-reminder (session)
+  "Queue one recovery-state reminder for SESSION."
+  (let ((body
+         (concat
+          "A previous session or request ended without proving that all "
+          "effects settled. Processes may still be running, and aborted "
+          "tools or commands may have partially changed files, tasks, or "
+          "external state. Reconcile current state before continuing, "
+          "prioritize the newest user request over any older ghost request, "
+          "and verify effects before making final success claims.")))
+    (unless (member body (mevedel-session-pending-reminders session))
+      (mevedel-session-enqueue-pending-reminder session body))))
+
 (defun mevedel--chat-buffer-init-common (buf workspace source)
   "Set up BUF for WORKSPACE and start its lifecycle with SOURCE.
 
@@ -573,6 +590,8 @@ session struct. SOURCE is \"startup\", \"resume\", or \"fork\"."
     (require 'mevedel-models)
     (mevedel-model-apply-session-policy mevedel--session buf)
     (mevedel-reminders-install-defaults mevedel--session)
+    (when (equal source "resume")
+      (mevedel--queue-reconciliation-reminder mevedel--session))
     (require 'mevedel-goal)
     ;; Install the mevedel-augmented FSM handler chain as the buffer-local
     ;; `gptel-send--handlers' so every request from this buffer -- whether
@@ -1890,6 +1909,7 @@ BUF defaults to the current buffer if not specified."
       ;; `gptel--request-alist' and get torn down in phase 2.
       (with-current-buffer chat-buffer
         (when (bound-and-true-p mevedel--current-request)
+          (mevedel--queue-reconciliation-reminder mevedel--session)
           (mevedel-request-drain-cancellers mevedel--current-request))
         ;; flush any queued permission entries with 'aborted
         ;; so callbacks fire and the FSMs they belong to can unwind.
