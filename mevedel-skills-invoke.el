@@ -1682,8 +1682,15 @@ DISPLAY-CALLBACK retain the normal fork dispatch meanings."
            session
            (mevedel-skills--fork-task-name session skill-name)
            (or prompt (plist-get prepared :body) "")
+           (lambda (outcome)
+             (unless (eq (plist-get outcome :outcome) 'success)
+               (mevedel-skills--invoke-error
+                skill 'agent-dispatch-failed
+                (or (plist-get outcome :error)
+                    "Agent preparation was cancelled")
+                callback display-callback)))
            :agent agent
-           :fork-turns "none"
+           :context "none"
            :model (plist-get context :model)
            :effort (plist-get context :effort)
            :description task-description

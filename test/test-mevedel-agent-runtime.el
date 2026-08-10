@@ -165,6 +165,56 @@
       (should-not transition)
       (should (plist-get turn :audits)))))
 
+(mevedel-deftest mevedel-agent-runtime-prepare-task ()
+  ,test
+  (test)
+  :doc "runs the two task hooks asynchronously once and returns one final task"
+  (let ((session (mevedel-session--create :name "main"))
+        (agent (mevedel-agent-runtime-test--agent))
+        callbacks
+        events
+        outcome)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (event _payload callback &rest _)
+                   (push event events)
+                   (push callback callbacks))))
+        (mevedel-agent-runtime-prepare-task
+         agent "Explore" "Original task" "/root/explore"
+         (lambda (value) (setq outcome value)))
+        (should (equal '(SubagentStart) events))
+        (funcall (car callbacks)
+                 '(:additional-context ("start context")))
+        (should (equal '(UserPromptSubmit SubagentStart) events))
+        (funcall (car callbacks)
+                 '(:updated-input "Rewritten task"
+                   :additional-context ("prompt context")))
+        (should (eq 'success (plist-get outcome :outcome)))
+        (let ((prompt (plist-get (plist-get outcome :turn) :prompt)))
+          (should (string-match-p "Rewritten task" prompt))
+          (should (string-match-p "start context" prompt))
+          (should (string-match-p "prompt context" prompt))))))
+
+  :doc "suppresses a late hook result after cancellation"
+  (let ((session (mevedel-session--create :name "main"))
+        (agent (mevedel-agent-runtime-test--agent))
+        hook-callback
+        cancelled
+        outcome)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (setq hook-callback callback))))
+        (mevedel-agent-runtime-prepare-task
+         agent "Explore" "Original task" "/root/explore"
+         (lambda (value) (setq outcome value))
+         :cancelled-p (lambda () cancelled))
+        (setq cancelled t)
+        (funcall hook-callback nil)
+        (should-not outcome)))))
+
 (mevedel-deftest mevedel-agent-runtime-dispatch
   ()
   ,test

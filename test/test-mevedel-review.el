@@ -407,13 +407,18 @@
                       (mevedel-request--create :session mevedel--session))
           (let ((progress-callback #'ignore))
             (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
-                       (lambda (session task-name message &rest options)
+                       (lambda (session task-name message callback
+                                &rest options)
                          (setq captured-session session
                                captured-name task-name
                                captured-message message
                                captured-options options)
-                         (mevedel-agent-record--create
-                          :path (concat "/root/" task-name)))))
+                         (let ((record
+                                (mevedel-agent-record--create
+                                 :path (concat "/root/" task-name))))
+                           (funcall callback
+                                    (list :outcome 'success :record record)))
+                         #'ignore)))
               (mevedel-review--run-task
                "prompt" "target"
                (lambda (result) (push result outcomes))
@@ -426,7 +431,7 @@
               (should (equal "reviewer"
                              (plist-get captured-options :role)))
               (should (equal "none"
-                             (plist-get captured-options :fork-turns)))
+                             (plist-get captured-options :context)))
               (should (equal "target"
                              (plist-get captured-options :description)))
               (should (functionp
@@ -464,10 +469,15 @@
           (setq-local mevedel--current-request
                       (mevedel-request--create :session mevedel--session))
           (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
-                     (lambda (_session task-name _message &rest options)
+                     (lambda (_session task-name _message callback
+                              &rest options)
                        (setq captured-options options)
-                       (mevedel-agent-record--create
-                        :path (concat "/root/" task-name)))))
+                       (let ((record
+                              (mevedel-agent-record--create
+                               :path (concat "/root/" task-name))))
+                         (funcall callback
+                                  (list :outcome 'success :record record)))
+                       #'ignore)))
             (mevedel-review--run-task
              "prompt" "target"
              (lambda (result) (setq outcome result))
@@ -503,12 +513,17 @@
             (setq-local mevedel--current-request
                         (mevedel-request--create :session mevedel--session))
             (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
-                       (lambda (_session task-name _message &rest options)
+                       (lambda (_session task-name _message callback
+                                &rest options)
                          (setq result-handler
                                (plist-get options :result-handler))
                          (funcall (plist-get options :on-invocation) invocation)
-                         (mevedel-agent-record--create
-                          :path (concat "/root/" task-name)))))
+                         (let ((record
+                                (mevedel-agent-record--create
+                                 :path (concat "/root/" task-name))))
+                           (funcall callback
+                                    (list :outcome 'success :record record)))
+                         #'ignore)))
               (mevedel-review--run-task
                "prompt" "target" (lambda (value) (setq outcome value))
                nil nil 'verify)
@@ -537,11 +552,16 @@
           (setq-local mevedel--current-request
                       (mevedel-request--create :session mevedel--session))
           (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
-                     (lambda (_session task-name _message &rest options)
+                     (lambda (_session task-name _message callback
+                              &rest options)
                        (setq result-handler
                              (plist-get options :result-handler))
-                       (mevedel-agent-record--create
-                        :path (concat "/root/" task-name))))
+                       (let ((record
+                              (mevedel-agent-record--create
+                               :path (concat "/root/" task-name))))
+                         (funcall callback
+                                  (list :outcome 'success :record record)))
+                       #'ignore))
                     ((symbol-function 'mevedel-agent-control-interrupt)
                      (lambda (_session target)
                        (setq interrupt-target target)

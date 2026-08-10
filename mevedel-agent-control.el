@@ -28,6 +28,8 @@
                   "mevedel-agent-runtime" (invocation))
 (declare-function mevedel-agent-runtime-interrupt
                   "mevedel-agent-runtime" (invocation reason))
+(declare-function mevedel-agent-runtime-prepare-task
+                  "mevedel-agent-runtime" t t)
 
 ;; `mevedel-agents'
 (declare-function copy-mevedel-agent "mevedel-agents" (cl-x))
@@ -57,7 +59,7 @@
 
 ;; `mevedel-compact'
 (declare-function mevedel-compact-context-snapshot
-                  "mevedel-compact" (fork-turns))
+                  "mevedel-compact" (context))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-parse-effort "mevedel-models" (value))
@@ -610,8 +612,8 @@ rewrite after the complete registry has been repaired."
   (unless (and (stringp message) (not (string-empty-p message)))
     (user-error "Agent message must be non-empty plain text")))
 
-(defun mevedel-agent-control--normalize-fork-turns (value)
-  "Normalize model-facing context fork VALUE.
+(defun mevedel-agent-control--normalize-context (value)
+  "Normalize model-facing parent context VALUE.
 
 Nil defaults to `none'.  The only explicit forms are \"all\", \"none\", and
 positive decimal strings."
@@ -622,7 +624,7 @@ positive decimal strings."
          (string-match-p "\\`[1-9][0-9]*\\'" value))
     (string-to-number value))
    (t (user-error
-       "Agent fork_turns must be all, none, or a positive integer string"))))
+       "Agent context must be all, none, or a positive integer string"))))
 
 (defun mevedel-agent-control--reserve
     (session parent-path task-name role)
@@ -872,13 +874,16 @@ it queued for ordinary parent delivery."
       (list :path path :previous-activity activity))))
 
 (cl-defun mevedel-agent-control-spawn
-    (session task-name message
-             &key role agent fork-turns model effort model-policy
+    (session task-name message callback
+             &key role agent context model effort model-policy
              description on-invocation result-handler
              skill-permission-rules skill-hook-rules parent-tool-use-id)
-  "Spawn TASK-NAME with MESSAGE and optional controls in SESSION.
-Return the committed retained record."
+  "Prepare and spawn TASK-NAME with MESSAGE asynchronously in SESSION.
+CALLBACK receives a success, error, or aborted outcome plist.  Return an
+idempotent cancellation thunk for the unpublished preparation transaction."
   (mevedel-agent-control--validate-spawn session task-name message)
+  (unless (functionp callback)
+    (error "Agent spawn callback must be a function"))
   (require 'mevedel-agents)
   (when (and role (null agent)
              (mevedel-agents-specs)
@@ -896,7 +901,7 @@ Return the committed retained record."
             resolved-agent))
          (resolved-agent (mevedel-agent-freeze resolved-agent))
          (role-name (mevedel-agent-name resolved-agent))
-         (fork-turns (mevedel-agent-control--normalize-fork-turns fork-turns))
+         (context (mevedel-agent-control--normalize-context context))
          (model-selector
           (progn
             (require 'mevedel-models)
@@ -906,45 +911,81 @@ Return the committed retained record."
           (or model-policy
               (mevedel-model-resolve-workload
                (intern role-name) model-selector effort)))
-         (context-snapshot
-          (progn
-            (require 'mevedel-compact)
-            (mevedel-compact-context-snapshot fork-turns)))
          (caller-path (mevedel-agent-control-current-path session))
          (record (mevedel-agent-control--reserve
                   session caller-path task-name role-name))
-         committed)
+         context-snapshot
+         committed
+         cancelled
+         settled)
     (setf (mevedel-agent-record-result-handler record) result-handler)
-    (unwind-protect
-        (progn
-          (require 'mevedel-agent-runtime)
-          (unless
-              (mevedel-agent-runtime-dispatch
-               resolved-agent (or description task-name) message
-               :context-snapshot context-snapshot
-               :model-policy model-policy
-               :skill-permission-rules skill-permission-rules
-               :parent-tool-use-id parent-tool-use-id
-               :path (mevedel-agent-record-path record)
-               :on-invocation
-               (lambda (invocation)
-                 (mevedel-agent-control--record-invocation
-                  session record invocation)
-                 (setq committed t)
-                 (when on-invocation
-                   (funcall on-invocation invocation)))
-               :on-settle
-               (apply-partially
-                #'mevedel-agent-control--settle session record))
-            (error "Agent provider request did not start"))
-          (unless (mevedel-agent-record-conversation-location record)
-            (error "Agent conversation could not be persisted"))
-          (when (eq (mevedel-agent-record-activity record) 'starting)
-            (setf (mevedel-agent-record-activity record) 'running))
-          (mevedel-agent-control--persist-session session)
-          record)
-      (unless committed
-        (mevedel-agent-control--rollback session record)))))
+    (cl-labels
+        ((settle (outcome)
+           (unless settled
+             (setq settled t)
+             (funcall callback outcome)))
+         (fail (err)
+           (unless settled
+             (unless committed
+               (mevedel-agent-control--rollback session record))
+             (settle (list :outcome 'error
+                           :error (error-message-string err)))))
+         (dispatch (prepared)
+           (unless (or settled cancelled)
+             (if (not (eq (plist-get prepared :outcome) 'success))
+                 (fail (list 'error
+                             (or (plist-get prepared :error)
+                                 "Agent task preparation failed")))
+               (condition-case err
+                   (progn
+                     (unless
+                         (mevedel-agent-runtime-dispatch
+                          resolved-agent (or description task-name) message
+                          :context-snapshot context-snapshot
+                          :model-policy model-policy
+                          :skill-permission-rules skill-permission-rules
+                          :prepared-turn (plist-get prepared :turn)
+                          :start-hook-audits
+                          (plist-get prepared :start-hook-audits)
+                          :parent-tool-use-id parent-tool-use-id
+                          :path (mevedel-agent-record-path record)
+                          :on-invocation
+                          (lambda (invocation)
+                            (mevedel-agent-control--record-invocation
+                             session record invocation)
+                            (setq committed t)
+                            (when on-invocation
+                              (funcall on-invocation invocation)))
+                          :on-settle
+                          (apply-partially
+                           #'mevedel-agent-control--settle session record))
+                       (error "Agent provider request did not start"))
+                     (unless (mevedel-agent-record-conversation-location
+                              record)
+                       (error "Agent conversation could not be persisted"))
+                     (when (eq (mevedel-agent-record-activity record)
+                               'starting)
+                       (setf (mevedel-agent-record-activity record) 'running))
+                     (mevedel-agent-control--persist-session session)
+                     (settle (list :outcome 'success :record record)))
+                 (error (fail err)))))))
+      (condition-case err
+          (progn
+            (require 'mevedel-compact)
+            (setq context-snapshot
+                  (mevedel-compact-context-snapshot context))
+            (require 'mevedel-agent-runtime)
+            (mevedel-agent-runtime-prepare-task
+             resolved-agent (or description task-name) message
+             (mevedel-agent-record-path record) #'dispatch
+             :skill-permission-rules skill-permission-rules
+             :cancelled-p (lambda () cancelled)))
+        (error (fail err)))
+      (lambda ()
+        (unless settled
+          (setq cancelled t)
+          (mevedel-agent-control--rollback session record)
+          (settle '(:outcome aborted)))))))
 
 (provide 'mevedel-agent-control)
 
