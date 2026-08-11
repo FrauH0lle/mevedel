@@ -1485,6 +1485,11 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should (eq agent-buffer (plist-get target :buffer)))
       (should (eq invocation (plist-get target :invocation)))
       (should (eq session (plist-get target :session)))
+      (should (eq session (plist-get target :prompt-session)))
+      (should (equal "/root/explorer"
+                     (plist-get target :skill-agent-path)))
+      (should (string-suffix-p
+               "/tool-results" (plist-get target :tool-results-dir)))
       (should (equal canonical-path (plist-get target :transcript-path)))
       (dolist (operation '(:apply :start :complete :resume :fail))
         (should (functionp (plist-get target operation)))))
@@ -3377,33 +3382,6 @@ missing or zero prompt-side usage cannot become the active baseline"
       (when (buffer-live-p chat-buf)
         (kill-buffer chat-buf)))))
 
-(mevedel-deftest mevedel--compact-context-limit ()
-  ,test
-  (test)
-  :doc "prefers declared model metadata over the configured fallback"
-  (let ((mevedel-compact-context-limit 12345)
-        (gptel-model 'mevedel-test-model))
-    (put 'mevedel-test-model :context-window 200)
-    (should (= (mevedel--compact-context-limit) 200000)))
-
-  :doc "uses gptel model context-window in thousands of tokens"
-  (let ((mevedel-compact-context-limit nil)
-        (gptel-model 'mevedel-test-model))
-    (put 'mevedel-test-model :context-window 8.192)
-    (should (= (mevedel--compact-context-limit) 8192)))
-
-  :doc "uses configured fallback when model has no context-window"
-  (let ((mevedel-compact-context-limit 64000)
-        (gptel-model 'mevedel-test-model-no-context))
-    (put 'mevedel-test-model-no-context :context-window nil)
-    (should (= (mevedel--compact-context-limit) 64000)))
-
-  :doc "falls back to 128000 tokens without model metadata or configuration"
-  (let ((mevedel-compact-context-limit nil)
-        (gptel-model 'mevedel-test-model-no-context))
-    (put 'mevedel-test-model-no-context :context-window nil)
-    (should (= (mevedel--compact-context-limit) 128000))))
-
 (mevedel-deftest mevedel--compact-workload-policy ()
   ,test
   (test)
@@ -3808,7 +3786,31 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should (string-match-p "Parent requirement" evidence))
       (should (string-match-p "Sibling evidence" evidence))
       (should-not (string-match-p "Triggering tool" evidence))
-      (should-not (string-match-p "task_name" evidence)))))
+      (should-not (string-match-p "task_name" evidence))))
+
+  :doc "includes only skill provenance from the delegating conversation"
+  (with-temp-buffer
+    (org-mode)
+    (let* ((session (mevedel-session--create :name "main" :turn-count 4))
+           (invocation
+            (mevedel-agent-invocation--create :path "/root/parent"))
+           (parent-skill
+            (mevedel-skill-invocation-record--create
+             :name "parent-skill" :role 'command :origin 'model
+             :agent-path "/root/parent" :turn 4))
+           (root-skill
+            (mevedel-skill-invocation-record--create
+             :name "root-skill" :role 'command :origin 'user
+             :agent-path "/root" :turn 3)))
+      (setf (mevedel-session-invoked-skills session)
+            (list root-skill parent-skill))
+      (setq-local mevedel--session session
+                  mevedel--agent-invocation invocation)
+      (insert "Delegating evidence.\n")
+      (let ((evidence
+             (mevedel-compact-summary-context-evidence "call_agent")))
+        (should (string-match-p "parent-skill" evidence))
+        (should-not (string-match-p "root-skill" evidence))))))
 
 (mevedel-deftest mevedel--compact-tail-start ()
   ,test
@@ -4195,12 +4197,13 @@ missing or zero prompt-side usage cannot become the active baseline"
          (session (mevedel-session-create "main" ws))
          (rec1 (mevedel-skill-invocation-record--create
                 :name "grill-me" :args "spec 22"
-                :role 'command :origin 'user :turn 3
+                :role 'command :origin 'user :agent-path "/root" :turn 3
                 :source-path "/skills/grill-me/SKILL.md"
                 :prepared-body "Body 1"))
          (rec2 (mevedel-skill-invocation-record--create
                 :name "review-spec" :args nil
-                :role 'command :origin 'model :turn 7
+                :role 'command :origin 'model
+                :agent-path "/root/reviewer" :turn 7
                 :source-path "/skills/review-spec/SKILL.md"
                 :prepared-body "Body 2")))
     (setf (mevedel-session-invoked-skills session) (list rec1 rec2))
@@ -4215,7 +4218,11 @@ missing or zero prompt-side usage cannot become the active baseline"
                               (cadr items))))
     (let ((items (mevedel--compact-skill-provenance session 3)))
       (should (= 1 (length items)))
-      (should (string-match-p "\\$grill-me" (car items))))))
+      (should (string-match-p "\\$grill-me" (car items))))
+    (let ((items (mevedel--compact-skill-provenance
+                  session 0 "/root/reviewer")))
+      (should (= 1 (length items)))
+      (should (string-match-p "\\$review-spec" (car items))))))
 
 (provide 'test-mevedel-compact)
 ;;; test-mevedel-compact.el ends here

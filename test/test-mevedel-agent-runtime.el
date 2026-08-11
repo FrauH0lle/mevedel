@@ -165,6 +165,21 @@
       (should-not transition)
       (should (plist-get turn :audits)))))
 
+(mevedel-deftest mevedel-agent-runtime--prepared-turn ()
+  ,test
+  (test)
+  :doc "applies the accepted rewrite and ordered hook context once"
+  (let ((turn
+         (mevedel-agent-runtime--prepared-turn
+          "Original"
+          '(:additional-context ("start context"))
+          '(:updated-input "Rewritten"
+            :additional-context ("prompt context"))
+          nil)))
+    (should (string-match-p "Rewritten" (plist-get turn :prompt)))
+    (should (string-match-p "start context" (plist-get turn :prompt)))
+    (should (string-match-p "prompt context" (plist-get turn :prompt)))))
+
 (mevedel-deftest mevedel-agent-runtime-prepare-task ()
   ,test
   (test)

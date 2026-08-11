@@ -336,9 +336,9 @@ Steps so the next model can continue it unchanged. There is no separate
 carry-forward path for raw or injected user
 messages. Recent-tail preservation is unchanged.
 
-Relevant skill invocation records are appended as provenance evidence so
-summaries can preserve user-side and model-side methodology without activating
-the skill for the generator.
+Relevant skill invocation records from the target conversation are appended as
+provenance evidence so summaries can preserve user-side and model-side
+methodology without activating the skill for the generator.
 
 Compaction neither snapshots Goal state into the segment nor queues a static
 Goal reminder. The durable Goal record remains the sole authority and is

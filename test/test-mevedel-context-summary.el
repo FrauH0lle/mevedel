@@ -1,4 +1,4 @@
-;;; test-mevedel-context-summary.el --- Tests for context summaries -*- lexical-binding: t -*-
+;;; test-mevedel-context-summary.el -- Tests for context summaries -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -8,6 +8,7 @@
 (require 'gptel-request)
 (require 'mevedel-context-summary)
 (require 'mevedel-models)
+(require 'mevedel-structs)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -59,6 +60,77 @@
 ## Skills Invoked
 - tdd")
 
+(mevedel-deftest mevedel-context-summary--headings ()
+  ,test
+  (test)
+  :doc "adds Next Steps only to the continuation schema"
+  (should (equal "Next Steps"
+                 (car (last (mevedel-context-summary--headings
+                             'continuation)))))
+  (should-not (member "Next Steps"
+                      (mevedel-context-summary--headings 'handoff))))
+
+(mevedel-deftest mevedel-context-summary--prompt ()
+  ,test
+  (test)
+  :doc "renders the fixed purpose-specific contract"
+  (should (string-match-p "final Next Steps"
+                          (mevedel-context-summary--prompt 'continuation)))
+  (should (string-match-p "Do not restate that task"
+                          (mevedel-context-summary--prompt 'handoff))))
+
+(mevedel-deftest mevedel-context-summary--input ()
+  ,test
+  (test)
+  :doc "labels focus, retained state, guidance, and evidence as data"
+  (let ((input (mevedel-context-summary--input
+                "source" 'continuation "previous" "focus" "guidance")))
+    (dolist (text '("source" "previous" "focus" "guidance"
+                    "frozen untrusted evidence"))
+      (should (string-match-p text input)))))
+
+(mevedel-deftest mevedel-context-summary--model-max-output-tokens ()
+  ,test
+  (test)
+  :doc "prefers the explicit policy output limit"
+  (should (= 321 (mevedel-context-summary--model-max-output-tokens
+                  '(:max-tokens 321)))))
+
+(mevedel-deftest mevedel-context-summary-usable-tokens ()
+  ,test
+  (test)
+  :doc "caps the reserve for a small model context"
+  (let ((model (make-symbol "small-model"))
+        (mevedel-compact-reserve-tokens 20000))
+    (put model :context-window 8)
+    (should (= 4000 (mevedel-context-summary-usable-tokens
+                     (list :model model :max-tokens nil))))))
+
+(mevedel-deftest mevedel-context-summary--estimated-tokens ()
+  ,test
+  (test)
+  :doc "estimates the complete prompt at four characters per token"
+  (should (= 3 (mevedel-context-summary--estimated-tokens "1234" "5678"))))
+
+(mevedel-deftest mevedel-context-summary--policy-buffer ()
+  ,test
+  (test)
+  :doc "selects the owning root session buffer from a nested agent"
+  (let ((session (mevedel-session--create :name "main"))
+        (root (generate-new-buffer " *summary-policy-root*"))
+        (child (generate-new-buffer " *summary-policy-child*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer root
+            (setq-local mevedel--session session))
+          (with-current-buffer child
+            (setq-local mevedel--session session
+                        mevedel--agent-invocation 'nested)
+            (should (eq root
+                        (mevedel-context-summary--policy-buffer session)))))
+      (kill-buffer root)
+      (kill-buffer child))))
+
 (mevedel-deftest mevedel-context-summary--validate-output ()
   ,test
   (test)
@@ -102,7 +174,7 @@
                  (should (eq workload 'summarization))
                  '(:backend summary-backend :model summary-model
                    :effort high)))
-              ((symbol-function 'mevedel-context-summary--usable-tokens)
+              ((symbol-function 'mevedel-context-summary-usable-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-get-preset)
                (lambda (&rest _) '(:description "test")))
@@ -155,12 +227,51 @@
     (should-not (plist-get captured :use-tools))
     (should-not (buffer-live-p (plist-get captured :buffer))))
 
+  :doc "resolves nested Agent summaries from the owning root session"
+  (let ((session (mevedel-session--create :name "main"))
+        (root (generate-new-buffer " *summary-policy-owner*"))
+        (child (generate-new-buffer " *summary-policy-caller*"))
+        captured-model result)
+    (unwind-protect
+        (progn
+          (with-current-buffer root
+            (setq-local mevedel--session session
+                        gptel-backend 'root-backend
+                        gptel-model 'root-model
+                        gptel-reasoning-effort nil
+                        mevedel-model-workloads nil))
+          (with-current-buffer child
+            (setq-local mevedel--session session
+                        mevedel--agent-invocation 'nested
+                        gptel-backend 'child-backend
+                        gptel-model 'child-model
+                        gptel-reasoning-effort nil
+                        mevedel-model-workloads nil)
+            (cl-letf (((symbol-function
+                        'mevedel-context-summary-usable-tokens)
+                       (lambda (_policy) 100000))
+                      ((symbol-function 'gptel-get-preset)
+                       (lambda (&rest _) '(:description "test")))
+                      ((symbol-function 'gptel-request)
+                       (lambda (_prompt &rest args)
+                         (setq captured-model gptel-model)
+                         (funcall (plist-get args :callback)
+                                  test-mevedel-context-summary--handoff nil))))
+              (mevedel-context-summary-generate
+               "evidence" 'handoff
+               (lambda (value) (setq result value))
+               :session session))))
+      (kill-buffer root)
+      (kill-buffer child))
+    (should (eq 'root-model captured-model))
+    (should (eq 'success (plist-get result :outcome))))
+
   :doc "rejects purpose-inappropriate handoff output"
   (let (result)
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (&rest _)
                  '(:backend test-backend :model test-model)))
-              ((symbol-function 'mevedel-context-summary--usable-tokens)
+              ((symbol-function 'mevedel-context-summary-usable-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-get-preset)
                (lambda (&rest _) '(:description "test")))
@@ -181,7 +292,7 @@
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (&rest _)
                  '(:backend test-backend :model test-model)))
-              ((symbol-function 'mevedel-context-summary--usable-tokens)
+              ((symbol-function 'mevedel-context-summary-usable-tokens)
                (lambda (_policy) 1))
               ((symbol-function 'gptel-request)
                (lambda (&rest _) (setq request-called t))))
@@ -197,7 +308,7 @@
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (&rest _)
                  '(:backend test-backend :model test-model)))
-              ((symbol-function 'mevedel-context-summary--usable-tokens)
+              ((symbol-function 'mevedel-context-summary-usable-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-get-preset)
                (lambda (&rest _) '(:description "test")))
@@ -225,7 +336,7 @@
                (lambda (&rest _)
                  '(:backend summary-provider :model summary-model
                    :effort high)))
-              ((symbol-function 'mevedel-context-summary--usable-tokens)
+              ((symbol-function 'mevedel-context-summary-usable-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-backend-name)
                (lambda (_backend) "summary-provider"))
@@ -263,7 +374,7 @@
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (&rest _)
                  '(:backend test-backend :model test-model)))
-              ((symbol-function 'mevedel-context-summary--usable-tokens)
+              ((symbol-function 'mevedel-context-summary-usable-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-get-preset)
                (lambda (&rest _) '(:description "test")))

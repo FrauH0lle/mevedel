@@ -1251,6 +1251,8 @@ allowed-tools:
     (should (equal "task" (mevedel-skill-invocation-record-args record)))
     (should (eq 'command (mevedel-skill-invocation-record-role record)))
     (should (eq 'user (mevedel-skill-invocation-record-origin record)))
+    (should (equal "/root"
+                   (mevedel-skill-invocation-record-agent-path record)))
     (should (equal "expanded"
                    (mevedel-skill-invocation-record-prepared-body record))))
 

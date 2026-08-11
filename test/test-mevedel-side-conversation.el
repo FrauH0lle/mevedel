@@ -21,6 +21,7 @@
 (defvar org-mode-hook)
 
 (require 'gptel-context)
+(require 'gptel-openai)
 (require 'gptel-request)
 (require 'mevedel)
 (require 'mevedel-session-persistence)
@@ -644,7 +645,16 @@
       (when (file-directory-p root)
         (delete-directory root t))))
   :doc "freezes inherited media bytes and removes the side-owned copy"
-  (let* ((root (make-temp-file "mevedel-btw-media-" t))
+  (let* ((gptel--known-backends nil)
+         (model (make-symbol "btw-media-model"))
+         (backend
+          (progn
+            (put model :capabilities '(media))
+            (put model :mime-types '("image/png"))
+            (gptel-make-openai
+             "btw-media" :host "example.test" :key "test"
+             :models (list model))))
+         (root (make-temp-file "mevedel-btw-media-" t))
          (media-file (file-name-concat root "image.png"))
          (second-media-file (file-name-concat root "second.png"))
          (workspace
@@ -664,6 +674,8 @@
             (with-current-buffer data-buf
               (setq-local mevedel--workspace workspace
                           mevedel--session session
+                          gptel-backend backend
+                          gptel-model model
                           gptel-context
                           (list (list media-file :mime "image/png")
                                 (list second-media-file :mime "image/png"))

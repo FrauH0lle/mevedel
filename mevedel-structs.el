@@ -778,16 +778,17 @@ compaction/replay.
 
 NAME is the skill identifier.  ARGS is the raw argument string
 passed to the skill.  ROLE is `command' or `instruction'.  ORIGIN is
-`user', `model', or `internal'.  TURN is the session turn-count when
-the skill was invoked.  SOURCE-PATH is the absolute path of the SKILL.md that was
-loaded.  PREPARED-BODY is the post-substitution, post-shell-expansion
-body string -- stored verbatim so compaction can summarize the
-skill's actual contribution to the conversation without re-reading
-SKILL.md (which may have changed)."
+`user', `model', or `internal'.  AGENT-PATH is the canonical conversation
+that invoked it.  TURN is the session turn-count when the skill was invoked.
+SOURCE-PATH is the absolute path of the SKILL.md that was loaded.
+PREPARED-BODY is the post-substitution, post-shell-expansion body string --
+stored verbatim so compaction can summarize the skill's actual contribution
+to the conversation without re-reading SKILL.md (which may have changed)."
   name
   args
   role
   origin
+  agent-path
   turn
   source-path
   prepared-body)

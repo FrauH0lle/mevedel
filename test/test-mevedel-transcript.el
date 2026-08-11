@@ -16,6 +16,8 @@
 (require 'mevedel-tool-media)
 (require 'mevedel-utilities)
 
+(defvar mevedel-tool-media--store)
+
 (defmacro mevedel-transcript-test--with-buffer (&rest body)
   "Run BODY with a temporary Org transcript bound as `data-buf'."
   (declare (indent 0) (debug t))
@@ -1340,6 +1342,67 @@ TOOL-PROP."
                (point-min) (point-max)))
       (should (equal before (match-data))))))
 
+(mevedel-deftest mevedel-transcript--summary-truncation-marker ()
+  ,test
+  (test)
+  :doc "reports the exact omitted tool-result size"
+  (should (string-match-p
+           "omitted 42 chars"
+           (mevedel-transcript--summary-truncation-marker 42))))
+
+(mevedel-deftest mevedel-transcript--summary-truncate-string ()
+  ,test
+  (test)
+  :doc "caps one string argument and reports the omission"
+  (let ((value (mevedel-transcript--summary-truncate-string "abcdef" 3)))
+    (should (string-prefix-p "abc" value))
+    (should (string-match-p "omitted 3 chars" value))))
+
+(mevedel-deftest mevedel-transcript--summary-truncate-args ()
+  ,test
+  (test)
+  :doc "recursively caps strings inside tool arguments"
+  (let ((value (mevedel-transcript--summary-truncate-args
+                '(:args ["abcdef"]) 3)))
+    (should (string-prefix-p "abc" (aref (plist-get value :args) 0)))))
+
+(mevedel-deftest mevedel-transcript--summary-tool-sexp-start ()
+  ,test
+  (test)
+  :doc "finds readable tool metadata in plain and Org forms"
+  (should (= 0 (mevedel-transcript--summary-tool-sexp-start
+                "(:name \"Read\")")))
+  (should (integerp
+           (mevedel-transcript--summary-tool-sexp-start
+            "#+begin_tool\n(:name \"Read\")\n#+end_tool\n"))))
+
+(mevedel-deftest mevedel-transcript--summary-media-placeholder ()
+  ,test
+  (test)
+  :doc "keeps media kind, MIME type, and path without payload bytes"
+  (should (equal "[media: image; MIME image/png; path plot.png]"
+                 (mevedel-transcript--summary-media-placeholder
+                  '(:kind image :mime "image/png" :path "plot.png")))))
+
+(mevedel-deftest mevedel-transcript--summary-tool-parts ()
+  ,test
+  (test)
+  :doc "separates readable tool metadata from its bounded result"
+  (pcase-let ((`(,call ,result)
+               (mevedel-transcript--summary-tool-parts
+                "(:name \"Read\" :args (:file_path \"x\"))\n\nresult"
+                100 nil nil)))
+    (should (string-match-p "Read" call))
+    (should (equal "result" result))))
+
+(mevedel-deftest mevedel-transcript--summary-evidence-item ()
+  ,test
+  (test)
+  :doc "wraps evidence with explicit matching provenance delimiters"
+  (let ((item (mevedel-transcript--summary-evidence-item "user" " text ")))
+    (should (string-prefix-p "--- evidence item; provenance: user ---" item))
+    (should (string-suffix-p "--- end evidence item ---" item))))
+
 (mevedel-deftest mevedel-transcript-project-evidence ()
   ,test
   (test)
@@ -1374,38 +1437,46 @@ TOOL-PROP."
                               evidence))))
 
   :doc "separates bounded tool calls/results and replaces native media"
-  (with-temp-buffer
-    (org-mode)
-    (insert "#+begin_tool (Read :file_path \"big.png\")\n")
-    (let* ((tool-start (point))
-           (result
-            (mevedel-tool-media-attach-result
-             (concat "(:name \"Read\" :args (:file_path \"big.png\"))\n\n"
-                     (make-string 200 ?x))
-             '((:kind image :mime "image/png" :data "QUJD"
-                       :path "diagram.png"))
-             nil "call-read")))
-      (insert result "\n#+end_tool\n")
-      (put-text-property tool-start (point) 'gptel '(tool . "call-read")))
-    (let ((evidence
-           (mevedel-transcript-project-evidence
-            (list (cons (point-min) (point-max)))
-            :tool-output-max 20)))
-      (should (string-match-p "provenance: tool-call" evidence))
-      (should (string-match-p "file_path" evidence))
-      (should (string-match-p "provenance: tool-result" evidence))
-      (should (string-match-p "tool output truncated" evidence))
-      (should (string-match-p
-               (regexp-quote
-                "[media: image; MIME image/png; path diagram.png]")
-               evidence))
-      (should-not (string-match-p "QUJD" evidence))
-      (should (= 1 (let ((start 0) (count 0))
-                     (while (string-match "provenance: tool-call" evidence
-                                          start)
-                       (setq count (1+ count)
-                             start (match-end 0)))
-                     count))))))
+  (let ((tool-results-dir (make-temp-file "mevedel-summary-media-" t))
+        (mevedel-tool-media--store (make-hash-table :test #'equal)))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (insert "#+begin_tool (Read :file_path \"big.png\")\n")
+          (let* ((tool-start (point))
+                 (result
+                  (mevedel-tool-media-attach-result
+                   (concat
+                    "(:name \"Read\" :args (:file_path \"big.png\"))\n\n"
+                    (make-string 200 ?x))
+                   '((:kind image :mime "image/png" :data "QUJD"
+                             :path "diagram.png"))
+                   tool-results-dir "call-read")))
+            (insert result "\n#+end_tool\n")
+            (put-text-property tool-start (point)
+                               'gptel '(tool . "call-read")))
+          (clrhash mevedel-tool-media--store)
+          (let ((evidence
+                 (mevedel-transcript-project-evidence
+                  (list (cons (point-min) (point-max)))
+                  :tool-output-max 20
+                  :tool-results-dir tool-results-dir)))
+            (should (string-match-p "provenance: tool-call" evidence))
+            (should (string-match-p "file_path" evidence))
+            (should (string-match-p "provenance: tool-result" evidence))
+            (should (string-match-p "tool output truncated" evidence))
+            (should (string-match-p
+                     (regexp-quote
+                      "[media: image; MIME image/png; path diagram.png]")
+                     evidence))
+            (should-not (string-match-p "QUJD" evidence))
+            (should (= 1 (let ((start 0) (count 0))
+                           (while (string-match
+                                   "provenance: tool-call" evidence start)
+                             (setq count (1+ count)
+                                   start (match-end 0)))
+                           count)))))
+      (delete-directory tool-results-dir t))))
 
 (provide 'test-mevedel-transcript)
 ;;; test-mevedel-transcript.el ends here
