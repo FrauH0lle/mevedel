@@ -23,9 +23,18 @@
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 
 ;; `mevedel-compact'
+(declare-function mevedel--compact-evidence-selection
+                  "mevedel-compact" (target limit aggressive))
+(declare-function mevedel--compact-find-boundary "mevedel-compact" nil)
 (declare-function mevedel--compact-main-target "mevedel-compact" nil)
 (declare-function mevedel--compact-previous-summary "mevedel-compact" nil)
 (declare-function mevedel--compact-run "mevedel-compact" (&rest args))
+(defvar mevedel--compaction-cancel)
+
+;; `mevedel-context-summary'
+(declare-function mevedel-context-summary-generate
+                  "mevedel-context-summary"
+                  (source purpose callback &rest args))
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-ensure "mevedel-goal"
@@ -423,16 +432,26 @@ reservation while its prepared kickoff has not started."
     (mevedel-plan-handoff--persist session chat-buffer)
     prepared))
 
-(defun mevedel-plan-handoff--summary-instructions (&optional portable-paths)
-  "Return compaction guidance for an implementation handoff.
-When PORTABLE-PATHS is non-nil, require repository-relative file references."
-  (concat
-   "Create a portable implementation handoff that preserves requirements, "
-   "repository discoveries, rationale, constraints, unresolved risks, and "
-   "next steps. Do not reproduce the accepted plan; it will be supplied "
-   "separately in full after this summary."
-   (when portable-paths
-     " Express repository-local file references relative to the repository root.")))
+(defun mevedel-plan-handoff--summary-focus (plan selection)
+  "Return exact PLAN and SELECTION instructions as relevance focus."
+  (format
+   "Accepted plan (authoritative; relevance only):\n%s\n\nImplementation-only instructions (authoritative; relevance only):\n%s"
+   plan
+   (or (plist-get selection :instructions) "(none)")))
+
+(defun mevedel-plan-handoff--summary-source
+    (source previous-summary plan)
+  "Return SOURCE with PREVIOUS-SUMMARY as evidence and PLAN omitted."
+  (string-replace
+   plan
+   "[mevedel accepted-plan omission: supplied separately as authoritative focus]"
+   (if previous-summary
+       (concat
+        "--- evidence item; provenance: prior-continuation-summary ---\n"
+        previous-summary
+        "\n--- end evidence item ---\n\n"
+        source)
+     source)))
 
 (defun mevedel-plan-handoff--prepare-summary (session chat-buffer record)
   "Aggressively compact CHAT-BUFFER and cache the result in SESSION RECORD."
@@ -443,64 +462,122 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
            (plan
             (mevedel-plan-handoff--accepted-body (plist-get record :accepted)))
            (target (mevedel--compact-main-target))
-           (apply-function (plist-get target :apply)))
-      (setq target
-            (plist-put
-             target :apply
-             (lambda (active-target summary &rest args)
-               (let ((prepared (copy-tree record)))
-                 (setq prepared (plist-put prepared :summary summary))
-                 (setq prepared
-                       (plist-put prepared :step
-                                  (if worktree-p 'prepare-worktree 'submit)))
-                 (cl-remf prepared :failure)
-                 (mevedel-plan--metadata-put
-                  session :implementation-retry prepared)
-                 (if worktree-p
-                     (mevedel-plan-handoff--persist session chat-buffer)
-                   (condition-case apply-error
-                       (apply apply-function active-target summary args)
-                     (error
-                      (setq prepared (plist-put prepared :step 'prepare-summary))
-                      (mevedel-plan--metadata-put
-                       session :implementation-retry prepared)
-                      (signal (car apply-error) (cdr apply-error)))))))))
-      (when worktree-p
-        (setq target (plist-put target :begin-context-epoch nil))
-        (setq target (plist-put target :warn-on-completion nil)))
-      (mevedel--compact-run
-       :aggressive t
-       :instructions (mevedel-plan-handoff--summary-instructions worktree-p)
-       :prepared-summary (plist-get record :summary)
-       :summary-ready
-       (lambda (summary)
-         (let* ((prepared (copy-tree record))
-                (summary
-                 (string-replace
-                  plan "(Accepted plan omitted; supplied separately.)"
-                  summary))
-                (summary
-                 (if worktree-p
-                     (string-replace
-                      (file-name-as-directory
-                       (expand-file-name
-                        (mevedel-session-working-directory session)))
-                      "" summary)
-                   summary)))
-           (setq prepared (plist-put prepared :summary summary))
-           (setq prepared (plist-put prepared :step 'prepare-summary))
-           (cl-remf prepared :failure)
-           (mevedel-plan--metadata-put
-            session :implementation-retry prepared)
-           (mevedel-plan-handoff--persist session chat-buffer)
-           summary))
-       :target target
-       :callback
-       (lambda (err)
-         (if err
-             (mevedel-plan-handoff--implementation-failed
-              session chat-buffer (format "%s" err))
-           (mevedel-plan-handoff--dispatch-accepted session chat-buffer)))))))
+           (previous-summary (plist-get target :previous-summary))
+           (focus (mevedel-plan-handoff--summary-focus plan selection))
+           (source-transform
+            (lambda (source)
+              (mevedel-plan-handoff--summary-source
+               source previous-summary plan))))
+      (if worktree-p
+          (let ((cached (plist-get record :summary)))
+            (if cached
+                (let ((prepared (copy-tree record)))
+                  (setq prepared
+                        (plist-put prepared :step 'prepare-worktree))
+                  (cl-remf prepared :failure)
+                  (mevedel-plan--metadata-put
+                   session :implementation-retry prepared)
+                  (mevedel-plan-handoff--persist session chat-buffer)
+                  (mevedel-plan-handoff--dispatch-accepted
+                   session chat-buffer))
+              (unless (plist-get target :eligible-p)
+                (user-error "Current buffer is not the active persisted segment"))
+              (let ((limit (mevedel--compact-find-boundary)))
+                (unless limit
+                  (user-error "Not enough conversation content to summarize"))
+                (let* ((source
+                        (plist-get
+                         (mevedel--compact-evidence-selection target limit t)
+                         :content))
+                       (source (funcall source-transform source))
+                       settled)
+                  (when (string-blank-p source)
+                    (user-error "Not enough conversation content to summarize"))
+                  (require 'mevedel-context-summary)
+                  (let ((cancel
+                         (mevedel-context-summary-generate
+                          source 'handoff
+                          (lambda (result)
+                            (setq settled t
+                                  mevedel--compaction-cancel nil)
+                            (pcase (plist-get result :outcome)
+                              ('success
+                               (let* ((summary
+                                       (string-replace
+                                        (file-name-as-directory
+                                         (expand-file-name
+                                          (mevedel-session-working-directory
+                                           session)))
+                                        "" (plist-get result :summary)))
+                                      (prepared (copy-tree record)))
+                                 (setq prepared
+                                       (plist-put prepared :summary summary))
+                                 (setq prepared
+                                       (plist-put prepared :step
+                                                  'prepare-worktree))
+                                 (cl-remf prepared :failure)
+                                 (mevedel-plan--metadata-put
+                                  session :implementation-retry prepared)
+                                 (mevedel-plan-handoff--persist
+                                  session chat-buffer)
+                                 (mevedel-plan-handoff--dispatch-accepted
+                                  session chat-buffer)))
+                              ('aborted
+                               (mevedel-plan-handoff--implementation-failed
+                                session chat-buffer
+                                "Summary generation aborted"))
+                              ('error
+                               (mevedel-plan-handoff--implementation-failed
+                                session chat-buffer
+                                (format "Summary generation failed: %s"
+                                        (plist-get result :error))))))
+                          :session session
+                          :focus focus)))
+                    (unless settled
+                      (setq-local mevedel--compaction-cancel cancel)))))))
+        (let ((apply-function (plist-get target :apply)))
+          (setq target
+                (plist-put
+                 target :apply
+                 (lambda (active-target summary &rest args)
+                   (let ((prepared (copy-tree record)))
+                     (setq prepared (plist-put prepared :summary summary))
+                     (setq prepared (plist-put prepared :step 'submit))
+                     (cl-remf prepared :failure)
+                     (mevedel-plan--metadata-put
+                      session :implementation-retry prepared)
+                     (condition-case apply-error
+                         (apply apply-function active-target summary args)
+                       (error
+                        (setq prepared
+                              (plist-put prepared :step 'prepare-summary))
+                        (mevedel-plan--metadata-put
+                         session :implementation-retry prepared)
+                        (signal (car apply-error) (cdr apply-error))))))))
+          (mevedel--compact-run
+           :aggressive t
+           :focus focus
+           :prepared-summary (plist-get record :summary)
+           :purpose 'handoff
+           :source-transform source-transform
+           :summary-ready
+           (lambda (summary)
+             (let ((prepared (copy-tree record)))
+               (setq prepared (plist-put prepared :summary summary))
+               (setq prepared (plist-put prepared :step 'prepare-summary))
+               (cl-remf prepared :failure)
+               (mevedel-plan--metadata-put
+                session :implementation-retry prepared)
+               (mevedel-plan-handoff--persist session chat-buffer)
+               summary))
+           :target target
+           :callback
+           (lambda (err)
+             (if err
+                 (mevedel-plan-handoff--implementation-failed
+                  session chat-buffer (format "%s" err))
+               (mevedel-plan-handoff--dispatch-accepted
+                session chat-buffer)))))))))
 
 (defun mevedel-plan-handoff--implementation-failed
     (session chat-buffer reason)

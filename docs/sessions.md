@@ -37,6 +37,13 @@ not emit `SessionEnd`. Their hook context is appended as a new snapshot and is
 consumed by the next accepted root input, except automatic compaction attaches
 compact-start context to its already-pending request.
 
+Plan Here/Summary is a root compaction and follows this rotation and context
+epoch contract. Plan Worktree/Summary is a non-mutating handoff preparation:
+the source sidecar caches its successful generated background in the durable
+implementation retry record, but the source segment and context epoch stay
+unchanged. The clean target later receives that cached background before its
+accepted-plan implementation turn.
+
 ## Persistence flow
 
 ```mermaid

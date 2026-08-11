@@ -43,20 +43,19 @@ The slash/manual command remains useful when the user wants to compact
 with custom instructions.
 
 Standalone Plan's Here/Summary context uses the same aggressive root
-compaction runner before implementation.  Its guidance asks for a portable
-handoff without the accepted plan, sets the preserved tail to zero, and then
-submits the immutable accepted path, the full accepted plan, and the
-implementation instruction through the ordinary request lifecycle.  The
-generated summary is anchored in the new segment and cached in the Plan retry
-record before rotation persists the sidecar.  A later startup failure can
-therefore retry implementation without another summary request.
+compaction runner before implementation. It selects the full compactable
+history with no preserved tail, changes generation to the handoff purpose, and
+retains the normal hooks, bounded retries, rotation, persistence, and compact
+context epoch. The generated background is anchored in the new segment and
+cached in the Plan retry record before rotation persists the sidecar.
 
-Worktree/Summary uses the same private target adapter and summary request, but
-its apply operation only caches the portable summary.  It neither replaces nor
-rotates the source transcript and does not begin a source context epoch.  The
-summary is instead installed as the leading canonical summary block of the
-clean worktree target, with source-checkout paths rewritten relative to the
-repository root.
+Worktree/Summary reuses that aggressive evidence selection but calls the
+one-attempt context-summary generator directly. It emits no compaction hooks,
+does not rotate or otherwise mutate the source, and starts no source context
+epoch. A successful background is cached in the durable retry record, rewritten
+to repository-relative source paths, and installed as the leading canonical
+summary block of the clean target. Later preparation or implementation-start
+failures therefore reuse it without another model request.
 
 When `PreCompact` adds hook context, the hook audit surface is stored as
 an ignored side channel next to the compaction summary, not in the
@@ -302,11 +301,15 @@ in this order:
 - Skills Invoked
 - Next Steps
 
-The generator also supports task-focused handoffs for other consumers. A
-handoff shares the first eight headings but omits `Next Steps`; it treats its
-separately supplied task as authority rather than turning unresolved parent
-work into a child assignment. Missing, duplicated, reordered, unexpected, or
-purpose-inappropriate headings fail validation.
+The generator also supports task-focused handoffs. A handoff shares the first
+eight headings but omits `Next Steps`; it treats separately supplied focus data
+as authority rather than turning unresolved source work into an assignment.
+For Plan, the focus contains the exact accepted plan and implementation-only
+instructions, while the projected evidence replaces the accepted proposal with
+a labelled omission marker. An anchored continuation summary is ordinary
+handoff evidence, not authoritative previous-summary state. Missing,
+duplicated, reordered, unexpected, or purpose-inappropriate headings fail
+validation.
 
 The transcript module preserves selected model-visible ordering as labelled
 user, assistant, reasoning, tool-call, and tool-result evidence. It excludes
