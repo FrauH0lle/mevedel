@@ -86,6 +86,8 @@ active elapsed time instead and exclude actionable user-input waits.
 - compaction threshold inputs, hook work, segment-save stages, publication,
   and total duration, plus context-summary purpose, provider/model/effort,
   outcome, and token usage without raw evidence, focus data, or generated text;
+- Agent summary preparation uses that same context-summary span; the parent
+  handle stores only provider/model/effort metadata and never summary content;
 - skill-roster advertisement and model/user skill invocation outcomes; and
 - profiler environment snapshots, prompt failures, and saved artifacts.
 

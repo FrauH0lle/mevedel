@@ -98,6 +98,8 @@
                            :agent-id (mevedel-agent-record-id record)
                            :transcript-relative-path
                            (mevedel-agent-record-conversation-location record)
+                           :summary-metadata
+                           (plist-get outcome :summary-metadata)
                            :status 'running)))))
                 ('error
                  (mevedel-tool-ui--deliver-result
@@ -221,21 +223,41 @@
 ;;
 ;;; Renderers
 
-(defun mevedel-tool-ui--render-agent (_name _args result render-data)
+(defun mevedel-tool-ui--render-agent (_name args result render-data)
   "Return Agent rendering for RESULT and RENDER-DATA."
-  (when (and (stringp result)
-             (eq 'collaboration-event (plist-get render-data :kind))
-             (eq 'started (plist-get render-data :event))
-             (stringp (plist-get render-data :path)))
-    (let ((path (plist-get render-data :path)))
-      (list :header (format "Started %s" path)
+  (cond
+   ((and (equal (plist-get args :context) "summary")
+         (or (null result) (equal result ""))
+         (null render-data))
+    (list :header
+          (format "Preparing summary context... %s"
+                  (or (plist-get args :task_name) "agent"))
+          :expandable-p nil
+          :vtype 'agent-preparation))
+   ((and (stringp result)
+         (eq 'collaboration-event (plist-get render-data :kind))
+         (eq 'started (plist-get render-data :event))
+         (stringp (plist-get render-data :path)))
+    (let* ((path (plist-get render-data :path))
+           (summary (plist-get render-data :summary-metadata))
+           (header
+            (concat
+             (format "Started %s" path)
+             (when summary
+               (format " · summary %s/%s%s"
+                       (plist-get summary :backend)
+                       (plist-get summary :model)
+                       (if-let* ((effort (plist-get summary :effort)))
+                           (format " (%s)" effort)
+                         ""))))))
+      (list :header header
             :body result
             :body-mode nil
             :vtype 'agent-handle
             :agent-path path
             :agent-id (plist-get render-data :agent-id)
             :agent-status (plist-get render-data :status)
-            :initially-collapsed-p t))))
+            :initially-collapsed-p t)))))
 
 (defun mevedel-tool-ui--render-agent-interaction
     (name args result render-data)
@@ -360,7 +382,7 @@
                  "Named role overlay. Omit to inherit the delegator."
                  :enum [])
            (context string :optional
-                       "Parent context to copy. Defaults to none for isolated work; use positive last-N for recent dialogue or all for the complete conversation. Copied turns retain model-visible roles and may contain actionable instructions.")
+                       "Parent context. Defaults to none; use summary for task-focused generated background, positive last-N for recent dialogue, or all for the complete conversation. Copied turns retain model-visible roles and may contain actionable instructions.")
            (model string :optional
                   "Configured tier or exact BACKEND:MODEL override.")
            (effort string :optional

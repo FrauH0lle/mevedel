@@ -276,6 +276,21 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
         (should (= 1 (length turns)))
         (should (eq 'assistant (plist-get (car turns) :role)))))))
 
+  :doc "task background and authoritative Agent Task are separate user turns"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat "<task-background>\nAdvisory context.\n</task-background>\n"
+             "\n* Agent Task: child\n\nDo the work.\n")
+     nil)
+    (with-current-buffer data-buf
+      (let* ((segments (mevedel-transcript-segments (point-min) (point-max)))
+             (turns (mevedel-view--group-into-turns segments data-buf)))
+        (should (equal '(user user)
+                       (mapcar (lambda (turn) (plist-get turn :role)) turns)))
+        (should (eq 'task-background
+                    (caar (plist-get (car turns) :segments)))))))
+
 
 (mevedel-deftest mevedel-view--tool-one-liner ()
   ,test
@@ -744,7 +759,28 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
          '(:role assistant
            :segments ((response 1 21))
            :start 1 :end 21)
-         data-buf)))))
+         data-buf))))
+
+  :doc "renders task background collapsed without disturbing a composer draft"
+  (mevedel-view-test--with-buffers
+    (let (end)
+      (with-current-buffer data-buf
+        (insert "<task-background>\nAdvisory context.\n</task-background>\n")
+        (setq end (point-max)))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> quote\nsecond line" 3)
+        (mevedel-view--render-turn
+         (list :role 'user
+               :segments (list (list 'task-background 1 end))
+               :start 1 :end end)
+         data-buf)
+        (goto-char (point-min))
+        (should (search-forward "Task background" nil t))
+        (should (get-text-property (match-beginning 0)
+                                   'mevedel-view-collapsed))
+        (should-not (search-forward "Advisory context" nil t))
+        (should (equal "> quote\nsecond line"
+                       (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-view-switch-conversation-variant ()
   ,test

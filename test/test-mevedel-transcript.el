@@ -144,6 +144,25 @@
         (should (eq 'tool (caadr segs)))
         (should (eq 'response (car (caddr segs)))))))
 
+  :doc "task background remains distinct from the authoritative Agent Task"
+  (mevedel-transcript-test--with-buffer
+    (mevedel-transcript-test--insert
+     data-buf
+     (concat "<task-background>\nAdvisory context.\n</task-background>\n"
+             "\n* Agent Task: child\n\nDo the work.\n")
+     nil)
+    (with-current-buffer data-buf
+      (let ((segs (mevedel-transcript-segments (point-min) (point-max))))
+        (should (equal '(task-background user) (mapcar #'car segs)))
+        (should (string-match-p
+                 "Advisory context"
+                 (buffer-substring-no-properties
+                  (cadr (car segs)) (caddr (car segs)))))
+        (should (string-match-p
+                 "Agent Task"
+                 (buffer-substring-no-properties
+                  (cadr (cadr segs)) (caddr (cadr segs))))))))
+
   :doc "response table continuation gaps stay in the response"
   (mevedel-transcript-test--with-buffer
     (mevedel-transcript-test--insert data-buf "| Name" 'response)

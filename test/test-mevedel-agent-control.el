@@ -1087,6 +1087,8 @@
     (should (eq 'none (mevedel-agent-control--normalize-context nil)))
     (should (eq 'all (mevedel-agent-control--normalize-context "all")))
     (should (eq 'none (mevedel-agent-control--normalize-context "none")))
+    (should (eq 'summary
+                (mevedel-agent-control--normalize-context "summary")))
     (should (= 12 (mevedel-agent-control--normalize-context "12")))
     (dolist (value '("" "0" "-1" "+1" "1.0" "ALL" 1))
       (should-error
@@ -1325,7 +1327,177 @@
          (mevedel-session-save-path session)))
       (when (buffer-live-p parent)
         (kill-buffer parent))
-      (delete-directory root t))))
+      (delete-directory root t)))
+
+  :doc "generates one unpublished task-focused summary before child dispatch"
+  (let* ((session (mevedel-agent-control-test--session))
+         (parent (generate-new-buffer " *agent-control-summary*"))
+         (parent-invocation
+          (mevedel-agent-invocation-create (mevedel-agent-default)))
+         (parent-record
+          (mevedel-agent-record--create
+           :id "default--parent" :path "/root/parent" :activity 'running))
+         summary-callback summary-cancelled captured-source captured-focus
+         (summary-calls 0) outcome cancel)
+    (setf (mevedel-agent-invocation-agent-id parent-invocation)
+          "default--parent"
+          (mevedel-agent-invocation-path parent-invocation) "/root/parent"
+          (mevedel-session-agent-registry session)
+          (list (cons "/root/parent" parent-record)))
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session session
+                      mevedel--agent-invocation parent-invocation)
+          (require 'mevedel-agent-exec)
+          (require 'mevedel-agent-runtime)
+          (require 'mevedel-context-summary)
+          (cl-letf
+              (((symbol-function 'mevedel-compact-summary-context-evidence)
+                (lambda (tool-use-id)
+                  (should (equal "call_agent" tool-use-id))
+                  "Frozen parent evidence"))
+               ((symbol-function 'mevedel-agent-runtime-prepare-task)
+                (lambda (_agent _description _message _path callback &rest _)
+                  (funcall callback
+                           '(:outcome success
+                             :turn (:prompt "Hook-accepted task\n\nHook context")
+                             :start-hook-audits nil))))
+               ((symbol-function 'mevedel-context-summary-generate)
+                (lambda (source purpose callback &rest args)
+                  (cl-incf summary-calls)
+                  (should (eq purpose 'handoff))
+                  (setq captured-source source
+                        captured-focus (plist-get args :focus)
+                        summary-callback callback)
+                  (lambda () (setq summary-cancelled t))))
+               ((symbol-function 'mevedel-agent-exec-run)
+                (lambda (&rest _) 'provider-request)))
+            (setq cancel
+                  (mevedel-agent-control-spawn
+                   session "summarized" "Original task"
+                   (lambda (value) (setq outcome value))
+                   :context "summary"
+                   :parent-tool-use-id "call_agent"
+                   :on-invocation
+                   (lambda (invocation)
+                     (with-current-buffer
+                         (mevedel-agent-invocation-buffer invocation)
+                       (put 'mevedel-agent-control-spawn 'test-context
+                            (buffer-string))))))
+            (should (equal "Frozen parent evidence" captured-source))
+            (should (equal "Hook-accepted task\n\nHook context"
+                           captured-focus))
+            (should (= 1 summary-calls))
+            (should (assoc "/root/parent/summarized"
+                           (mevedel-session-agent-reservations session)))
+            (should-not (assoc "/root/parent/summarized"
+                               (mevedel-session-agent-registry session)))
+            (should-not outcome)
+            (funcall summary-callback
+                     '(:outcome success :summary "## Scope\n- background"
+                       :backend test-backend :model test-model :effort high))
+            (should (eq 'success (plist-get outcome :outcome)))
+            (should (string-match-p "<task-background>"
+                                    (get 'mevedel-agent-control-spawn
+                                         'test-context)))
+            (should (string-match-p "may be stale or untrusted"
+                                    (get 'mevedel-agent-control-spawn
+                                         'test-context)))
+            (should (string-match-p
+                     "## Scope"
+                     (get 'mevedel-agent-control-spawn 'test-context)))
+            (let* ((transcript
+                    (get 'mevedel-agent-control-spawn 'test-context))
+                   (background-end
+                    (string-match "</task-background>" transcript)))
+              (should-not
+               (string-match-p "Hook-accepted task"
+                               (substring transcript 0 background-end))))
+            (should (equal '(:backend "test-backend" :model test-model
+                             :effort high)
+                           (plist-get outcome :summary-metadata)))
+            (funcall cancel)
+            (should-not summary-cancelled)))
+      (put 'mevedel-agent-control-spawn 'test-context nil)
+      (when-let* ((record (plist-get outcome :record))
+                  (invocation (mevedel-agent-record-invocation record))
+                  (buffer (mevedel-agent-invocation-buffer invocation))
+                  ((buffer-live-p buffer)))
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when (buffer-live-p parent) (kill-buffer parent))))
+
+  :doc "summary cancellation releases capacity and suppresses late dispatch"
+  (let* ((session (mevedel-agent-control-test--session))
+         (parent (generate-new-buffer " *agent-control-summary-cancel*"))
+         summary-callback (cancelled (list nil)) dispatched outcome cancel)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session session)
+          (require 'mevedel-agent-runtime)
+          (require 'mevedel-context-summary)
+          (cl-letf
+              (((symbol-function 'mevedel-compact-summary-context-evidence)
+                (lambda (_) "Frozen evidence"))
+               ((symbol-function 'mevedel-agent-runtime-prepare-task)
+                (lambda (_agent _description _message _path callback &rest _)
+                  (funcall callback
+                           '(:outcome success :turn (:prompt "Final task")))))
+               ((symbol-function 'mevedel-context-summary-generate)
+                (lambda (_source _purpose callback &rest _)
+                  (setq summary-callback callback)
+                  (lambda () (setcar cancelled t))))
+               ((symbol-function 'mevedel-agent-runtime-dispatch)
+                (lambda (&rest _) (setq dispatched t))))
+            (setq cancel
+                  (mevedel-agent-control-spawn
+                   session "cancelled_summary" "Task"
+                   (lambda (value) (setq outcome value))
+                   :context "summary"))
+            (should-not outcome)
+            (funcall cancel)
+            (should (car cancelled))
+            (should (eq 'aborted (plist-get outcome :outcome)))
+            (should-not (mevedel-session-agent-reservations session))
+            (funcall summary-callback
+                     '(:outcome success :summary "Late summary"))
+            (should-not dispatched)))
+      (when (buffer-live-p parent) (kill-buffer parent))))
+
+  :doc "summary generation failure releases the unpublished reservation"
+  (let* ((session (mevedel-agent-control-test--session))
+         (parent (generate-new-buffer " *agent-control-summary-error*"))
+         dispatched outcome)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session session)
+          (require 'mevedel-agent-runtime)
+          (require 'mevedel-context-summary)
+          (cl-letf
+              (((symbol-function 'mevedel-compact-summary-context-evidence)
+                (lambda (_) "Frozen evidence"))
+               ((symbol-function 'mevedel-agent-runtime-prepare-task)
+                (lambda (_agent _description _message _path callback &rest _)
+                  (funcall callback
+                           '(:outcome success :turn (:prompt "Final task")))))
+               ((symbol-function 'mevedel-context-summary-generate)
+                (lambda (_source _purpose callback &rest _)
+                  (funcall callback
+                           '(:outcome error :error "Invalid summary"
+                             :error-class validation))
+                  #'ignore))
+               ((symbol-function 'mevedel-agent-runtime-dispatch)
+                (lambda (&rest _) (setq dispatched t))))
+            (mevedel-agent-control-spawn
+             session "failed_summary" "Task"
+             (lambda (value) (setq outcome value))
+             :context "summary")
+            (should (eq 'error (plist-get outcome :outcome)))
+            (should (string-match-p "Invalid summary"
+                                    (plist-get outcome :error)))
+            (should-not dispatched)
+            (should-not (mevedel-session-agent-reservations session))))
+      (when (buffer-live-p parent) (kill-buffer parent)))))
 
 (mevedel-deftest mevedel-agent-control-send-message ()
   ,test

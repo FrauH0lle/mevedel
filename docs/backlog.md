@@ -113,27 +113,6 @@ become implemented, obsolete, or unjustified.
 
 ## Agents
 
-### Add task-focused summary context for agent forks
-
-- **Source:** `mevedel-agent-control.el`, `mevedel-plan-handoff.el`; agent
-  context-fork discussion on 2026-07-24.
-- **What's owed:** If real usage shows self-contained Agent messages are
-  insufficient, add an explicit `fork_turns="summary"` mode. It should cost one
-  disclosed additional model request, use the child task to produce focused
-  background, never treat prior requests as child assignments, inject the
-  result as labelled context rather than replayed user turns, and leave the
-  parent transcript unchanged.
-- **Why deferred:** Ordinary delegation should first rely on a complete
-  `message`. Generated context adds latency, cost, failure handling, and
-  asynchronous preparation to Agent spawning.
-- **Status check:** Plan handoff already creates compact implementation
-  summaries, but its continuation-oriented prompt preserves unresolved next
-  steps and its preparation runs after a completed Plan turn.
-- **Blast radius:** Reusing Plan handoff compaction unchanged could revive
-  parent obligations in the child and cannot safely mutate or compact a parent
-  request that is still active. Reuse lower-level summarization machinery only
-  behind a non-mutating, task-focused agent handoff.
-
 ## Request lifecycle
 
 ### Prevent system sleep during active requests

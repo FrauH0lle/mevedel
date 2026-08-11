@@ -14,6 +14,9 @@
   (require 'cl-lib)
   (require 'subr-x))
 
+;; `gptel'
+(declare-function gptel-backend-name "ext:gptel" (backend))
+
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-final-response
                   "mevedel-agent-conversation" (invocation))
@@ -30,6 +33,8 @@
                   "mevedel-agent-runtime" (invocation reason))
 (declare-function mevedel-agent-runtime-prepare-task
                   "mevedel-agent-runtime" t t)
+(declare-function mevedel-agent-runtime-task-background
+                  "mevedel-agent-runtime" (summary))
 
 ;; `mevedel-agents'
 (declare-function copy-mevedel-agent "mevedel-agents" (cl-x))
@@ -60,6 +65,12 @@
 ;; `mevedel-compact'
 (declare-function mevedel-compact-context-snapshot
                   "mevedel-compact" (context))
+(declare-function mevedel-compact-summary-context-evidence
+                  "mevedel-compact" (tool-use-id))
+
+;; `mevedel-context-summary'
+(declare-function mevedel-context-summary-generate
+                  "mevedel-context-summary" t t)
 
 ;; `mevedel-models'
 (declare-function mevedel-model-parse-effort "mevedel-models" (value))
@@ -616,15 +627,16 @@ rewrite after the complete registry has been repaired."
   "Normalize model-facing parent context VALUE.
 
 Nil defaults to `none'.  The only explicit forms are \"all\", \"none\", and
-positive decimal strings."
+positive decimal strings, or \"summary\"."
   (cond
    ((or (null value) (equal value "none")) 'none)
    ((equal value "all") 'all)
+   ((equal value "summary") 'summary)
    ((and (stringp value)
          (string-match-p "\\`[1-9][0-9]*\\'" value))
     (string-to-number value))
    (t (user-error
-       "Agent context must be all, none, or a positive integer string"))))
+       "Agent context must be all, none, summary, or a positive integer string"))))
 
 (defun mevedel-agent-control--reserve
     (session parent-path task-name role)
@@ -915,6 +927,9 @@ idempotent cancellation thunk for the unpublished preparation transaction."
          (record (mevedel-agent-control--reserve
                   session caller-path task-name role-name))
          context-snapshot
+         summary-evidence
+         summary-metadata
+         summary-cancel
          committed
          cancelled
          settled)
@@ -930,7 +945,7 @@ idempotent cancellation thunk for the unpublished preparation transaction."
                (mevedel-agent-control--rollback session record))
              (settle (list :outcome 'error
                            :error (error-message-string err)))))
-         (dispatch (prepared)
+         (start-provider (prepared)
            (unless (or settled cancelled)
              (if (not (eq (plist-get prepared :outcome) 'success))
                  (fail (list 'error
@@ -967,23 +982,76 @@ idempotent cancellation thunk for the unpublished preparation transaction."
                                'starting)
                        (setf (mevedel-agent-record-activity record) 'running))
                      (mevedel-agent-control--persist-session session)
-                     (settle (list :outcome 'success :record record)))
-                 (error (fail err)))))))
+                     (settle (list :outcome 'success
+                                   :record record
+                                   :summary-metadata summary-metadata)))
+                 (error (fail err))))))
+         (prepared (result)
+           (unless (or settled cancelled)
+             (if (not (eq context 'summary))
+                 (start-provider result)
+               (if (not (eq (plist-get result :outcome) 'success))
+                   (start-provider result)
+                 (condition-case err
+                     (progn
+                       (require 'mevedel-context-summary)
+                       (setq
+                        summary-cancel
+                        (mevedel-context-summary-generate
+                         summary-evidence 'handoff
+                         (lambda (summary-result)
+                           (unless (or settled cancelled)
+                             (pcase (plist-get summary-result :outcome)
+                               ('success
+                                (setq context-snapshot
+                                      (mevedel-agent-runtime-task-background
+                                       (plist-get summary-result :summary))
+                                      summary-metadata
+                                      (list
+                                       :backend
+                                       (when-let* ((backend
+                                                    (plist-get summary-result
+                                                               :backend)))
+                                         (or (ignore-errors
+                                               (gptel-backend-name backend))
+                                             (format "%s" backend)))
+                                       :model (plist-get summary-result :model)
+                                       :effort
+                                       (plist-get summary-result :effort)))
+                                (start-provider result))
+                               ('aborted
+                                (mevedel-agent-control--rollback session record)
+                                (settle '(:outcome aborted)))
+                               (_
+                                (fail
+                                 (list
+                                  'error
+                                  (or (plist-get summary-result :error)
+                                      "Agent context summary failed")))))))
+                         :session session
+                         :focus (plist-get (plist-get result :turn) :prompt))))
+                   (error (fail err))))))))
       (condition-case err
           (progn
             (require 'mevedel-compact)
-            (setq context-snapshot
-                  (mevedel-compact-context-snapshot context))
+            (if (eq context 'summary)
+                (setq summary-evidence
+                      (mevedel-compact-summary-context-evidence
+                       parent-tool-use-id))
+              (setq context-snapshot
+                    (mevedel-compact-context-snapshot context)))
             (require 'mevedel-agent-runtime)
             (mevedel-agent-runtime-prepare-task
              resolved-agent (or description task-name) message
-             (mevedel-agent-record-path record) #'dispatch
+             (mevedel-agent-record-path record) #'prepared
              :skill-permission-rules skill-permission-rules
              :cancelled-p (lambda () cancelled)))
         (error (fail err)))
       (lambda ()
         (unless settled
           (setq cancelled t)
+          (when summary-cancel
+            (funcall summary-cancel))
           (mevedel-agent-control--rollback session record)
           (settle '(:outcome aborted)))))))
 

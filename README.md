@@ -546,7 +546,8 @@ structured task list with statuses, dependencies, owner status notes, and an
 optional task status fragment; use `mevedel-toggle-tasks` or `TAB`/`RET` on the
 fragment to show or hide completed tasks)
 
-**Sub-agents:** `Agent` (start a retained asynchronous child), `FollowupAgent`
+**Sub-agents:** `Agent` (start a retained asynchronous child, optionally with
+task-focused generated background), `FollowupAgent`
 (continue or steer a retained child), `ListAgents` (inspect retained paths),
 `SendMessage` (queue mail without starting a turn), `WaitAgent` (wait for mail,
 steering, or timeout), `InterruptAgent` (abort one current turn without removing
