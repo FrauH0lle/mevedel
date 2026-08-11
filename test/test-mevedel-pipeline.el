@@ -541,6 +541,24 @@
 				   (plist-get
 				    (plist-get updated :args) :file_path)))))
 		     (delete-directory root t)))
+		 :doc "rejects explicit client paths before remote authorization"
+		 (let* ((target (mevedel-execution-target-create
+			 "/ssh:user@host:/srv/project/"))
+		(session (mevedel-session--create
+			  :name "remote-client-path"
+			  :execution-target target
+			  :working-directory "/ssh:user@host:/srv/project/"))
+		(tool (mevedel-tool--create
+		       :name "RemotePath"
+		       :args '((file_path path :required "Path"))))
+		(context (list :tool tool
+			       :session session
+			       :default-directory "/ssh:user@host:/srv/project/"
+			       :args '(:file_path "/::/etc/passwd"))))
+		   (should-error
+		    (mevedel-pipeline--step-normalize-paths
+		     context #'ignore #'ignore)
+		    :type 'mevedel-execution-target-error))
 		 :doc "authorization and handler observe one identical path"
 		 (let* ((root (file-name-as-directory
 				 (make-temp-file "mevedel-normalize-" t)))
@@ -3136,6 +3154,187 @@
      tool (lambda (value) (setq result value)) '(:msg "hello"))
     (should (equal result "hello")))
 
+  :doc "unknown remote outcome blocks mutation but permits read-only tools"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-pipeline-unknown-" t)))
+         (remote-root (format "/mevedelmock:unknown:%s" root))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id remote-root :root remote-root
+           :name "unknown-remote"
+           :file-cache (mevedel-test-file-cache-create)))
+         session
+         mutation-permission-called
+         mutation-handler-called
+         read-permission-called
+         read-handler-called
+         (mutating-tool
+          (mevedel-tool--create
+           :name "ApplyPatch" :read-only-p nil
+           :check-permission-async
+           (lambda (_tool _input cont)
+             (setq mutation-permission-called t)
+             (funcall cont 'allow))
+           :handler
+           (lambda (_args)
+             (setq mutation-handler-called t)
+             (list :result "mutated"))))
+         (read-tool
+          (mevedel-tool--create
+           :name "Read" :read-only-p t
+           :check-permission-async
+           (lambda (_tool _input cont)
+             (setq read-permission-called t)
+             (funcall cont 'allow))
+           :handler
+           (lambda (_args)
+             (setq read-handler-called t)
+             (list :result "read"))))
+         mutation-result read-result)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("unknown")
+          (setq session
+                (mevedel-session-create
+                 "unknown-remote" workspace remote-root))
+          (setf (mevedel-session-lease session)
+                '(:unsettled-mutation t))
+          (with-temp-buffer
+            (setq-local default-directory remote-root)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel--session session)
+            (setq mutation-result
+                  (test-mevedel-pipeline--run-tool-and-wait
+                   mutating-tool nil))
+            (setq read-result
+                  (test-mevedel-pipeline--run-tool-and-wait
+                   read-tool nil)))
+          (should (string-match-p
+                   "unknown remote outcome" mutation-result))
+          (should-not mutation-permission-called)
+          (should-not mutation-handler-called)
+          (should read-permission-called)
+          (should read-handler-called)
+          (should (equal read-result "read")))
+      (when session
+        (mevedel-execution-teardown-session session))
+      (delete-directory root t)))
+  :doc "remote project hook rewrites cannot cross execution targets"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-pipeline-hook-root-" t)))
+         (foreign-root (file-name-as-directory
+                        (make-temp-file "mevedel-pipeline-hook-foreign-" t)))
+         (remote-root (format "/mevedelmock:%s:%s"
+                              (system-name) root))
+         (foreign-path (format "/mevedelmock:foreign:%sfile.txt"
+                               foreign-root))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id remote-root :root remote-root
+           :name "remote-hook-boundary"
+           :file-cache (mevedel-test-file-cache-create)))
+         session
+         (tool
+          (mevedel-tool--create
+           :name "Read" :args '((file_path path :required "Path"))
+           :groups '(read) :read-only-p t
+           :get-path (lambda (args) (plist-get args :file_path))
+           :check-permission-async
+           (lambda (&rest _)
+             (ert-fail "Cross-target hook rewrite reached permission"))
+           :handler (lambda (_args)
+                      (ert-fail "Cross-target hook rewrite reached handler"))))
+         (mevedel-hooks-persist-log nil)
+         (mevedel-permission-mode 'ask)
+         (mevedel-protected-paths nil)
+         json result)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("foreign")
+          (setq session
+                (mevedel-session-create
+                 "remote-hook-boundary" workspace remote-root))
+          (setq json
+                (format "{\"updatedInput\":{\"file_path\":%s}}"
+                        (json-encode-string foreign-path)))
+          (setf
+           (mevedel-session-hook-rules session)
+           `((PreToolUse
+              ((:matcher "Read"
+                :hooks ((:type command
+                         :source project-file
+                         :source-root ,remote-root
+                         :command
+                         ,(format "printf '%%s' %s"
+                                  (shell-quote-argument json)))))))))
+          (with-temp-buffer
+            (setq-local default-directory remote-root)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel--session session)
+            (setq result
+                  (test-mevedel-pipeline--run-tool-and-wait
+                   tool '(:file_path "inside.txt"))))
+          (should (string-prefix-p "Error:" result))
+          (should (string-match-p "another execution target" result)))
+      (delete-directory root t)
+      (delete-directory foreign-root t)))
+  :doc "remote same-target additional roots authorize the normal pipeline"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-pipeline-root-" t)))
+         (extra (file-name-as-directory
+                 (make-temp-file "mevedel-pipeline-extra-" t)))
+         (path (file-name-concat extra "file.txt"))
+         (remote-root (format "/mevedelmock:%s:%s"
+                              (system-name) root))
+         (remote-extra (format "/mevedelmock:%s:%s"
+                               (system-name) extra))
+         (native-path (file-name-concat extra "file.txt"))
+         (remote-path (file-name-concat remote-extra "file.txt"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id remote-root :root remote-root
+           :name "remote-additional-root"
+           :file-cache (mevedel-test-file-cache-create)))
+         session
+         seen-path
+         (tool
+          (mevedel-tool--create
+           :name "Read" :args '((file_path path :required "Path"))
+           :groups '(read) :read-only-p t
+           :get-path (lambda (args) (plist-get args :file_path))
+           :handler
+           (lambda (args)
+             (setq seen-path (plist-get args :file_path))
+             (list :result
+                   (with-temp-buffer
+                     (insert-file-contents seen-path)
+                     (buffer-string))))))
+         (mevedel-workspace-additional-roots
+          (list (cons remote-root (list remote-extra))))
+         (mevedel-memory-dirs nil)
+         (mevedel-permission-mode 'ask)
+         (mevedel-protected-paths nil)
+         result)
+    (unwind-protect
+        (progn
+          (write-region "same-target" nil path nil 'silent)
+          (mevedel-test--with-local-shell-tramp nil
+            (setq session
+                  (mevedel-session-create
+                   "remote-additional-root" workspace remote-root))
+            (with-temp-buffer
+              (setq-local default-directory remote-root)
+              (setq-local mevedel--workspace workspace)
+              (setq-local mevedel--session session)
+              (cl-letf
+                  (((symbol-function 'mevedel-permission--enqueue)
+                    (lambda (&rest _)
+                      (ert-fail "Same-target additional root prompted"))))
+                (setq result
+                      (test-mevedel-pipeline--run-tool-and-wait
+                       tool (list :file_path native-path))))))
+          (should (equal "same-target" result))
+          (should (equal remote-path seen-path)))
+      (delete-directory root t)
+      (delete-directory extra t)))
   :doc "rejects malformed resource addresses before permission or post-use hooks"
   (let* ((permission-called nil)
          (post-called nil)

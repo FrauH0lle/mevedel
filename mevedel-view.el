@@ -41,6 +41,8 @@
 (declare-function mevedel-execution-count-user "mevedel-execution" (session))
 (declare-function mevedel-execution-teardown-session
                   "mevedel-execution" (session))
+(declare-function mevedel-execution-unsettled-mutation-p
+                  "mevedel-execution" (session))
 (defvar mevedel-execution-state-change-hook)
 
 ;; `mevedel-execution-target'
@@ -84,7 +86,10 @@
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-lease "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-publication
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -647,6 +652,9 @@ existing `mevedel--view-buffer' binding untouched.  A
     (mevedel-view-composer-initialize)
     ;; Kill-buffer lifecycle: view killed -> clear ref on data buffer
     (add-hook 'kill-buffer-hook #'mevedel-view--on-view-killed nil t)
+    (unless mevedel-view--agent-transcript-p
+      (add-hook 'kill-buffer-query-functions
+                #'mevedel-view--allow-session-close-p nil t))
     (unless mevedel-view--side-conversation-p
       (add-hook 'kill-buffer-hook #'mevedel-view-history-save nil t))
     (unless mevedel-view--agent-transcript-p
@@ -658,6 +666,9 @@ existing `mevedel--view-buffer' binding untouched.  A
        (copy-keymap (or (current-local-map) (make-sparse-keymap))))
       (local-set-key (kbd "C-c C-o") #'mevedel-menu)
       ;; Kill-buffer lifecycle: data killed -> kill view buffer
+      (unless (plist-get options :agent-transcript-p)
+        (add-hook 'kill-buffer-query-functions
+                  #'mevedel-view--allow-session-close-p nil t))
       (add-hook 'kill-buffer-hook
                 (if (plist-get options :agent-transcript-p)
                     #'mevedel-view--on-agent-transcript-data-killed
@@ -688,6 +699,31 @@ new view buffer is created."
 
 ;;
 ;;; Lifecycle
+
+(defun mevedel-view--allow-session-close-p ()
+  "Return non-nil when the current session may be closed safely."
+  (require 'mevedel-execution)
+  (cond
+   ((and mevedel--session
+         (mevedel-session-pending-publication mevedel--session))
+    (message
+     (concat
+      "mevedel: session publication is pending; run "
+      "mevedel-session-durability-retry-publication or "
+      "mevedel-session-durability-abandon-publication first"))
+    nil)
+   ((and mevedel--session
+         (not
+          (eq 'foreign
+              (plist-get (mevedel-session-lease mevedel--session)
+                         :state)))
+         (mevedel-execution-unsettled-mutation-p mevedel--session))
+    (message
+     (concat
+      "mevedel: remote mutation is unsettled; stop live executions or run "
+      "mevedel-retry-target-readiness to acknowledge it first"))
+    nil)
+   (t t)))
 
 (defun mevedel-view--abort-data-buffer (data-buffer)
   "Abort active work owned by DATA-BUFFER."

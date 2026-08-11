@@ -69,6 +69,8 @@
                   "mevedel-execution-target" (target path &optional directory))
 (declare-function mevedel-execution-target-native-path
                   "mevedel-execution-target" (target path))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
@@ -127,6 +129,9 @@
     (let* ((default-directory (file-name-as-directory
                                (expand-file-name directory)))
            (target (mevedel-worktree--execution-target default-directory))
+           (process-environment
+            (unless (mevedel-execution-target-remote-p target)
+              process-environment))
            (args (mapcar
                   (lambda (arg)
                     (if (stringp arg)

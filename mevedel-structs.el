@@ -408,7 +408,7 @@ workspace."
   telemetry-pending  ; transient lifecycle telemetry awaiting materialization
   hook-context-pending ; transient hook context injected into the next prompt
   execution-state   ; transient opaque state owned by `mevedel-execution'
-  audit-session     ; transient durable target for sanitized audit events
+  audit-session     ; transient durable parent for audit and mutation authority
   pending-publication ; transient local recovery record blocking mutation
   publication       ; transient captured immutable publication plist
   publication-queue ; transient FIFO of durability publication batches
@@ -564,11 +564,12 @@ Set when a session is created, never cleared during buffer lifetime.")
 ;;; Session helpers
 
 (defun mevedel-session-audit-target (session)
-  "Return SESSION's sanitized audit target, defaulting to SESSION.
+  "Return SESSION's durable parent target, defaulting to SESSION.
 
 Transient conversations may set `mevedel-session-audit-session' to a
-durable parent.  Runtime state and unsanitized subsystem logs continue to
-belong to SESSION; only explicitly sanitized audit events use this target."
+durable parent.  Sanitized audit events and shared mutation authority use this
+target.  Runtime state and unsanitized subsystem logs continue to belong to
+SESSION."
   (or (and session (mevedel-session-audit-session session)) session))
 
 (defun mevedel-session-tool-results-directory (session)

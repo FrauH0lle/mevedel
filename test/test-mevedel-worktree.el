@@ -220,6 +220,20 @@
            :type 'mevedel-execution-target-error))
       (delete-directory root t))))
 
+  :doc "does not forward client-only environment variables to target Git"
+  (let ((process-environment
+         (cons "MEVEDEL_CLIENT_SECRET=do-not-forward" process-environment)))
+    (cl-letf (((symbol-function 'process-file)
+               (lambda (_program _in _destination _display &rest _args)
+                 (should-not (getenv "MEVEDEL_CLIENT_SECRET"))
+                 0)))
+      (should
+       (eq 0
+           (plist-get
+            (mevedel-worktree--git-result
+             "/ssh:user@host:/srv/project/" "status" "--short")
+            :exit)))))
+
 (mevedel-deftest mevedel-worktree--ensure-worktree ()
   ,test
   (test)

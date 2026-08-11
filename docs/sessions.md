@@ -233,7 +233,9 @@ user explicitly runs
 succeeds, the transaction is durable even if the final `publishing` to
 `active` lease normalization fails: the client fails closed with visible lease
 loss, consumes the transaction sources, and does not create recovery or
-republish the committed bytes.
+republish the committed bytes.  Normal session-buffer closure and Emacs exit
+are refused while recovery is pending, so releasing a lease cannot silently
+turn the only local recovery into an unreachable temporary directory.
 
 Critical publication changes the owned generation to `publishing` and reserves
 a one-hour ownership window before each artifact.  Timer callbacks perform no
@@ -263,7 +265,12 @@ as one batch.  A mid-batch failure therefore leaves one retryable recovery and
 blocks later mutation.  The first root turn remains the deliberate exception:
 while the session is only shallowly materialized, an agent transcript may be
 saved but no early sidecar is created; the root turn's DONE publication remains
-the first authoritative sidecar boundary.
+the first authoritative sidecar boundary. A remote mutating process may still
+arm the portable lease during that shallow interval. If the client disappears,
+the lease latch survives but the no-head session remains intentionally absent
+from resume listings; ordinary session close and Emacs exit therefore refuse to
+discard the live handle until the process settles or the reconnected user
+explicitly acknowledges its unknown outcome.
 
 Local Fork and Rewind retain their same-filesystem directory transactions and
 rollback trees.  Remote lifecycle commits use the immutable publication head
@@ -716,6 +723,14 @@ release preserve it.  The publisher may replace it only through an exact-head
 generation check, so a stale client can update only its older record and
 cannot commit over a newer owner.  The current head can be read uncached before
 a session object exists without acquiring or mutating the lease.
+
+Each generation also carries the required boolean `:unsettled-mutation` latch.
+Managed remote mutation sets it before child launch. Renewal, publishing,
+release, and takeover preserve it. Proven settlement clears it by updating the
+exact owned generation only after no other armed mutating record remains; an
+unprovable result keeps it set. A restored owner therefore blocks mutation
+without reconstructing process records, and explicit acknowledgement must
+durably clear the owned generation before transient blocking state is removed.
 
 The persisted states are `claiming`, `active`, `publishing`, `released`, and
 `aborted`.  Unexpired claiming, active, and publishing records fence other

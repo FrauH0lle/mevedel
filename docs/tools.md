@@ -647,6 +647,18 @@ running under its original owner and resource boundary without blocking later
 admission. Before starting queued work, admission rechecks that a retained agent
 owner is still active and settles rejected work without spawning a process.
 
+A remote mutating Bash command first acquires or verifies the session's portable
+mutation lease and durably arms its unsettled-mutation latch before process
+launch is attempted. Yield releases the scheduler lane, so more than one
+mutating process can remain armed; one clean settlement cannot clear the latch
+while another armed record remains. A post-attempt launch error, transport loss,
+or failed lease compare-and-set remains unknown. Reconnect plus explicit user
+acknowledgement clears the durable latch before mutation admission reopens.
+Non-read-only tools are rejected while the latch is armed without a live
+provable writer. Lifecycle teardown gives a final KILL one bounded proof
+interval before it decides whether the latch can clear. Process records,
+timers, and spools remain transient.
+
 At most 64 managed Bash processes may be live in one session. The sixty-fifth
 is refused before spawn without evicting existing work. Foreground work remains
 owned by its initiating request; yielding detaches it from later request aborts

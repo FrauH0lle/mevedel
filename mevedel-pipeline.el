@@ -37,6 +37,8 @@
                   "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-execution'
+(declare-function mevedel-execution-mutation-blocked-p
+                  "mevedel-execution" (session))
 (declare-function mevedel-execution-sandbox-summary-class
                   "mevedel-execution" (summary))
 (defvar mevedel-execution--sandbox-summary-cell)
@@ -1374,10 +1376,20 @@ existing path extraction behavior."
 (defun mevedel-pipeline--step-permission (context next fail)
   "Authorize each filesystem path in CONTEXT before continuing."
   (let* ((tool (plist-get context :tool))
+         (session (plist-get context :session))
          (paths (mevedel-pipeline--tool-paths
                  tool (plist-get context :args) context)))
-    (if (null paths)
-        (mevedel-pipeline--step-permission-one context next fail)
+    (cond
+     ((and session
+           (not (mevedel-tool-read-only-p tool))
+           (progn
+             (require 'mevedel-execution)
+             (mevedel-execution-mutation-blocked-p session)))
+      (funcall fail
+               "Mutating execution is blocked by an unknown remote outcome"))
+     ((null paths)
+      (mevedel-pipeline--step-permission-one context next fail))
+     (t
       (cl-labels
           ((authorize (remaining current all-direct-p)
              (if (null remaining)
@@ -1397,7 +1409,7 @@ existing path extraction behavior."
                      (and all-direct-p
                           (plist-get updated :auto-apply-edit-p))))
                   fail)))))
-        (authorize paths context t)))))
+        (authorize paths context t))))))
 
 (cl-defun mevedel-pipeline--dispatch-permission-outcome
     (outcome context next fail

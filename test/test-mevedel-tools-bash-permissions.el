@@ -1147,6 +1147,54 @@ an exact session grant skips only the filesystem prompt"
           (should-not enqueued)
           (should (eq 'allow outcome)))
       (delete-directory root t)))
+  :doc "target replacement:
+the durable Bash rule survives but its exact profile requires a fresh grant"
+  (let* ((root (make-temp-file "mevedel-bash-incarnation-" t))
+         (path (file-name-concat root "cache"))
+         (workspace (mevedel-workspace--create :root root))
+         (profile `((:path ,path :access write)))
+         (rule `("Bash" :pattern "make build"
+                 :file-system ,profile :action allow))
+         (session (mevedel-session-create "resource" workspace))
+         (mevedel--session session)
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         (prompts 0)
+         prompt-kind
+         outcome)
+    (setf (mevedel-session-permission-rules session) (list rule)
+          (mevedel-session-resource-grants session) profile)
+    (unwind-protect
+        (cl-labels
+            ((check ()
+               (setq outcome nil)
+               (mevedel-tool-exec--check-permission-async
+                nil
+                `(:command "make build"
+                  :sandbox_permissions "with_additional_permissions"
+                  :additional_permissions (:file_system (:write [,path]))
+                  :justification "Write the build cache?"
+                  :permission-context
+                  (:mode ask :session ,session :workspace ,workspace))
+                (lambda (result) (setq outcome result)))))
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (entry &optional _session)
+                       (cl-incf prompts)
+                       (setq prompt-kind (plist-get entry :kind))
+                       (funcall (plist-get entry :callback)
+                                'allow-session))))
+            (check)
+            (should (eq 'allow outcome))
+            (should (= 0 prompts))
+            (mevedel-permission-invalidate-target-grants session)
+            (check)
+            (should (eq 'allow outcome))
+            (should (= 1 prompts))
+            (should (eq 'sandbox prompt-kind))
+            (check)
+            (should (eq 'allow outcome))
+            (should (= 1 prompts))))
+      (delete-directory root t)))
   :doc "pregranted resource with explicit ask:
 an exact ask rule remains authoritative over the stored grant"
   (let* ((root (make-temp-file "mevedel-bash-ask-grant-" t))

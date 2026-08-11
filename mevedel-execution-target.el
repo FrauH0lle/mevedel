@@ -144,6 +144,10 @@ different execution target."
   (unless (stringp path)
     (signal 'mevedel-execution-target-error
             (list "Path must be a string")))
+  (when (and (mevedel-execution-target-remote-p target)
+             (file-name-quoted-p path 'top))
+    (signal 'mevedel-execution-target-error
+            (list (format "Path explicitly names the client: %s" path))))
   (if-let* ((path-prefix (mevedel-execution-target--prefix path)))
       (if (equal path-prefix (mevedel-execution-target-prefix target))
           (file-remote-p path 'localname 'never)
@@ -449,6 +453,10 @@ SANDBOX-MODE records the session's effective confinement requirement."
                              (string-trim
                               (mevedel-execution-target--process-output
                                target "uname" "-s")))
+                            (operating-system-version
+                             (string-trim
+                              (mevedel-execution-target--process-output
+                               target "uname" "-r")))
                             (capabilities
                              (mevedel-execution-target--probe-capabilities target))
                             (missing
@@ -484,6 +492,7 @@ SANDBOX-MODE records the session's effective confinement requirement."
                                       (missing 'missing-dependencies)
                                       (incompatible 'incompatible-dependencies))
                              :operating-system operating-system
+                             :operating-system-version operating-system-version
                              :capabilities capabilities
                              :missing-dependencies missing
                              :incompatible-dependencies incompatible

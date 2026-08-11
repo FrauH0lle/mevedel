@@ -252,36 +252,29 @@
 (mevedel-deftest mevedel--environment-info-string ()
   ,test
   (test)
-  :doc "reports the target directory and operating system without probing Git"
-  (let (programs)
+  :doc "renders cached target readiness facts without launching a process"
+  (let* ((process-environment
+          (cons "MEVEDEL_CLIENT_SECRET=do-not-forward" process-environment))
+         (target (mevedel-execution-target-create
+                  "/ssh:user@host:/srv/project/")))
+    (setf (mevedel-execution-target-readiness target)
+          '(:status ready
+            :operating-system "Linux"
+            :operating-system-version "6.8.0-target"))
     (cl-letf (((symbol-function 'executable-find)
-               (lambda (name &optional remote)
-                 (push (list name remote) programs)
-                 (concat (or remote "") "/usr/bin/" name)))
+               (lambda (&rest _args) (error "Unexpected executable lookup")))
               ((symbol-function 'process-file)
-               (lambda (program _in destination _display &rest args)
-                 (when destination
-                   (with-current-buffer (if (eq destination t)
-                                            (current-buffer)
-                                          destination)
-                     (insert
-                      (pcase (cons program args)
-                        (`("uname" "-s") "Linux\n")
-                        (`("uname" "-r") "6.8.0-target\n")
-                        (_ "")))))
-                 0)))
+               (lambda (&rest _args) (error "Unexpected target process"))))
       (let ((result
              (mevedel--environment-info-string
               (mevedel-workspace--create
                :root "/ssh:user@host:/srv/project/")
-              "/ssh:user@host:/srv/project/lib/")))
+              "/ssh:user@host:/srv/project/lib/"
+              target)))
         (should (string-match-p "Working directory: /srv/project/lib/"
                                 result))
-        (should-not (string-match-p "git repo" result))
         (should (string-match-p "Platform: linux" result))
-        (should (string-match-p "OS Version: 6.8.0-target" result))))
-    (should-not (seq-some (lambda (call) (equal (car call) "git"))
-                          programs))))
+        (should (string-match-p "OS Version: 6.8.0-target" result))))))
 
 (mevedel-deftest mevedel--clear-user-turn-gptel-properties ()
   ,test

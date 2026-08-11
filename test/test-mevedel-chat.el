@@ -247,8 +247,31 @@
                                  'mevedel--probe-session-target)
                                 (lambda (&rest _args) '(:status ready)))
                                ((symbol-function
-                                 'mevedel-execution-unknown-outcome)
+                                 'mevedel-execution-mutation-blocked-p)
                                 (lambda (_session) '(:group-id 42)))
+                               ((symbol-function 'yes-or-no-p)
+                                (lambda (&rest _) t))
+                               ((symbol-function
+                                 'mevedel-execution-acknowledge-unknown)
+                                (lambda (actual)
+                                  (setq acknowledged actual))))
+                       (mevedel-retry-target-readiness))
+                     (should (eq session acknowledged))))
+
+                 :doc "acknowledges a restored durable latch without process state"
+                 (with-temp-buffer
+                   (let* ((target (mevedel-execution-target-create
+                                   "/ssh:user@host:/srv/project/"))
+                          (session (mevedel-session--create
+                                    :execution-target target
+                                    :lease '(:unsettled-mutation t)))
+                          acknowledged)
+                     (setq-local mevedel--session session)
+                     (setf (mevedel-execution-target-readiness target)
+                           '(:status ready))
+                     (cl-letf (((symbol-function
+                                 'mevedel--probe-session-target)
+                                (lambda (&rest _args) '(:status ready)))
                                ((symbol-function 'yes-or-no-p)
                                 (lambda (&rest _) t))
                                ((symbol-function
@@ -271,7 +294,7 @@
                                  'mevedel--probe-session-target)
                                 (lambda (&rest _args) '(:status ready)))
                                ((symbol-function
-                                 'mevedel-execution-unknown-outcome)
+                                 'mevedel-execution-mutation-blocked-p)
                                 (lambda (_session) '(:group-id 42)))
                                ((symbol-function 'yes-or-no-p)
                                 (lambda (&rest _) nil))

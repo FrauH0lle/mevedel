@@ -8,13 +8,19 @@
 
 (require 'cl-lib)
 (require 'mevedel-agents)
+(require 'mevedel-diff-apply)
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
+(require 'mevedel-file-state)
+(require 'mevedel-overlays)
 (require 'mevedel-pipeline)
 (require 'mevedel-sandbox)
+(require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
 (require 'mevedel-telemetry)
 (require 'mevedel-tool-registry)
+(require 'mevedel-tools)
+(require 'mevedel-workspace)
 (require 'tramp)
 (require 'tramp-container)
 (require 'tramp-sh)
@@ -87,6 +93,13 @@ The root must already exist, be writable, and be reachable through normal
   (with-timeout ((or timeout 30) (ert-fail description))
     (while (not (funcall predicate))
       (accept-process-output nil 0.05))))
+
+(defun test-mevedel-execution-remote--accept-storage (session)
+  "Accept SESSION's target-side durable storage for an opt-in test."
+  (puthash
+   (mevedel-execution-target-identity
+    (mevedel-session-execution-target session))
+   t mevedel-session-durability--disclosed-targets))
 
 (defun test-mevedel-execution-remote--run-tool (session name args)
   "Run registered tool NAME with ARGS in SESSION and return its result."
@@ -483,6 +496,37 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
         (mevedel-execution-teardown-session session))
       (delete-directory root t)))
 
+  :doc "keeps the latch when remote launch errors after process attempt"
+  (let* ((root (make-temp-file "mevedel-remote-launch-attempt-" t))
+         (remote-root
+          (format "/mevedelmock:%s:%s/" (system-name) root))
+         (mevedel-sandbox-mode 'off)
+         session result)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (setq session (test-mevedel-execution--session remote-root))
+          (cl-letf
+              (((symbol-function 'mevedel-execution--launch-record)
+                (lambda (record &rest _)
+                  (setf (mevedel-execution--record-launch-attempted-p record)
+                        t)
+                  (error "Injected post-attempt launch failure"))))
+            (setq result
+                  (test-mevedel-execution--start-managed
+                   session remote-root '("sh" "-c" "true")
+                   :yield-time-ms nil)))
+          (should (eq 'unknown
+                      (plist-get (plist-get result :facts) :termination)))
+          (should (mevedel-execution-mutation-blocked-p session))
+          (should
+           (mevedel-session-durability-unsettled-mutation-p session))
+          (mevedel-execution-acknowledge-unknown session)
+          (should-not
+           (mevedel-session-durability-unsettled-mutation-p session)))
+      (when session
+        (mevedel-execution-teardown-session session))
+      (delete-directory root t)))
+
   :doc "stages omitted output on the target before exposing its native path"
   (let* ((root (make-temp-file "mevedel-remote-published-output-" t))
          (remote-root
@@ -545,6 +589,77 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
         (mevedel-execution-teardown-session session))
       (delete-directory root t)))
 
+  :doc "side and root writers share one shallow durable mutation authority"
+  (let* ((root (make-temp-file "mevedel-remote-overlap-latch-" t))
+         (remote-root
+          (format "/mevedelmock:%s:%s/" (system-name) root))
+         (mevedel-sandbox-mode 'off)
+         (mevedel-session-durability--disclosed-targets
+          (make-hash-table :test #'equal))
+         parent side root-buffer side-buffer
+         first second first-done second-done)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (let ((workspace (test-mevedel-execution--workspace remote-root)))
+            (setq parent (mevedel-session-create "main" workspace remote-root)
+                  side (mevedel-session-create "side" workspace remote-root)
+                  root-buffer (generate-new-buffer " *remote-root-authority*")
+                  side-buffer (generate-new-buffer " *remote-side-writer*"))
+            (setf (mevedel-session-audit-session side) parent
+                  (mevedel-session-sandbox-mode parent) 'off
+                  (mevedel-session-sandbox-mode side) 'off)
+            (with-current-buffer root-buffer
+              (setq-local mevedel--workspace workspace
+                          mevedel--session parent)
+              (setq default-directory remote-root))
+            (with-current-buffer side-buffer
+              (setq-local mevedel--workspace workspace
+                          mevedel--session side)
+              (setq default-directory remote-root)))
+          (puthash
+           (mevedel-execution-target-identity
+            (mevedel-session-execution-target parent))
+           t mevedel-session-durability--disclosed-targets)
+          (setq first
+                (test-mevedel-execution--start-managed
+                 side remote-root
+                 '("sh" "-c" "printf first-ready; sleep 30")
+                 :data-buffer side-buffer
+                 :yield-time-ms 10)
+                second
+                (test-mevedel-execution--start-managed
+                 parent remote-root
+                 '("sh" "-c" "printf second-ready; sleep 30")
+                 :data-buffer root-buffer
+                 :yield-time-ms 10))
+          (should (mevedel-session-save-path parent))
+          (should (buffer-local-value 'buffer-file-name root-buffer))
+          (should-not (buffer-local-value 'buffer-file-name side-buffer))
+          (should (mevedel-session-durability-unsettled-mutation-p parent))
+          (mevedel-execution-stop
+           side "main" (plist-get (plist-get first :facts) :execution-id)
+           (lambda (value) (setq first-done value)))
+          (test-mevedel-execution--wait (lambda () first-done))
+          (should (mevedel-session-durability-unsettled-mutation-p parent))
+          (mevedel-execution-stop
+           parent "main" (plist-get (plist-get second :facts) :execution-id)
+           (lambda (value) (setq second-done value)))
+          (test-mevedel-execution--wait (lambda () second-done))
+          (should-not
+           (mevedel-session-durability-unsettled-mutation-p parent)))
+      (dolist (session (list side parent))
+        (when session
+          (mevedel-execution-teardown-session session)))
+      (when (and parent (mevedel-session-save-path parent))
+        (mevedel-session-durability-lease-release
+         (mevedel-session-save-path parent) parent))
+      (dolist (buffer (list side-buffer root-buffer))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (delete-directory root t)))
+
   :doc "keeps queued output reachable through its logical session path"
   (let* ((root (make-temp-file "mevedel-remote-output-queued-" t))
          (remote-root
@@ -575,17 +690,85 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
         (mevedel-execution-teardown-session session))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-execution-unsettled-mutation-p ()
+  ,test
+  (test)
+  :doc "reports a durable latch even when no transient process record exists"
+  (let* ((root (make-temp-file "mevedel-remote-durable-latch-" t))
+         (remote-root
+          (format "/mevedelmock:%s:%s/" (system-name) root))
+         (session nil))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (setq session (test-mevedel-execution--session remote-root))
+          (mevedel-session-persistence-assert-mutation-authority session)
+          (should
+           (mevedel-session-durability-set-unsettled-mutation session t))
+          (should (mevedel-execution-unsettled-mutation-p session))
+          (should (mevedel-execution-mutation-blocked-p session))
+          (should
+           (mevedel-session-durability-set-unsettled-mutation session nil))
+          (should-not (mevedel-execution-unsettled-mutation-p session)))
+      (when (and session (mevedel-session-save-path session))
+        (mevedel-session-durability-lease-release
+         (mevedel-session-save-path session) session))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
 
 ;;
 ;;; Opt-in real transport acceptance
+
+(defun test-mevedel-execution-remote--apply-diff (session root)
+  "Apply the acceptance diff through the public diff command at ROOT."
+  (let ((buffer (generate-new-buffer " *mevedel real remote diff*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq default-directory root)
+          (setq-local mevedel--workspace (mevedel-session-workspace session)
+                      mevedel--session session)
+          (insert
+           (concat "diff --git a/acceptance.el b/acceptance.el\n"
+                   "--- a/acceptance.el\n"
+                   "+++ b/acceptance.el\n"
+                   "@@ -1,7 +1,7 @@\n"
+                   " ;;; acceptance.el --- real remote acceptance -*- lexical-binding: t -*-\n"
+                   " \n"
+                   " (defun mevedel-real-remote-target ()\n"
+                   "   \"Return the remote acceptance marker.\"\n"
+                   "-  \"patched\")\n"
+                   "+  \"diff-applied\")\n"
+                   " \n"
+                   " (defun mevedel-real-remote-caller ()\n"))
+          (diff-mode)
+          (mevedel-diff-apply-buffer t)
+          (when-let* ((file-buffer
+                       (find-buffer-visiting
+                        (file-name-concat root "acceptance.el"))))
+            (kill-buffer file-buffer)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
 (defun test-mevedel-execution-remote--exercise-file-tools
     (session target root)
   "Exercise ordinary file tools for SESSION and TARGET below ROOT."
   (let* ((file (file-name-concat root "acceptance.el"))
-         (native-file (mevedel-execution-target-native-path target file)))
-    (write-region "alpha\nacceptance needle\nomega\n"
-                  nil file nil 'silent)
+         (tree-file (file-name-concat root "acceptance.sh"))
+         (native-file (mevedel-execution-target-native-path target file))
+         (identifier "mevedel-real-remote-target"))
+    (write-region
+     (concat
+      ";;; acceptance.el --- real remote acceptance -*- lexical-binding: t -*-\n"
+      "\n"
+      "(defun mevedel-real-remote-target ()\n"
+      "  \"Return the remote acceptance marker.\"\n"
+      "  \"alpha\")\n"
+      "\n"
+      "(defun mevedel-real-remote-caller ()\n"
+      "  (mevedel-real-remote-target))\n"
+      "\n"
+      ";; acceptance needle\n")
+     nil file nil 'silent)
     (should
      (string-match-p
       "acceptance needle"
@@ -603,6 +786,61 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
               :output_mode "content"))))
       (should (string-match-p "acceptance needle" grep))
       (should (string-match-p (regexp-quote native-file) grep)))
+    (let ((result
+           (test-mevedel-execution-remote--run-tool
+            session "ApplyPatch"
+            (list
+             :patch
+             (string-join
+              '("*** Begin Patch"
+                "*** Update File: acceptance.el"
+                "@@"
+                "-  \"alpha\")"
+                "+  \"patched\")"
+                "*** End Patch")
+              "\n")))))
+      (should (string-match-p "Applied patch" result)))
+    (should
+     (string-match-p
+      "patched"
+      (test-mevedel-execution-remote--run-tool
+       session "Read" '(:file_path "acceptance.el"))))
+    (test-mevedel-execution-remote--apply-diff session root)
+    (should
+     (string-match-p
+      "diff-applied"
+      (test-mevedel-execution-remote--run-tool
+       session "Read" '(:file_path "acceptance.el"))))
+    (should
+     (string-match-p
+      identifier
+      (test-mevedel-execution-remote--run-tool
+       session "Imenu" '(:file_path "acceptance.el"))))
+    (let ((default-directory root)
+          (process-environment nil))
+      (should (zerop (process-file "git" nil nil nil "init" "--quiet")))
+      (should (zerop (process-file "git" nil nil nil "add" "acceptance.el"))))
+    (let ((result
+           (test-mevedel-execution-remote--run-tool
+            session "XrefReferences"
+            (list :identifier identifier :file_path "acceptance.el"))))
+      (should (string-match-p identifier result))
+      (should (string-match-p (regexp-quote native-file) result)))
+    (should
+     (string-match-p
+      "not supported for remote workspaces"
+      (test-mevedel-execution-remote--run-tool
+       session "XrefDefinitions"
+       (list :pattern identifier :file_path "acceptance.el"))))
+    (write-region
+     "#!/usr/bin/env bash -*- mode: bash-ts -*-\necho acceptance\n"
+     nil tree-file nil 'silent)
+    (let ((result
+           (test-mevedel-execution-remote--run-tool
+            session "Treesitter"
+            '(:file_path "acceptance.sh" :whole_file t))))
+      (should-not (string-prefix-p "Error" result))
+      (should (string-match-p "program" result)))
     file))
 
 (defun test-mevedel-execution-remote--exercise-reconnect (target)
@@ -679,6 +917,7 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
                 (mevedel-execution-target-probe target t 'off))
                (vector (tramp-dissect-file-name root))
                initial execution-id result)
+          (test-mevedel-execution-remote--accept-storage session)
           (should (eq 'ready (plist-get readiness :status)))
           (setq
            initial
@@ -929,6 +1168,7 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
                (workspace (test-mevedel-execution--workspace root))
                (_ (setq session (mevedel-session-create "main" workspace root)))
                (target (mevedel-session-execution-target session)))
+          (test-mevedel-execution-remote--accept-storage session)
           (setf (mevedel-session-permission-mode session) 'full-auto
                 (mevedel-session-sandbox-mode session) 'off)
           (should (eq method (mevedel-execution-target-method target)))

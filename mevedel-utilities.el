@@ -32,6 +32,12 @@
 ;; `gptel'
 (defvar gptel-default-mode)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-readiness
+                  "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-ranges
                   "mevedel-mention-bindings" (text))
@@ -426,11 +432,14 @@ means that the resulting color is the same as the TINT-COLOR-NAME color."
                             tint)))
     (apply #'color-rgb-to-hex `(,@result 2))))
 
-(defun mevedel--environment-info-string (&optional workspace working-directory)
+(defun mevedel--environment-info-string
+    (&optional workspace working-directory execution-target)
   "Return formatted environment information for WORKSPACE.
 
 WORKSPACE defaults to current `mevedel-workspace'.  WORKING-DIRECTORY
-overrides the workspace root.  The string includes:
+overrides the workspace root.  EXECUTION-TARGET supplies cached target
+readiness facts; remote directories are never probed here.
+The string includes:
 - Working directory
 - Platform (operating system type)
 - OS version
@@ -441,33 +450,39 @@ overrides the workspace root.  The string includes:
                    (mevedel-workspace-root
                     (or workspace (mevedel-workspace))))))
          (default-directory dir)
-         (remote (file-remote-p dir))
-         (find-executable
-          (lambda (name)
-            (if remote
-                (executable-find name remote)
-              (executable-find name))))
+         (remote (if execution-target
+                     (mevedel-execution-target-remote-p execution-target)
+                   (file-remote-p dir)))
+         (readiness
+          (and execution-target
+               (mevedel-execution-target-readiness execution-target)))
          (process-line
           (lambda (program &rest args)
-            (when (funcall find-executable program)
+            (when (and (not remote) (executable-find program))
               (with-temp-buffer
                 (when (zerop (apply #'process-file
                                     program nil t nil args))
                   (string-trim (buffer-string)))))))
-         (os-name (ignore-errors (funcall process-line "uname" "-s")))
+         (os-name
+          (or (plist-get readiness :operating-system)
+              (ignore-errors (funcall process-line "uname" "-s"))))
          (os-version
-          (or (ignore-errors (funcall process-line "uname" "-r"))
-              system-configuration))
+          (or (plist-get readiness :operating-system-version)
+              (ignore-errors (funcall process-line "uname" "-r"))
+              (and (not remote) system-configuration)
+              "unknown"))
          (platform
           (if os-name
               (downcase os-name)
-            (pcase system-type
-              ('gnu/linux "linux")
-              ('darwin "darwin")
-              ('windows-nt "windows")
-              ('cygwin "cygwin")
-              ('berkeley-unix "bsd")
-              (_ (symbol-name system-type)))))
+            (if remote
+                "unknown"
+              (pcase system-type
+                ('gnu/linux "linux")
+                ('darwin "darwin")
+                ('windows-nt "windows")
+                ('cygwin "cygwin")
+                ('berkeley-unix "bsd")
+                (_ (symbol-name system-type))))))
          (display-directory
           (or (file-remote-p dir 'localname 'never)
               (expand-file-name dir)))

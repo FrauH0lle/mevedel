@@ -8,6 +8,8 @@
 
 (require 'cl-lib)
 (require 'mevedel-execution)
+(require 'mevedel-execution-target)
+(require 'mevedel-session-durability)
 (require 'mevedel-structs)
 (require 'subr-x)
 
@@ -42,6 +44,11 @@
     (make-directory save-path t)
     (setf (mevedel-session-save-path session) save-path
           (mevedel-session-sandbox-mode session) 'off)
+    (when (file-remote-p root)
+      (puthash
+       (mevedel-execution-target-identity
+        (mevedel-session-execution-target session))
+       t mevedel-session-durability--disclosed-targets))
     session))
 
 (defun test-mevedel-execution--wait (predicate &optional timeout)

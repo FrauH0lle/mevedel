@@ -63,11 +63,14 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   log. Lifecycle events emitted before session materialization wait in the
   transient `telemetry-pending` queue and flush to the diagnostic stream; the
   queue is never persisted as resumable state. A transient side conversation
-  may point `audit-session` at its parent solely for redacted audit events; its
-  runtime queues and unsanitized logs remain side-owned. The transient
+  may point `audit-session` at its durable parent for redacted audit events and
+  shared remote mutation authority; its runtime queues and unsanitized logs
+  remain side-owned. The transient
   `execution-state` slot is opaque outside
   `mevedel-execution.el`; process records, timers, spools, and process groups
-  never enter the general session model or persisted sidecar.
+  never enter the general session model or persisted sidecar. Remote lease
+  generations persist only the boolean unsettled-mutation safety latch needed
+  when those transient records disappear.
 - **`mevedel-goal`**: identity, objective, lifecycle status and reason,
   token/time/turn accounting, optional budget and accepted-plan reference,
   and timestamps.
@@ -210,6 +213,12 @@ without moving command semantics into the process module.
 `mevedel-session-durability.el` owns remote mutation leases and serializes
 authoritative session publication.  `mevedel-session-persistence.el` remains
 the session codec and workflow layer above that boundary.
+
+Before a mutating managed Bash child can start remotely, the execution module
+asserts the durable parent's current lease and commits its unsettled-mutation
+latch. Proven terminal settlement clears the latch only after all armed records
+sharing that authority have settled. Process records remain transient; restore
+and takeover recover the latch, not an invented process registry.
 
 Each mutable process record points to one immutable origin record containing
 the session, owner, private mailbox context, data buffer, tool arguments, and

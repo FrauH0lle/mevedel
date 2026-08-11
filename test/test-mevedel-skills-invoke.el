@@ -1412,6 +1412,77 @@ allowed-tools:
       (delete-directory root t))
     (should (equal '(("Bash" "pwd") ("Bash" "pwd")) calls)))
 
+  :doc "discovers target project shell skills without dispatching local resources remotely"
+  (let* ((target-root (file-name-as-directory
+                       (make-temp-file "mevedel-skill-target" t)))
+         (client-root (file-name-as-directory
+                       (make-temp-file "mevedel-skill-client" t)))
+         (project-skills (file-name-concat target-root ".mevedel" "skills"))
+         (user-skills (file-name-concat client-root "skills"))
+         (remote-root (format "/mevedelmock:%s:%s"
+                              (system-name) target-root))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id remote-root :root remote-root
+                     :name "remote-discovery"
+                     :file-cache (mevedel-test-file-cache-create)))
+         (mevedel-skills-include-bundled nil)
+         session
+         calls
+         project-outcome
+         user-outcome)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           project-skills "project-shell"
+           "name: project-shell\ndescription: Target shell resource\n"
+           "project=!`printf project`")
+          (mevedel-skills-test--write-skill
+           user-skills "user-shell"
+           "name: user-shell\ndescription: Client shell resource\n"
+           "user=!`printf user`")
+          (mevedel-test--with-local-shell-tramp nil
+            (setq session
+                  (mevedel-session-create
+                   "remote-discovery" workspace remote-root))
+            (let* ((skills (mevedel-skills-scan
+                            remote-root
+                            (list ".mevedel/skills" user-skills)))
+                   (project (cl-find "project-shell" skills
+                                     :key #'mevedel-skill-name :test #'equal))
+                   (user (cl-find "user-shell" skills
+                                  :key #'mevedel-skill-name :test #'equal)))
+              (should (eq 'project (mevedel-skill-source project)))
+              (should (file-remote-p (mevedel-skill-source-file project)))
+              (should (eq 'user (mevedel-skill-source user)))
+              (should-not (file-remote-p (mevedel-skill-source-file user)))
+              (with-temp-buffer
+                (setq-local default-directory remote-root)
+                (setq-local mevedel--session session)
+                (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+                           (lambda (tool callback args)
+                             (push (list (mevedel-tool-name tool)
+                                         (plist-get args :command))
+                                   calls)
+                             (funcall callback "expanded"))))
+                  (mevedel-skills-prepare
+                   project "" (lambda (value) (setq project-outcome value))
+                   :role 'command :origin 'model)
+                  (mevedel-skills-prepare
+                   user "" (lambda (value) (setq user-outcome value))
+                   :role 'command :origin 'model)))))
+          (should (equal '(("Bash" "printf project")) calls))
+          (should (eq 'ok (plist-get project-outcome :status)))
+          (should (equal "project=expanded"
+                         (plist-get project-outcome :body)))
+          (should (eq 'resource-target (plist-get user-outcome :reason)))
+          (should
+           (equal '("project-shell")
+                  (mapcar #'file-name-nondirectory
+                          (directory-files project-skills nil
+                                           directory-files-no-dot-files-regexp)))))
+      (delete-directory target-root t)
+      (delete-directory client-root t)))
+
   :doc "remote sessions refuse client-local and foreign shell bodies before Bash"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-skill-origin" t)))

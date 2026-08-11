@@ -92,7 +92,7 @@
 ;; `mevedel-execution'
 (declare-function mevedel-execution-acknowledge-unknown
                   "mevedel-execution" (session))
-(declare-function mevedel-execution-unknown-outcome
+(declare-function mevedel-execution-mutation-blocked-p
                   "mevedel-execution" (session))
 
 ;; `mevedel-execution-target'
@@ -573,7 +573,7 @@ sessions keep their existing startup behavior and return nil."
     (let ((readiness (mevedel--probe-session-target session t)))
       (when (eq 'ready (plist-get readiness :status))
         (require 'mevedel-execution)
-        (when (mevedel-execution-unknown-outcome session)
+        (when (mevedel-execution-mutation-blocked-p session)
           (unless
               (yes-or-no-p
                (concat

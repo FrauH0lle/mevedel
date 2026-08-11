@@ -79,6 +79,8 @@
               (should (natnump (plist-get lease :generation)))
               (should (plist-member lease :publication-head))
               (should-not (plist-get lease :publication-head))
+              (should (plist-member lease :unsettled-mutation))
+              (should-not (plist-get lease :unsettled-mutation))
               (should-not (plist-member lease :pid)))
             (should (eq 'owned
                         (plist-get (mevedel-session-lease session) :state)))
@@ -266,6 +268,116 @@
             (should confirmed)
             (should (mevedel-session-durability-lease-acquire
                      session-dir "*successor*"))))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t)))))
+
+(mevedel-deftest mevedel-session-durability-set-unsettled-mutation ()
+  ,test
+  (test)
+  :doc "lease transitions and takeover preserve the unsettled mutation latch"
+  (let* ((host "unsettled-mutation-host")
+         (local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-unsettled-mutation-" t)))
+         (session-dir-local
+          (file-name-as-directory (file-name-concat local-root "session")))
+         (session-dir
+          (format "/mevedelmock:%s:%s/" host session-dir-local))
+         (session
+          (test-mevedel-session-durability--remote-session host local-root))
+         first-generation)
+    (make-directory session-dir-local t)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (test-mevedel-session-durability--accept-storage session)
+          (setf (mevedel-session-save-path session) session-dir)
+          (let ((mevedel-session-durability--client-id (make-string 64 ?a)))
+            (should
+             (mevedel-session-durability-lease-acquire
+              session-dir "*first-owner*" session))
+            (setq first-generation
+                  (plist-get (mevedel-session-lease session) :generation))
+            (should
+             (mevedel-session-durability-set-unsettled-mutation session t))
+            (should (mevedel-session-durability-lease-renew session))
+            (should
+             (mevedel-session-durability-call-with-reserved-lease
+              session (lambda () t)))
+            (should
+             (mevedel-session-durability-unsettled-mutation-p session))
+            (mevedel-session-durability-lease-release session-dir session))
+          (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
+            (should
+             (mevedel-session-durability-lease-acquire
+              session-dir "*successor*" session))
+            (should (> (plist-get (mevedel-session-lease session) :generation)
+                       first-generation))
+            (should
+             (mevedel-session-durability-unsettled-mutation-p session))
+            (should
+             (mevedel-session-durability-set-unsettled-mutation session nil))
+            (mevedel-session-durability-lease-release session-dir session))
+          (let ((mevedel-session-durability--client-id (make-string 64 ?c)))
+            (should
+             (mevedel-session-durability-lease-acquire
+              session-dir "*observer*" session))
+            (should-not
+             (mevedel-session-durability-unsettled-mutation-p session))
+            (mevedel-session-durability-lease-release session-dir session)))
+      (mevedel-session-durability--cancel-renewal session)
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
+  :doc "a stale renewal cannot overwrite a reentrant mutation arm"
+  (let* ((host "unsettled-renew-race-host")
+         (local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-unsettled-renew-race-" t)))
+         (session-dir-local
+          (file-name-as-directory (file-name-concat local-root "session")))
+         (session-dir
+          (format "/mevedelmock:%s:%s/" host session-dir-local))
+         (session
+          (test-mevedel-session-durability--remote-session host local-root))
+         (client-id (make-string 64 ?a))
+         write-generation
+         injected
+         initial-generation)
+    (make-directory session-dir-local t)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (test-mevedel-session-durability--accept-storage session)
+          (setf (mevedel-session-save-path session) session-dir)
+          (let ((mevedel-session-durability--client-id client-id))
+            (should
+             (mevedel-session-durability-lease-acquire
+              session-dir "*owner*" session))
+            (setq initial-generation
+                  (plist-get (mevedel-session-lease session) :generation)
+                  write-generation
+                  (symbol-function
+                   'mevedel-session-durability--write-generation))
+            (cl-letf
+                (((symbol-function
+                   'mevedel-session-durability--write-generation)
+                  (lambda (directory record)
+                    (when (and (not injected)
+                               (eq 'active (plist-get record :status))
+                               (not (plist-get record :unsettled-mutation)))
+                      (setq injected t)
+                      (should
+                       (mevedel-session-durability-set-unsettled-mutation
+                        session t)))
+                    (funcall write-generation directory record))))
+              (mevedel-session-durability-lease-renew session))
+            (should injected)
+            (should
+             (mevedel-session-durability-unsettled-mutation-p session))
+            (should
+             (> (plist-get (mevedel-session-lease session) :generation)
+                initial-generation))
+            (mevedel-session-durability-lease-release session-dir session)))
+      (mevedel-session-durability--cancel-renewal session)
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
@@ -660,6 +772,81 @@
                 :status))))
       (mevedel-session-durability--cancel-renewal session)
       (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
+  :doc "release retains failed critical publication until explicit abandonment"
+  (let* ((host "release-pending-host")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-release-pending-" t)))
+         (session-dir-local
+          (file-name-as-directory (file-name-concat local-root "session")))
+         (session-dir (format "/mevedelmock:%s:%s/" host session-dir-local))
+         (blocker-local (file-name-concat session-dir-local "blocker"))
+         (target (file-name-concat session-dir "blocker" "state.el"))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir-local t)
+    (with-temp-file blocker-local (insert "not-a-directory"))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (let ((session (test-mevedel-session-durability--remote-session
+                          host local-root)))
+            (test-mevedel-session-durability--accept-storage session)
+            (setf (mevedel-session-save-path session) session-dir)
+            (should (mevedel-session-durability-lease-acquire
+                     session-dir "*publisher*" session))
+            (should-error
+             (mevedel-session-durability-publish
+              session (list (list :path target :content "critical")))
+             :type 'file-error)
+            (let* ((pending (mevedel-session-pending-publication session))
+                   (batch (car (plist-get pending :batches)))
+                   (recovery (plist-get batch :directory)))
+              (should (file-directory-p recovery))
+              (mevedel-session-durability-lease-release session-dir session)
+              (should (eq pending
+                          (mevedel-session-pending-publication session)))
+              (should (file-directory-p recovery))
+              (dolist (retained (plist-get pending :batches))
+                (mevedel-session-durability--delete-batch retained)))))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t)))))
+
+(mevedel-deftest mevedel-session-durability-forget-removed-session
+  (:doc "clears lease, renewal, publication, and recovery without target I/O")
+  (let* ((local-root (file-name-as-directory
+                      (make-temp-file "mevedel-forget-removed-" t)))
+         (session-dir (file-name-as-directory
+                       (file-name-concat local-root "session")))
+         (recovery (file-name-as-directory
+                    (make-temp-file "mevedel-forget-recovery-" t)))
+         (session (test-mevedel-session-durability--local-session local-root))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*removed*" session))
+          (should (timerp
+                   (mevedel-session-lease-renewal-timer session)))
+          (setf (mevedel-session-publication session) '(:head "published")
+                (mevedel-session-publication-active-p session) t
+                (mevedel-session-pending-publication session)
+                (list :batches
+                      (list (list :directory recovery :artifacts nil))))
+          (delete-directory session-dir t)
+          (mevedel-session-durability-forget-removed-session session)
+          (should-not (file-exists-p session-dir))
+          (should-not (file-directory-p recovery))
+          (should-not (mevedel-session-lease session))
+          (should-not (mevedel-session-lease-renewal-timer session))
+          (should-not (mevedel-session-publication session))
+          (should-not (mevedel-session-publication-active-p session))
+          (should-not (mevedel-session-pending-publication session)))
+      (mevedel-session-durability--cancel-renewal session)
+      (when (file-directory-p recovery)
+        (delete-directory recovery t))
+      (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-session-durability-call-with-reserved-lease ()
@@ -989,6 +1176,139 @@
              :type 'error)))
       (mevedel-session-durability-lease-release session-dir session)
       (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
+  :doc "rejects a publication head symlink that escapes immutable storage"
+  (let* ((local-root (file-name-as-directory
+                      (make-temp-file "mevedel-publication-head-escape-" t)))
+         (session-dir (file-name-as-directory
+                       (file-name-concat local-root "session")))
+         (segment (file-name-concat session-dir "segment.chat.org"))
+         (sidecar (file-name-concat session-dir "session.meta.el"))
+         (outside-dir (file-name-as-directory
+                       (file-name-concat local-root "outside")))
+         (session (test-mevedel-session-durability--local-session local-root))
+         (escaped-head ".publications/escaped-head/manifest.el")
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (make-directory outside-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*publisher*" session))
+          (let* ((publication
+                  (mevedel-session-durability-publish
+                   session
+                   (list (list :path segment :content "segment")
+                         (list :path sidecar :content "sidecar"
+                               :commit-marker t))))
+                 (manifest
+                  (file-name-concat session-dir
+                                    (plist-get publication :head))))
+            (copy-file manifest
+                       (file-name-concat outside-dir "manifest.el"))
+            (make-symbolic-link
+             outside-dir
+             (file-name-concat session-dir ".publications" "escaped-head"))
+            (should
+             (mevedel-session-durability--renew-publication-lease session))
+            (should
+             (mevedel-session-durability-commit-publication-head
+              session escaped-head))
+            (should
+             (mevedel-session-durability--finish-publication-lease session))
+            (should-error
+             (mevedel-session-durability-read-publication session-dir)
+             :type 'error)))
+      (mevedel-session-durability-lease-release session-dir session)
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
+  :doc "rejects a manifest artifact symlink that escapes immutable storage"
+  (let* ((local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-publication-artifact-escape-" t)))
+         (session-dir (file-name-as-directory
+                       (file-name-concat local-root "session")))
+         (segment (file-name-concat session-dir "segment.chat.org"))
+         (sidecar (file-name-concat session-dir "session.meta.el"))
+         (outside-dir (file-name-as-directory
+                       (file-name-concat local-root "outside")))
+         (session (test-mevedel-session-durability--local-session local-root))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (make-directory outside-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*publisher*" session))
+          (let* ((publication
+                  (mevedel-session-durability-publish
+                   session
+                   (list (list :path segment :content "segment")
+                         (list :path sidecar :content "sidecar"
+                               :commit-marker t))))
+                 (manifest-path
+                  (file-name-concat session-dir
+                                    (plist-get publication :head)))
+                 (manifest
+                  (mevedel-session-durability--read-plist manifest-path))
+                 (sidecar-entry
+                  (cdr (assoc "session.meta.el"
+                              (plist-get manifest :artifacts)))))
+            (copy-file
+             (file-name-concat
+              session-dir (plist-get sidecar-entry :published))
+             (file-name-concat outside-dir "session.meta.el"))
+            (make-symbolic-link
+             outside-dir
+             (file-name-concat
+              session-dir ".publications" "escaped-artifact"))
+            (setf (plist-get sidecar-entry :published)
+                  ".publications/escaped-artifact/session.meta.el")
+            (with-temp-file manifest-path
+              (let ((print-length nil)
+                    (print-level nil))
+                (prin1 manifest (current-buffer))))
+            (should-error
+             (mevedel-session-durability-read-publication session-dir)
+             :type 'error)))
+      (mevedel-session-durability-lease-release session-dir session)
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
+  :doc "rejects a publication root symlink outside the physical session"
+  (let* ((local-root (file-name-as-directory
+                      (make-temp-file "mevedel-publication-root-escape-" t)))
+         (session-dir (file-name-as-directory
+                       (file-name-concat local-root "session")))
+         (segment (file-name-concat session-dir "segment.chat.org"))
+         (sidecar (file-name-concat session-dir "session.meta.el"))
+         (publication-dir (file-name-concat session-dir ".publications"))
+         (outside-dir (file-name-concat local-root "outside-publications"))
+         (session (test-mevedel-session-durability--local-session local-root))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*publisher*" session))
+          (should
+           (mevedel-session-durability-publish
+            session
+            (list (list :path segment :content "segment")
+                  (list :path sidecar :content "sidecar"
+                        :commit-marker t))))
+          (rename-file publication-dir outside-dir)
+          (make-symbolic-link outside-dir publication-dir)
+          (should-error
+           (mevedel-session-durability-read-publication session-dir)
+           :type 'error))
+      (mevedel-session-durability-lease-release session-dir session)
+      (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-session-durability-seed-publication-base ()
@@ -1268,27 +1588,30 @@
          (prompts 0))
     (unwind-protect
         (mevedel-test--with-local-shell-tramp (list host)
-          (cl-letf (((symbol-function 'yes-or-no-p)
-                     (lambda (&rest _)
-                       (cl-incf prompts)
-                       nil)))
-            (should-error
-             (mevedel-session-persistence-assert-mutation-authority
-              session)
-             :type 'user-error))
-          (should-not (file-exists-p (file-name-concat local-root ".mevedel")))
-          (cl-letf (((symbol-function 'yes-or-no-p)
-                     (lambda (&rest _)
-                       (cl-incf prompts)
-                       t)))
-            (should
-             (mevedel-session-persistence-assert-mutation-authority
-              session))
-            (should
-             (mevedel-session-durability-disclose session)))
-          (should (= 2 prompts))
-          (when-let ((save-path (mevedel-session-save-path session)))
-            (mevedel-session-persistence-lock-release save-path session)))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (&rest _)
+                         (cl-incf prompts)
+                         nil)))
+              (should-error
+               (mevedel-session-persistence-assert-mutation-authority
+                session)
+               :type 'user-error))
+            (should-not
+             (file-exists-p (file-name-concat local-root ".mevedel")))
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (&rest _)
+                         (cl-incf prompts)
+                         t)))
+              (should
+               (mevedel-session-persistence-assert-mutation-authority
+                session))
+              (should
+               (mevedel-session-durability-disclose session)))
+            (should (= 2 prompts))
+            (when-let ((save-path (mevedel-session-save-path session)))
+              (mevedel-session-persistence-lock-release save-path session))))
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 

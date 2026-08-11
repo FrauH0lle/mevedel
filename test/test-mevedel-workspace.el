@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'mevedel-execution-target)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 
@@ -197,7 +198,31 @@
         (should (member (file-name-as-directory (expand-file-name "/tmp/extra-a/"))
                         roots))
         (should (member (file-name-as-directory (expand-file-name "/tmp/extra-b/"))
-                        roots))))))
+                        roots)))))
+
+  :doc "uses target TMPDIR or target /tmp without granting client temp paths"
+  (let* ((remote-root "/ssh:user@host:/srv/project/")
+         (workspace (mevedel-workspace--create
+                     :type 'project :id remote-root :root remote-root
+                     :name "remote"))
+         (session (mevedel-session-create "main" workspace))
+         (target (mevedel-session-execution-target session))
+         (mevedel-memory-dirs nil)
+         (mevedel-workspace-additional-roots nil))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local default-directory remote-root)
+      (setq-local temporary-file-directory "/client/tmp/")
+      (dolist (case '((:environment (("TMPDIR" . "/var/tmp/target"))
+                       :expected "/ssh:user@host:/var/tmp/target/")
+                      (:environment nil
+                       :expected "/ssh:user@host:/tmp/")))
+        (setf (mevedel-execution-target-environment target)
+              (plist-get case :environment))
+        (let ((roots (mevedel--all-allowed-roots)))
+          (should (member (plist-get case :expected) roots))
+          (should-not (member "/ssh:user@host:/client/tmp/" roots))
+          (should-not (member "/client/tmp/" roots)))))))
 
 (mevedel-deftest mevedel-workspace--file-in-allowed-roots-p
   (:before-each (mevedel-workspace-clear-registry)

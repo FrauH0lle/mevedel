@@ -31,6 +31,63 @@
 (defvar mevedel-session--read-only-mode)
 
 
+(mevedel-deftest mevedel-review--git-lines ()
+  ,test
+  (test)
+  :doc "does not forward client-only environment variables to target Git"
+  (let ((process-environment
+         (cons "MEVEDEL_CLIENT_SECRET=do-not-forward" process-environment)))
+    (cl-letf (((symbol-function 'process-file)
+               (lambda (_program _in destination _display &rest _args)
+                 (should-not (getenv "MEVEDEL_CLIENT_SECRET"))
+                 (with-current-buffer (if (eq destination t)
+                                          (current-buffer)
+                                        destination)
+                   (insert "main\ntopic\n"))
+                 0)))
+      (should
+       (equal '("main" "topic")
+              (mevedel-review--git-lines
+               "/ssh:user@host:/srv/project/" "branch"))))))
+
+(mevedel-deftest mevedel-review--git-string ()
+  ,test
+  (test)
+  :doc "does not forward client-only environment variables to target Git"
+  (let ((process-environment
+         (cons "MEVEDEL_CLIENT_SECRET=do-not-forward" process-environment)))
+    (cl-letf (((symbol-function 'process-file)
+               (lambda (_program _in destination _display &rest _args)
+                 (should-not (getenv "MEVEDEL_CLIENT_SECRET"))
+                 (with-current-buffer (if (eq destination t)
+                                          (current-buffer)
+                                        destination)
+                   (insert "abc123\n"))
+                 0)))
+      (should
+       (equal "abc123"
+              (mevedel-review--git-string
+               "/ssh:user@host:/srv/project/" "rev-parse" "HEAD"))))))
+
+(mevedel-deftest mevedel-review--git-output ()
+  ,test
+  (test)
+  :doc "does not forward client-only environment variables to target Git"
+  (let ((process-environment
+         (cons "MEVEDEL_CLIENT_SECRET=do-not-forward" process-environment)))
+    (cl-letf (((symbol-function 'process-file)
+               (lambda (_program _in destination _display &rest _args)
+                 (should-not (getenv "MEVEDEL_CLIENT_SECRET"))
+                 (with-current-buffer (if (eq destination t)
+                                          (current-buffer)
+                                        destination)
+                   (insert "diff output\n"))
+                 0)))
+      (should
+       (equal "diff output\n"
+              (mevedel-review--git-output
+               "/ssh:user@host:/srv/project/" "diff" "HEAD"))))))
+
 (mevedel-deftest mevedel-review--repo-root ()
   ,test
   (test)

@@ -73,9 +73,10 @@ extension.  Guards against matching URLs."
                            text))))
 
 (defun mevedel-view--path-context-candidate-p (start raw)
-  "Return non-nil when RAW at START is not embedded in URL/email text."
-  (or (string-search "/" raw)
-      (not (memq (char-before start) '(?@ ?/ ?:)))))
+  "Return non-nil when RAW at START is not part of a larger locator."
+  (and (not (eq (char-before start) ?:))
+       (or (string-search "/" raw)
+           (not (memq (char-before start) '(?@ ?/))))))
 
 (defun mevedel-view--resolve-path (raw)
   "Return an absolute path for RAW, or nil when no sensible anchor exists.
