@@ -16,11 +16,21 @@
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-append-diagnostic
+                  "mevedel-session-durability" (session path content))
+
 ;; `mevedel-structs'
+(declare-function mevedel-session-execution-target
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-log-pending
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -75,6 +85,12 @@
 ;;
 ;;; Persistence
 
+(defun mevedel-permission-log--remote-p (session)
+  "Return non-nil when SESSION's execution target is remote."
+  (when-let* ((target (mevedel-session-execution-target session)))
+    (require 'mevedel-execution-target)
+    (mevedel-execution-target-remote-p target)))
+
 (defun mevedel-permission-log--printable-value (value)
   "Return a disk-log-safe representation of VALUE."
   (cond
@@ -100,37 +116,70 @@
     (vconcat (mapcar #'mevedel-permission-log--printable-value
                      (append value nil))))
    (t
-    (format "%S" value))))
+   (format "%S" value))))
 
-(defun mevedel-permission-log--persist (session entry)
-  "Append sanitized permission log ENTRY to SESSION's persistent log."
+(defun mevedel-permission-log--entry-text (entry)
+  "Return sanitized permission log ENTRY in its durable line format."
+  (let ((print-length nil)
+        (print-level nil)
+        (print-quoted t))
+    (concat
+     (prin1-to-string (mevedel-permission-log--printable-value entry))
+     "\n")))
+
+(defun mevedel-permission-log--persist-content (session content)
+  "Append serialized permission log CONTENT for SESSION."
   (when-let* ((file (and mevedel-permission-log-enabled
                          (mevedel-permission-log-path session))))
     (condition-case err
-        (let ((print-length nil)
-              (print-level nil)
-              (print-quoted t))
+        (if (mevedel-permission-log--remote-p session)
+            (progn
+              (require 'mevedel-session-durability)
+              (mevedel-session-durability-append-diagnostic
+               session file content))
           (make-directory (file-name-directory file) t)
-          (with-temp-buffer
-            (prin1 (mevedel-permission-log--printable-value entry)
-                   (current-buffer))
-            (insert "\n")
-            (write-region (point-min) (point-max) file t 'silent)))
+          (write-region content nil file t 'silent)
+          t)
       (error
        (message "mevedel: permission log persistence failed: %s"
-                (error-message-string err))))))
+                (error-message-string err))
+       nil))))
+
+(defun mevedel-permission-log--persist (session entry)
+  "Append sanitized permission log ENTRY to SESSION's persistent log."
+  (mevedel-permission-log--persist-content
+   session (mevedel-permission-log--entry-text entry)))
+
+(defun mevedel-permission-log-flush (session)
+  "Persist SESSION's queued permission diagnostics, retaining failures."
+  (when session
+    (let ((pending (mevedel-session-permission-log-pending session)))
+      (if (and pending (mevedel-permission-log--remote-p session))
+          (when (mevedel-permission-log--persist-content
+                 session (mapconcat #'mevedel-permission-log--entry-text
+                                    pending ""))
+            (setf (mevedel-session-permission-log-pending session) nil))
+        (let (remaining)
+          (dolist (entry pending)
+            (unless (mevedel-permission-log--persist session entry)
+              (push entry remaining)))
+          (setf (mevedel-session-permission-log-pending session)
+                (nreverse remaining)))))))
 
 (defun mevedel-permission-log (session event &rest props)
   "Append EVENT and PROPS to SESSION's permission diagnostic log."
   (when (and mevedel-permission-log-enabled session)
     (let ((entry (append (list :event event
                                :time (format-time-string "%FT%T%z"))
-                         props)))
-      (if (mevedel-session-save-path session)
-          (mevedel-permission-log--persist session entry)
+                         props))
+          (pending (mevedel-session-permission-log-pending session)))
+      (if (and (null pending)
+               (mevedel-session-save-path session)
+               (not (mevedel-permission-log--remote-p session))
+               (mevedel-permission-log--persist session entry))
+          nil
         (setf (mevedel-session-permission-log-pending session)
-              (append (mevedel-session-permission-log-pending session)
-                      (list entry))))
+              (append pending (list entry))))
       (when (fboundp 'mevedel-telemetry-record)
         (apply #'mevedel-telemetry-record session event
                :permission-mode-base

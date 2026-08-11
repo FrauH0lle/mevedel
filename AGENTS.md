@@ -101,11 +101,13 @@ Data model
   mevedel-directive.el        directive lifecycle, plan invalidation, rewind
   mevedel-turn.el             canonical success/failure turn settlement
   mevedel-workspace.el        workspace detection and registry
+  mevedel-workspace-identity.el project-owned durable workspace identity
   mevedel-models.el           model tier/provider resolution, context budget
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
   mevedel-prompt-submission.el accepted prompt + lifecycle-context transaction
   mevedel-bash-analysis.el    conservative shell parsing and normalized command facts
   mevedel-bash-policy.el      argument-aware read-only command policies
+  mevedel-execution-target.el immutable local/TRAMP target, path domains, readiness
   mevedel-execution.el        bounded child-process lifecycle and session state
   mevedel-execution-scheduler.el fair session-scoped Bash admission
   mevedel-sandbox.el          optional Bubblewrap child-process confinement
@@ -157,6 +159,7 @@ Chat / view
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      save/load instructions
+  mevedel-session-durability.el remote leases and serialized publication
   mevedel-session-persistence.el  session save/resume/rewind/fork
   mevedel-compact.el          conversation compaction (split-on-compact)
 
@@ -198,7 +201,7 @@ Support
 
 ## External dependencies
 
-- **gptel**, **gptel-agent**, **Emacs >=30.1**, **ediff**, **org-mode**
+- **gptel**, **gptel-agent**, **Emacs >=30.2**, **ediff**, **org-mode**
 
 Eask dependency installs can get stale. 
 Run `npx @emacs-eask/cli upgrade PACKAGE` to update. For example:

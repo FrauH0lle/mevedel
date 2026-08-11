@@ -34,7 +34,8 @@
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-hydrate
                   "mevedel-agent-conversation"
-                  (invocation parent-data-buffer absolute-path))
+                  (invocation parent-data-buffer logical-path
+                              &optional inspection))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--recipe-p
@@ -43,6 +44,10 @@
                   "mevedel-reminders" (recipes))
 (declare-function mevedel-reminders-serialize-agent-templates
                   "mevedel-reminders" (reminders))
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-artifact-present-p
+                  "mevedel-session-persistence" (session logical))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--plain-data-p "mevedel-utilities" (value))
@@ -490,7 +495,8 @@ programming errors propagate instead of masquerading as corrupt user data."
          (and (string-prefix-p agents-dir
                                (file-name-as-directory
                                 (file-name-directory resolved)))
-              (or (not (file-exists-p resolved))
+              (or (file-remote-p save-path)
+                  (not (file-exists-p resolved))
                   (file-in-directory-p
                    (file-truename resolved)
                   (file-truename agents-dir)))))))
@@ -520,7 +526,6 @@ dropped or recovered records."
              (parent (mevedel-agent-record-parent-path record))
              (relative
               (mevedel-agent-record-conversation-location record))
-             (absolute (and relative (expand-file-name relative save-path)))
              buffer)
         (condition-case err
             (progn
@@ -528,7 +533,10 @@ dropped or recovered records."
                                (assoc parent accepted))
                            (mevedel-agent-persistence-transcript-path-p
                             relative save-path)
-                           (file-regular-p absolute))
+                           (progn
+                             (require 'mevedel-session-persistence)
+                             (mevedel-session-persistence-artifact-present-p
+                              session relative)))
                 (signal 'mevedel-agent-persistence-invalid-data
                         (list (format "Invalid retained agent conversation: %s"
                                       path))))
@@ -559,7 +567,7 @@ dropped or recovered records."
                       configuration)
                 (setq buffer
                       (mevedel-agent-conversation-hydrate
-                       invocation root-buffer absolute))
+                       invocation root-buffer relative readonly-p))
                 (when (and (not readonly-p)
                            (not (eq (mevedel-agent-record-activity record)
                                     'idle)))

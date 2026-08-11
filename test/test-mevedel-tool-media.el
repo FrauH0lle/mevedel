@@ -5,6 +5,9 @@
 ;;; Code:
 
 (require 'mevedel-tool-media)
+(require 'mevedel-execution-target)
+(require 'mevedel-session-persistence)
+(require 'mevedel-structs)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -60,7 +63,31 @@
                     result '((:kind image)) nil "toolu_1")))
     (should (string-search "native media block attached" attached))
     (should-not (string-search "SECRET" attached))
-    (should-not (string-search mevedel-tool-media--data-open attached))))
+    (should-not (string-search mevedel-tool-media--data-open attached)))
+  :doc "publishes remote media records through session durability"
+  (let* ((target (mevedel-execution-target-create
+                  "/ssh:user@host:/srv/project/"))
+         (session (mevedel-session--create
+                   :name "remote-media"
+                   :execution-target target
+                   :working-directory "/ssh:user@host:/srv/project/"))
+         (dir "/ssh:user@host:/srv/project/.mevedel/sessions/s/tool-results")
+         published)
+    (cl-letf (((symbol-function
+                'mevedel-session-persistence-publish-text)
+               (lambda (actual-session path content &optional coding)
+                 (setq published
+                       (list actual-session path content coding)))))
+      (mevedel-tool-media-attach-result
+       "visible"
+       '((:mime "image/png" :kind image :data "QUJD"))
+       dir "toolu_remote" session))
+    (should (eq session (car published)))
+    (should (string-prefix-p (concat dir "/media/media-")
+                             (cadr published)))
+    (should (string-search ":tool-use-id \"toolu_remote\""
+                           (nth 2 published)))
+    (should (eq 'utf-8-unix (nth 3 published)))))
 
 (mevedel-deftest mevedel-tool-media-extract ()
   ,test
@@ -84,7 +111,76 @@
          (result (mevedel-tool-media-extract
                   stored nil "toolu_other")))
     (should (equal stored (car result)))
-    (should-not (cdr result))))
+    (should-not (cdr result)))
+  :doc "cold remote replay reads the committed record instead of its fixed cache"
+  (let* ((host "media-replay")
+         (local-store (make-temp-file "mevedel-media-source-" t))
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-media-remote-" t)))
+         (remote-root (format "/mevedelmock:%s:%s" host local-root))
+         (save-path (concat remote-root "session/"))
+         (tool-results (file-name-concat save-path "tool-results"))
+         (media '((:mime "image/png" :kind image :data "QUJD")))
+         (stored (substring-no-properties
+                  (mevedel-tool-media-attach-result
+                   "visible" media local-store "toolu_remote_replay")))
+         (source (car (directory-files
+                       (file-name-concat local-store "media") t
+                       (rx "media-" (+ hex) ".el"))))
+         (name (file-name-nondirectory source))
+         (id (substring name 6 -3))
+         (logical (file-name-concat "tool-results" "media" name))
+         (fixed (file-name-concat save-path logical))
+         (published (file-name-concat
+                     save-path ".publications" "generation" "000001.data"))
+         (bytes (with-temp-buffer
+                  (set-buffer-multibyte nil)
+                  (insert-file-contents-literally source)
+                  (buffer-string)))
+         (target (mevedel-execution-target-create remote-root))
+         (session (mevedel-session--create
+                   :name "remote-media" :execution-target target
+                   :save-path save-path)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (make-directory (file-name-directory fixed) t)
+          (write-region "(:version 1 :items nil)" nil fixed nil 'silent)
+          (make-directory (file-name-directory published) t)
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region bytes nil published nil 'silent))
+          (setf (mevedel-session-publication session)
+                (list :head ".publications/generation/manifest.el"
+                      :sidecar nil
+                      :artifacts
+                      (list (list logical :published published
+                                  :sha256 (secure-hash 'sha256 bytes)))))
+          (clrhash mevedel-tool-media--store)
+          (should (equal logical (file-relative-name fixed save-path)))
+          (should
+           (equal bytes
+                  (mevedel-session-persistence-read-artifact
+                   session logical)))
+          (let ((record (with-temp-buffer
+                          (insert bytes)
+                          (goto-char (point-min))
+                          (read (current-buffer)))))
+            (should (equal id (plist-get record :id)))
+            (should (equal "toolu_remote_replay"
+                           (plist-get record :tool-use-id)))
+            (should (equal media (plist-get record :items))))
+          (should
+           (equal media
+                  (mevedel-tool-media--read-media-store-record
+                   id tool-results "toolu_remote_replay" session)))
+          (let ((result
+                 (mevedel-tool-media-extract
+                  stored tool-results "toolu_remote_replay" nil session)))
+            (should (equal "visible" (car result)))
+            (should (equal media (cdr result)))))
+      (when (file-directory-p local-store)
+        (delete-directory local-store t))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-tool-media-prepare-tool-result ()
   ,test

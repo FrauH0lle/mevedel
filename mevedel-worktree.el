@@ -62,6 +62,14 @@
 (declare-function mevedel-cockpit-surface-selected
                   "mevedel-cockpit" (&optional no-error))
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-create
+                  "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-expand-path
+                  "mevedel-execution-target" (target path &optional directory))
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
 
@@ -102,11 +110,29 @@
 ;;
 ;;; Git helpers
 
+(defun mevedel-worktree--execution-target (directory)
+  "Return the execution target containing DIRECTORY."
+  (require 'mevedel-execution-target)
+  (mevedel-execution-target-create
+   (file-name-as-directory (expand-file-name directory))))
+
+(defun mevedel-worktree--native-path (path directory)
+  "Return PATH in DIRECTORY's target-native path domain."
+  (mevedel-execution-target-native-path
+   (mevedel-worktree--execution-target directory) path))
+
 (defun mevedel-worktree--git-result (directory &rest args)
   "Run Git in DIRECTORY with ARGS and return (:exit N :output STRING)."
   (with-temp-buffer
-    (let ((default-directory (file-name-as-directory
-                              (expand-file-name directory))))
+    (let* ((default-directory (file-name-as-directory
+                               (expand-file-name directory)))
+           (target (mevedel-worktree--execution-target default-directory))
+           (args (mapcar
+                  (lambda (arg)
+                    (if (stringp arg)
+                        (mevedel-execution-target-native-path target arg)
+                      arg))
+                  args)))
       (condition-case err
           (let ((exit (apply #'process-file
                              "git" nil (list t t) nil args)))
@@ -130,7 +156,24 @@
 (defun mevedel-worktree--expand-git-path (path base-directory)
   "Expand Git PATH relative to BASE-DIRECTORY when needed."
   (when (and path (not (string-empty-p path)))
-    (expand-file-name path base-directory)))
+    (mevedel-execution-target-expand-path
+     (mevedel-worktree--execution-target base-directory)
+     path base-directory)))
+
+(defun mevedel-worktree--ensure-git (directory)
+  "Require Git on DIRECTORY's execution target or signal a user error."
+  (let ((result (mevedel-worktree--git-result directory "--version")))
+    (unless (eq 0 (plist-get result :exit))
+      (user-error "Git is required on the session execution target for worktree workflows: %s"
+                  (plist-get result :output)))))
+
+(defun mevedel-worktree--ensure-worktree (directory)
+  "Require Git worktree support in target DIRECTORY or signal a user error."
+  (let ((result (mevedel-worktree--git-result
+                 directory "worktree" "list" "--porcelain")))
+    (unless (eq 0 (plist-get result :exit))
+      (user-error "Git worktree support is required on the session execution target: %s"
+                  (plist-get result :output)))))
 
 (defun mevedel-worktree--parse-worktree-list (output)
   "Parse `git worktree list --porcelain' OUTPUT into plist entries."
@@ -227,7 +270,9 @@
               :isolation 'not-git
               :ignore-state 'unknown
               :worktrees nil)
-      (let* ((repo-root (file-name-as-directory (expand-file-name repo-root)))
+      (let* ((repo-root
+              (file-name-as-directory
+               (mevedel-worktree--expand-git-path repo-root directory)))
              (git-dir (mevedel-worktree--expand-git-path
                        (mevedel-worktree--git-success-output
                         directory "rev-parse" "--git-dir")
@@ -268,8 +313,15 @@
                             (not (string-empty-p status-output)))
               :ignore-state (mevedel-worktree--ignore-state
                              ignore-directory)
-              :worktrees (mevedel-worktree--parse-worktree-list
-                          worktrees-output))))))
+              :worktrees
+              (mapcar
+               (lambda (entry)
+                 (plist-put
+                  entry :path
+                  (mevedel-worktree--expand-git-path
+                   (plist-get entry :path) directory)))
+               (mevedel-worktree--parse-worktree-list
+                worktrees-output)))))))
 
 (defun mevedel-worktree--isolation-label (isolation)
   "Return a user-facing label for ISOLATION."
@@ -287,10 +339,12 @@
     ('not-ignored "not ignored")
     (_ "unknown")))
 
-(defun mevedel-worktree--format-worktree-entry (entry)
-  "Format one parsed Git worktree ENTRY."
+(defun mevedel-worktree--format-worktree-entry (entry directory)
+  "Format one parsed Git worktree ENTRY for target DIRECTORY."
   (format "- %s [%s]"
-          (or (plist-get entry :path) "unknown")
+          (or (and-let* ((path (plist-get entry :path)))
+                (mevedel-worktree--native-path path directory))
+              "unknown")
           (or (plist-get entry :branch)
               (and (plist-get entry :detached)
                    (format "detached %s"
@@ -309,12 +363,16 @@
       (list
        "Worktree status"
        (format "Repository: %s"
-               (or (plist-get status :repo-root)
+               (or (and-let* ((root (plist-get status :repo-root)))
+                     (mevedel-worktree--native-path
+                      root (plist-get status :directory)))
                    "not a Git repository"))
        (format "Current session: %s"
                (if session (mevedel-session-name session) "none"))
        (format "Current directory: %s"
-               (plist-get status :directory))
+               (mevedel-worktree--native-path
+                (plist-get status :directory)
+                (plist-get status :directory)))
        (format "Isolation: %s"
                (mevedel-worktree--isolation-label
                 (plist-get status :isolation)))
@@ -330,7 +388,11 @@
                (if (plist-get status :dirty-p) "yes" "no"))
        "Existing worktrees:")
       (if worktrees
-          (mapcar #'mevedel-worktree--format-worktree-entry worktrees)
+          (mapcar
+           (lambda (entry)
+             (mevedel-worktree--format-worktree-entry
+              entry (plist-get status :directory)))
+           worktrees)
         '("- none"))
       (list
        "Usage: /worktree status | /worktree create [NAME] [--for \"purpose\"] [--clean]"))
@@ -392,11 +454,16 @@
      (list
       (propertize "mevedel worktree" 'face 'transient-heading)
       (format "Repo:       %s"
-              (or (plist-get status :repo-root)
+              (or (and-let* ((root (plist-get status :repo-root)))
+                    (mevedel-worktree--native-path
+                     root (plist-get status :directory)))
                   "not a Git repository"))
       (format "Session:    %s"
               (if session (mevedel-session-name session) "none"))
-      (format "Directory:  %s" (plist-get status :directory))
+      (format "Directory:  %s"
+              (mevedel-worktree--native-path
+               (plist-get status :directory)
+               (plist-get status :directory)))
       (format "Isolation:  %s"
               (mevedel-worktree--isolation-label
                (plist-get status :isolation)))
@@ -567,6 +634,9 @@
          (current (equal path directory))
          (sessions (mevedel-worktree-list--sessions workspace path)))
     (list :path path
+          :display-path
+          (mevedel-worktree--native-path
+           path (plist-get status :directory))
           :branch (mevedel-worktree-list--branch-label entry)
           :head (or (plist-get entry :head) "")
           :current current
@@ -585,7 +655,7 @@
   (list
    (mevedel-worktree-list--item-id item)
    (vector
-    (plist-get item :path)
+    (or (plist-get item :display-path) (plist-get item :path))
     (plist-get item :branch)
     (plist-get item :head)
     (mevedel-worktree-list--current-label (plist-get item :current))
@@ -612,8 +682,10 @@
   "Return normalized details text for worktree ITEM."
   (string-join
    (list
-    (format "Worktree %s" (plist-get item :path))
-    (format "Path: %s" (plist-get item :path))
+    (format "Worktree %s"
+            (or (plist-get item :display-path) (plist-get item :path)))
+    (format "Path: %s"
+            (or (plist-get item :display-path) (plist-get item :path)))
     (format "Branch: %s" (plist-get item :branch))
     (format "Head: %s" (or (plist-get item :head) ""))
     (format "Current: %s"
@@ -668,6 +740,9 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
                           (file-name-concat workspace-root ".worktrees")))
          (path (mevedel-worktree-list--normalize-path
                 (plist-get item :path)))
+         (display-path
+          (or (plist-get item :display-path)
+              (mevedel-worktree--native-path path workspace-root)))
          (entry (plist-get item :entry))
          (branch (plist-get entry :branch))
          (sessions (mevedel-worktree-list--sessions workspace path)))
@@ -675,7 +750,9 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
       (user-error "Cannot remove the current worktree"))
     (require 'mevedel-utilities)
     (unless (mevedel--file-in-directory-p path worktrees-root)
-      (user-error "Can only remove worktrees under %s" worktrees-root))
+      (user-error "Can only remove worktrees under %s"
+                  (mevedel-worktree--native-path
+                   worktrees-root workspace-root)))
     (when (plist-get entry :bare)
       (user-error "Cannot remove a bare worktree"))
     (when (plist-get entry :locked)
@@ -694,8 +771,8 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
     (unless (yes-or-no-p
              (if force
                  (format "Force remove %s and discard uncommitted changes? "
-                         path)
-               (format "Remove worktree %s? " path)))
+                         display-path)
+               (format "Remove worktree %s? " display-path)))
       (user-error "Cancelled"))
     (let ((result (apply #'mevedel-worktree--git-result
                          (mevedel-worktree--context-directory context)
@@ -707,7 +784,7 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
                     (plist-get result :output))))
     (mevedel-worktree-list-refresh)
     (message "mevedel: removed worktree %s; %s"
-             path
+             display-path
              (if branch
                  (format "branch %s was left intact" branch)
                "no branch was deleted"))))
@@ -831,6 +908,8 @@ branch-name grammar before any mutating Git command runs."
   (when (or (not (stringp name)) (string-empty-p name))
     (user-error "Branch name is required"))
   (when directory
+    (mevedel-worktree--ensure-git directory)
+    (mevedel-worktree--ensure-worktree directory)
     (pcase (mevedel-worktree--git-exit
             directory "check-ref-format" "--branch" name)
       (0 nil)
@@ -847,8 +926,10 @@ branch-name grammar before any mutating Git command runs."
            (expand-file-name
             (mevedel-session-working-directory session))))
          (inside
-          (mevedel-worktree--git-success-output
-           source-directory "rev-parse" "--is-inside-work-tree"))
+          (progn
+            (mevedel-worktree--ensure-git source-directory)
+            (mevedel-worktree--git-success-output
+             source-directory "rev-parse" "--is-inside-work-tree")))
          (repo-root
           (mevedel-worktree--git-success-output
            source-directory "rev-parse" "--show-toplevel"))
@@ -864,13 +945,16 @@ branch-name grammar before any mutating Git command runs."
     (unless (and (string= inside "true") repo-root)
       (user-error
        "Worktree Fork requires a supported Git repository; use Conversation Fork to share the current files"))
+    (mevedel-worktree--ensure-worktree source-directory)
     (unless base-commit
       (user-error "Worktree Fork requires an existing HEAD commit"))
     (when (and superproject (not (string-empty-p superproject)))
       (user-error "Worktree Fork does not support submodules"))
     (list
      :source-directory source-directory
-     :source-root (file-name-as-directory (expand-file-name repo-root))
+     :source-root
+     (file-name-as-directory
+      (mevedel-worktree--expand-git-path repo-root source-directory))
      :workspace-root
      (file-name-as-directory
       (expand-file-name
@@ -880,7 +964,8 @@ branch-name grammar before any mutating Git command runs."
      :base-commit base-commit)))
 
 (defun mevedel-worktree-fork-reservation (session &optional preflight)
-  "Return the first free branch and directory reservation for SESSION."
+  "Return the first free branch and directory reservation for SESSION.
+Use PREFLIGHT when it already describes SESSION's immutable Git state."
   (let* ((preflight (or preflight
                         (mevedel-worktree-fork-preflight session)))
          (source-directory (plist-get preflight :source-directory))
@@ -912,19 +997,28 @@ branch-name grammar before any mutating Git command runs."
       :branch branch
       :directory directory
       :cleanup-command
-      (format
-       "git -C %s worktree remove --force %s && git -C %s branch -D %s"
-       (shell-quote-argument source-directory)
-       (shell-quote-argument directory)
-       (shell-quote-argument source-directory)
-       (shell-quote-argument branch))))))
+      (let ((native-source
+             (mevedel-worktree--native-path
+              source-directory source-directory))
+            (native-directory
+             (mevedel-worktree--native-path directory source-directory)))
+        (format
+         "git -C %s worktree remove --force %s && git -C %s branch -D %s"
+         (shell-quote-argument native-source)
+         (shell-quote-argument native-directory)
+         (shell-quote-argument native-source)
+         (shell-quote-argument branch)))))))
 
 (defun mevedel-worktree-fork-create (reservation)
   "Create the linked worktree described by RESERVATION."
-  (let ((source-directory (plist-get reservation :source-directory))
-        (directory (plist-get reservation :directory))
-        (branch (plist-get reservation :branch))
-        (base-commit (plist-get reservation :base-commit)))
+  (let* ((source-directory (plist-get reservation :source-directory))
+         (directory (plist-get reservation :directory))
+         (branch (plist-get reservation :branch))
+         (base-commit (plist-get reservation :base-commit))
+         (native-directory
+          (mevedel-worktree--native-path directory source-directory)))
+    (mevedel-worktree--ensure-git source-directory)
+    (mevedel-worktree--ensure-worktree source-directory)
     (make-directory (file-name-directory
                      (directory-file-name directory))
                     t)
@@ -936,7 +1030,9 @@ branch-name grammar before any mutating Git command runs."
             "worktree" "add" "-b" branch directory base-commit)))
       (unless (eq 0 (plist-get result :exit))
         (user-error "Git worktree add failed for %s at %s: %s"
-                    branch directory (plist-get result :output))))
+                    branch
+                    native-directory
+                    (plist-get result :output))))
     reservation))
 
 (defun mevedel-worktree-fork-validate-reservation (session reservation)
@@ -958,7 +1054,9 @@ branch-name grammar before any mutating Git command runs."
                  (concat "refs/heads/" branch))))
       (user-error
        "Reserved Worktree Fork artifacts already exist: branch %s, directory %s. Cleanup: %s"
-       branch directory cleanup-command))
+       branch
+       (mevedel-worktree--native-path directory source-directory)
+       cleanup-command))
     (let ((current (mevedel-worktree-fork-preflight session)))
       (dolist (key '(:source-directory :source-root :workspace-root
                      :common-git-dir :base-commit))
@@ -1005,24 +1103,28 @@ branch-name grammar before any mutating Git command runs."
   "Return setup-context stub for SOURCE-SESSION.
 SOURCE-DIR, WORKTREE-DIRECTORY, BRANCH, PURPOSE and WARNINGS describe the
 new session."
-  (string-join
-   (append
-    (list
-     "Setup context for this worktree session."
-     ""
-     (format "Created from session: %s"
-             (or source-session "unknown"))
-     (format "Source directory: %s" source-dir)
-     (format "Worktree directory: %s" worktree-directory)
-     (format "Branch: %s" branch))
-    (when (and purpose (not (string-empty-p purpose)))
-      (list (format "Purpose: %s" purpose)))
-    (when warnings
-      (append '("" "Warnings:")
-              (mapcar (lambda (warning) (format "- %s" warning))
-                      warnings)))
-    '("" "This is setup context only. Wait for the user's next prompt before taking action."))
-   "\n"))
+  (let ((native-source
+         (mevedel-worktree--native-path source-dir source-dir))
+        (native-worktree
+         (mevedel-worktree--native-path worktree-directory source-dir)))
+    (string-join
+     (append
+      (list
+       "Setup context for this worktree session."
+       ""
+       (format "Created from session: %s"
+               (or source-session "unknown"))
+       (format "Source directory: %s" native-source)
+       (format "Worktree directory: %s" native-worktree)
+       (format "Branch: %s" branch))
+      (when (and purpose (not (string-empty-p purpose)))
+        (list (format "Purpose: %s" purpose)))
+      (when warnings
+        (append '("" "Warnings:")
+                (mapcar (lambda (warning) (format "- %s" warning))
+                        warnings)))
+      '("" "This is setup context only. Wait for the user's next prompt before taking action."))
+     "\n")))
 
 (defun mevedel-worktree--save-stub (chat-buffer)
   "Persist CHAT-BUFFER after a setup stub was inserted."
@@ -1044,7 +1146,9 @@ new session."
                         (file-in-directory-p worktree-directory workspace-root))
                    (directory-file-name
                     (file-relative-name worktree-directory workspace-root))
-                 (directory-file-name worktree-directory)))
+                 (directory-file-name
+                  (mevedel-worktree--native-path
+                   worktree-directory worktree-directory))))
          (quoted (shell-quote-argument path)))
     (format
      "Cleanup:\n  git worktree remove %s\n  rm -rf %s\n  git worktree prune"
@@ -1076,7 +1180,10 @@ a plist with `:buffer', `:branch', `:directory', and `:warnings'."
                                 (expand-file-name
                                  (mevedel-session-working-directory
                                   session))))
-             (status (mevedel-worktree--collect-status context))
+             (status
+              (progn
+                (mevedel-worktree--ensure-git source-directory)
+                (mevedel-worktree--collect-status context)))
              (repo-root (plist-get status :repo-root))
              (leaf (progn
                      (mevedel-worktree--validate-branch-name
@@ -1098,7 +1205,8 @@ a plist with `:buffer', `:branch', `:directory', and `:warnings'."
           (user-error "Cannot create a worktree from a submodule"))
         (when (file-exists-p worktree-directory)
           (user-error "Worktree destination already exists: %s"
-                      worktree-directory))
+                      (mevedel-worktree--native-path
+                       worktree-directory source-directory)))
         (make-directory worktrees-dir t)
         (mevedel-worktree--ensure-local-exclude
          (plist-get status :git-common-dir))
@@ -1131,7 +1239,8 @@ a plist with `:buffer', `:branch', `:directory', and `:warnings'."
           (error
            (user-error
             "Created worktree at %s, but session setup failed: %s\n%s"
-            worktree-directory
+            (mevedel-worktree--native-path
+             worktree-directory source-directory)
             (error-message-string err)
             (mevedel-worktree--cleanup-message
              worktree-directory workspace-root))))))))
@@ -1149,7 +1258,9 @@ a plist with `:buffer', `:branch', `:directory', and `:warnings'."
       (list
        (format "Created worktree session `%s' at %s"
                (plist-get result :branch)
-               (plist-get result :directory)))
+               (mevedel-worktree--native-path
+                (plist-get result :directory)
+                (plist-get result :directory))))
       (when-let* ((warnings (plist-get result :warnings)))
         (list (format "Warnings: %s"
                       (string-join warnings "; ")))))

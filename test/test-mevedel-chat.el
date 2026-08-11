@@ -181,8 +181,122 @@
 				 (should-not menu-called))
 		     (delete-directory root t))))
 
-(mevedel-deftest mevedel--chat-buffer-init-common
-		 (:doc "notifies about pending plugin hook consent during setup")
+(mevedel-deftest mevedel--probe-session-target ()
+                 ,test
+                 (test)
+                 :doc "probes remote sessions and forwards forced refresh"
+                 (let* ((target (mevedel-execution-target-create
+                                 "/ssh:user@host:/srv/project/"))
+                        (session (mevedel-session--create
+                                  :execution-target target
+                                  :sandbox-mode 'required))
+                        seen)
+                   (cl-letf (((symbol-function
+                               'mevedel-execution-target-probe)
+                              (lambda (actual refresh sandbox-mode)
+                                (setq seen
+                                      (list actual refresh sandbox-mode))
+                                '(:status ready))))
+                     (should (equal '(:status ready)
+                                    (mevedel--probe-session-target
+                                     session t))))
+                   (should (equal (list target t 'required) seen)))
+
+                 :doc "does not probe local sessions"
+                 (let* ((workspace (mevedel-workspace--create
+                                    :type 'project :id "/tmp/project/"
+                                    :root "/tmp/project/" :name "local"))
+                        (session (mevedel-session-create "main" workspace)))
+                   (cl-letf (((symbol-function
+                               'mevedel-execution-target-probe)
+                              (lambda (&rest _)
+                                (ert-fail "local target was probed"))))
+                     (should-not (mevedel--probe-session-target session)))))
+
+(mevedel-deftest mevedel-retry-target-readiness ()
+                 ,test
+                 (test)
+                 :doc "force-reprobes the current remote session"
+                 (with-temp-buffer
+                   (let* ((target (mevedel-execution-target-create
+                                   "/ssh:user@host:/srv/project/"))
+                          (session (mevedel-session--create
+                                    :execution-target target))
+                          seen)
+                     (setq-local mevedel--session session)
+                     (cl-letf (((symbol-function
+                                 'mevedel--probe-session-target)
+                                (lambda (actual refresh)
+                                  (setq seen (list actual refresh))
+                                  '(:status ready))))
+                       (should (equal '(:status ready)
+                                      (mevedel-retry-target-readiness))))
+                     (should (equal (list session t) seen))))
+
+                 :doc "requires explicit acknowledgement after unknown loss"
+                 (with-temp-buffer
+                   (let* ((target (mevedel-execution-target-create
+                                   "/ssh:user@host:/srv/project/"))
+                          (session (mevedel-session--create
+                                    :execution-target target))
+                          acknowledged)
+                     (setq-local mevedel--session session)
+                     (setf (mevedel-execution-target-readiness target)
+                           '(:status ready))
+                     (cl-letf (((symbol-function
+                                 'mevedel--probe-session-target)
+                                (lambda (&rest _args) '(:status ready)))
+                               ((symbol-function
+                                 'mevedel-execution-unknown-outcome)
+                                (lambda (_session) '(:group-id 42)))
+                               ((symbol-function 'yes-or-no-p)
+                                (lambda (&rest _) t))
+                               ((symbol-function
+                                 'mevedel-execution-acknowledge-unknown)
+                                (lambda (actual)
+                                  (setq acknowledged actual))))
+                       (mevedel-retry-target-readiness))
+                     (should (eq session acknowledged))))
+
+                 :doc "keeps unknown loss blocked when acknowledgement is declined"
+                 (with-temp-buffer
+                   (let* ((target (mevedel-execution-target-create
+                                   "/ssh:user@host:/srv/project/"))
+                          (session (mevedel-session--create
+                                    :execution-target target)))
+                     (setq-local mevedel--session session)
+                     (setf (mevedel-execution-target-readiness target)
+                           '(:status ready))
+                     (cl-letf (((symbol-function
+                                 'mevedel--probe-session-target)
+                                (lambda (&rest _args) '(:status ready)))
+                               ((symbol-function
+                                 'mevedel-execution-unknown-outcome)
+                                (lambda (_session) '(:group-id 42)))
+                               ((symbol-function 'yes-or-no-p)
+                                (lambda (&rest _) nil))
+                               ((symbol-function
+                                 'mevedel-execution-acknowledge-unknown)
+                                (lambda (_session)
+                                  (ert-fail "unknown outcome acknowledged"))))
+                       (should-error
+                        (mevedel-retry-target-readiness)
+                        :type 'user-error))))
+
+                 :doc "rejects a local session"
+                 (with-temp-buffer
+                   (let* ((workspace (mevedel-workspace--create
+                                      :type 'project :id "/tmp/project/"
+                                      :root "/tmp/project/" :name "local"))
+                          (session (mevedel-session-create "main" workspace)))
+                     (setq-local mevedel--session session)
+                     (should-error (mevedel-retry-target-readiness)
+                                   :type 'user-error))))
+
+(mevedel-deftest mevedel--chat-buffer-init-common ()
+		 ,test
+		 (test)
+		 :doc "notifies about pending plugin hook consent during setup"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-chat-init-" t)))
 			(workspace (mevedel-workspace--create
@@ -191,8 +305,9 @@
 				    :root root
 				    :name "init"))
 			(session (mevedel-session-create "main" workspace root))
-			notified-workspace
-			validated-workspace)
+		 notified-workspace
+		 probed-session
+		 validated-workspace)
 		   (unwind-protect
 		       (with-temp-buffer
 			 (setq-local mevedel--session session)
@@ -217,12 +332,15 @@
 				    #'ignore)
 				   ((symbol-function 'mevedel-view--ensure)
 				    #'ignore)
-				   ((symbol-function
-				     'mevedel-permission-validate-persistent-stores)
+			   ((symbol-function
+			     'mevedel-permission-validate-persistent-stores)
 				    (lambda (workspace)
 				      (setq validated-workspace workspace)))
-				   ((symbol-function 'mevedel--run-session-start-hooks)
-				    #'ignore)
+			   ((symbol-function 'mevedel--run-session-start-hooks)
+			    #'ignore)
+			   ((symbol-function 'mevedel--probe-session-target)
+			    (lambda (session &optional _refresh)
+			      (setq probed-session session)))
 				   ((symbol-function
 				     'mevedel-plugins-notify-pending-consent)
 				    (lambda (workspace)
@@ -235,6 +353,7 @@
 			          "reconcile current state"
 			          (car (mevedel-session-pending-reminders session))))
 			 (should (eq notified-workspace workspace))
+			 (should (eq probed-session session))
 			 (should (eq validated-workspace workspace))
 			 (should (memq #'mevedel-tool-repair-pre-tool-call
 				       gptel-pre-tool-call-functions))
@@ -254,6 +373,71 @@
 				       gptel-post-stream-hook))
 			 (should (memq #'mevedel-tool-repair-clear-ledger
 				       kill-buffer-hook)))
+		     (delete-directory root t)))
+
+		 :doc "watcher warnings do not derail view creation"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-chat-watch-warning-" t)))
+			(workspace (mevedel-workspace--create
+				    :type 'project
+				    :id root
+				    :root root
+				    :name "watch-warning"))
+			(session (mevedel-session-create "main" workspace root))
+			(chat (generate-new-buffer " *mevedel-chat-watch-warning*"))
+			(other (generate-new-buffer " *mevedel-chat-selected*"))
+			reminder-session
+			ensured-buffer)
+		   (unwind-protect
+		       (with-current-buffer chat
+			 (setq-local mevedel--session session)
+			 (require 'mevedel-session-persistence)
+			 (require 'mevedel-view)
+			 (cl-letf (((symbol-function
+				     'mevedel-reminders-install-defaults)
+				    #'ignore)
+				   ((symbol-function
+				     'mevedel-preset--build-handlers)
+				    #'identity)
+				   ((symbol-function
+				     'mevedel-session-persistence--install-gptel-save-state-advice)
+				    #'ignore)
+				   ((symbol-function 'mevedel-skills-install)
+				    (lambda (_session _buffer)
+				      (mevedel-skills--ensure-watcher root)))
+				   ((symbol-function 'file-notify-add-watch)
+				    (lambda (&rest _args)
+				      (error "Watcher failed")))
+				   ((symbol-function 'display-warning)
+				    (lambda (&rest _args) (set-buffer other)))
+				   ((symbol-function
+				     'mevedel-skills-install-reminder)
+				    (lambda (actual)
+				      (setq reminder-session actual)))
+				   ((symbol-function
+				     'mevedel-skills-install-activation-hook)
+				    #'ignore)
+				   ((symbol-function 'mevedel-view--ensure)
+				    (lambda (actual)
+				      (setq ensured-buffer actual)))
+				   ((symbol-function
+				     'mevedel-permission-validate-persistent-stores)
+				    #'ignore)
+				   ((symbol-function
+				     'mevedel--run-session-start-hooks)
+				    #'ignore)
+				   ((symbol-function
+				     'mevedel--probe-session-target)
+				    #'ignore)
+				   ((symbol-function
+				     'mevedel-plugins-notify-pending-consent)
+				    #'ignore))
+			   (mevedel--chat-buffer-init-common
+			    chat workspace "startup"))
+			 (should (eq session reminder-session))
+			 (should (eq chat ensured-buffer)))
+		     (when (buffer-live-p chat) (kill-buffer chat))
+		     (when (buffer-live-p other) (kill-buffer other))
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-lifecycle-hooks
@@ -2091,6 +2275,28 @@
                              (should (eq 'paused (mevedel-goal-status goal)))
                              (should (equal "interrupted by user"
                                             (mevedel-goal-reason goal)))))
+
+		 :doc "does not save or warn during read-only inspection cleanup"
+		 (with-temp-buffer
+		   (let* ((workspace
+			   (mevedel-workspace--create
+			    :type 'project
+			    :id "/tmp/mevedel-chat-abort-inspection/"
+			    :root "/tmp/mevedel-chat-abort-inspection/"
+			    :name "abort-inspection"))
+			  (session (mevedel-session-create "main" workspace))
+			  (save-count 0))
+		     (setq-local mevedel--session session)
+		     (setq-local mevedel-session--read-only-mode t)
+		     (cl-letf
+			 (((symbol-function 'mevedel-session-persistence-save)
+			   (lambda (&rest _)
+			     (cl-incf save-count)))
+			  ((symbol-function 'display-warning)
+			   (lambda (&rest _)
+			     (ert-fail "Read-only inspection cleanup warned"))))
+		       (mevedel-abort (current-buffer)))
+		     (should (= 0 save-count))))
 
 			 :doc "does not rewrite a Goal already paused for another reason"
 			 (with-temp-buffer

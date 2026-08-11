@@ -26,8 +26,16 @@
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-probe "mevedel-sandbox" ())
+
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-append-diagnostic
+                  "mevedel-session-durability" (session path content))
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x))
@@ -36,6 +44,8 @@
 (declare-function mevedel-goal-tokens-used "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-turns-run "mevedel-structs" (cl-x))
 (declare-function mevedel-session-audit-target "mevedel-structs" (session))
+(declare-function mevedel-session-execution-target
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x))
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x))
 (declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
@@ -278,23 +288,42 @@ symbol instead of their printed representation."
 ;;
 ;;; Persistence
 
-(defun mevedel-telemetry--persist (session entry)
-  "Append telemetry ENTRY to SESSION's persistent stream."
+(defun mevedel-telemetry--remote-p (session)
+  "Return non-nil when SESSION's execution target is remote."
+  (when-let* ((target (mevedel-session-execution-target session)))
+    (require 'mevedel-execution-target)
+    (mevedel-execution-target-remote-p target)))
+
+(defun mevedel-telemetry--entry-text (entry)
+  "Return telemetry ENTRY in its durable line format."
+  (let ((print-length nil)
+        (print-level nil)
+        (print-quoted t)
+        (print-escape-newlines t))
+    (concat (prin1-to-string entry) "\n")))
+
+(defun mevedel-telemetry--persist-content (session content)
+  "Append serialized telemetry CONTENT to SESSION's persistent stream."
   (when-let* ((file (and mevedel-telemetry-enabled
                          (mevedel-telemetry-path session))))
     (condition-case err
-        (let ((print-length nil)
-              (print-level nil)
-              (print-quoted t)
-              (print-escape-newlines t))
+        (if (mevedel-telemetry--remote-p session)
+            (progn
+              (require 'mevedel-session-durability)
+              (mevedel-session-durability-append-diagnostic
+               session file content))
           (make-directory (file-name-directory file) t)
-          (with-temp-buffer
-            (prin1 entry (current-buffer))
-            (insert "\n")
-            (write-region (point-min) (point-max) file t 'silent)))
+          (write-region content nil file t 'silent)
+          t)
       (error
        (message "mevedel: telemetry persistence failed: %s"
-                (error-message-string err))))))
+                (error-message-string err))
+       nil))))
+
+(defun mevedel-telemetry--persist (session entry)
+  "Append telemetry ENTRY to SESSION's persistent stream."
+  (mevedel-telemetry--persist-content
+   session (mevedel-telemetry--entry-text entry)))
 
 (defun mevedel-telemetry-record (session event &rest props)
   "Record telemetry EVENT and PROPS for SESSION.
@@ -302,12 +331,15 @@ The event is buffered until SESSION has a persistent directory.  Raw payload
 keys are always discarded.  Return the sanitized event plist."
   (when (and mevedel-telemetry-enabled session)
     (condition-case err
-        (let ((entry (mevedel-telemetry--envelope session event props)))
-          (if (mevedel-session-save-path session)
-              (mevedel-telemetry--persist session entry)
+        (let ((entry (mevedel-telemetry--envelope session event props))
+              (pending (mevedel-session-telemetry-pending session)))
+          (if (and (null pending)
+                   (mevedel-session-save-path session)
+                   (not (mevedel-telemetry--remote-p session))
+                   (mevedel-telemetry--persist session entry))
+              nil
             (setf (mevedel-session-telemetry-pending session)
-                  (append (mevedel-session-telemetry-pending session)
-                          (list entry))))
+                  (append pending (list entry))))
           entry)
       (error
        (message "mevedel: telemetry event failed: %s"
@@ -334,11 +366,20 @@ anything crosses into the durable target."
              (append '(:conversation-scope btw) props)))))
 
 (defun mevedel-telemetry-flush (session)
-  "Persist and clear SESSION telemetry buffered before materialization."
+  "Persist SESSION's queued telemetry, retaining failed entries."
   (when session
-    (dolist (entry (mevedel-session-telemetry-pending session))
-      (mevedel-telemetry--persist session entry))
-    (setf (mevedel-session-telemetry-pending session) nil)))
+    (let ((pending (mevedel-session-telemetry-pending session)))
+      (if (and pending (mevedel-telemetry--remote-p session))
+          (when (mevedel-telemetry--persist-content
+                 session (mapconcat #'mevedel-telemetry--entry-text
+                                    pending ""))
+            (setf (mevedel-session-telemetry-pending session) nil))
+        (let (remaining)
+          (dolist (entry pending)
+            (unless (mevedel-telemetry--persist session entry)
+              (push entry remaining)))
+          (setf (mevedel-session-telemetry-pending session)
+                (nreverse remaining)))))))
 
 
 ;;
@@ -429,18 +470,19 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
 
 (defun mevedel-telemetry--git-snapshot (directory)
   "Return a non-sensitive Git state snapshot for DIRECTORY."
-  (let* ((head (ignore-errors
+  (let* ((default-directory directory)
+         (head (ignore-errors
                  (mevedel-telemetry--process-output
-                  "git" "-C" directory "rev-parse" "HEAD")))
+                  "git" "rev-parse" "HEAD")))
          (status (ignore-errors
                    (mevedel-telemetry--process-output
-                    "git" "-C" directory "status" "--short")))
+                    "git" "status" "--short")))
          (diff (ignore-errors
                  (mevedel-telemetry--process-output
-                  "git" "-C" directory "diff" "--binary" "HEAD")))
+                  "git" "diff" "--binary" "HEAD")))
          (untracked (ignore-errors
                       (mevedel-telemetry--process-output
-                       "git" "-C" directory "ls-files" "--others"
+                       "git" "ls-files" "--others"
                        "--exclude-standard" "-z")))
          (untracked-hashes
           (mapcar

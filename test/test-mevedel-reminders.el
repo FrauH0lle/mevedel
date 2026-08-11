@@ -10,6 +10,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'mevedel-permissions)
+(require 'mevedel-session-persistence)
 (require 'mevedel-file-state)
 (require 'mevedel-tool-fs)
 (require 'mevedel-compact)
@@ -26,6 +27,7 @@
           "helpers"))
 
 (defvar imenu--index-alist)
+(defvar mevedel--agent-invocation)
 
 ;; Declared special here so `let'-binding stays dynamic even when no
 ;; loaded module has defined the variable with a value yet.
@@ -961,7 +963,7 @@
   ,test
   (test)
 
-  :doc "surfaces accepted plan contents from the session artifact"
+  :doc "surfaces verified plan contents instead of a poisoned fixed cache"
   (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))
          (ws (mevedel-workspace-get-or-create
               'project (file-name-as-directory tmp)

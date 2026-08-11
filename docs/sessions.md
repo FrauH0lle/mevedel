@@ -76,9 +76,16 @@ permission state, ends the request, and schedules queued follow-up delivery.
 Layout:
 
 ```
+.mevedel/workspace-id                 ; project-owned portable workspace identity
 .mevedel/sessions/main-2026-04-23T14-30-a9f2/
-  session.meta.el                    ; sidecar plist (workspace, perms, tasks, ...)
-  .lock                              ; PID + hostname + buffer name; released on kill
+  session.meta.el                    ; non-authoritative current sidecar cache
+  .lock                              ; local-only PID lock
+  .lease/                            ; remote-only portable lease generations
+    00000000000000000001.el         ; current renewable ownership record
+  .publications/
+    generation-a1b2c3/
+      000001.data                   ; immutable artifact bytes
+      manifest.el                  ; logical path -> bytes + SHA-256
   segment-0001.chat.org              ; finalized at compact #1
   segment-0002.chat.org              ; finalized at compact #2
   segment-0003.chat.org              ; current/live
@@ -150,6 +157,152 @@ belong to the session's execution target. Client-local skill and memory roots
 retain their origin, while MCP addresses use the current configured connection;
 no resource address changes a session's target. See
 [`address-to-resource.md`](address-to-resource.md#local).
+
+The workspace identity is one opaque 64-character lowercase hexadecimal value
+stored in `.mevedel/workspace-id` when the first session is materialized.  The
+sidecar's nested `:workspace` record stores that `:workspace-id` together with
+`:target-native-root`; the top-level `:working-directory` is target-native as
+well.  Neither field stores a client-specific TRAMP prefix or the process-local
+workspace registry id.  Resume binds the record to the currently opened
+workspace, verifies its project-owned identity, maps saved target-native paths
+to the current target root, and constructs a fresh immutable execution target.
+A missing identity is an error.  An identity mismatch requires explicit
+confirmation; declining aborts resume, while accepting binds the conversation
+to the opened workspace and discards copied session permission rules, resource
+grants, and additional roots.  The next save records the opened workspace's
+identity.  Superseded sidecar shapes are not migrated.
+
+The top-level `:target-incarnation` records a remote host/container fingerprint
+without embedding its client-specific TRAMP spelling; local sessions store
+`nil`.  Resume seeds a fresh remote execution target with that persisted
+baseline before readiness probing, so reconnection can detect that the alias
+now resolves to a replacement host or container.  A replacement probe stages
+the observation without changing that durable baseline.  Request admission
+first revokes exact session and workspace grants, then commits a sidecar marker
+containing the new incarnation and no exact session grants; only that successful
+commit acknowledges the replacement.  Publication failure leaves admission
+blocked and retryable.
+
+### Remote durability publication
+
+Remote session state remains authoritative under the target workspace's
+`.mevedel/` directory.  Before the first target-side state write in a live
+Emacs client, mevedel discloses the exact state directory, the stored data
+categories, and that mevedel does not encrypt them.  Acceptance is remembered
+once per execution target for that Emacs process; another client or restart
+discloses again.
+
+Completed-turn saves and segment transitions stage their complete critical
+artifact batch locally before target I/O.  Replacement files at their familiar
+session paths are published through nearby target temporary files plus atomic
+rename, but these fixed files are caches, not the durable snapshot boundary.
+A successful session-local batch without a sidecar marker retains its staged
+source locally.  A later batch with exactly one `session.meta.el` artifact
+marked `:commit-marker t` merges those retained artifacts with the current
+batch in order; duplicate logical paths use the last write.  Artifacts outside
+the session directory remain ordinary fenced writes and never enter the
+session snapshot.
+
+The marker transaction copies the merged logical artifacts into a unique,
+never-overwritten directory below `.publications/`, records each target-native
+session-relative logical and published path plus its SHA-256, and creates the
+immutable `manifest.el` last.  Updating the exact current lease generation's
+`:publication-head` to that manifest is the only commit point.  Every fixed
+cache write precedes this compare-and-set, and no fixed or shared state is
+written after a failed compare-and-set.  Consequently, a reader sees either
+the complete old manifest or the complete new one even if newer fixed caches
+already exist.  A lifecycle replacement such as Rewind may put `:replace t`
+only on the marker, which starts from an empty manifest rather than overlaying
+the preceding snapshot.
+
+An uncached read validates the manifest and all logical/control paths, returns
+qualified immutable paths, and verifies the selected sidecar bytes eagerly.
+Other artifact digests are verified only when those bytes are consumed, so
+session listing costs one manifest plus one sidecar rather than the whole
+conversation.  A nil head means the session is unpublished or incomplete.
+The live owning session may resolve its newest retained local staged source
+before falling back to its captured committed manifest; readers never treat
+the fixed caches as authority.
+
+A failure before the manifest-head compare-and-set retains the current and
+previously retained staged sources as one transient local recovery, surfaces
+`Publication pending` in session status, and blocks request and mutation
+admission until `mevedel-session-durability-retry-publication` succeeds or the
+user explicitly runs
+`mevedel-session-durability-abandon-publication`.  Once the compare-and-set
+succeeds, the transaction is durable even if the final `publishing` to
+`active` lease normalization fails: the client fails closed with visible lease
+loss, consumes the transaction sources, and does not create recovery or
+republish the committed bytes.
+
+Critical publication changes the owned generation to `publishing` and reserves
+a one-hour ownership window before each artifact.  Timer callbacks perform no
+target I/O while publication is active, avoiding reentrant TRAMP calls; the
+serialized publisher renews before and immediately after every artifact
+instead.  If one uninterrupted target filesystem operation exceeds that
+window, the next ownership check fails closed and preserves local recovery.
+Another client may take over an expired publishing generation only after an
+explicit prompt warns that a critical write may still be in flight and asks
+the user to confirm that the prior client is stopped.
+
+The same bounded reservation wrapper covers long synchronous lifecycle I/O,
+such as target-side copy, restore, and rename.  It suppresses timer target I/O
+and checks final ownership but does not itself publish, commit, or drain queued
+artifacts.
+
+`ponytail:` v1 retains every committed and orphaned immutable publication
+generation until the whole session directory is removed.  This makes reads
+pin-free and crash recovery straightforward at the cost of storage proportional
+to all committed snapshots; garbage collection and read pins remain deferred
+until real storage use justifies them.
+
+Terminal retained-agent state in an already-materialized remote session uses
+the same seam: finalization first updates the in-memory transcript metadata and
+registry, then publishes the agent transcript followed by the session sidecar
+as one batch.  A mid-batch failure therefore leaves one retryable recovery and
+blocks later mutation.  The first root turn remains the deliberate exception:
+while the session is only shallowly materialized, an agent transcript may be
+saved but no early sidecar is created; the root turn's DONE publication remains
+the first authoritative sidecar boundary.
+
+Local Fork and Rewind retain their same-filesystem directory transactions and
+rollback trees.  Remote lifecycle commits use the immutable publication head
+instead.  A remote fork acquires one fresh child lease in hidden staging,
+publishes a complete `:replace t` child snapshot, then moves the staged tree
+with its `.lease/` and `.publications/` control state while the bounded lease is
+reserved.  The child's save path changes immediately and restore retains that
+same generation; it is never released and reacquired at a discoverable path.
+The replacement manifest contains only the selected transcript, accepted-plan
+evidence, retained agent transcripts, and file-history artifacts resolved from
+the Source's committed manifest, never its fixed caches.
+
+Remote Rewind does not rename or exchange the session directory.  It
+materializes only logical committed artifacts, excludes `.lease/` and
+`.publications/` by construction, restores project files under a bounded lease
+reservation, then commits the complete rewound snapshot with one `:replace t`
+sidecar marker against the current generation and head.  A pre-commit failure
+revalidates the same authority before rolling project files back.  Incomplete
+rollback fails closed visibly and retains recovery bytes; the control trees
+and current lease generation are never copied, moved, or replaced.
+
+Remote Rename reserves the owned lease while moving the whole session tree,
+immediately retargets the bound session to the moved `.lease/`, refreshes its
+captured immutable paths, and commits the renamed sidecar against the same
+generation and head.  Failure before that head compare-and-set moves the tree
+and in-memory paths back under revalidated authority; failure after it leaves
+the committed rename installed and reports lease loss.
+
+Remote Save As similarly keeps the parent lease through the directory copy,
+deletes copied `.lock` and `.lease/` authority, claims a fresh child lease, and
+binds the live session to that child before rewriting metadata.  The parent is
+released only after the handoff cleanup.  The fresh child lease keeps a nil
+head.  After validating every copied immutable artifact, Save As seeds only the
+live child's transient merge base; its rewritten sidecar marker then overlays
+that base and performs the child's first head compare-and-set.  No stale parent
+sidecar becomes discoverable between those steps.  A pre-commit failure
+releases the child, restores the parent binding, and removes the unpublished
+clone; a post-commit lease-normalization failure keeps the committed child and
+fails closed visibly.
 
 Pending input is live-session state, not sidecar state. Same-turn steering,
 queued follow-ups, their category order and edit state, session-local IDs,
@@ -226,12 +379,15 @@ available; otherwise the request estimator supplies the charge.
 
 Worktree sessions are ordinary sessions whose `:working-directory` is a
 Git linked worktree under the same workspace, created by `/worktree
-create`. The old session remains live; the new session does not inherit
-active requests, permission queues, tasks, retained agents, or transcript
-history. Unless `--clean` is used, the new data buffer starts with a
-visible setup-context user turn explaining the source session, source
-directory, worktree directory, branch, purpose, and warnings. That turn is
-not sent automatically.
+create`. Git availability, worktree-command support, and branch validity are
+checked on the session execution target before any worktree state is created.
+The linked checkout and its session remain on that same target, while
+setup-context paths use the target-native spelling. The old session remains
+live; the new session does not inherit active requests, permission queues,
+tasks, retained agents, or transcript history. Unless `--clean` is used, the
+new data buffer starts with a visible setup-context user turn explaining the
+source session, source directory, worktree directory, branch, purpose, and
+warnings. That turn is not sent automatically.
 
 When a saved session's working directory no longer exists, it remains visible
 in the resume picker. Resume prompts for an existing replacement inside the
@@ -262,7 +418,12 @@ Permission diagnostics are also append-only. `permission-log.el` records
 permission queue lifecycle events so transient overlays can be diagnosed after
 a turn or agent is aborted. It is not read
 back into live session state on resume.  Pre-materialization entries wait in
-a transient session queue and flush with the other diagnostic logs.
+a transient session queue and flush with the other diagnostic logs.  Failed
+hook, repair, permission, and telemetry appends stay queued and retry after
+the next successful session save; they never block critical publication.
+Remote hook and repair appends share the session publication serializer and
+replace their target logs atomically, while failed diagnostic staging is
+discarded and the in-memory entries remain queued.
 
 For mevedel chat buffers with dynamic preset system prompts, save-time
 advice around `gptel--save-state` removes frozen `GPTEL_SYSTEM`
@@ -328,19 +489,24 @@ while `C-n`/`C-p` move through user queries. These navigation actions change
 neither transcript nor session state; Rewind remains a separate explicit
 operation.
 
-Rewind is an in-place transaction. It discards the selected turn and every
-later transcript and session artifact, restores every captured working-tree
-file to immediately before the selected turn, and keeps
-the same session identity, name, directory, working directory, and lineage.
+Rewind is an in-place logical transaction. It discards the selected turn and
+every later transcript and session artifact, restores every captured
+working-tree file to immediately before the selected turn, and keeps the same
+session identity, name, directory, working directory, and lineage.  Locally,
+the transaction stages and swaps a session directory with a rollback tree.
+Remotely, it leaves the directory and control state in place and commits one
+complete replacement manifest through the owned lease head.
 The impact lists the discarded prompt suffix in order, including ordinary chat
 and complete directive turns, alongside restored files and every known gap.
 External working-tree changes to captured files are overwritten. Git HEAD and
 the index are not changed, so the impact identifies staged files whose index
-content will diverge from the restored working tree. Failure rolls back both
-session and file changes, including a live transcript already replaced during
-publication. A failed rollback reports every inconsistent path and retains its
-temporary recovery directory; a successful Rewind removes those rollback
-bytes. Every settled model turn, including the first, owns a durable pre-turn
+content will diverge from the restored working tree. Failure before the commit
+point rolls back both session and file changes, including a live transcript
+already replaced during local publication. Remote rollback first revalidates
+the same lease authority and never substitutes fixed session caches for the
+captured manifest. A failed rollback reports every inconsistent path and
+retains its temporary recovery directory; a successful Rewind removes those
+rollback bytes. Every settled model turn, including the first, owns a durable pre-turn
 checkpoint. The impact marks coverage as complete or lists known gaps; gaps do
 not disable Rewind and are never presented as restored paths. Rewind creates
 neither a child session nor a redo variant. Existing
@@ -400,8 +566,10 @@ so Conversation Fork also works outside Git. A durable system-reminder
 disclosure tells both the user and model that current files may be newer than
 the conversation point and that file changes are shared with Source.
 
-Worktree Fork requires a supported Git checkout. It creates a linked worktree
-at the Source checkout's current `HEAD`, restores captured repository-local
+Worktree Fork requires Git, its worktree command, and a supported checkout on
+the Source session's execution target. Dependency and repository preflight run
+before a branch or directory is created. It creates a linked worktree at the
+Source checkout's current `HEAD`, restores captured repository-local
 files from the selected turn before the first prompt, and retargets valid
 repository-local snapshot, permission, grant, and mention paths to the child
 checkout. An unavailable individual backup leaves that child file at `HEAD`
@@ -523,12 +691,41 @@ exact entries to `.git/info/exclude` instead of ignoring the whole
 
 ### Locking
 
-`.lock` files prevent concurrent edits. Same-host active lock →
+Local `.lock` files prevent concurrent edits. Same-host active lock →
 break / read-only / abort prompt; same-host stale lock → prompt to
 break; cross-host → break / read-only / abort prompt. Same-host locks
 are stale when their PID is dead or when the live process start time
 proves PID reuse. If the process start time or lock timestamp cannot be
 verified, the lock stays active.
+
+Remote sessions never use client PIDs as liveness authority.  Their `.lease/`
+directory contains portable generation records with an opaque client id,
+renewal and expiry times, and a diagnostic buffer name.  A new owner
+exclusively creates the next generation in `claiming`, then activates it only
+if the immediately preceding live generation is still exactly the record it
+observed.  Every complete acquire, renewal, and release transaction disables
+remote file caching so an external client's generation is observed
+consistently.  Renew and release can update only their own generation and
+verify that no newer head won.  A successful claim prunes older generations
+best-effort; aborted candidates are ignored and removed best-effort.
+
+Each generation also carries `:publication-head`, initially nil and otherwise
+a validated `.publications/.../manifest.el` session-relative path.  A new
+generation inherits its predecessor's head; renewal, status changes, and
+release preserve it.  The publisher may replace it only through an exact-head
+generation check, so a stale client can update only its older record and
+cannot commit over a newer owner.  The current head can be read uncached before
+a session object exists without acquiring or mutating the lease.
+
+The persisted states are `claiming`, `active`, `publishing`, `released`, and
+`aborted`.  Unexpired claiming, active, and publishing records fence other
+clients.  An interrupted claiming or publishing record remains bounded by its
+expiry, and its takeover still requires explicit confirmation.  A non-owner
+may inspect the last published state read-only.  Killing the owning data buffer
+cancels its renewal timer and marks only that client's active or inactive
+publishing generation released; it never interrupts live publication or
+deletes a newer owner's generation.  Retry can normalize the same client's
+still-live publishing generation back to active before reserving a new window.
 
 ### Auto-cleanup
 
@@ -539,7 +736,9 @@ registered during the Emacs invocation before releasing live-session locks.
 Cleanup uses `:updated-at` when available, otherwise the sidecar or session
 directory modification time. It skips active locks and is throttled to once per
 workspace per Emacs invocation. Expired session cleanup removes its `local/`
-scratch directory with the rest of the session. `nil` disables.
+scratch directory with the rest of the session. Remote session stores are
+never auto-cleaned; their portable lease protocol has no deletion claim in
+v1. `nil` disables local cleanup.
 
 ## Defcustoms
 
@@ -548,5 +747,11 @@ All in `mevedel-session-persistence.el`:
 - `mevedel-sessions-directory` (default `.mevedel/sessions/`)
 - `mevedel-session-max-age-days` (default 30)
 - `mevedel-file-history-max-snapshot-bytes` (default 1 MB)
+- `mevedel-session-lease-seconds` (in `mevedel-session-durability.el`,
+  default 90)
+- `mevedel-session-lease-renewal-seconds` (in
+  `mevedel-session-durability.el`, default 30)
+- `mevedel-session-publication-lease-seconds` (in
+  `mevedel-session-durability.el`, default 3600)
 - `mevedel-view-input-history-size` (in `mevedel-view-history.el`,
   default 500)

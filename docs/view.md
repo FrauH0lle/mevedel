@@ -496,9 +496,12 @@ Markdown rendering adds small view-only affordances:
 - local Markdown image links and bare local image paths render inline
   when Emacs can display images;
 - simple Markdown pipe tables are padded so columns line up in the view;
-- rendered `@file` mentions, local Markdown links, and bare local paths
+- rendered `@file` mentions, Markdown file links, and bare file paths
   are clickable open-file buttons, including `:LINE`, `:L<line>`,
-  `:#L<line>`, comma-separated line lists, and `#L<line>` targets.
+  `:#L<line>`, comma-separated line lists, and `#L<line>` targets. A path
+  inside the active remote session opens resolver-verified published bytes at
+  its logical path; the disposable fixed-path cache is never used as evidence
+  that the artifact exists.
 
 Markdown tables, links, local images, paths, and fenced source-panel
 projection are isolated in `mevedel-view-markdown.el`.

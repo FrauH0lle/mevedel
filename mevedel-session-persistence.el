@@ -15,7 +15,9 @@
 ;;   (:version "v0.5.0"
 ;;    :session-id "main-2026-04-23T14-30-a9f2"
 ;;    :session-name "main"
-;;    :workspace (:type project :id ID :root ROOT :name NAME)
+;;    :workspace (:type project :workspace-id ID
+;;                :target-native-root ROOT :name NAME)
+;;    :target-incarnation STRING-OR-NIL
 ;;    :created-at "..." :updated-at "..."
 ;;    :current-segment 3 :total-turn-count 47
 ;;    :first-user-message "..."
@@ -49,12 +51,16 @@
 (require 'cl-lib)
 
 (eval-when-compile
+  (require 'mevedel-agents)
   (require 'mevedel-structs))
 
 (require 'mevedel-transcript)
 
 ;; `diff'
 (declare-function diff "diff" (old new &optional switches no-async))
+
+;; `files'
+(defvar remote-file-name-inhibit-cache)
 
 ;; `gptel'
 (declare-function gptel--get-buffer-bounds "ext:gptel" nil)
@@ -89,11 +95,26 @@
 (declare-function mevedel-agent-persistence-transcript-path-p
 		  "mevedel-agent-persistence" (path save-path))
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-agent-id
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-buffer
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-session
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-sidecar-dirty
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-transcript-relative-path
+                  "mevedel-agents" (cl-x) t)
+
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer-disable-org-element-cache
 		  "mevedel-chat" nil)
 (declare-function mevedel--chat-buffer-init-common "mevedel-chat"
-		  (buf workspace source))
+		  (buf workspace source &optional inspection-p))
 (declare-function mevedel--normalize-session-directory "mevedel-chat"
 		  (directory workspace))
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
@@ -110,15 +131,34 @@
 (declare-function mevedel-execution-teardown-all "mevedel-execution"
 		  nil)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-create
+                  "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-expand-path
+                  "mevedel-execution-target" (target path &optional directory))
+(declare-function mevedel-execution-target-incarnation
+                  "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+(declare-function mevedel-execution-target-native-root
+                  "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-seed-incarnation
+                  "mevedel-execution-target" (target incarnation))
+
 ;; `mevedel-hooks'
-(declare-function mevedel-hooks--persist-log-entry "mevedel-hooks"
-		  (session entry))
+(declare-function mevedel-hooks-flush-log "mevedel-hooks" (session))
 
 ;; `mevedel-permission-log'
-(declare-function mevedel-permission-log--persist
-		  "mevedel-permission-log" (session entry))
+(declare-function mevedel-permission-log-flush
+		  "mevedel-permission-log" (session))
 
 ;; `mevedel-permissions'
+(declare-function mevedel-permission-deserialize-authority
+                  "mevedel-permissions" (rules grants target))
+(declare-function mevedel-permission-serialize-authority
+                  "mevedel-permissions" (rules grants target))
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-sandbox'
@@ -133,6 +173,9 @@
 		  "mevedel-persistence" (workspace directives))
 (declare-function mevedel--restore-preserved-directives
 		  "mevedel-persistence" (workspace))
+(declare-function mevedel--serialize-instructions
+                  "mevedel-persistence"
+                  (&optional base-directory include-original-content))
 (declare-function mevedel--write-instructions-file
 		  "mevedel-persistence"
 		  (path &optional base-directory write-empty quiet
@@ -148,11 +191,40 @@
 (defvar mevedel-pipeline--render-data-open)
 
 ;; `mevedel-plan'
-(declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
+(declare-function mevedel-plan-read-artifact "mevedel-plan"
+                  (session artifact))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders"
 		  (reminders))
+
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-call-with-reserved-lease
+                  "mevedel-session-durability" (session function))
+(declare-function mevedel-session-durability-discard-rolled-back-publication
+                  "mevedel-session-durability" (session))
+(declare-function mevedel-session-durability-disclose
+                  "mevedel-session-durability" (session))
+(declare-function mevedel-session-durability-lease-acquire
+                  "mevedel-session-durability"
+                  (session-dir buffer-name &optional session))
+(declare-function mevedel-session-durability-lease-owned-p
+                  "mevedel-session-durability" (session))
+(declare-function mevedel-session-durability-lease-release
+                  "mevedel-session-durability" (session-dir &optional session))
+(declare-function mevedel-session-durability-logical-path-p
+                  "mevedel-session-durability" (path))
+(declare-function mevedel-session-durability-publish
+                  "mevedel-session-durability" (session artifacts))
+(declare-function mevedel-session-durability-read-publication
+                  "mevedel-session-durability" (session-dir))
+(declare-function mevedel-session-durability-record-specialized-failure
+                  "mevedel-session-durability"
+                  (session reason recovery-path))
+(declare-function mevedel-session-durability-seed-publication-base
+                  "mevedel-session-durability" (session head))
+(declare-function mevedel-session-durability-uncommitted-artifact
+                  "mevedel-session-durability" (session logical))
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-attempt-checkpoint
@@ -185,6 +257,8 @@
 		  t)
 (declare-function mevedel-session-current-segment "mevedel-structs"
 		  (cl-x) t)
+(declare-function mevedel-session-execution-target "mevedel-structs"
+                  (cl-x) t)
 (declare-function mevedel-session-file-snapshots "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-forked-from-fork-point-id
@@ -250,12 +324,14 @@
 		  "mevedel-structs" (tasks))
 (declare-function mevedel-task-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task-subject "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-get-or-create "mevedel-structs"
-		  (type id root name))
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-get-or-create "mevedel-structs"
+                  (type id root name))
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-set-directives
+                  "mevedel-structs" (workspace directives))
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
@@ -272,8 +348,8 @@
 		  (session event &rest props))
 
 ;; `mevedel-tool-repair'
-(declare-function mevedel-tool-repair--persist-event
-		  "mevedel-tool-repair-diagnostics" (session event))
+(declare-function mevedel-tool-repair-flush-log
+		  "mevedel-tool-repair-diagnostics" (session))
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
@@ -324,6 +400,12 @@
 (declare-function mevedel-workspace-ensure-generated-state-ignored
 		  "mevedel-workspace" (workspace))
 (defvar mevedel-workspace-additional-roots)
+
+;; `mevedel-workspace-identity'
+(declare-function mevedel-workspace-identity-ensure
+                  "mevedel-workspace-identity" (root))
+(declare-function mevedel-workspace-identity-read
+                  "mevedel-workspace-identity" (root))
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-fork-create
@@ -394,6 +476,7 @@ add more, and we don't want to act on actions we don't understand).")
 
 (defconst mevedel-session-persistence--required-sidecar-keys
   '(:version :session-id :session-name :workspace :working-directory
+    :target-incarnation
     :created-at :updated-at :current-segment :total-turn-count
     :last-task-write-turn :task-status-notes :first-user-message
     :latest-user-message :forked-from-session-id :forked-from-turn
@@ -434,28 +517,59 @@ add more, and we don't want to act on actions we don't understand).")
 (defun mevedel-session-persistence--workspace-to-plist (workspace)
   "Convert WORKSPACE to a plist for sidecar storage.
 
-Captures only the identity tuple needed to re-register the workspace on
-load: type, id, root, and name.  The file cache is process-local and
-not persisted."
+The project-owned identity and target-native root are portable across
+client-specific TRAMP spellings.  The process-local workspace id and file
+cache are not persisted."
   (when workspace
-    (list :type (mevedel-workspace-type workspace)
-          :id   (mevedel-workspace-id workspace)
-          :root (mevedel-workspace-root workspace)
-          :name (mevedel-workspace-name workspace))))
+    (require 'mevedel-execution-target)
+    (require 'mevedel-workspace-identity)
+    (let* ((root (mevedel-workspace-root workspace))
+           (identity (mevedel-workspace-identity-read root))
+           (target (mevedel-execution-target-create root)))
+      (unless identity
+        (error "Workspace identity is not materialized: %s" root))
+      (list :type (mevedel-workspace-type workspace)
+            :workspace-id identity
+            :target-native-root
+            (mevedel-execution-target-native-root target)
+            :name (mevedel-workspace-name workspace)))))
 
-(defun mevedel-session-persistence--workspace-from-plist (plist)
-  "Resolve WORKSPACE from PLIST.
+(defun mevedel-session-persistence--workspace-from-plist (plist workspace)
+  "Bind PLIST to the currently opened WORKSPACE.
 
-Looks up the workspace in the registry by (type . id); if not found,
-registers a fresh one from the saved tuple.  The current registry's
-`root' wins if it differs from the saved root (workspace relocation
-is handled by the read path, not here)."
-  (when plist
-    (mevedel-workspace-get-or-create
-     (plist-get plist :type)
-     (plist-get plist :id)
-     (plist-get plist :root)
-     (plist-get plist :name))))
+The sidecar never supplies a live filesystem authority.  Resume must bind it
+to the workspace through which the user opened the session.  Return
+`(WORKSPACE . IDENTITY-CHANGED-P)'.  Rebinding a different project-owned
+identity requires confirmation so callers can discard copied authority."
+  (unless (and (proper-list-p plist) workspace)
+    (error "Invalid persisted workspace"))
+  (require 'mevedel-workspace-identity)
+  (let ((saved-identity (plist-get plist :workspace-id))
+        (saved-root (plist-get plist :target-native-root))
+        (current-identity
+         (mevedel-workspace-identity-read
+          (mevedel-workspace-root workspace))))
+    (unless (and (stringp saved-identity)
+                 (string-match-p "\\`[0-9a-f]\\{64\\}\\'" saved-identity))
+      (error "Invalid persisted workspace identity"))
+    (unless (and (stringp saved-root)
+                 (file-name-absolute-p saved-root)
+                 (not (file-remote-p saved-root)))
+      (error "Invalid target-native workspace root: %S" saved-root))
+    (unless current-identity
+      (error "Workspace identity is missing: %s"
+             (mevedel-workspace-root workspace)))
+    (let ((changed-p (not (equal saved-identity current-identity))))
+      (when (and changed-p
+                 (not
+                  (yes-or-no-p
+                   (concat
+                    "This session belongs to a different workspace identity. "
+                    "Resume against the opened project and discard copied "
+                    "session permissions, resource grants, and additional "
+                    "roots? "))))
+        (user-error "Workspace identity change was not accepted"))
+      (cons workspace changed-p))))
 
 
 ;;
@@ -488,41 +602,40 @@ A grant is `(:path ABSOLUTE-PATH :access read-or-write)'."
 ;;; Working directory restore
 
 (defun mevedel-session-persistence--working-directory-from-plist
-    (plist workspace)
+    (plist workspace target)
   "Return PLIST's restored working directory for WORKSPACE.
 
-When WORKSPACE is available, paths saved under a relocated workspace
-root are first mapped to the current root unless
-they already live under that current root, then checked with the same
-containment semantics as session creation."
+TARGET qualifies the persisted target-native path through the current
+client's live filesystem authority.  Paths below a prior target-native root
+are mapped below the opened workspace root before containment is checked."
   (let* ((raw (plist-get plist :working-directory))
          (saved-workspace (plist-get plist :workspace))
-         (saved-root (plist-get saved-workspace :root))
-         (current-root (and workspace
-                            (mevedel-workspace-root workspace)))
-         (saved-prefix (and saved-root
-                            (file-name-as-directory
-                             (expand-file-name saved-root))))
-         (current-prefix (and current-root
-                              (file-name-as-directory
-                               (expand-file-name current-root))))
-         (dir (and raw
-                   (file-name-as-directory
-                    (expand-file-name raw)))))
-    (when (and dir saved-prefix current-prefix
-               (not (equal saved-prefix current-prefix))
-               (not (string-prefix-p current-prefix dir))
-               (string-prefix-p saved-prefix dir))
-      (setq dir (concat current-prefix
-                        (substring dir (length saved-prefix)))))
-    (when (and dir workspace)
-      (let ((root (or current-prefix
-                      (file-name-as-directory
-                       (expand-file-name (mevedel-workspace-root workspace))))))
-        (unless (file-in-directory-p dir root)
-          (user-error "Working directory must be inside workspace root %s"
-                      root))))
-    dir))
+         (saved-root
+          (file-name-as-directory
+           (expand-file-name
+            (plist-get saved-workspace :target-native-root))))
+         (current-native-root
+          (mevedel-execution-target-native-root target)))
+    (unless (and (stringp raw)
+                 (file-name-absolute-p raw)
+                 (not (file-remote-p raw)))
+      (error "Invalid target-native working directory: %S" raw))
+    (let* ((native-directory (file-name-as-directory (expand-file-name raw)))
+           (mapped
+            (cond
+             ((string-prefix-p current-native-root native-directory)
+              native-directory)
+             ((string-prefix-p saved-root native-directory)
+              (concat current-native-root
+                      (substring native-directory (length saved-root))))
+             (t native-directory)))
+           (dir
+            (file-name-as-directory
+             (mevedel-execution-target-expand-path target mapped)))
+           (root (mevedel-workspace-root workspace)))
+      (unless (file-in-directory-p dir root)
+        (user-error "Working directory must be inside workspace root %s" root))
+      dir)))
 
 
 ;;
@@ -650,7 +763,15 @@ ADDITIONAL-ROOTS is the buffer-local value of
 The resulting plist is round-trippable via
 `mevedel-session-persistence-deserialize'."
   (require 'mevedel-agent-persistence)
-  (let ((permission-mode
+  (require 'mevedel-execution-target)
+  (require 'mevedel-permissions)
+  (let* ((execution-target (mevedel-session-execution-target session))
+         (remote-p
+          (mevedel-execution-target-remote-p execution-target))
+         (target-incarnation
+          (and remote-p
+               (mevedel-execution-target-incarnation execution-target)))
+         (permission-mode
          (or (mevedel-session-permission-mode session)
              (and (boundp 'mevedel-permission-mode)
                   (default-toplevel-value 'mevedel-permission-mode))
@@ -659,7 +780,18 @@ The resulting plist is round-trippable via
          (or (mevedel-session-sandbox-mode session)
              (and (boundp 'mevedel-sandbox-mode)
                   (default-toplevel-value 'mevedel-sandbox-mode))
-             'best-effort)))
+             'best-effort))
+        (authority
+         (or
+          (mevedel-permission-serialize-authority
+           (mevedel-session-permission-rules session)
+           (mevedel-session-resource-grants session)
+           execution-target)
+          (error "Session permission authority is not portable"))))
+    (when (and remote-p
+               (not (and (stringp target-incarnation)
+                         (string-match-p "\\S-" target-incarnation))))
+      (error "Remote target incarnation is not available"))
     (unless (memq permission-mode '(ask edits full-auto))
       (error "Invalid persisted permission mode: %S" permission-mode))
     (unless (memq sandbox-mode '(best-effort required off))
@@ -670,9 +802,12 @@ The resulting plist is round-trippable via
    :session-name           (mevedel-session-name session)
    :workspace              (mevedel-session-persistence--workspace-to-plist
                             (mevedel-session-workspace session))
-   :working-directory      (or (mevedel-session-working-directory session)
-                               (mevedel-workspace-root
-                                (mevedel-session-workspace session)))
+   :working-directory
+   (mevedel-execution-target-native-path
+    execution-target
+    (or (mevedel-session-working-directory session)
+        (mevedel-workspace-root (mevedel-session-workspace session))))
+   :target-incarnation     target-incarnation
    :created-at             (mevedel-session-created-at session)
    :updated-at             (mevedel-session-updated-at session)
    :current-segment        (or (mevedel-session-current-segment session) 1)
@@ -693,8 +828,8 @@ The resulting plist is round-trippable via
    :permission-mode        permission-mode
    :sandbox-mode           sandbox-mode
    :plan-mode              (and (mevedel-session-plan-mode session) t)
-   :permission-rules       (mevedel-session-permission-rules session)
-   :resource-grants        (mevedel-session-resource-grants session)
+   :permission-rules       (plist-get authority :rules)
+   :resource-grants        (plist-get authority :resource-grants)
    :preset-name            (mevedel-session-preset-name session)
    :preset-settings        (mevedel-session-preset-settings session)
    :model-provider         (mevedel-session-model-provider session)
@@ -728,6 +863,11 @@ The resulting plist is round-trippable via
   (dolist (key mevedel-session-persistence--required-sidecar-keys)
     (unless (plist-member plist key)
       (error "Missing session sidecar key: %s" key)))
+  (let ((incarnation (plist-get plist :target-incarnation)))
+    (unless (or (null incarnation)
+                (and (stringp incarnation)
+                     (string-match-p "\\S-" incarnation)))
+      (error "Invalid persisted target incarnation: %S" incarnation)))
   (unless (memq (plist-get plist :permission-mode) '(ask edits full-auto))
     (error "Invalid persisted permission mode: %S"
            (plist-get plist :permission-mode)))
@@ -762,8 +902,8 @@ The resulting plist is round-trippable via
         (error "Invalid session prompt entry: %S" prompt))))
   plist)
 
-(defun mevedel-session-persistence-deserialize (plist)
-  "Reconstruct a session from sidecar PLIST.
+(defun mevedel-session-persistence-deserialize (plist workspace)
+  "Reconstruct a session from sidecar PLIST for opened WORKSPACE.
 
 Returns a plist:
   (:session SESSION
@@ -784,16 +924,47 @@ their hygiene filters."
            (or (plist-get plist :version) "missing")))
   (mevedel-session-persistence--validate-current-sidecar plist)
   (require 'mevedel-agent-persistence)
-  (let* ((workspace (mevedel-session-persistence--workspace-from-plist
-                     (plist-get plist :workspace)))
+  (require 'mevedel-execution-target)
+  (require 'mevedel-permissions)
+  (let* ((workspace-binding
+          (mevedel-session-persistence--workspace-from-plist
+           (plist-get plist :workspace) workspace))
+         (workspace (car workspace-binding))
+         (workspace-identity-changed-p (cdr workspace-binding))
+         (execution-target
+          (let* ((target
+                  (mevedel-execution-target-create
+                   (mevedel-workspace-root workspace)))
+                 (incarnation (plist-get plist :target-incarnation)))
+            (if (mevedel-execution-target-remote-p target)
+                (progn
+                  (unless (and (stringp incarnation)
+                               (string-match-p "\\S-" incarnation))
+                    (error "Remote session has no target incarnation"))
+                  (mevedel-execution-target-seed-incarnation
+                   target incarnation))
+              (when incarnation
+                (error "Local session has a remote target incarnation")))
+            target))
          (working-directory
           (mevedel-session-persistence--working-directory-from-plist
-           plist workspace))
-         (rules     (mevedel-session-persistence--filter-permission-rules
-                     (plist-get plist :permission-rules)))
+           plist workspace execution-target))
+         (persisted-rules
+          (unless workspace-identity-changed-p
+            (mevedel-session-persistence--filter-permission-rules
+             (plist-get plist :permission-rules))))
+         (persisted-resource-grants
+          (unless workspace-identity-changed-p
+            (mevedel-session-persistence--filter-resource-grants
+             (plist-get plist :resource-grants))))
+         (authority
+          (mevedel-permission-deserialize-authority
+           persisted-rules
+           persisted-resource-grants
+           execution-target))
+         (rules (and authority (plist-get authority :rules)))
          (resource-grants
-          (mevedel-session-persistence--filter-resource-grants
-           (plist-get plist :resource-grants)))
+          (and authority (plist-get authority :resource-grants)))
          (prompt-index (plist-get plist :prompt-index))
          (latest-user-message (plist-get plist :latest-user-message))
          (raw-agent-registry (plist-get plist :agent-registry))
@@ -827,6 +998,7 @@ their hygiene filters."
          (session   (mevedel-session--create
                      :name             (plist-get plist :session-name)
                      :workspace        workspace
+                     :execution-target execution-target
                      :working-directory working-directory
                      :touched-files    (make-hash-table :test #'equal)
                      :mentions-shown   (make-hash-table :test #'equal)
@@ -896,7 +1068,8 @@ their hygiene filters."
     (list :session             session
           :first-user-message  (plist-get plist :first-user-message)
           :latest-user-message latest-user-message
-          :additional-roots    (plist-get plist :additional-roots)
+          :additional-roots    (unless workspace-identity-changed-p
+                                 (plist-get plist :additional-roots))
           :agent-registry-repaired-p
           (not (= (length agent-registry)
                   (length (and (proper-list-p raw-agent-registry)
@@ -980,22 +1153,35 @@ Returns the raw plist.  Caller is responsible for passing it through
         ids))))
 
 (defun mevedel-session-persistence--reconcile-lost-execution-file
-    (path &optional successor-execution-ids)
-  "Mark stale running execution rows in transcript PATH as lost."
+    (path &optional successor-execution-ids artifact-callback)
+  "Mark stale running execution rows in transcript PATH as lost.
+
+When ARTIFACT-CALLBACK is non-nil, pass it the repaired replacement instead
+of writing PATH directly."
   (when (file-regular-p path)
     (with-temp-buffer
       (insert-file-contents path)
       (require 'mevedel-pipeline)
       (let ((count
-             (mevedel-pipeline-reconcile-lost-executions
+              (mevedel-pipeline-reconcile-lost-executions
               (current-buffer) successor-execution-ids)))
         (when (> count 0)
-          (mevedel-session-persistence--write-current-buffer-atomically path))
+          (if artifact-callback
+              (funcall
+               artifact-callback
+               (list :path path
+                     :content (buffer-string)
+                     :coding (or buffer-file-coding-system 'utf-8-unix)))
+            (mevedel-session-persistence--write-current-buffer-atomically
+             path)))
         count))))
 
 (defun mevedel-session-persistence--reconcile-lost-execution-segments
-    (session &optional exclude-path)
-  "Repair stale execution rows in SESSION segments except EXCLUDE-PATH."
+    (session &optional exclude-path artifact-callback)
+  "Repair stale execution rows in SESSION segments except EXCLUDE-PATH.
+
+ARTIFACT-CALLBACK has the meaning described by
+`mevedel-session-persistence--reconcile-lost-execution-file'."
   (let ((save-path (mevedel-session-save-path session))
         (successor-ids
          (and exclude-path
@@ -1012,7 +1198,7 @@ Returns the raw plist.  Caller is responsible for passing it through
              do (cl-incf
                  count
                  (or (mevedel-session-persistence--reconcile-lost-execution-file
-                      path successor-ids)
+                      path successor-ids artifact-callback)
                      0))
              and do
              (dolist (id
@@ -1063,19 +1249,15 @@ render time."
                         entries))))
 
 (defun mevedel-session-persistence--flush-diagnostic-logs (session)
-  "Persist SESSION diagnostics buffered before materialization."
+  "Retry SESSION diagnostics queued before or after materialization."
   (when (fboundp 'mevedel-telemetry-flush)
     (mevedel-telemetry-flush session))
-  (when (fboundp 'mevedel-hooks--persist-log-entry)
-    (dolist (entry (mevedel-session-hook-log session))
-      (mevedel-hooks--persist-log-entry session entry)))
-  (when (fboundp 'mevedel-tool-repair--persist-event)
-    (dolist (event (mevedel-session-repair-log session))
-      (mevedel-tool-repair--persist-event session event)))
-  (when (fboundp 'mevedel-permission-log--persist)
-    (dolist (entry (mevedel-session-permission-log-pending session))
-      (mevedel-permission-log--persist session entry))
-    (setf (mevedel-session-permission-log-pending session) nil)))
+  (when (fboundp 'mevedel-hooks-flush-log)
+    (mevedel-hooks-flush-log session))
+  (when (fboundp 'mevedel-tool-repair-flush-log)
+    (mevedel-tool-repair-flush-log session))
+  (when (fboundp 'mevedel-permission-log-flush)
+    (mevedel-permission-log-flush session)))
 
 (defun mevedel-session-persistence--allocate-session-id (name sessions-dir)
   "Return a fresh session id for NAME below SESSIONS-DIR."
@@ -1101,7 +1283,18 @@ slot.
 Returns SESSION's `save-path' on success, or nil on failure.  Idempotent."
   (or (mevedel-session-save-path session)
       (condition-case err
-          (let* ((sessions-dir (mevedel-session-persistence--sessions-dir
+          (let* ((_disclosure
+                  (when (mevedel-execution-target-remote-p
+                         (mevedel-session-execution-target session))
+                    (require 'mevedel-session-durability)
+                    (mevedel-session-durability-disclose session)))
+                 (_workspace-identity
+                  (progn
+                    (require 'mevedel-workspace-identity)
+                    (mevedel-workspace-identity-ensure
+                     (mevedel-workspace-root
+                      (mevedel-session-workspace session)))))
+                 (sessions-dir (mevedel-session-persistence--sessions-dir
                                 (mevedel-session-workspace session)))
                  (session-id
                   (mevedel-session-persistence--allocate-session-id
@@ -1115,7 +1308,7 @@ Returns SESSION's `save-path' on success, or nil on failure.  Idempotent."
             (make-directory (file-name-concat save-path "agents") t)
             (make-directory (file-name-concat save-path "file-history") t)
             (mevedel-session-persistence-lock-acquire
-             save-path (buffer-name buffer))
+             save-path (buffer-name buffer) session)
             (setf (mevedel-session-session-id session)      session-id)
             (setf (mevedel-session-save-path session)       save-path)
             (setf (mevedel-session-created-at session)      now)
@@ -1171,13 +1364,37 @@ In that case the write is deferred to the parent's DONE autosave;
 the in-memory `agent-transcripts' slot still reflects current state
 and will be picked up by that autosave."
   (when (and session (mevedel-session-save-path session))
-    (let ((sidecar (mevedel-session-persistence--sidecar-path
-                    (mevedel-session-save-path session))))
-      (when (file-exists-p sidecar)
+    (let* ((sidecar (mevedel-session-persistence--sidecar-path
+                     (mevedel-session-save-path session)))
+           (remote-p
+            (and (mevedel-session-execution-target session)
+                 (mevedel-execution-target-remote-p
+                  (mevedel-session-execution-target session))))
+           (present-p
+            (if remote-p
+                (mevedel-session-persistence-artifact-present-p
+                 session "session.meta.el")
+              (file-exists-p sidecar))))
+      (when present-p
         (condition-case err
-            (mevedel-session-persistence-write
-             sidecar
-             (mevedel-session-persistence--build-sidecar session buffer))
+            (if remote-p
+                (progn
+                  (mevedel-session-persistence-assert-mutation-authority
+                   session buffer)
+                  (require 'mevedel-session-durability)
+                  (mevedel-session-durability-publish
+                   session
+                   (list
+                    (list
+                     :path sidecar
+                     :content
+                     (mevedel-session-persistence--printed-value
+                      (mevedel-session-persistence--build-sidecar
+                       session buffer))
+                     :commit-marker t))))
+              (mevedel-session-persistence-write
+               sidecar
+               (mevedel-session-persistence--build-sidecar session buffer)))
           (error
            (message "mevedel: sidecar rewrite failed: %S" err)
            nil)
@@ -1253,6 +1470,123 @@ Segments are zero-padded to four digits (`segment-0001.chat.org')."
 (defvar-local mevedel-session--inspection-buffer-p nil
   "Non-nil in a read-only archived-segment inspection buffer.")
 
+(defun mevedel-session-persistence-read-artifact
+    (session logical &optional committed-only)
+  "Return SESSION artifact LOGICAL as literal bytes.
+
+LOGICAL is a normalized session-relative path.  Local sessions read their
+fixed logical file directly.  A remote live owner sees its newest locally
+staged write unless COMMITTED-ONLY is non-nil.  Otherwise remote sessions
+resolve only through SESSION's captured immutable publication and verify its
+recorded hash; fixed remote caches are never an authority fallback."
+  (require 'mevedel-session-durability)
+  (unless (mevedel-session-durability-logical-path-p logical)
+    (error "Invalid session artifact path: %S" logical))
+  (let ((save-path (or (mevedel-session-save-path session)
+                       (error "Session has no persistence path"))))
+    (if (not (file-remote-p save-path))
+        (mevedel-file-history--read-file-raw
+         (expand-file-name logical save-path))
+      (let ((source
+             (and (not committed-only)
+                  (mevedel-session-durability-lease-owned-p session)
+                  (mevedel-session-durability-uncommitted-artifact
+                   session logical)))
+            expected)
+        (unless source
+          (let* ((publication
+                  (or (mevedel-session-publication session)
+                      (setf
+                       (mevedel-session-publication session)
+                       (mevedel-session-durability-read-publication
+                        save-path))))
+                 (entry (and publication
+                             (cdr (assoc
+                                   logical
+                                   (plist-get publication :artifacts))))))
+            (unless entry
+              (error "Session artifact is not published: %s" logical))
+            (setq source (plist-get entry :published)
+                  expected (plist-get entry :sha256))))
+        (let ((content (mevedel-file-history--read-file-raw source)))
+          (when (and expected
+                     (not (equal expected (secure-hash 'sha256 content))))
+            (error
+             "Published session artifact failed verification: %s" logical))
+          content)))))
+
+(defun mevedel-session-persistence-artifact-present-p
+    (session logical &optional committed-only)
+  "Return non-nil when SESSION has artifact LOGICAL.
+
+Local sessions consult the fixed logical path.  Remote sessions consult a
+live owner's newest staged write or captured immutable publication only.
+When COMMITTED-ONLY is non-nil, ignore staged remote writes."
+  (require 'mevedel-session-durability)
+  (unless (mevedel-session-durability-logical-path-p logical)
+    (error "Invalid session artifact path: %S" logical))
+  (let ((save-path (or (mevedel-session-save-path session)
+                       (error "Session has no persistence path"))))
+    (if (not (file-remote-p save-path))
+        (file-exists-p (expand-file-name logical save-path))
+      (or
+       (and (not committed-only)
+            (mevedel-session-durability-lease-owned-p session)
+            (mevedel-session-durability-uncommitted-artifact session logical))
+       (let ((publication
+              (or (mevedel-session-publication session)
+                  (setf
+                   (mevedel-session-publication session)
+                   (mevedel-session-durability-read-publication save-path)))))
+         (and (assoc logical (plist-get publication :artifacts)) t))))))
+
+(defun mevedel-session-persistence-find-artifact-noselect
+    (session logical &optional inspection)
+  "Visit SESSION artifact LOGICAL without exposing immutable storage.
+
+Insert resolver-verified bytes into a buffer visiting the qualified logical
+path.  When INSPECTION is non-nil, make the buffer read-only and ineligible
+for saving."
+  (let* ((save-path (or (mevedel-session-save-path session)
+                        (error "Session has no persistence path")))
+         (path (expand-file-name logical save-path))
+         ;; Read first so the fixed remote cache can never select the bytes.
+         (content (mevedel-session-persistence-read-artifact session logical))
+         (existing
+          (and
+           (not inspection)
+           (cl-find-if
+            (lambda (candidate)
+              (with-current-buffer candidate
+                (and buffer-file-name
+                     (equal (expand-file-name buffer-file-name) path)
+                     (not (bound-and-true-p
+                           mevedel-session--inspection-buffer-p)))))
+            (buffer-list))))
+         (buffer
+          (or existing
+              (generate-new-buffer
+               (format " *mevedel artifact %s*"
+                       (file-name-nondirectory logical))))))
+    (with-current-buffer buffer
+      (when (and (not inspection) (buffer-modified-p))
+        (error "Session artifact buffer has unsaved changes: %s" path))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert
+         (decode-coding-string
+          content (or buffer-file-coding-system 'utf-8-unix))))
+      (unless existing
+        (setq buffer-file-name path
+              buffer-file-truename path)
+        (delay-mode-hooks (set-auto-mode)))
+      (setq-local mevedel-session--inspection-buffer-p inspection)
+      (setq-local buffer-offer-save (not inspection))
+      (setq buffer-read-only inspection)
+      (set-buffer-modified-p nil)
+      (set-visited-file-modtime))
+    buffer))
+
 (defun mevedel-session-persistence-segments (session live-buffer)
   "Return ordered segment descriptors for SESSION.
 
@@ -1267,6 +1601,7 @@ Each descriptor contains `:number', `:path', `:status', `:current-p', and
      for path = (and save-path
                      (mevedel-session-persistence--segment-path
                       save-path number))
+     for logical = (format "segment-%04d.chat.org" number)
      for current-p = (= number current)
      for prompts = (cdr (assoc number index))
      collect
@@ -1276,7 +1611,12 @@ Each descriptor contains `:number', `:path', `:status', `:current-p', and
       :status
       (cond
        ((and current-p (buffer-live-p live-buffer)) 'readable)
-       ((or (not path) (not (file-exists-p path))) 'missing)
+       ((not path) 'missing)
+       ((file-remote-p save-path)
+        (if (mevedel-session-persistence-artifact-present-p session logical)
+            'readable
+          'missing))
+       ((not (file-exists-p path)) 'missing)
        ((and (file-regular-p path) (file-readable-p path)) 'readable)
        (t 'unreadable))
       :current-p current-p
@@ -1295,29 +1635,41 @@ session state.  Signal a `user-error' naming the exact path when the segment
 cannot be read."
   (let* ((save-path (mevedel-session-save-path session))
          (current (or (mevedel-session-current-segment session) 1))
+         (logical (format "segment-%04d.chat.org" number))
          (path (and save-path
                     (mevedel-session-persistence--segment-path
                      save-path number))))
     (unless (and (integerp number) (<= 1 number) (<= number current))
       (user-error "Unknown session segment: %s" number))
-    (unless (and path (file-exists-p path))
+    (unless (and path
+                 (if (file-remote-p save-path)
+                     (mevedel-session-persistence-artifact-present-p
+                      session logical)
+                   (file-exists-p path)))
       (user-error "Segment file is missing: %s" (or path "(unsaved session)")))
-    (unless (and (file-regular-p path) (file-readable-p path))
+    (unless (or (file-remote-p save-path)
+                (and (file-regular-p path) (file-readable-p path)))
       (user-error "Segment file is unreadable: %s" path))
-    (let ((buffer (generate-new-buffer
-                   (format " *mevedel segment %d*" number))))
+    (let ((buffer
+           (if (file-remote-p save-path)
+               (mevedel-session-persistence-find-artifact-noselect
+                session logical t)
+             (generate-new-buffer
+              (format " *mevedel segment %d*" number)))))
       (condition-case err
           (with-current-buffer buffer
             (setq-local default-directory
                         (or (mevedel-session-working-directory session)
                             save-path))
-            (insert-file-contents path)
-            (delay-mode-hooks (org-mode))
+            (unless (file-remote-p save-path)
+              (insert-file-contents path)
+              (delay-mode-hooks (org-mode)))
             (setq-local mevedel-session--inspection-buffer-p t)
             (require 'mevedel-transcript-restore)
             (mevedel-transcript-restore-properties)
-            (setq buffer-file-name nil
-                  buffer-read-only t)
+            (unless (file-remote-p save-path)
+              (setq buffer-file-name nil))
+            (setq buffer-read-only t)
             (set-buffer-modified-p nil)
             buffer)
         (error
@@ -1708,7 +2060,18 @@ Returns SESSION's `save-path' (allocated or existing)."
   (let* ((existing-save-path (mevedel-session-save-path session))
            (save-path
             (or existing-save-path
-                (let* ((sessions-dir
+                (let* ((_disclosure
+                        (when (mevedel-execution-target-remote-p
+                               (mevedel-session-execution-target session))
+                          (require 'mevedel-session-durability)
+                          (mevedel-session-durability-disclose session)))
+                       (_workspace-identity
+                        (progn
+                          (require 'mevedel-workspace-identity)
+                          (mevedel-workspace-identity-ensure
+                           (mevedel-workspace-root
+                            (mevedel-session-workspace session)))))
+                       (sessions-dir
                         (mevedel-session-persistence--sessions-dir
                          (mevedel-session-workspace session)))
                        (session-id
@@ -1722,7 +2085,7 @@ Returns SESSION's `save-path' (allocated or existing)."
                   (make-directory (file-name-concat new-save-path "agents") t)
                   (make-directory (file-name-concat new-save-path "file-history") t)
                   (mevedel-session-persistence-lock-acquire
-                   new-save-path (buffer-name buffer))
+                   new-save-path (buffer-name buffer) session)
                   (setf (mevedel-session-session-id session)      session-id)
                   (setf (mevedel-session-save-path session)       new-save-path)
                   (setf (mevedel-session-created-at session)      now)
@@ -1749,8 +2112,36 @@ Returns SESSION's `save-path' (allocated or existing)."
           (setq buffer-file-name segment-path))
         (unless (file-exists-p segment-path)
           (set-buffer-modified-p t)
-          (save-buffer)))
+          (unless (mevedel-execution-target-remote-p
+                   (mevedel-session-execution-target session))
+            (save-buffer))))
       save-path))
+
+(defun mevedel-session-persistence-assert-mutation-authority
+    (session &optional buffer)
+  "Return non-nil when SESSION may start durable mutation from BUFFER.
+
+Pending critical publication blocks every session.  A remote session also
+materializes its target-side directory when necessary and must own its live
+portable lease."
+  (when (mevedel-session-pending-publication session)
+    (user-error "Session has pending publication; retry or abandon it first"))
+  (let ((target (mevedel-session-execution-target session)))
+    (when (and target (mevedel-execution-target-remote-p target))
+      (let ((buffer (or buffer (current-buffer))))
+        (require 'mevedel-session-durability)
+        (mevedel-session-durability-disclose session)
+        (unless (or (mevedel-session-save-path session)
+                    (mevedel-session-persistence--shallow-ensure-files
+                     session buffer))
+          (user-error "Could not materialize remote session state"))
+        (unless (or (mevedel-session-durability-lease-owned-p session)
+                    (mevedel-session-persistence-lock-acquire
+                     (mevedel-session-save-path session)
+                     (buffer-name buffer)
+                     session))
+          (user-error "Remote session is leased by another client")))))
+  t)
 
 
 ;;
@@ -1758,12 +2149,23 @@ Returns SESSION's `save-path' (allocated or existing)."
 
 (defun mevedel-session-persistence--persisted-first-user-message (session)
   "Return SESSION's already persisted first user preview, or nil."
-  (when-let* ((save-path (mevedel-session-save-path session))
-              (sidecar (mevedel-session-persistence--sidecar-path save-path))
-              (_ (file-exists-p sidecar)))
+  (when-let* ((save-path (mevedel-session-save-path session)))
     (condition-case nil
-        (plist-get (mevedel-session-persistence-read sidecar)
-                   :first-user-message)
+        (let ((sidecar
+               (if (file-remote-p save-path)
+                   (with-temp-buffer
+                     (insert
+                      (decode-coding-string
+                       (mevedel-session-persistence-read-artifact
+                        session "session.meta.el")
+                       'utf-8-unix))
+                     (read (current-buffer)))
+                 (let ((path
+                        (mevedel-session-persistence--sidecar-path
+                         save-path)))
+                   (and (file-exists-p path)
+                        (mevedel-session-persistence-read path))))))
+          (plist-get sidecar :first-user-message))
       (error nil))))
 
 (defun mevedel-session-persistence--build-sidecar (session buffer)
@@ -2057,21 +2459,51 @@ directive identity and activity while replacing historical presentations.
 PRESERVE-DIRECTIVES-P applies that behavior even when the record list is empty.
 Missing snapshots clear presentations only in preservation mode."
   (when-let* ((save-path (mevedel-session-save-path session)))
-    (let ((path (if turn
-                    (mevedel-session-persistence--instructions-turn-path
-                     save-path turn)
-                  (mevedel-session-persistence--instructions-current-path
-                   save-path))))
+    (let* ((path (if turn
+                     (mevedel-session-persistence--instructions-turn-path
+                      save-path turn)
+                   (mevedel-session-persistence--instructions-current-path
+                    save-path)))
+           (logical (file-relative-name path save-path))
+           (remote-p (file-remote-p save-path))
+           (present-p
+            (if remote-p
+                (mevedel-session-persistence-artifact-present-p
+                 session logical)
+              (file-exists-p path))))
       (require 'mevedel-persistence)
-      (if (file-exists-p path)
+      (if present-p
         (condition-case err
-            (with-current-buffer buffer
-              (mevedel--load-instructions-file
-               path
-               (mevedel-workspace-root (mevedel-session-workspace session))
-               nil t
-               (mevedel-session-workspace session)
-               directive-records preserve-directives-p))
+            (let ((source path)
+                  inspection
+                  temporary)
+              (unwind-protect
+                  (progn
+                    (when remote-p
+                      (setq
+                       inspection
+                       (mevedel-session-persistence-find-artifact-noselect
+                        session logical t)
+                       temporary
+                       (make-temp-file "mevedel-instructions-" nil ".el")
+                       source temporary)
+                      (with-current-buffer inspection
+                        (let ((coding-system-for-write
+                               (or buffer-file-coding-system 'utf-8-unix)))
+                          (write-region
+                           (point-min) (point-max) temporary nil 'silent))))
+                    (with-current-buffer buffer
+                      (mevedel--load-instructions-file
+                       source
+                       (mevedel-workspace-root
+                        (mevedel-session-workspace session))
+                       nil t
+                       (mevedel-session-workspace session)
+                       directive-records preserve-directives-p)))
+                (when (buffer-live-p inspection)
+                  (kill-buffer inspection))
+                (when (and temporary (file-exists-p temporary))
+                  (delete-file temporary))))
           (error
            (display-warning
             'mevedel
@@ -2090,6 +2522,271 @@ Missing snapshots clear presentations only in preservation mode."
 ;;
 ;;; Per-turn save
 
+(defvar mevedel-session-persistence--critical-artifacts nil
+  "Dynamically collected target artifacts for one remote publication.")
+
+(defvar mevedel-session-persistence--collecting-critical-artifacts-p nil
+  "Non-nil while remote save captures durability-critical file writes.")
+
+(defun mevedel-session-persistence--printed-value (value)
+  "Return VALUE in the package's durable Lisp representation."
+  (with-temp-buffer
+    (let ((print-length nil)
+          (print-level nil)
+          (print-circle t)
+          (print-quoted t))
+      (prin1 value (current-buffer)))
+    (buffer-string)))
+
+(defun mevedel-session-persistence-publish-text
+    (session path content &optional coding)
+  "Publish SESSION's durability-critical CONTENT atomically at PATH.
+
+Remote writes enter the session publication queue.  Local writes retain the
+existing same-filesystem temporary-file and rename behavior.  Return the
+remote publication outcome, or PATH after a local write."
+  (if (and (mevedel-session-execution-target session)
+           (mevedel-execution-target-remote-p
+            (mevedel-session-execution-target session)))
+      (progn
+        (mevedel-session-persistence-assert-mutation-authority session)
+        (require 'mevedel-session-durability)
+        (mevedel-session-durability-publish
+         session (list (list :path path :content content :coding coding))))
+    (progn
+      (make-directory (file-name-directory (expand-file-name path)) t)
+      (with-temp-buffer
+        (setq buffer-file-coding-system (or coding 'utf-8-unix))
+        (insert content)
+        (mevedel-session-persistence--write-current-buffer-atomically path))
+      path)))
+
+(defun mevedel-session-persistence--sidecar-publication-artifact
+    (session root-buffer)
+  "Return SESSION's freshly built sidecar marker artifact.
+
+SESSION must be remote and materialized, ROOT-BUFFER must be its live root
+data buffer, and the current immutable publication must already contain the
+sidecar.  Mutation authority is checked before the artifact is built."
+  (unless (and (buffer-live-p root-buffer)
+               (mevedel-session-persistence--root-data-buffer-p root-buffer)
+               (eq session
+                   (buffer-local-value 'mevedel--session root-buffer)))
+    (error "Session state publication requires the live root session buffer"))
+  (unless (and (mevedel-session-save-path session)
+               (mevedel-session-execution-target session)
+               (mevedel-execution-target-remote-p
+                (mevedel-session-execution-target session)))
+    (error "Session state publication requires a remote materialized session"))
+  (require 'mevedel-session-durability)
+  (unless (mevedel-session-persistence-artifact-present-p
+           session "session.meta.el" t)
+    (error "Remote session sidecar is not published"))
+  (mevedel-session-persistence-assert-mutation-authority
+   session root-buffer)
+  (list
+   :path
+   (mevedel-session-persistence--sidecar-path
+    (mevedel-session-save-path session))
+   :content
+   (mevedel-session-persistence--printed-value
+    (mevedel-session-persistence--build-sidecar session root-buffer))
+   :commit-marker t))
+
+(defun mevedel-session-persistence-publish-sidecar-state
+    (session root-buffer)
+  "Publish remote SESSION's freshly built sidecar as one strict commit.
+
+ROOT-BUFFER must be SESSION's live root data buffer.  Publication and
+authority failures are propagated to the caller."
+  (require 'mevedel-session-durability)
+  (let ((result
+         (mevedel-session-durability-publish
+          session
+          (list
+           (mevedel-session-persistence--sidecar-publication-artifact
+            session root-buffer)))))
+    (when (eq result 'queued)
+      (user-error "Session state publication was queued before its commit"))
+    result))
+
+(defun mevedel-session-persistence-publish-transcript-state
+    (session root-buffer transcript-path content &optional coding)
+  "Publish remote SESSION transcript CONTENT and its sidecar atomically.
+
+ROOT-BUFFER must be SESSION's live root data buffer.  TRANSCRIPT-PATH must be
+a logical artifact below SESSION's save path.  The current authoritative
+sidecar is rebuilt from SESSION and ROOT-BUFFER and commits the two-artifact
+batch."
+  (unless (stringp content)
+    (error "Transcript publication requires string content"))
+  (let* ((sidecar-artifact
+          (mevedel-session-persistence--sidecar-publication-artifact
+           session root-buffer))
+         (save-path (file-name-as-directory
+                     (mevedel-session-save-path session)))
+         (path (expand-file-name transcript-path))
+         (logical (file-relative-name path save-path)))
+    (unless (and (file-in-directory-p path save-path)
+                 (mevedel-session-durability-logical-path-p logical))
+      (error "Invalid session transcript path: %s" transcript-path))
+    (mevedel-session-durability-publish
+     session
+     (list
+      (list :path path :content content :coding coding)
+      sidecar-artifact))))
+
+(defun mevedel-session-persistence-publish-agent-terminal-state (invocation)
+  "Publish INVOCATION's remote transcript and final session sidecar together.
+
+The authoritative sidecar must already exist.  Shallow first-turn agent state
+continues to wait for the root turn's completed-turn publication boundary."
+  (require 'mevedel-agent-persistence)
+  (unless (mevedel-agent-invocation-p invocation)
+    (error "Invalid agent invocation"))
+  (let* ((session (mevedel-agent-invocation-parent-session invocation))
+         (parent (mevedel-agent-invocation-parent-data-buffer invocation))
+         (buffer (mevedel-agent-invocation-buffer invocation))
+         (save-path (and session (mevedel-session-save-path session)))
+         (relative
+          (mevedel-agent-invocation-transcript-relative-path invocation))
+         (target (and session (mevedel-session-execution-target session)))
+         (transcript (and save-path relative
+                          (expand-file-name relative save-path)))
+         (sidecar (and save-path
+                       (mevedel-session-persistence--sidecar-path save-path))))
+    (unless (and session target save-path relative transcript sidecar
+                 (mevedel-execution-target-remote-p target)
+                 (buffer-live-p parent)
+                 (buffer-live-p buffer)
+                 (mevedel-agent-persistence-transcript-path-p
+                  relative save-path)
+                 (mevedel-session-persistence-artifact-present-p
+                  session "session.meta.el"))
+      (error "Remote terminal agent state is not materialized"))
+    (with-current-buffer buffer
+      (unless (and buffer-file-name
+                   (equal (expand-file-name buffer-file-name) transcript))
+        (error "Agent transcript path does not match its invocation"))
+      (mevedel-session-persistence-assert-mutation-authority session)
+      (let ((modified-p (buffer-modified-p)))
+        (when modified-p
+          (when (bound-and-true-p gptel-mode)
+            (gptel--save-state))
+          (let ((before-save-hook
+                 (remq 'gptel--save-state before-save-hook)))
+            (run-hooks 'before-save-hook)))
+        (mevedel-session-persistence--update-transcript-entry
+         session (mevedel-agent-invocation-agent-id invocation)
+         (list :updated-at (format-time-string "%FT%H-%M-%S")))
+        (require 'mevedel-session-durability)
+        (mevedel-session-durability-publish
+         session
+         (list
+          (list :path transcript
+                :content (buffer-substring-no-properties
+                          (point-min) (point-max))
+                :coding (or buffer-file-coding-system 'utf-8-unix))
+          ;; The sidecar commits transcript metadata and final registry state.
+          (list :path sidecar
+                :content
+                (mevedel-session-persistence--printed-value
+                 (mevedel-session-persistence--build-sidecar
+                  session parent))
+                :commit-marker t)))
+        (when modified-p
+          (set-visited-file-modtime)
+          (set-buffer-modified-p nil)
+          (run-hooks 'after-save-hook))
+        (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil)
+        t))))
+
+(defun mevedel-session-persistence--instruction-artifacts (session buffer)
+  "Return SESSION instruction snapshot artifacts derived from BUFFER."
+  (require 'mevedel-persistence)
+  (let* ((save-path (mevedel-session-save-path session))
+         (workspace-root
+          (mevedel-workspace-root (mevedel-session-workspace session)))
+         (turn (mevedel-session-turn-count session)))
+    (with-current-buffer buffer
+      (append
+       (list
+        (list :path
+              (mevedel-session-persistence--instructions-current-path
+               save-path)
+              :content
+              (mevedel-session-persistence--printed-value
+               (mevedel--serialize-instructions workspace-root t))))
+       (when (integerp turn)
+         (list
+          (list :path
+                (mevedel-session-persistence--instructions-turn-path
+                 save-path turn)
+                :content
+                (mevedel-session-persistence--printed-value
+                 (mevedel--serialize-instructions workspace-root nil)))))))))
+
+(defun mevedel-session-persistence--remote-save (session buffer settled)
+  "Publish remote SESSION's durability-critical state from BUFFER.
+When SETTLED is non-nil, update the prompt index and latest fork point."
+  (mevedel-session-persistence-assert-mutation-authority session buffer)
+  (mevedel-session-persistence-ensure-files session buffer)
+  (setf (mevedel-session-updated-at session)
+        (format-time-string "%FT%H-%M-%S"))
+  (when settled
+    (mevedel-session-persistence--update-prompt-index session buffer)
+    (mevedel-session-persistence--ensure-latest-fork-point session buffer))
+  (let ((segment-artifact nil)
+        (mevedel-session-persistence--critical-artifacts nil)
+        (mevedel-session-persistence--collecting-critical-artifacts-p t))
+    (with-current-buffer buffer
+      (when (buffer-modified-p)
+        (run-hooks 'before-save-hook)
+        (setq segment-artifact
+              (list
+               :path buffer-file-name
+               :content (buffer-substring-no-properties
+                         (point-min) (point-max))
+               :coding buffer-file-coding-system))))
+    (mevedel-session-persistence--update-prompt-index session buffer)
+    (when (and (boundp 'mevedel--current-request)
+               mevedel--current-request)
+      (mevedel-file-history-snapshot-modified
+       session
+       (or (mevedel-session-turn-count session) 0)
+       (mevedel-request-file-snapshots mevedel--current-request)))
+    (let ((artifacts
+           (append
+            (and segment-artifact (list segment-artifact))
+            (nreverse mevedel-session-persistence--critical-artifacts)
+            (mevedel-session-persistence--instruction-artifacts
+             session buffer)
+            ;; The sidecar is the commit marker and therefore publishes last.
+            (list
+             (list
+              :path
+              (mevedel-session-persistence--sidecar-path
+               (mevedel-session-save-path session))
+              :content
+              (mevedel-session-persistence--printed-value
+               (mevedel-session-persistence--build-sidecar
+                session buffer))
+              :commit-marker t)))))
+      (require 'mevedel-session-durability)
+      (mevedel-session-durability-publish session artifacts))
+    (when segment-artifact
+      (with-current-buffer buffer
+        (set-visited-file-modtime)
+        (set-buffer-modified-p nil)
+        (run-hooks 'after-save-hook)))
+    (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
+                ((buffer-live-p vb)))
+      ;; Input history is diagnostic UI state: warn/retry independently and
+      ;; never turn it into critical publication.
+      (require 'mevedel-view-history)
+      (mevedel-view-history-save vb))
+    (mevedel-session-save-path session)))
+
 (defun mevedel-session-persistence-save (session buffer &optional settled)
   "Save SESSION's on-disk state from BUFFER's contents.
 
@@ -2097,38 +2794,44 @@ Materializes lazily on first call.  Subsequent calls update the
 `updated-at' timestamp, save the data buffer, checkpoint any tool-modified
 files from before this turn, and rewrite the sidecar.  When SETTLED is non-nil,
 mark the latest assistant response
-as a stable fork point."
+  as a stable fork point."
   (when-let ((buffer (mevedel-session-persistence--authoritative-buffer
                       buffer)))
-    (mevedel-session-persistence-ensure-files session buffer)
-    (setf (mevedel-session-updated-at session)
-          (format-time-string "%FT%H-%M-%S"))
-    (when settled
-      (mevedel-session-persistence--update-prompt-index session buffer)
-      (mevedel-session-persistence--ensure-latest-fork-point session buffer))
-    (with-current-buffer buffer
-      (when (buffer-modified-p)
-        (save-buffer)))
-    (mevedel-session-persistence--update-prompt-index session buffer)
-    ;; Snapshot files modified during the just-completed turn.
-    (when (and (boundp 'mevedel--current-request)
-               mevedel--current-request)
-      (let ((pre-snapshots
-             (mevedel-request-file-snapshots mevedel--current-request)))
-        (mevedel-file-history-snapshot-modified
-         session
-         (or (mevedel-session-turn-count session) 0)
-         pre-snapshots)))
-    (mevedel-session-persistence-write
-     (mevedel-session-persistence--sidecar-path
-      (mevedel-session-save-path session))
-     (mevedel-session-persistence--build-sidecar session buffer))
-    (mevedel-session-persistence--save-instructions session buffer)
-    (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
-                ((buffer-live-p vb)))
-      (require 'mevedel-view-history)
-      (mevedel-view-history-save vb))
-    (mevedel-session-save-path session)))
+    (prog1
+        (if (mevedel-execution-target-remote-p
+             (mevedel-session-execution-target session))
+            (mevedel-session-persistence--remote-save session buffer settled)
+          (mevedel-session-persistence-ensure-files session buffer)
+          (setf (mevedel-session-updated-at session)
+                (format-time-string "%FT%H-%M-%S"))
+          (when settled
+            (mevedel-session-persistence--update-prompt-index session buffer)
+            (mevedel-session-persistence--ensure-latest-fork-point
+             session buffer))
+          (with-current-buffer buffer
+            (when (buffer-modified-p)
+              (save-buffer)))
+          (mevedel-session-persistence--update-prompt-index session buffer)
+          ;; Snapshot files modified during the just-completed turn.
+          (when (and (boundp 'mevedel--current-request)
+                     mevedel--current-request)
+            (let ((pre-snapshots
+                   (mevedel-request-file-snapshots mevedel--current-request)))
+              (mevedel-file-history-snapshot-modified
+               session
+               (or (mevedel-session-turn-count session) 0)
+               pre-snapshots)))
+          (mevedel-session-persistence-write
+           (mevedel-session-persistence--sidecar-path
+            (mevedel-session-save-path session))
+           (mevedel-session-persistence--build-sidecar session buffer))
+          (mevedel-session-persistence--save-instructions session buffer)
+          (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
+                      ((buffer-live-p vb)))
+            (require 'mevedel-view-history)
+            (mevedel-view-history-save vb))
+          (mevedel-session-save-path session))
+      (mevedel-session-persistence--flush-diagnostic-logs session))))
 
 
 ;;
@@ -2172,17 +2875,20 @@ as a stable fork point."
   "Atomically write CONTENT under `<SAVE-PATH>/file-history/BACKUP-NAME'."
   (let* ((dir  (file-name-concat save-path "file-history"))
          (dest (file-name-concat dir backup-name)))
-    (unless (file-directory-p dir)
-      (make-directory dir t))
-    ;; Create the temp file in the destination's own directory so
-    ;; `rename-file' stays on one filesystem and remains atomic.
-    (let ((tmp (make-temp-file (expand-file-name ".mevedel-fh-" dir))))
-      (unwind-protect
-          (progn
-            (let ((coding-system-for-write 'no-conversion))
-              (write-region content nil tmp nil 'silent))
-            (rename-file tmp dest t))
-        (when (file-exists-p tmp) (delete-file tmp))))))
+    (if mevedel-session-persistence--collecting-critical-artifacts-p
+        (push (list :path dest :content content)
+              mevedel-session-persistence--critical-artifacts)
+      (unless (file-directory-p dir)
+        (make-directory dir t))
+      ;; Create the temp file in the destination's own directory so
+      ;; `rename-file' stays on one filesystem and remains atomic.
+      (let ((tmp (make-temp-file (expand-file-name ".mevedel-fh-" dir))))
+        (unwind-protect
+            (progn
+              (let ((coding-system-for-write 'no-conversion))
+                (write-region content nil tmp nil 'silent))
+              (rename-file tmp dest t))
+          (when (file-exists-p tmp) (delete-file tmp)))))))
 
 (defun mevedel-file-history--maybe-snapshot (session path pre-content)
   "Return SESSION's pre-turn checkpoint entry for changed PATH.
@@ -2419,6 +3125,56 @@ user\\='s view, by contrast, sees a foldable block."
                      (format-time-string "%FT%H-%M-%S"))
       (write-region (point-min) (point-max) file nil 'silent))))
 
+(defun mevedel-session-persistence--finalized-segment-text (text coding)
+  "Return segment TEXT with finalized metadata, encoded using CODING."
+  (with-temp-buffer
+    (setq buffer-file-coding-system coding)
+    (insert text)
+    (let ((org-agenda-file-menu-enabled nil))
+      (org-mode))
+    (org-entry-put (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"
+                   (format-time-string "%FT%H-%M-%S"))
+    (buffer-string)))
+
+(defun mevedel-session-persistence--publish-remote-segment-transition
+    (session buffer old-segment old-text new-segment new-text)
+  "Publish one remote SESSION segment transition derived from BUFFER.
+
+OLD-SEGMENT receives finalized OLD-TEXT.  NEW-SEGMENT receives NEW-TEXT.
+Instruction snapshots and the sidecar join the same batch, with the sidecar
+last as its commit marker."
+  (with-current-buffer buffer
+    (let ((coding buffer-file-coding-system))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert new-text))
+      ;; Keep the live transition installed if publication becomes pending.
+      ;; Retry can then publish the exact state represented in memory.
+      (setq buffer-file-name new-segment
+            buffer-file-truename nil)
+      (require 'mevedel-session-durability)
+      (mevedel-session-durability-publish
+       session
+       (append
+        (list
+         (list :path old-segment
+               :content
+               (mevedel-session-persistence--finalized-segment-text
+                old-text coding)
+               :coding coding)
+         (list :path new-segment :content new-text :coding coding))
+        (mevedel-session-persistence--instruction-artifacts session buffer)
+        (list
+         (list
+          :path
+          (mevedel-session-persistence--sidecar-path
+           (mevedel-session-save-path session))
+          :content
+          (mevedel-session-persistence--printed-value
+           (mevedel-session-persistence--build-sidecar session buffer))
+          :commit-marker t))))
+      (mevedel-session-persistence--set-visited-segment-file new-segment))))
+
 (defun mevedel-session-persistence--delete-trailing-text (text)
   "Delete trailing TEXT from the current buffer when it is an exact suffix."
   (when (and text
@@ -2453,10 +3209,14 @@ Requires SESSION to have a `save-path' (i.e., to have been lazily
 materialized).  Returns the new segment's absolute path on success,
 nil if SESSION is not yet materialized."
   (when (mevedel-session-save-path session)
+    (mevedel-session-persistence-assert-mutation-authority session buffer)
     (with-current-buffer buffer
       (require 'org)
       ;; 1. Save the current segment before replacing the buffer body.
-      (let ((old-segment buffer-file-name)
+      (let ((remote-p
+             (mevedel-execution-target-remote-p
+              (mevedel-session-execution-target session)))
+            (old-segment buffer-file-name)
             (old-current-segment (mevedel-session-current-segment session))
             (old-updated-at (mevedel-session-updated-at session))
             (old-text (buffer-substring (point-min) (point-max)))
@@ -2464,6 +3224,7 @@ nil if SESSION is not yet materialized."
             (old-modified-p (buffer-modified-p))
             (tail-prompt-count
              (mevedel-session-persistence--prompt-count-in-text tail-text))
+            old-publish-text
             new-segment
             new-text
             pending-position)
@@ -2491,7 +3252,10 @@ nil if SESSION is not yet materialized."
                 (let ((inhibit-read-only t))
                   (mevedel-session-persistence--delete-trailing-text
                    pending-text)))
-              (when (buffer-modified-p) (save-buffer))
+              (if remote-p
+                  (setq old-publish-text
+                        (buffer-substring (point-min) (point-max)))
+                (when (buffer-modified-p) (save-buffer)))
               (when (fboundp 'mevedel-telemetry-record)
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'old-saved
@@ -2533,26 +3297,31 @@ nil if SESSION is not yet materialized."
                           (setq pending-position (point)))
                         (insert "\n")
                         (buffer-string))))
-              ;; 5. Atomically publish, then repoint the canonical live buffer.
+              ;; 5. Publish, then repoint the canonical live buffer.
               (when (fboundp 'mevedel-telemetry-record)
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'new-publish-start
                  :new-segment (mevedel-session-current-segment session)))
-              (mevedel-session-persistence--publish-segment-text
-               new-segment new-text)
+              (setf (mevedel-session-updated-at session)
+                    (format-time-string "%FT%H-%M-%S"))
+              (if remote-p
+                  (mevedel-session-persistence--publish-remote-segment-transition
+                   session buffer old-segment old-publish-text
+                   new-segment new-text)
+                (mevedel-session-persistence--publish-segment-text
+                 new-segment new-text)
+                ;; 6. Rewrite the sidecar with the bumped current-segment.
+                (mevedel-session-persistence-write
+                 (mevedel-session-persistence--sidecar-path
+                  (mevedel-session-save-path session))
+                 (mevedel-session-persistence--build-sidecar session buffer))
+                (mevedel-session-persistence--save-instructions session buffer)
+                (mevedel-session-persistence--finalize-segment-file
+                 old-segment))
               (when (fboundp 'mevedel-telemetry-record)
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'new-published
                  :new-segment (mevedel-session-current-segment session)))
-              ;; 6. Rewrite the sidecar with the bumped current-segment.
-              (setf (mevedel-session-updated-at session)
-                    (format-time-string "%FT%H-%M-%S"))
-              (mevedel-session-persistence-write
-               (mevedel-session-persistence--sidecar-path
-                (mevedel-session-save-path session))
-               (mevedel-session-persistence--build-sidecar session buffer))
-              (mevedel-session-persistence--save-instructions session buffer)
-              (mevedel-session-persistence--finalize-segment-file old-segment)
               (when telemetry-span
                 (mevedel-telemetry-finish
                  telemetry-span :outcome 'success))
@@ -2568,21 +3337,30 @@ nil if SESSION is not yet materialized."
            (when telemetry-span
              (mevedel-telemetry-finish
               telemetry-span :outcome 'error :error-class (car-safe err)))
-           (setf (mevedel-session-current-segment session) old-current-segment)
-           (setf (mevedel-session-updated-at session) old-updated-at)
-           (let ((inhibit-read-only t))
-             (erase-buffer)
-             (insert old-text))
-           (mevedel-session-persistence--set-visited-segment-file old-segment)
-           (goto-char (min old-point (point-max)))
-           (set-buffer-modified-p old-modified-p)
-           (ignore-errors
-             (mevedel-session-persistence-write
-              (mevedel-session-persistence--sidecar-path
-               (mevedel-session-save-path session))
-              (mevedel-session-persistence--build-sidecar session buffer)))
-           (when (and new-segment (file-exists-p new-segment))
-             (delete-file new-segment))
+           (if (and remote-p
+                    (mevedel-session-pending-publication session))
+               (progn
+                 (when pending-position
+                   (goto-char pending-position)
+                   (insert pending-text))
+                 (set-buffer-modified-p nil))
+             (setf (mevedel-session-current-segment session)
+                   old-current-segment)
+             (setf (mevedel-session-updated-at session) old-updated-at)
+             (let ((inhibit-read-only t))
+               (erase-buffer)
+               (insert old-text))
+             (mevedel-session-persistence--set-visited-segment-file
+              old-segment)
+             (goto-char (min old-point (point-max)))
+             (set-buffer-modified-p old-modified-p)
+             (ignore-errors
+               (mevedel-session-persistence-write
+                (mevedel-session-persistence--sidecar-path
+                 (mevedel-session-save-path session))
+                (mevedel-session-persistence--build-sidecar session buffer)))
+             (when (and new-segment (file-exists-p new-segment))
+               (delete-file new-segment)))
            (signal (car err) (cdr err)))))))))
 
 (cl-defun mevedel-session-persistence-start-fresh-segment
@@ -2596,14 +3374,19 @@ the data buffer without carrying over any conversation summary.
 Requires SESSION to have a `save-path'.  Returns the new segment's
 absolute path on success, nil if SESSION is not yet materialized."
   (when (mevedel-session-save-path session)
+    (mevedel-session-persistence-assert-mutation-authority session buffer)
     (with-current-buffer buffer
       (require 'org)
-      (let ((old-segment buffer-file-name)
+      (let ((remote-p
+             (mevedel-execution-target-remote-p
+              (mevedel-session-execution-target session)))
+            (old-segment buffer-file-name)
             (old-current-segment (mevedel-session-current-segment session))
             (old-updated-at (mevedel-session-updated-at session))
             (old-text (buffer-substring (point-min) (point-max)))
             (old-point (point))
             (old-modified-p (buffer-modified-p))
+            old-publish-text
             new-segment
             new-text
             initial-position)
@@ -2612,7 +3395,10 @@ absolute path on success, nil if SESSION is not yet materialized."
         (condition-case err
             (progn
               (mevedel-session-persistence--refresh-visited-file-modtime-or-error)
-              (when (buffer-modified-p) (save-buffer))
+              (if remote-p
+                  (setq old-publish-text
+                        (buffer-substring (point-min) (point-max)))
+                (when (buffer-modified-p) (save-buffer)))
               (mevedel-session-persistence--update-prompt-index
                session buffer)
               (cl-incf (mevedel-session-current-segment session))
@@ -2633,16 +3419,21 @@ absolute path on success, nil if SESSION is not yet materialized."
                           (unless (bolp) (insert "\n"))
                           (setq initial-position (point)))
                         (buffer-string))))
-              (mevedel-session-persistence--publish-segment-text
-               new-segment new-text)
               (setf (mevedel-session-updated-at session)
                     (format-time-string "%FT%H-%M-%S"))
-              (mevedel-session-persistence-write
-               (mevedel-session-persistence--sidecar-path
-                (mevedel-session-save-path session))
-               (mevedel-session-persistence--build-sidecar session buffer))
-              (mevedel-session-persistence--save-instructions session buffer)
-              (mevedel-session-persistence--finalize-segment-file old-segment)
+              (if remote-p
+                  (mevedel-session-persistence--publish-remote-segment-transition
+                   session buffer old-segment old-publish-text
+                   new-segment new-text)
+                (mevedel-session-persistence--publish-segment-text
+                 new-segment new-text)
+                (mevedel-session-persistence-write
+                 (mevedel-session-persistence--sidecar-path
+                  (mevedel-session-save-path session))
+                 (mevedel-session-persistence--build-sidecar session buffer))
+                (mevedel-session-persistence--save-instructions session buffer)
+                (mevedel-session-persistence--finalize-segment-file
+                 old-segment))
               (when initial-position
                 (goto-char initial-position)
                 (insert initial-text)
@@ -2654,21 +3445,30 @@ absolute path on success, nil if SESSION is not yet materialized."
                   (mevedel-view--full-rerender)))
               new-segment)
           (error
-           (setf (mevedel-session-current-segment session) old-current-segment)
-           (setf (mevedel-session-updated-at session) old-updated-at)
-           (let ((inhibit-read-only t))
-             (erase-buffer)
-             (insert old-text))
-           (mevedel-session-persistence--set-visited-segment-file old-segment)
-           (goto-char (min old-point (point-max)))
-           (set-buffer-modified-p old-modified-p)
-           (ignore-errors
-             (mevedel-session-persistence-write
-              (mevedel-session-persistence--sidecar-path
-               (mevedel-session-save-path session))
-              (mevedel-session-persistence--build-sidecar session buffer)))
-           (when (and new-segment (file-exists-p new-segment))
-             (delete-file new-segment))
+           (if (and remote-p
+                    (mevedel-session-pending-publication session))
+               (progn
+                 (when initial-position
+                   (goto-char initial-position)
+                   (insert initial-text))
+                 (set-buffer-modified-p nil))
+             (setf (mevedel-session-current-segment session)
+                   old-current-segment)
+             (setf (mevedel-session-updated-at session) old-updated-at)
+             (let ((inhibit-read-only t))
+               (erase-buffer)
+               (insert old-text))
+             (mevedel-session-persistence--set-visited-segment-file
+              old-segment)
+             (goto-char (min old-point (point-max)))
+             (set-buffer-modified-p old-modified-p)
+             (ignore-errors
+               (mevedel-session-persistence-write
+                (mevedel-session-persistence--sidecar-path
+                 (mevedel-session-save-path session))
+                (mevedel-session-persistence--build-sidecar session buffer)))
+             (when (and new-segment (file-exists-p new-segment))
+               (delete-file new-segment)))
            (signal (car err) (cdr err))))))))
 
 
@@ -2776,8 +3576,12 @@ loss."
           (<= (- (float-time pid-start) (float-time holder-start))
               mevedel-session-persistence--lock-start-time-tolerance)))))
 
-(defun mevedel-session-persistence-lock-acquire (session-dir buffer-name)
-  "Acquire SESSION-DIR's `.lock' for BUFFER-NAME.
+(defun mevedel-session-persistence-lock-acquire
+    (session-dir buffer-name &optional session)
+  "Acquire SESSION-DIR's mutation authority for BUFFER-NAME.
+
+Remote sessions use a portable renewable lease.  Local sessions use `.lock'.
+SESSION supplies the remote lease owner when SESSION-DIR is remote.
 
 Returns:
   t   - lock acquired (or broken from a previous holder).
@@ -2792,9 +3596,16 @@ Behavior table:
 - Lock from same host, dead PID: prompt to break (`y-or-n-p').
 - Lock from same host, live PID: 3-way prompt -- break / read-only / abort.
 - Lock from different host: 3-way prompt -- break / read-only / abort."
-  (let* ((lock-path (mevedel-session-persistence--lock-path session-dir))
+  (if (file-remote-p session-dir)
+      (progn
+        (require 'mevedel-session-durability)
+        (when session
+          (mevedel-session-durability-disclose session))
+        (mevedel-session-durability-lease-acquire
+         session-dir buffer-name session))
+    (let* ((lock-path (mevedel-session-persistence--lock-path session-dir))
          (existing  (mevedel-session-persistence--read-lock lock-path)))
-    (cond
+      (cond
      ((null existing)
       ;; Race-free create via `add-name-to-file'.  If another process
       ;; beat us to it between the read above and this write, fall
@@ -2803,7 +3614,8 @@ Behavior table:
        ((mevedel-session-persistence--write-lock-atomic lock-path buffer-name)
         t)
        ((mevedel-session-persistence--read-lock lock-path)
-        (mevedel-session-persistence-lock-acquire session-dir buffer-name))
+        (mevedel-session-persistence-lock-acquire
+         session-dir buffer-name session))
        (t
         (user-error "Session lock exists but could not be read: %s"
                     lock-path))))
@@ -2855,16 +3667,21 @@ Behavior table:
           (?b (mevedel-session-persistence--write-lock lock-path buffer-name)
               t)
           (?r nil)
-          (?a (user-error "Session resume aborted"))))))))
+          (?a (user-error "Session resume aborted")))))))))
 
-(defun mevedel-session-persistence-lock-release (session-dir)
-  "Delete SESSION-DIR's `.lock' if it was written by this Emacs."
-  (let* ((lock-path (mevedel-session-persistence--lock-path session-dir))
-         (existing  (mevedel-session-persistence--read-lock lock-path)))
-    (when (and existing
-               (eq (plist-get existing :pid) (emacs-pid))
-               (equal (plist-get existing :hostname) (system-name)))
-      (delete-file lock-path))))
+(defun mevedel-session-persistence-lock-release (session-dir &optional session)
+  "Release this client's mutation authority for SESSION-DIR.
+SESSION supplies the remote lease owner when SESSION-DIR is remote."
+  (if (file-remote-p session-dir)
+      (progn
+        (require 'mevedel-session-durability)
+        (mevedel-session-durability-lease-release session-dir session))
+    (let* ((lock-path (mevedel-session-persistence--lock-path session-dir))
+           (existing  (mevedel-session-persistence--read-lock lock-path)))
+      (when (and existing
+                 (eq (plist-get existing :pid) (emacs-pid))
+                 (equal (plist-get existing :hostname) (system-name)))
+        (delete-file lock-path)))))
 
 (defun mevedel-session-persistence--sweep-stale-locks (workspace)
   "Silently remove stale `.lock' files in WORKSPACE.
@@ -2876,7 +3693,10 @@ Best-effort; any I/O failure is swallowed.
 
 Called opportunistically from `mevedel-resume'."
   (let ((sessions-dir (mevedel-session-persistence--sessions-dir workspace)))
-    (when (file-directory-p sessions-dir)
+    ;; Portable remote leases expire and are taken over explicitly.  A local
+    ;; PID sweep has no authority over them.
+    (when (and (not (file-remote-p sessions-dir))
+               (file-directory-p sessions-dir))
       (dolist (entry (directory-files sessions-dir t "\\`[^.]"))
         (when (file-directory-p entry)
           (let* ((lock-path (mevedel-session-persistence--lock-path entry))
@@ -2896,7 +3716,7 @@ Called opportunistically from `mevedel-resume'."
              mevedel--session)
     (when-let ((dir (mevedel-session-save-path mevedel--session)))
       (condition-case _
-          (mevedel-session-persistence-lock-release dir)
+          (mevedel-session-persistence-lock-release dir mevedel--session)
         (error nil)))))
 
 
@@ -2907,16 +3727,18 @@ Called opportunistically from `mevedel-resume'."
     (session saved-workspace-plist)
   "Reconcile SESSION's path-bearing fields against workspace relocation.
 
-If SAVED-WORKSPACE-PLIST's `:root' differs from SESSION's current
+If SAVED-WORKSPACE-PLIST's `:target-native-root' differs from SESSION's current
 workspace root, rewrite permission rules whose `:path' starts with
 the saved root and is not already under the current root, and prune
 touched-files entries pointing at vanished paths.  Logs the rewrite
 count to `*Messages*'.
 
 A no-op when the saved root is missing or matches current."
-  (let* ((saved-root (plist-get saved-workspace-plist :root))
-         (current-root (mevedel-workspace-root
-                        (mevedel-session-workspace session)))
+  (let* ((saved-root
+          (plist-get saved-workspace-plist :target-native-root))
+         (current-root
+          (mevedel-execution-target-native-root
+           (mevedel-session-execution-target session)))
          (saved-root-expanded (and saved-root (expand-file-name saved-root)))
          (current-root-expanded (and current-root
                                      (expand-file-name current-root))))
@@ -2967,17 +3789,21 @@ A no-op when the saved root is missing or matches current."
             (when (> n max-n) (setq max-n n))))))
     max-n))
 
-(defun mevedel-session-persistence--self-heal-segment-counter (session save-path)
+(defun mevedel-session-persistence--self-heal-segment-counter
+    (session save-path &optional defer-finalization-p)
   "Reconcile SESSION's `:current-segment' with the filesystem under SAVE-PATH.
 
 If the highest-numbered segment file on disk differs from the sidecar's
 recorded `:current-segment', trust the filesystem (the sidecar may be
 stale from a crash mid-rotation).  Logs a warning.  When healing upward
 after a crash that published a new segment before finalizing its
-predecessor, mark the predecessor finalized now."
+predecessor, mark the predecessor finalized now.  When
+DEFER-FINALIZATION-P is non-nil, return that predecessor without writing it
+so the caller can include finalization in a larger publication batch."
   (let* ((sidecar-n    (or (mevedel-session-current-segment session) 1))
          (filesystem-n (mevedel-session-persistence--detect-highest-segment
-                        save-path)))
+                        save-path))
+         predecessor)
     (when (and (> filesystem-n 0)
                (not (= sidecar-n filesystem-n)))
       (display-warning
@@ -2986,10 +3812,13 @@ predecessor, mark the predecessor finalized now."
                sidecar-n filesystem-n filesystem-n)
        :warning)
       (when (> filesystem-n sidecar-n)
-        (mevedel-session-persistence--finalize-segment-file
-         (mevedel-session-persistence--segment-path save-path
-                                                    (1- filesystem-n))))
-      (setf (mevedel-session-current-segment session) filesystem-n))))
+        (setq predecessor
+              (mevedel-session-persistence--segment-path
+               save-path (1- filesystem-n)))
+        (unless defer-finalization-p
+          (mevedel-session-persistence--finalize-segment-file predecessor)))
+      (setf (mevedel-session-current-segment session) filesystem-n))
+    predecessor))
 
 
 ;;
@@ -3007,6 +3836,17 @@ visible cue in addition to the `display-warning'.")
 Empty when the session has no unusual state; highlights save
 failures and read-only mode when active."
   (let ((parts nil))
+    (when (and (bound-and-true-p mevedel--session)
+               (mevedel-session-pending-publication mevedel--session))
+      (push (propertize " [Publication pending] " 'face 'error) parts))
+    (when (bound-and-true-p mevedel--session)
+      (when-let* ((lease-state
+                   (plist-get (mevedel-session-lease mevedel--session)
+                              :state))
+                  ((memq lease-state '(foreign expired lost))))
+        (push (propertize (format " [Lease: %s] " lease-state)
+                          'face 'warning)
+              parts)))
     (when (bound-and-true-p mevedel-session--save-failed)
       (push (propertize " [Save failed] " 'face 'error) parts))
     (when (bound-and-true-p mevedel-session--read-only-mode)
@@ -3086,6 +3926,7 @@ Sends are disabled and nothing will be persisted."
   "Build a minimal `mevedel-session' when the sidecar is absent.
 Used when the sidecar file for SESSION-DIR is missing or unparseable.
 WORKSPACE is the current workspace (resolved by the caller)."
+  (require 'mevedel-execution-target)
   (let* ((dir-name (file-name-nondirectory
                     (directory-file-name session-dir)))
          (name (if (string-match
@@ -3099,6 +3940,8 @@ WORKSPACE is the current workspace (resolved by the caller)."
     (mevedel-session--create
      :name            name
      :workspace       workspace
+     :execution-target
+     (mevedel-execution-target-create (mevedel-workspace-root workspace))
      :working-directory (mevedel-workspace-root workspace)
      :touched-files   (make-hash-table :test #'equal)
      :mentions-shown  (make-hash-table :test #'equal)
@@ -3155,11 +3998,12 @@ found.  Returns nil; signals `user-error' to abort the restore."
 
 (defun mevedel-session-persistence--hydrate-restored-buffer
     (buf session workspace segment-path acquired additional-roots
-         lifecycle-source)
+         lifecycle-source &optional artifact-callback)
   "Hydrate fresh restore buffer BUF and return its agent repair count.
 SESSION and WORKSPACE are planted before gptel restores persisted state.
 SEGMENT-PATH is reconciled when ACQUIRED owns the session lock.  Additional
-workspace roots and LIFECYCLE-SOURCE restore the saved session environment."
+workspace roots and LIFECYCLE-SOURCE restore the saved session environment.
+ARTIFACT-CALLBACK collects remote transcript replacements for one batch."
   (with-current-buffer buf
     (unless (derived-mode-p 'org-mode)
       (let ((org-agenda-file-menu-enabled nil))
@@ -3177,14 +4021,20 @@ workspace roots and LIFECYCLE-SOURCE restore the saved session environment."
     (when acquired
       (require 'mevedel-pipeline)
       (when (> (mevedel-pipeline-reconcile-lost-executions buf) 0)
-        (mevedel-session-persistence--write-current-buffer-atomically
-         segment-path)
-        (set-buffer-modified-p nil)
-        (set-visited-file-modtime)))
+        (if artifact-callback
+            (funcall
+             artifact-callback
+             (list :path segment-path
+                   :content (buffer-string)
+                   :coding (or buffer-file-coding-system 'utf-8-unix)))
+          (mevedel-session-persistence--write-current-buffer-atomically
+           segment-path)
+          (set-visited-file-modtime))
+        (set-buffer-modified-p nil)))
     (unless acquired
       (mevedel-session-persistence--apply-read-only-mode buf))
     (mevedel--chat-buffer-init-common
-     buf workspace (or lifecycle-source "resume"))
+     buf workspace (or lifecycle-source "resume") (not acquired))
     (require 'mevedel-agent-persistence)
     (prog1
         (mevedel-agent-persistence-restore-tree
@@ -3192,18 +4042,52 @@ workspace roots and LIFECYCLE-SOURCE restore the saved session environment."
       (mevedel-session-persistence--load-instructions session buf))))
 
 (defun mevedel-session-persistence--finish-restored-buffer
-    (buf session live persist-repairs-p)
+    (buf session live persist-repairs-p &optional repair-artifacts)
   "Finish restoring BUF for SESSION and return BUF.
 LIVE means BUF was already initialized.  When PERSIST-REPAIRS-P is non-nil,
-write repaired sidecar state before rendering the companion view."
+write repaired sidecar state before rendering the companion view.
+REPAIR-ARTIFACTS are remote transcript replacements published before the
+sidecar commit marker."
   (with-current-buffer buf
     (when persist-repairs-p
-      (condition-case _
-          (mevedel-session-persistence-write
-           (mevedel-session-persistence--sidecar-path
-            (mevedel-session-save-path session))
-           (mevedel-session-persistence--build-sidecar session buf))
-        (error nil)))
+      (let ((remote-p
+             (mevedel-execution-target-remote-p
+              (mevedel-session-execution-target session)))
+            (published-p nil))
+        (condition-case err
+            (progn
+              (if remote-p
+                  (progn
+                    (require 'mevedel-session-durability)
+                    (mevedel-session-durability-publish
+                     session
+                     (append
+                      repair-artifacts
+                      (list
+                       (list
+                        :path
+                        (mevedel-session-persistence--sidecar-path
+                         (mevedel-session-save-path session))
+                        :content
+                        (mevedel-session-persistence--printed-value
+                         (mevedel-session-persistence--build-sidecar
+                          session buf))
+                        :commit-marker t)))))
+                (mevedel-session-persistence-write
+                 (mevedel-session-persistence--sidecar-path
+                  (mevedel-session-save-path session))
+                 (mevedel-session-persistence--build-sidecar session buf)))
+              (setq published-p t))
+          (error
+           (unless (or (not remote-p)
+                       (mevedel-session-pending-publication session))
+             (signal (car err) (cdr err)))))
+        (when (and published-p
+                   (cl-find buffer-file-name repair-artifacts
+                            :key (lambda (artifact)
+                                   (plist-get artifact :path))
+                            :test #'equal))
+          (set-visited-file-modtime))))
     (when-let* ((view-buffer
                  (buffer-local-value 'mevedel--view-buffer buf))
                 ((buffer-live-p view-buffer)))
@@ -3227,13 +4111,13 @@ write repaired sidecar state before rendering the companion view."
            (mevedel-session-persistence--sessions-dir workspace)
            session-id))))
     (when (file-directory-p session-dir)
-      (mevedel-session-persistence-restore session-dir))))
+      (mevedel-session-persistence-restore session-dir nil nil workspace))))
 
 (defun mevedel-session-persistence-restore
-    (session-dir &optional lifecycle-source session-override)
+    (session-dir &optional lifecycle-source session-override workspace)
   "Restore the chat buffer for the session at SESSION-DIR.
 
-Loads the sidecar (or synthesizes a minimal session when the sidecar
+Loads the sidecar (or, locally, synthesizes a minimal session when the sidecar
 is missing/unreadable), opens the live segment file in a buffer named
 per `mevedel-session-buffer-name', enables `org-mode' and
 `gptel-mode' (the latter triggers gptel's restore of text-property
@@ -3245,18 +4129,47 @@ alive (matched by session-id), switches to it instead of re-loading.
 
 LIFECYCLE-SOURCE defaults to \"resume\".  SESSION-OVERRIDE, when non-nil,
 is the already-projected in-memory session used by a newly published fork.
+WORKSPACE is the currently opened workspace authority.
 
 Tasks are deserialized from the sidecar.  Touched-files and
 mentions-shown reset to empty hash tables on load."
-  (let* ((sidecar-path     (mevedel-session-persistence--sidecar-path session-dir))
+  (let* ((remote-p (file-remote-p session-dir))
+         (publication
+          (when remote-p
+            (require 'mevedel-session-durability)
+            (or (mevedel-session-durability-read-publication session-dir)
+                (user-error
+                 "Remote session has no committed publication: %s"
+                 session-dir))))
+         (sidecar-path
+          (if remote-p
+              (plist-get publication :sidecar)
+            (mevedel-session-persistence--sidecar-path session-dir)))
          (sidecar          (mevedel-session-persistence-load-sidecar sidecar-path))
          (had-sidecar-p    (not (null sidecar)))
+         (opened-workspace
+          (or workspace
+              (and session-override
+                   (mevedel-session-workspace session-override))
+              (and sidecar
+                   (not (file-remote-p session-dir))
+                   (let* ((saved (plist-get sidecar :workspace))
+                          (root (plist-get saved :target-native-root)))
+                     (mevedel-workspace-get-or-create
+                      (plist-get saved :type) root root
+                      (plist-get saved :name))))
+              (mevedel-workspace)))
          (result           (when sidecar
-                             (mevedel-session-persistence-deserialize sidecar)))
+                             (mevedel-session-persistence-deserialize
+                              sidecar opened-workspace)))
          (session          (or session-override
                                (plist-get result :session)
-                               (mevedel-session-persistence--synthesize-session
-                                session-dir (mevedel-workspace))))
+                               (if remote-p
+                                   (user-error
+                                    "Remote session has no valid published sidecar: %s"
+                                    session-dir)
+                                 (mevedel-session-persistence--synthesize-session
+                                  session-dir opened-workspace))))
          (agent-registry-repaired-p
           (plist-get result :agent-registry-repaired-p))
          (additional-roots (plist-get result :additional-roots))
@@ -3266,18 +4179,14 @@ mentions-shown reset to empty hash tables on load."
     ;; `save-path' is intentionally not serialized in the sidecar: the
     ;; session directory itself is the source of truth at restore time.
     (setf (mevedel-session-save-path session)
-          (file-name-as-directory session-dir))
-    ;; Self-heal: trust the filesystem if sidecar's segment counter is stale.
-    (mevedel-session-persistence--self-heal-segment-counter session session-dir)
+          (file-name-as-directory session-dir)
+          (mevedel-session-publication session) publication)
     ;; Workspace relocation: rewrite path-bearing fields if the saved
     ;; root no longer matches the current workspace's root.
     (when had-sidecar-p
       (mevedel-session-persistence--reconcile-relocation
        session (plist-get sidecar :workspace)))
-    (let* ((segment-n    (mevedel-session-current-segment session))
-           (segment-path (mevedel-session-persistence--segment-path
-                          session-dir segment-n))
-           (buf-name     (mevedel-session-buffer-name
+    (let* ((buf-name     (mevedel-session-buffer-name
                           (mevedel-session-name session)
                           workspace))
            (session-id   (mevedel-session-session-id session))
@@ -3305,59 +4214,155 @@ mentions-shown reset to empty hash tables on load."
            ;; acquisitions return nil; we still open the buffer but
            ;; flip it to read-only below.  `live' skips acquisition
            ;; because the buffer is already owned by this Emacs.
-           (acquired     (unless live
-                           (mevedel-session-persistence-lock-acquire
-                            session-dir buf-name)))
-           (buf          (or live
-                             (and (file-exists-p segment-path)
-                                  (mevedel-session-persistence--find-file-noselect
-                                   segment-path))))
-           (agent-repairs 0)
-           (setup-done   nil))
-      (unwind-protect
-          (progn
-            (unless (and buf (buffer-live-p buf) (file-exists-p segment-path))
-              (mevedel-session-persistence--maybe-prune-orphan
-               session-dir segment-path))
-            (when (and acquired (not live))
-              (mevedel-session-persistence--reconcile-lost-execution-segments
-               session segment-path))
-            (with-current-buffer buf
-              (unless (equal (buffer-name) buf-name)
-                (rename-buffer buf-name t))
-              (unless (equal (expand-file-name buffer-file-name)
-                             (expand-file-name segment-path))
-                (setq buffer-file-name segment-path))
-              (when (and (derived-mode-p 'org-mode)
-                         (fboundp 'mevedel--chat-buffer-disable-org-element-cache))
-                (mevedel--chat-buffer-disable-org-element-cache)))
+           (acquired
             (unless live
-              (setq agent-repairs
-                    (mevedel-session-persistence--hydrate-restored-buffer
-                     buf session workspace segment-path acquired additional-roots
-                     lifecycle-source)))
-            (mevedel-session-persistence--finish-restored-buffer
-             buf session live
-             (and acquired
-                  had-sidecar-p
-                  (or cwd-retargeted-p
-                      agent-registry-repaired-p
-                      (> agent-repairs 0)
-                      (and sidecar-current-n
-                           (not (= sidecar-current-n segment-n))))))
-            (setq setup-done t)
-            buf)
-        ;; If any of the setup above failed non-locally, don't leak the
-        ;; lock we just acquired or the freshly-opened buffer.
-        (unless setup-done
-          (when (and acquired (not live))
-            (condition-case _
-                (mevedel-session-persistence-lock-release session-dir)
-              (error nil)))
-          (when (and (not live) buf (buffer-live-p buf))
-            (condition-case _
-                (kill-buffer buf)
-              (error nil))))))))
+              (if (and session-override
+                       (file-remote-p session-dir)
+                       (progn
+                         (require 'mevedel-session-durability)
+                         (mevedel-session-durability-lease-owned-p session)))
+                  t
+                (mevedel-session-persistence-lock-acquire
+                 session-dir buf-name session)))))
+      (let ((repair-artifacts nil)
+            repair-callback
+            self-healed-predecessor
+            buf
+            (setup-done nil))
+        (unwind-protect
+            (progn
+              (setq repair-callback
+                    (and acquired
+                         (not live)
+                         (mevedel-execution-target-remote-p
+                          (mevedel-session-execution-target session))
+                         (lambda (artifact)
+                           (push artifact repair-artifacts))))
+              ;; Once fenced, confirm the same published state still owns the
+              ;; remote lease head.  Local sessions retain their sidecar-last
+              ;; comparison because they have no immutable publication head.
+              (when (and acquired (not live))
+                (if remote-p
+                    (let ((current
+                           (mevedel-session-durability-read-publication
+                            session-dir)))
+                      (unless (and current
+                                   (equal (plist-get publication :head)
+                                          (plist-get current :head)))
+                        (user-error
+                         "Session state changed while acquiring its lease; retry restore"))
+                      (setf (mevedel-session-publication session) current))
+                  (unless
+                      (equal
+                       sidecar
+                       (mevedel-session-persistence-load-sidecar sidecar-path))
+                    (user-error
+                     "Session state changed while acquiring its lock; retry restore"))))
+              ;; Files newer than the sidecar may be an incomplete publication.
+              ;; Only the mutation owner may reconcile them; inspection trusts
+              ;; the sidecar.
+              (when (and acquired (not live) (not remote-p))
+                (setq self-healed-predecessor
+                      (mevedel-session-persistence--self-heal-segment-counter
+                       session session-dir (not (null repair-callback)))))
+              (let* ((segment-n (mevedel-session-current-segment session))
+                     (segment-path
+                      (mevedel-session-persistence--segment-path
+                       session-dir segment-n))
+                     (agent-repairs 0))
+                (setq
+                 buf
+                 (or
+                  live
+                  (if remote-p
+                      (mevedel-session-persistence-find-artifact-noselect
+                       session (file-name-nondirectory segment-path)
+                       (not acquired))
+                    (and
+                     (file-exists-p segment-path)
+                     (mevedel-session-persistence--find-file-noselect
+                      segment-path)))))
+                (unless (and buf (buffer-live-p buf)
+                             (or remote-p (file-exists-p segment-path)))
+                  (if (and acquired (not remote-p))
+                      (mevedel-session-persistence--maybe-prune-orphan
+                       session-dir segment-path)
+                    (user-error
+                     "%s session segment is unavailable: %s"
+                     (if remote-p "Published" "Session") segment-path)))
+                (when (and acquired (not live))
+                  (mevedel-session-persistence--reconcile-lost-execution-segments
+                   session segment-path repair-callback))
+                (when (and repair-callback
+                           self-healed-predecessor
+                           (file-regular-p self-healed-predecessor))
+                  (if-let ((artifact
+                            (cl-find
+                             self-healed-predecessor repair-artifacts
+                             :key (lambda (candidate)
+                                    (plist-get candidate :path))
+                             :test #'equal)))
+                      (let ((coding (or (plist-get artifact :coding)
+                                        'utf-8-unix)))
+                        (setf
+                         (plist-get artifact :content)
+                         (mevedel-session-persistence--finalized-segment-text
+                          (plist-get artifact :content) coding)))
+                    (with-temp-buffer
+                      (insert-file-contents self-healed-predecessor)
+                      (let ((coding (or buffer-file-coding-system
+                                        'utf-8-unix)))
+                        (funcall
+                         repair-callback
+                         (list
+                          :path self-healed-predecessor
+                          :content
+                          (mevedel-session-persistence--finalized-segment-text
+                           (buffer-string) coding)
+                          :coding coding))))))
+                (with-current-buffer buf
+                  (unless (equal (buffer-name) buf-name)
+                    (rename-buffer buf-name t))
+                  (unless (equal (expand-file-name buffer-file-name)
+                                 (expand-file-name segment-path))
+                    (setq buffer-file-name segment-path))
+                  (when
+                      (and
+                       (derived-mode-p 'org-mode)
+                       (fboundp
+                        'mevedel--chat-buffer-disable-org-element-cache))
+                    (mevedel--chat-buffer-disable-org-element-cache)))
+                (unless live
+                  (setq agent-repairs
+                        (mevedel-session-persistence--hydrate-restored-buffer
+                         buf session workspace segment-path acquired
+                         additional-roots lifecycle-source repair-callback)))
+                (mevedel-session-persistence--finish-restored-buffer
+                 buf session live
+                 (and acquired
+                      (or repair-artifacts
+                          (and
+                           had-sidecar-p
+                           (or cwd-retargeted-p
+                               agent-registry-repaired-p
+                               (> agent-repairs 0)
+                               (and sidecar-current-n
+                                    (not (= sidecar-current-n segment-n)))))))
+                 (nreverse repair-artifacts))
+                (setq setup-done t)
+                buf))
+          ;; Any failure after acquisition releases the session lease and
+          ;; removes a freshly opened buffer.
+          (unless setup-done
+            (when (and acquired (not live))
+              (condition-case _
+                  (mevedel-session-persistence-lock-release
+                   session-dir session)
+                (error nil)))
+            (when (and (not live) buf (buffer-live-p buf))
+              (condition-case _
+                  (kill-buffer buf)
+                (error nil)))))))))
 
 
 ;;
@@ -3373,6 +4378,20 @@ mentions-shown reset to empty hash tables on load."
         (when (> v best-version)
           (setq best-version v
                 best          (cdr entry)))))))
+
+(defun mevedel-session-persistence--read-backup (session backup-name)
+  "Return SESSION's BACKUP-NAME as literal bytes.
+
+Remote Rewind resolves only the committed immutable publication.  Local
+sessions retain their existing direct file-history read."
+  (if (and (mevedel-session-execution-target session)
+           (mevedel-execution-target-remote-p
+            (mevedel-session-execution-target session)))
+      (mevedel-session-persistence-read-artifact
+       session (file-name-concat "file-history" backup-name) t)
+    (mevedel-file-history--read-file-raw
+     (mevedel-file-history--backup-path
+      (mevedel-session-save-path session) backup-name))))
 
 (defun mevedel-session-persistence--state-at-turn
     (session cum-turn &optional before-turn)
@@ -3431,10 +4450,8 @@ or earlier.  Possible `:action' values are:
      ;; Target has content; file currently present -- compare.
      (t
       (let* ((target-content
-              (mevedel-file-history--read-file-raw
-               (mevedel-file-history--backup-path
-                (mevedel-session-save-path session)
-                target-backup-name)))
+              (mevedel-session-persistence--read-backup
+               session target-backup-name))
              (current-content
               (mevedel-file-history--read-file-raw path)))
         (if (string-equal current-content target-content)
@@ -3446,10 +4463,8 @@ or earlier.  Possible `:action' values are:
                  (latest-name (and latest (plist-get latest :backup-name)))
                  (latest-content
                   (and latest-name
-                       (mevedel-file-history--read-file-raw
-                        (mevedel-file-history--backup-path
-                         (mevedel-session-save-path session)
-                         latest-name))))
+                       (mevedel-session-persistence--read-backup
+                        session latest-name)))
                  (diverged (not (and latest-content
                                      (string-equal current-content
                                                    latest-content)))))
@@ -3604,10 +4619,9 @@ backup paths for per-row diffs."
        (when (file-exists-p path)
          (delete-file path)))
       ((or 'create 'restore 'overwrite)
-       (let* ((backup-path (mevedel-file-history--backup-path
-                            (mevedel-session-save-path session)
-                            backup-name))
-              (content     (mevedel-file-history--read-file-raw backup-path)))
+       (let ((content
+              (mevedel-session-persistence--read-backup
+               session backup-name)))
          (let ((dir (file-name-directory path)))
            (when (and dir (not (file-directory-p dir)))
              (make-directory dir t)))
@@ -3850,15 +4864,27 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
   (let* ((segment-n (plist-get target :segment))
          (segment-path
           (mevedel-session-persistence--segment-path
-           (mevedel-session-save-path session) segment-n)))
-    (unless (file-exists-p segment-path)
-      (user-error "Segment %d file missing: %s"
-                  segment-n segment-path))
+           (mevedel-session-save-path session) segment-n))
+         (remote-p (file-remote-p (mevedel-session-save-path session)))
+         (logical (file-name-nondirectory segment-path))
+         (content
+          (when remote-p
+            (condition-case nil
+                (mevedel-session-persistence-read-artifact
+                 session logical t)
+              (error
+               (user-error "Published segment %d is unavailable" segment-n))))))
+    (unless (or remote-p (file-exists-p segment-path))
+      (user-error "Segment %d file missing: %s" segment-n segment-path))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
         (let ((buffer-file-name segment-path))
-          (insert-file-contents segment-path)
+          (if remote-p
+              (insert
+               (decode-coding-string
+                content (or buffer-file-coding-system 'utf-8-unix)))
+            (insert-file-contents segment-path))
           (when (derived-mode-p 'org-mode)
             (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
               (mevedel--chat-buffer-disable-org-element-cache))
@@ -3944,26 +4970,41 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
 
 (defun mevedel-session-persistence--staged-file-p (path)
   "Return non-nil when PATH differs in the Git index."
-  (and (executable-find "git")
-       (file-directory-p (file-name-directory path))
-       (= 1
-          (process-file "git" nil nil nil
-                        "-C" (file-name-directory path)
-                        "diff" "--cached" "--quiet" "--" path))))
+  (let ((directory (file-name-directory path)))
+    (when (file-directory-p directory)
+      (require 'mevedel-execution-target)
+      (let* ((target (mevedel-execution-target-create directory))
+             (default-directory (file-name-as-directory directory))
+             (remote (file-remote-p default-directory)))
+        (and (executable-find "git" remote)
+             (= 1
+                (process-file
+                 "git" nil nil nil
+                 "-C"
+                 (mevedel-execution-target-native-path target directory)
+                 "diff" "--cached" "--quiet" "--"
+                 (mevedel-execution-target-native-path target path))))))))
 
 (defun mevedel-session-persistence--detached-child-count
     (session target-turn)
   "Return direct child count detached by rewinding SESSION to TARGET-TURN."
   (let ((session-id (mevedel-session-session-id session))
+        (remote-p
+         (and (mevedel-session-execution-target session)
+              (mevedel-execution-target-remote-p
+               (mevedel-session-execution-target session))))
         (count 0))
     (dolist (entry
              (mevedel-session-persistence-list-sessions
               (mevedel-session-workspace session)))
       (when-let* ((path (plist-get entry :save-path))
+                  (sidecar-path
+                   (if remote-p
+                       (plist-get (plist-get entry :publication) :sidecar)
+                     (mevedel-session-persistence--sidecar-path path)))
                   (sidecar
                    (condition-case nil
-                       (mevedel-session-persistence-read
-                        (mevedel-session-persistence--sidecar-path path))
+                       (mevedel-session-persistence-read sidecar-path)
                      (error nil))))
         (when (and (equal session-id
                           (plist-get sidecar :forked-from-session-id))
@@ -4116,7 +5157,9 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
      (mevedel-session-mentions-shown candidate) (make-hash-table :test #'equal)
      (mevedel-session-workspace-instruction-hashes candidate) nil
      (mevedel-session-hook-log candidate) nil
+     (mevedel-session-hook-log-pending candidate) nil
      (mevedel-session-repair-log candidate) nil
+     (mevedel-session-repair-log-pending candidate) nil
      (mevedel-session-permission-log-pending candidate) nil
      (mevedel-session-telemetry-pending candidate) nil
      (mevedel-session-hook-context-pending candidate) nil
@@ -4152,12 +5195,93 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
   (dotimes (index (length from))
     (aset to index (aref from index))))
 
+(defun mevedel-session-persistence--copy-rewind-session-state (from to)
+  "Copy Rewind state from FROM into TO without replacing durability runtime."
+  (let ((pending (mevedel-session-pending-publication to))
+        (publication (mevedel-session-publication to))
+        (queue (mevedel-session-publication-queue to))
+        (uncommitted
+         (mevedel-session-publication-uncommitted-batches to))
+        (active (mevedel-session-publication-active-p to))
+        (lease (mevedel-session-lease to))
+        (timer (mevedel-session-lease-renewal-timer to)))
+    (mevedel-session-persistence--copy-session-state from to)
+    (setf (mevedel-session-pending-publication to) pending
+          (mevedel-session-publication to) publication
+          (mevedel-session-publication-queue to) queue
+          (mevedel-session-publication-uncommitted-batches to) uncommitted
+          (mevedel-session-publication-active-p to) active
+          (mevedel-session-lease to) lease
+          (mevedel-session-lease-renewal-timer to) timer)))
+
+(defun mevedel-session-persistence--materialize-publication
+    (session publication staging-path)
+  "Materialize SESSION's committed PUBLICATION below local STAGING-PATH."
+  (unless publication
+    (error "Remote Rewind requires a committed session publication"))
+  (dolist (entry (plist-get publication :artifacts))
+    (let* ((logical (car entry))
+           (destination (expand-file-name logical staging-path))
+           (content
+            (mevedel-session-persistence-read-artifact session logical t)))
+      (unless (file-in-directory-p destination staging-path)
+        (error "Session artifact escapes Rewind staging: %s" logical))
+      (make-directory (file-name-directory destination) t)
+      (let ((coding-system-for-write 'no-conversion))
+        (write-region content nil destination nil 'silent)))))
+
+(defun mevedel-session-persistence--prune-remote-rewind-staging
+    (candidate target staging-path)
+  "Remove post-target artifacts from CANDIDATE's STAGING-PATH snapshot.
+TARGET identifies the retained segment and turn."
+  (let ((target-segment (plist-get target :segment))
+        (target-turn (1- (plist-get target :cum-turn)))
+        (agents
+         (delq nil
+               (mapcar
+                (lambda (entry) (plist-get (cdr entry) :path))
+                (mevedel-session-agent-transcripts candidate)))))
+    (dolist (path (directory-files-recursively staging-path ".*"))
+      (let ((logical (file-relative-name path staging-path)))
+        (when
+            (or
+             (and (string-match
+                   "\\`segment-\\([0-9]+\\)\\.chat\\.org\\'" logical)
+                  (> (string-to-number (match-string 1 logical))
+                     target-segment))
+             (and (string-match
+                   "\\`instructions/turn-\\([0-9]+\\)\\.el\\'" logical)
+                  (> (string-to-number (match-string 1 logical))
+                     target-turn))
+             (and (string-prefix-p "agents/" logical)
+                  (not (member logical agents)))
+             (string-prefix-p "plans/" logical)
+             (member logical '(".lock" ".lease" ".publications")))
+          (delete-file path))))
+    (let ((plans (file-name-concat staging-path "plans")))
+      (when (file-directory-p plans)
+        (delete-directory plans t)))))
+
 (defun mevedel-session-persistence--stage-rewind
-    (session candidate target staging-path staging-buffer)
-  "Stage CANDIDATE and TARGET from SESSION under STAGING-PATH."
-  (copy-directory (mevedel-session-save-path session) staging-path nil t t)
-  (mevedel-session-persistence--load-rewind-target
-   session staging-buffer target t)
+    (session candidate target staging-path staging-buffer
+             &optional publication rollback-staging-path)
+  "Stage CANDIDATE and TARGET from SESSION under STAGING-PATH.
+
+When PUBLICATION is non-nil, materialize only its immutable logical artifacts;
+portable lease and publication control directories are never copied."
+  (if publication
+      (progn
+        (mevedel-session-persistence--materialize-publication
+         session publication staging-path)
+        (when rollback-staging-path
+          (copy-directory staging-path rollback-staging-path nil t t)))
+    (copy-directory (mevedel-session-save-path session) staging-path nil t t))
+  (let ((source session))
+    (when publication
+      (setq source (copy-sequence session))
+      (setf (mevedel-session-save-path source) staging-path))
+    (mevedel-session-persistence--load-rewind-target
+     source staging-buffer target t))
   (with-current-buffer staging-buffer
     (setq buffer-file-name
           (mevedel-session-persistence--segment-path
@@ -4193,12 +5317,16 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
                      (> (string-to-number (match-string 1 name))
                         (1- (plist-get target :cum-turn))))
             (delete-file path))))))
+  (when publication
+    (mevedel-session-persistence--prune-remote-rewind-staging
+     candidate target staging-path))
   (mevedel-session-persistence-write
    (mevedel-session-persistence--sidecar-path staging-path)
    (mevedel-session-persistence--build-sidecar candidate staging-buffer))
   (mevedel-session-persistence-deserialize
    (mevedel-session-persistence-read
-    (mevedel-session-persistence--sidecar-path staging-path))))
+    (mevedel-session-persistence--sidecar-path staging-path))
+   (mevedel-session-workspace session)))
 
 (defun mevedel-session-persistence--backup-restore-files (plan directory)
   "Copy current PLAN file state under DIRECTORY for transaction rollback."
@@ -4231,6 +5359,38 @@ Return descriptions of every artifact that could not be restored."
                  failures)))))
     (nreverse failures)))
 
+(defun mevedel-session-persistence--rewind-publication-artifacts
+    (session buffer staging-path &optional state)
+  "Return STAGING-PATH as SESSION replacement artifacts, sidecar last.
+
+SESSION supplies the owned publication path.  BUFFER supplies live transcript
+state.  STATE, when non-nil, supplies the logical sidecar state without
+replacing SESSION's live lease runtime."
+  (require 'mevedel-session-durability)
+  (let* ((save-path (mevedel-session-save-path session))
+         (sidecar-name "session.meta.el")
+         artifacts)
+    (dolist (path (sort (directory-files-recursively staging-path ".*")
+                        #'string<))
+      (let ((logical (file-relative-name path staging-path)))
+        (when (and (not (equal logical sidecar-name))
+                   (mevedel-session-durability-logical-path-p logical))
+          (push
+           (list :path (expand-file-name logical save-path)
+                 :content (mevedel-file-history--read-file-raw path))
+           artifacts))))
+    (append
+     (nreverse artifacts)
+     (list
+      (list
+       :path (mevedel-session-persistence--sidecar-path save-path)
+       :content
+       (mevedel-session-persistence--printed-value
+        (mevedel-session-persistence--build-sidecar
+         (or state session) buffer))
+       :commit-marker t
+       :replace t)))))
+
 (defun mevedel-session-persistence--install-rewind-buffer
     (buffer staging-buffer session target)
   "Install STAGING-BUFFER as BUFFER for rewound SESSION at TARGET."
@@ -4253,9 +5413,214 @@ Return descriptions of every artifact that could not be restored."
         (mevedel-view-reset-agent-ephemeral-state))
       (mevedel-view--full-rerender))))
 
+(defun mevedel-session-persistence--commit-remote-rewind
+    (session buffer target plan)
+  "Commit remote SESSION, BUFFER, TARGET, and file PLAN through one head CAS."
+  (require 'mevedel-session-durability)
+  (let* ((workspace (mevedel-session-workspace session))
+         (directives (copy-sequence
+                      (mevedel-workspace-directives workspace)))
+         (save-path (mevedel-session-save-path session))
+         (publication
+          (or (mevedel-session-publication session)
+              (mevedel-session-durability-read-publication save-path)
+              (error "Remote Rewind requires a committed publication")))
+         (head-before (plist-get publication :head))
+         (temporary-root (make-temp-file "mevedel-remote-rewind-" t))
+         (staging-path (file-name-concat temporary-root "staging"))
+         (file-backup-dir (file-name-concat temporary-root "files"))
+         (candidate
+          (mevedel-session-persistence--rewind-candidate session target))
+         (staging-buffer
+          (generate-new-buffer " *mevedel-remote-rewind-staging*"))
+         file-backups
+         project-restore-started
+         publish-attempted
+         committed
+         post-commit-error
+         operation-error
+         rollback-failures)
+    (unwind-protect
+        (condition-case err
+            (progn
+              (with-current-buffer staging-buffer
+                (funcall (buffer-local-value 'major-mode buffer)))
+              (make-directory file-backup-dir t)
+              ;; Materialization, project backup, recheck, and restore are one
+              ;; synchronous target operation.  Timer renewal stays off-target
+              ;; until the wrapper proves the same generation still owns it.
+              (mevedel-session-durability-call-with-reserved-lease
+               session
+               (lambda ()
+                 (let ((current
+                        (mevedel-session-durability-read-publication
+                         save-path)))
+                   (unless (and current
+                                (equal head-before
+                                       (plist-get current :head)))
+                     (user-error
+                      "Session state changed before remote Rewind; retry"))
+                   (setq publication current)
+                   (setf (mevedel-session-publication session) current))
+                 (setq file-backups
+                       (mevedel-session-persistence--backup-restore-files
+                        plan file-backup-dir))
+                 (mevedel-session-persistence--stage-rewind
+                  session candidate target staging-path staging-buffer
+                  publication)
+                 (let ((rechecked
+                        (mevedel-session-persistence-restore-plan
+                         session (plist-get target :cum-turn) t)))
+                   (unless
+                       (equal
+                        (sort (copy-sequence plan)
+                              (lambda (a b)
+                                (string< (plist-get a :path)
+                                         (plist-get b :path))))
+                        (sort (copy-sequence rechecked)
+                              (lambda (a b)
+                                (string< (plist-get a :path)
+                                         (plist-get b :path)))))
+                     (error
+                      "Captured files changed after Rewind confirmation")))
+                 (setq project-restore-started t)
+                 (let ((result
+                        (mevedel-session-persistence-execute-restore
+                         session plan)))
+                   (when (plist-get result :failed)
+                     (error "File restore failed on %s: %s"
+                            (plist-get result :failed)
+                            (plist-get result :error))))))
+              (setq publish-attempted t)
+              (condition-case publish-error
+                  (mevedel-session-durability-publish
+                   session
+                   (mevedel-session-persistence--rewind-publication-artifacts
+                    session staging-buffer staging-path candidate))
+                (error
+                 ;; The captured head changes at marker CAS, before final lease
+                 ;; normalization.  A changed head is already committed and
+                 ;; must never be rolled back as though publication failed.
+                 (if (not
+                      (equal head-before
+                             (plist-get (mevedel-session-publication session)
+                                        :head)))
+                     (setq committed t
+                           post-commit-error publish-error)
+                   (signal (car publish-error) (cdr publish-error)))))
+              (unless committed
+                (unless
+                    (not
+                     (equal head-before
+                            (plist-get (mevedel-session-publication session)
+                                       :head)))
+                  (error "Remote Rewind did not commit a publication head"))
+                (setq committed t))
+              ;; Only the successful head CAS installs logical session state.
+              (mevedel-session-persistence--copy-rewind-session-state
+               candidate session)
+              (mevedel-session-persistence--install-rewind-buffer
+               buffer staging-buffer session target)
+              (condition-case instruction-error
+                  (unless
+                      (mevedel-session-persistence--load-instructions
+                       session buffer nil directives t)
+                    (error "Published instruction snapshot is unavailable"))
+                (error
+                 (display-warning
+                  'mevedel
+                  (format
+                   "Remote Rewind committed, but instructions did not refresh: %s"
+                   (error-message-string instruction-error))
+                  :warning)))
+              (condition-case directive-error
+                  (progn
+                    (mevedel-workspace-rewind-directives
+                     workspace (mevedel-session-session-id session)
+                     (plist-get target :cum-turn))
+                    (mevedel--restore-preserved-directives workspace))
+                (error
+                 (display-warning
+                  'mevedel
+                  (format
+                   "Remote Rewind committed, but directives did not refresh: %s"
+                   (error-message-string directive-error))
+                  :warning)))
+              (condition-case refresh-error
+                  (mevedel-session-persistence--refresh-restored-buffers
+                   plan (list :succeeded (length plan)))
+                (error
+                 (display-warning
+                  'mevedel
+                  (format
+                   "Remote Rewind committed, but buffers did not refresh: %s"
+                   (error-message-string refresh-error))
+                  :warning))))
+          (error (setq operation-error err)))
+      (unless committed
+        (when project-restore-started
+          (condition-case rollback-error
+              (setq rollback-failures
+                    (mevedel-session-durability-call-with-reserved-lease
+                     session
+                     (lambda ()
+                       (mevedel-session-persistence--rollback-restore-files
+                        file-backups))))
+            (error
+             (push
+              (format "Project rollback authority (%s)"
+                      (error-message-string rollback-error))
+              rollback-failures))))
+        (when (and publish-attempted (null rollback-failures))
+          (condition-case discard-error
+              (mevedel-session-durability-discard-rolled-back-publication
+               session)
+            (error
+             (push
+              (format "Publication recovery cleanup (%s)"
+                      (error-message-string discard-error))
+              rollback-failures)))))
+      (when (buffer-live-p staging-buffer)
+        (with-current-buffer staging-buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer staging-buffer))
+      (unless rollback-failures
+        (when (file-directory-p temporary-root)
+          (delete-directory temporary-root t))))
+    (when rollback-failures
+      (let ((reason
+             (format
+              "Remote Rewind rollback incomplete: %s"
+              (string-join (nreverse rollback-failures) ", "))))
+        (condition-case nil
+            (mevedel-session-durability-record-specialized-failure
+             session reason temporary-root)
+          (error nil))
+        (error "%s; recovery data: %s" reason temporary-root)))
+    (when operation-error
+      (if committed
+          (error "Remote Rewind committed, but local state failed: %s"
+                 (error-message-string operation-error))
+        (signal (car operation-error) (cdr operation-error))))
+    (when post-commit-error
+      (error "Remote Rewind committed, but lease finalization failed: %s"
+             (error-message-string post-commit-error)))
+    t))
+
 (defun mevedel-session-persistence--commit-rewind
     (session buffer target plan)
   "Commit SESSION, BUFFER, TARGET, and file PLAN as one recoverable Rewind."
+  (if (and (mevedel-session-execution-target session)
+           (mevedel-execution-target-remote-p
+            (mevedel-session-execution-target session)))
+      (mevedel-session-persistence--commit-remote-rewind
+       session buffer target plan)
+    (mevedel-session-persistence--commit-local-rewind
+     session buffer target plan)))
+
+(defun mevedel-session-persistence--commit-local-rewind
+    (session buffer target plan)
+  "Commit local SESSION, BUFFER, TARGET, and file PLAN as one Rewind."
   (let* ((workspace (mevedel-session-workspace session))
          (directives (copy-sequence
                       (mevedel-workspace-directives workspace)))
@@ -4437,10 +5802,16 @@ Return descriptions of every artifact that could not be restored."
       (when (buffer-live-p original-buffer)
         (kill-buffer original-buffer))
       (if rollback-failures
-          (error
-           "Rewind rollback incomplete; inconsistent artifacts: %s; recovery data: %s"
-           (string-join (nreverse rollback-failures) ", ")
-           temporary-root)
+          (let ((reason
+                 (format
+                  "Rewind rollback incomplete; inconsistent artifacts: %s"
+                  (string-join (nreverse rollback-failures) ", "))))
+            (when (mevedel-execution-target-remote-p
+                   (mevedel-session-execution-target session))
+              (require 'mevedel-session-durability)
+              (mevedel-session-durability-record-specialized-failure
+               session reason temporary-root))
+            (error "%s; recovery data: %s" reason temporary-root))
         (when (file-directory-p temporary-root)
           (delete-directory temporary-root t))))))
 
@@ -4449,6 +5820,7 @@ Return descriptions of every artifact that could not be restored."
   (let ((session (buffer-local-value 'mevedel--session buffer)))
     (unless (and session (plist-get target :fork-point-id))
       (user-error "Rewind requires a settled assistant response"))
+    (mevedel-session-persistence-assert-mutation-authority session buffer)
     (setq target
           (mevedel-session-persistence--resolve-fork-target
            session target))
@@ -4476,6 +5848,8 @@ Return descriptions of every artifact that could not be restored."
                      (plist-get impact :discarded-turns)
                      (length prepared)))))
               (when confirmed
+                (mevedel-session-persistence-assert-mutation-authority
+                 session buffer)
                 (mevedel-session-persistence--commit-rewind
                  session buffer target prepared))
               (when-let* ((impact-buffer
@@ -4620,6 +5994,7 @@ mail are deliberately absent from the returned session."
          (mevedel-session--create
           :name (mevedel-session-name session)
           :workspace (mevedel-session-workspace session)
+          :execution-target (mevedel-session-execution-target session)
           :working-directory (mevedel-session-working-directory session)
           :tasks nil
           :task-status-notes nil
@@ -4672,7 +6047,9 @@ mail are deliberately absent from the returned session."
           :hook-rules
           (copy-tree (mevedel-session-hook-rules session) t)
           :hook-log nil
+          :hook-log-pending nil
           :repair-log nil
+          :repair-log-pending nil
           :permission-log-pending nil
           :hook-context-pending nil
           :execution-state nil
@@ -4715,135 +6092,164 @@ mail are deliberately absent from the returned session."
       (setf (mevedel-session-turn-count child) picked-cum-turn))
     child))
 
+(defun mevedel-session-persistence--materialize-fork-artifact
+    (source logical staging-path &optional required)
+  "Copy SOURCE's committed LOGICAL artifact below STAGING-PATH.
+
+Return non-nil when the artifact was materialized.  When REQUIRED is non-nil,
+signal if LOGICAL is absent.  Literal resolver bytes are used so remote fixed
+caches never become fork authority."
+  (if (mevedel-session-persistence-artifact-present-p source logical t)
+      (let ((destination (expand-file-name logical staging-path))
+            (content
+             (mevedel-session-persistence-read-artifact source logical t)))
+        (make-directory (file-name-directory destination) t)
+        (let ((coding-system-for-write 'no-conversion))
+          (write-region content nil destination nil 'silent))
+        t)
+    (when required
+      (error "Required fork artifact is not published: %s" logical))))
+
 (defun mevedel-session-persistence--stage-fork
     (child buffer staging-buffer parent-save-path staging-path
            picked-segment picked-cum-turn &optional additional-roots)
   "Materialize CHILD under STAGING-PATH using STAGING-BUFFER."
   (require 'mevedel-agent-persistence)
   (require 'mevedel-plan)
-  (require 'mevedel-utilities)
-  (make-directory (file-name-concat staging-path "agents") t)
-  (make-directory (file-name-concat staging-path "file-history") t)
-  (when-let ((source (and parent-save-path
-                          (file-name-concat parent-save-path "local")))
-             ((file-directory-p source)))
-    (copy-directory source
-                    (file-name-concat staging-path "local")
-                    nil t t)
-    ;; `local/plans' is managed plan state, not ordinary local content.
-    ;; Re-add only the accepted artifact proven valid at the fork point below.
-    (let ((plans (file-name-concat staging-path "local" "plans")))
-      (when (file-directory-p plans)
-        (delete-directory plans t))))
-  (when-let* ((source
-               (buffer-local-value 'mevedel--session buffer))
-              (metadata (mevedel-session-plan-metadata source))
-              ((eq (plist-get metadata :status) 'accepted))
-              (accepted-turn (plist-get metadata :accepted-turn))
-              ((and (integerp accepted-turn)
-                    (<= accepted-turn picked-cum-turn)))
-              (relative-path (plist-get metadata :accepted-path))
-              ((stringp relative-path))
-              (source-path (expand-file-name relative-path parent-save-path))
-              ((file-in-directory-p
-                source-path
-                (file-name-concat parent-save-path "local" "plans"))))
-    (unless (file-readable-p source-path)
-      (error "Accepted plan artifact is unavailable: %s" source-path))
-    (let ((hash
-           (with-temp-buffer
-             (insert-file-contents source-path)
-             (mevedel-plan-hash
-              (mevedel--normalize-message-text (buffer-string))))))
-      (unless (and (stringp (plist-get metadata :accepted-hash))
-                   (equal hash (plist-get metadata :accepted-hash)))
-        (error "Accepted plan artifact hash does not match")))
-    (let ((destination (expand-file-name relative-path staging-path)))
-      (make-directory (file-name-directory destination) t)
-      (copy-file source-path destination)))
-  (cl-loop for i from 1 below picked-segment do
-           (let ((src (mevedel-session-persistence--segment-path
-                       parent-save-path i))
-                 (dst (mevedel-session-persistence--segment-path
-                       staging-path i)))
-             (when (file-exists-p src)
-               (copy-file src dst))))
-  (with-current-buffer staging-buffer
-    (setq-local mevedel--session child)
-    (setq-local mevedel-workspace-additional-roots
-                (copy-tree additional-roots t))
-    (setq buffer-file-name
-          (mevedel-session-persistence--segment-path
-           staging-path picked-segment)
-          buffer-file-truename nil)
-    (require 'mevedel-pipeline)
-    (mevedel-pipeline-reconcile-lost-executions staging-buffer)
-    (set-buffer-modified-p t)
-    (save-buffer))
-  (mevedel-session-persistence--reconcile-lost-execution-segments
-   child (mevedel-session-persistence--segment-path
-          staging-path picked-segment))
-  (when picked-cum-turn
-    (dolist (entry
-             (mevedel-session-persistence--state-at-turn
-              child picked-cum-turn))
-      (when-let* ((backup-name (plist-get (cdr entry) :backup-name))
-                  (src (mevedel-file-history--backup-path
-                        parent-save-path backup-name))
-                  ((file-exists-p src)))
-        (copy-file src
-                   (mevedel-file-history--backup-path
-                    staging-path backup-name)))))
-  (when (and picked-cum-turn parent-save-path)
-    (dolist (entry
-             (mevedel-session-persistence--agent-files-for-segments
-              (mevedel-session-prompt-index child)
-              (mevedel-session-agent-transcripts child)
-              picked-segment picked-cum-turn))
-      (let* ((rel-path (plist-get (cdr entry) :path))
-             (src (and rel-path
-                       (expand-file-name rel-path parent-save-path)))
-             (dst (and rel-path
-                       (expand-file-name rel-path staging-path))))
-        (when (and rel-path
-                   (mevedel-agent-persistence-transcript-path-p
-                    rel-path parent-save-path)
-                   (mevedel-agent-persistence-transcript-path-p
-                    rel-path staging-path)
-                   (file-exists-p src))
-          (make-directory (file-name-directory dst) t)
-          (copy-file src dst)))))
-  (mevedel-session-persistence-write
-   (mevedel-session-persistence--sidecar-path staging-path)
-   (mevedel-session-persistence--build-sidecar child staging-buffer))
-  (mevedel-session-persistence--save-instructions child buffer)
-  (unless (mevedel-session-persistence-lock-acquire
-           staging-path (buffer-name buffer))
-    (error "Could not acquire fork session lock"))
-  (let* ((saved
-          (mevedel-session-persistence-read
-           (mevedel-session-persistence--sidecar-path staging-path)))
-         (restored (mevedel-session-persistence-deserialize saved)))
-    (unless (equal (mevedel-session-session-id
-                    (plist-get restored :session))
-                   (mevedel-session-session-id child))
-      (error "Fork staging validation failed"))))
+  (let ((source (buffer-local-value 'mevedel--session buffer)))
+    (unless source
+      (error "Fork source buffer has no session"))
+    (make-directory (file-name-concat staging-path "agents") t)
+    (make-directory (file-name-concat staging-path "file-history") t)
+    (when-let ((local-source
+                (and parent-save-path
+                     (file-name-concat parent-save-path "local")))
+               ((file-directory-p local-source)))
+      (copy-directory local-source
+                      (file-name-concat staging-path "local")
+                      nil t t)
+      ;; `local/plans' is managed plan state, not ordinary local content.
+      ;; Re-add only the accepted artifact proven valid at the fork point
+      ;; below.
+      (let ((plans (file-name-concat staging-path "local" "plans")))
+        (when (file-directory-p plans)
+          (delete-directory plans t))))
+    (when-let* ((source source)
+                (metadata (mevedel-session-plan-metadata source))
+                ((eq (plist-get metadata :status) 'accepted))
+                (accepted-turn (plist-get metadata :accepted-turn))
+                ((and (integerp accepted-turn)
+                      (<= accepted-turn picked-cum-turn)))
+                (relative-path (plist-get metadata :accepted-path))
+                ((stringp relative-path))
+                (source-path
+                 (expand-file-name relative-path parent-save-path))
+                ((file-in-directory-p
+                  source-path
+                  (file-name-concat parent-save-path "local" "plans"))))
+      ;; Reading the artifact validates its accepted hash before the fork
+      ;; inherits it.
+      (mevedel-plan-read-artifact
+       source (list :path relative-path
+                    :hash (plist-get metadata :accepted-hash)))
+      (mevedel-session-persistence--materialize-fork-artifact
+       source relative-path staging-path t))
+    (cl-loop for i from 1 below picked-segment do
+             (mevedel-session-persistence--materialize-fork-artifact
+              source
+              (file-name-nondirectory
+               (mevedel-session-persistence--segment-path parent-save-path i))
+              staging-path))
+    (with-current-buffer staging-buffer
+      (setq-local mevedel--session child)
+      (setq-local mevedel-workspace-additional-roots
+                  (copy-tree additional-roots t))
+      (setq buffer-file-name
+            (mevedel-session-persistence--segment-path
+             staging-path picked-segment)
+            buffer-file-truename nil)
+      (require 'mevedel-pipeline)
+      (mevedel-pipeline-reconcile-lost-executions staging-buffer)
+      (set-buffer-modified-p t)
+      (save-buffer))
+    (mevedel-session-persistence--reconcile-lost-execution-segments
+     child (mevedel-session-persistence--segment-path
+            staging-path picked-segment))
+    (when picked-cum-turn
+      (dolist (entry
+               (mevedel-session-persistence--state-at-turn
+                child picked-cum-turn))
+        (when-let* ((backup-name (plist-get (cdr entry) :backup-name)))
+          (mevedel-session-persistence--materialize-fork-artifact
+           source (file-name-concat "file-history" backup-name)
+           staging-path))))
+    (when (and picked-cum-turn parent-save-path)
+      (dolist (entry
+               (mevedel-session-persistence--agent-files-for-segments
+                (mevedel-session-prompt-index child)
+                (mevedel-session-agent-transcripts child)
+                picked-segment picked-cum-turn))
+        (when-let* ((rel-path (plist-get (cdr entry) :path))
+                    ((mevedel-agent-persistence-transcript-path-p
+                      rel-path parent-save-path))
+                    ((mevedel-agent-persistence-transcript-path-p
+                      rel-path staging-path)))
+          (mevedel-session-persistence--materialize-fork-artifact
+           source rel-path staging-path))))
+    (mevedel-session-persistence-write
+     (mevedel-session-persistence--sidecar-path staging-path)
+     (mevedel-session-persistence--build-sidecar child staging-buffer))
+    (mevedel-session-persistence--save-instructions child buffer)
+    (let* ((saved
+            (mevedel-session-persistence-read
+             (mevedel-session-persistence--sidecar-path staging-path)))
+           (restored
+            (mevedel-session-persistence-deserialize
+             saved (mevedel-session-workspace child))))
+      (unless (equal (mevedel-session-session-id
+                      (plist-get restored :session))
+                     (mevedel-session-session-id child))
+        (error "Fork staging validation failed")))))
 
 (defun mevedel-session-persistence--publish-fork
     (child buffer staging-buffer parent-save-path staging-path new-save-path
            picked-segment picked-cum-turn additional-roots)
   "Stage, publish, and restore CHILD as one session-artifact transaction."
-  (let (child-buffer published committed)
+  (let ((remote-p (file-remote-p staging-path))
+        child-buffer published committed)
     (unwind-protect
         (progn
+          (unless (mevedel-session-persistence-lock-acquire
+                   staging-path (buffer-name buffer) child)
+            (error "Could not acquire fork session lock"))
           (mevedel-session-persistence--stage-fork
            child buffer staging-buffer parent-save-path staging-path
            picked-segment picked-cum-turn additional-roots)
-          (mevedel-session-persistence-lock-release staging-path)
-          (rename-file (directory-file-name staging-path)
-                       (directory-file-name new-save-path))
+          (if remote-p
+              (progn
+                (require 'mevedel-session-durability)
+                ;; A fork starts a new publication history.  Publish its
+                ;; complete staged snapshot before the owned lease and
+                ;; immutable control state move together into discoverability.
+                (mevedel-session-durability-publish
+                 child
+                 (mevedel-session-persistence--rewind-publication-artifacts
+                  child staging-buffer staging-path))
+                (mevedel-session-durability-call-with-reserved-lease
+                 child
+                 (lambda ()
+                   (rename-file (directory-file-name staging-path)
+                                (directory-file-name new-save-path))
+                   ;; Reservation finalization must address the moved lease.
+                   (setf (mevedel-session-save-path child) new-save-path)))
+                (setf
+                 (mevedel-session-publication child)
+                 (mevedel-session-durability-read-publication new-save-path)))
+            (mevedel-session-persistence-lock-release staging-path child)
+            (rename-file (directory-file-name staging-path)
+                         (directory-file-name new-save-path))
+            (setf (mevedel-session-save-path child) new-save-path))
           (setq published t)
-          (setf (mevedel-session-save-path child) new-save-path)
           (with-current-buffer staging-buffer
             (set-buffer-modified-p nil)
             (set-visited-file-name nil t)
@@ -4855,6 +6261,9 @@ mail are deliberately absent from the returned session."
                 committed t)
           child-buffer)
       (unless committed
+        (ignore-errors
+          (mevedel-session-persistence-lock-release
+           (mevedel-session-save-path child) child))
         (when-let* ((failed-buffer
                      (or child-buffer
                          (mevedel-session-persistence--find-live-buffer
@@ -5132,7 +6541,8 @@ Return descriptions of malformed grants and rules dropped from the child."
            "</system-reminder>\n")
      (if partial "Worktree Fork (partial restoration)" "Worktree Fork")
      (mevedel-session-forked-from-session-id session)
-     (mevedel-session-worktree-directory session)
+     (mevedel-session-persistence--target-native-report-path
+      session (mevedel-session-worktree-directory session))
      (mevedel-session-worktree-branch session)
      (mevedel-session-worktree-base-commit session)
      (plist-get report :restored)
@@ -5144,7 +6554,13 @@ Return descriptions of malformed grants and rules dropped from the child."
      (if-let* ((external (plist-get report :external)))
          (format
           "External captured paths remain shared and non-isolated: %s\n"
-          (string-join external ", "))
+          (string-join
+           (mapcar
+            (lambda (path)
+              (mevedel-session-persistence--target-native-report-path
+               session path))
+            external)
+           ", "))
        "")
      (if unrestored
          (format
@@ -5152,7 +6568,8 @@ Return descriptions of malformed grants and rules dropped from the child."
           (mapconcat
            (lambda (item)
              (format "- %s: %s"
-                     (plist-get item :path)
+                     (mevedel-session-persistence--target-native-report-path
+                      session (plist-get item :path))
                      (plist-get item :reason)))
            unrestored "\n"))
        "")
@@ -5161,7 +6578,27 @@ Return descriptions of malformed grants and rules dropped from the child."
           "Dropped malformed copied path state:\n%s\n"
           (mapconcat (lambda (item) (format "- %s" item))
                      dropped "\n"))
-       ""))))
+        ""))))
+
+(defun mevedel-session-persistence--target-native-report-path (session path)
+  "Return PATH without SESSION's client-specific remote prefix."
+  (if-let* ((target (mevedel-session-execution-target session))
+            ((stringp path)))
+      (condition-case _
+          (mevedel-execution-target-native-path target path)
+        (mevedel-execution-target-error "<path outside session target>"))
+    path))
+
+(defun mevedel-session-persistence--worktree-fork-retained-error
+    (session failure reservation)
+  "Return the retained-artifact error for SESSION, FAILURE, and RESERVATION."
+  (format
+   "%s; Worktree Fork artifacts retained: branch %s, directory %s. Cleanup: %s"
+   (error-message-string failure)
+   (plist-get reservation :branch)
+   (mevedel-session-persistence--target-native-report-path
+    session (plist-get reservation :directory))
+   (plist-get reservation :cleanup-command)))
 
 (defun mevedel-session-persistence-conversation-fork (buffer target)
   "Create and open a Conversation Fork of BUFFER at stable TARGET.
@@ -5172,6 +6609,8 @@ child data buffer without mutating the Source buffer, session, or lock."
   (let* ((session (buffer-local-value 'mevedel--session buffer))
          (_ (unless session
               (user-error "Active buffer has no mevedel session")))
+         (_ (mevedel-session-persistence-assert-mutation-authority
+             session buffer))
          (target
           (mevedel-session-persistence--resolve-fork-target session target))
          (_ (mevedel-session-persistence--assert-stable-source
@@ -5241,6 +6680,8 @@ child data buffer without mutating the Source buffer, session, or lock."
   (let* ((session (buffer-local-value 'mevedel--session buffer))
          (_ (unless session
               (user-error "Active buffer has no mevedel session")))
+         (_ (mevedel-session-persistence-assert-mutation-authority
+             session buffer))
          (target
           (mevedel-session-persistence--resolve-fork-target session target))
          (_ (mevedel-session-persistence--assert-stable-source
@@ -5340,12 +6781,9 @@ child data buffer without mutating the Source buffer, session, or lock."
     (if (not failure)
         result
       (if worktree-created
-          (error
-           "%s; Worktree Fork artifacts retained: branch %s, directory %s. Cleanup: %s"
-           (error-message-string failure)
-           (plist-get reservation :branch)
-           (plist-get reservation :directory)
-           (plist-get reservation :cleanup-command))
+          (error "%s"
+                 (mevedel-session-persistence--worktree-fork-retained-error
+                  session failure reservation))
         (signal (car failure) (cdr failure))))))
 
 (defun mevedel-session-persistence--reduce-prompt-index
@@ -5385,6 +6823,110 @@ non-nil, drops the picked checkpoint too."
          (<= (car entry) picked-cum-turn)))
      snapshots)))
 
+(defun mevedel-session-persistence--commit-remote-rename
+    (session buffer new-name new-id new-save-path)
+  "Rename remote SESSION and commit NEW-NAME through its current lease head.
+
+BUFFER is SESSION's root data buffer.  NEW-ID and NEW-SAVE-PATH name the moved
+session tree.  Return a post-commit lease error, or nil.  A failure before the
+sidecar marker CAS rolls the directory and in-memory paths back while the same
+lease generation remains owned."
+  (require 'mevedel-execution)
+  (require 'mevedel-session-durability)
+  (let* ((old-save-path (mevedel-session-save-path session))
+         (old-id (mevedel-session-session-id session))
+         (old-name (mevedel-session-name session))
+         (old-publication
+          (or (mevedel-session-publication session)
+              (mevedel-session-durability-read-publication old-save-path)))
+         (head-before (plist-get old-publication :head))
+         (old-buffer-file (buffer-local-value 'buffer-file-name buffer))
+         (old-buffer-truename
+          (buffer-local-value 'buffer-file-truename buffer))
+         (new-buffer-file
+          (and old-buffer-file
+               (file-name-concat
+                new-save-path (file-name-nondirectory old-buffer-file))))
+         moved committed operation-error rollback-error post-commit-error)
+    (unless head-before
+      (error "Remote Rename requires a committed publication"))
+    (condition-case err
+        (progn
+          (mevedel-session-durability-call-with-reserved-lease
+           session
+           (lambda ()
+             (rename-file (directory-file-name old-save-path)
+                          (directory-file-name new-save-path))
+             (setq moved t)
+             ;; Reservation finalization must immediately follow the moved
+             ;; lease at its new qualified path.
+             (setf (mevedel-session-save-path session) new-save-path
+                   (mevedel-session-session-id session) new-id
+                   (mevedel-session-name session) new-name)
+             (with-current-buffer buffer
+               (setq buffer-file-name new-buffer-file
+                     buffer-file-truename nil))
+             (mevedel-execution-relocate-artifacts
+              session old-save-path new-save-path)
+             (setf (mevedel-session-publication session)
+                   (or
+                    (mevedel-session-durability-read-publication new-save-path)
+                    (error "Moved session has no committed publication")))))
+          (condition-case publish-error
+              (mevedel-session-durability-publish
+               session
+               (list
+                (list
+                 :path
+                 (mevedel-session-persistence--sidecar-path new-save-path)
+                 :content
+                 (mevedel-session-persistence--printed-value
+                  (mevedel-session-persistence--build-sidecar session buffer))
+                 :commit-marker t)))
+            (error
+             (if (not
+                  (equal head-before
+                         (plist-get (mevedel-session-publication session)
+                                    :head)))
+                 (setq committed t
+                       post-commit-error publish-error)
+               (signal (car publish-error) (cdr publish-error)))))
+          (unless committed
+            (when (equal head-before
+                         (plist-get (mevedel-session-publication session)
+                                    :head))
+              (error "Remote Rename did not commit a publication head"))
+            (setq committed t)))
+      (error (setq operation-error err)))
+    (when (and operation-error moved (not committed))
+      (condition-case err
+          (progn
+            (mevedel-session-durability-call-with-reserved-lease
+             session
+             (lambda ()
+               (rename-file (directory-file-name new-save-path)
+                            (directory-file-name old-save-path))
+               (setf (mevedel-session-save-path session) old-save-path
+                     (mevedel-session-session-id session) old-id
+                     (mevedel-session-name session) old-name
+                     (mevedel-session-publication session) old-publication)
+               (with-current-buffer buffer
+                 (setq buffer-file-name old-buffer-file
+                       buffer-file-truename old-buffer-truename))
+               (mevedel-execution-relocate-artifacts
+                session new-save-path old-save-path)))
+            (mevedel-session-durability-discard-rolled-back-publication
+             session))
+        (error (setq rollback-error err))))
+    (when rollback-error
+      (error
+       "Remote Rename rollback incomplete after %s: %s"
+       (error-message-string operation-error)
+       (error-message-string rollback-error)))
+    (when operation-error
+      (signal (car operation-error) (cdr operation-error)))
+    post-commit-error))
+
 ;;;###autoload
 (defun mevedel-rename-session (new-name)
   "Rename the current session to NEW-NAME.
@@ -5407,10 +6949,12 @@ Works from a chat buffer or a view buffer."
          (session (buffer-local-value 'mevedel--session data-buf)))
     (unless session
       (user-error "Active buffer has no mevedel session"))
+    (mevedel-session-persistence-assert-mutation-authority session data-buf)
     (let ((sanitized (mevedel-session-persistence--sanitize new-name)))
       (when (string-empty-p sanitized)
         (user-error "Empty session name"))
       ;; Rename the on-disk directory if the session is materialized.
+      (let (post-commit-error)
       (when (mevedel-session-save-path session)
         (let* ((old-save-path (mevedel-session-save-path session))
                (parent-dir    (file-name-directory
@@ -5438,27 +6982,34 @@ Works from a chat buffer or a view buffer."
                                   sanitized)))
                (new-save-path  (file-name-as-directory
                                 (file-name-concat parent-dir new-id))))
-          (rename-file (directory-file-name old-save-path)
-                       (directory-file-name new-save-path))
-          (require 'mevedel-execution)
-          (mevedel-execution-relocate-artifacts
-           session old-save-path new-save-path)
-          (setf (mevedel-session-save-path session) new-save-path)
-          (setf (mevedel-session-session-id session) new-id)
-          (with-current-buffer data-buf
-            (when buffer-file-name
-              (setq buffer-file-name
-                    (file-name-concat
-                     new-save-path
-                     (file-name-nondirectory buffer-file-name)))))))
-      ;; Update session-name in the struct.
-      (setf (mevedel-session-name session) sanitized)
-      ;; Rewrite sidecar (if materialized).
-      (when (mevedel-session-save-path session)
-        (mevedel-session-persistence-write
-         (mevedel-session-persistence--sidecar-path
-          (mevedel-session-save-path session))
-         (mevedel-session-persistence--build-sidecar session data-buf)))
+          (if (file-remote-p old-save-path)
+              (setq post-commit-error
+                    (mevedel-session-persistence--commit-remote-rename
+                     session data-buf sanitized new-id new-save-path))
+            (rename-file (directory-file-name old-save-path)
+                         (directory-file-name new-save-path))
+            (require 'mevedel-execution)
+            (mevedel-execution-relocate-artifacts
+             session old-save-path new-save-path)
+            (setf (mevedel-session-save-path session) new-save-path
+                  (mevedel-session-session-id session) new-id)
+            (with-current-buffer data-buf
+              (when buffer-file-name
+                (setq buffer-file-name
+                      (file-name-concat
+                       new-save-path
+                       (file-name-nondirectory buffer-file-name))))))))
+      ;; Local and unmaterialized sessions retain the direct metadata write.
+      (unless (and (mevedel-session-save-path session)
+                   (file-remote-p (mevedel-session-save-path session)))
+        (setf (mevedel-session-name session) sanitized)
+        (when (mevedel-session-save-path session)
+          (mevedel-session-persistence-publish-text
+           session
+           (mevedel-session-persistence--sidecar-path
+            (mevedel-session-save-path session))
+           (mevedel-session-persistence--printed-value
+            (mevedel-session-persistence--build-sidecar session data-buf)))))
       ;; Rename the chat buffer per the convention, and also rename
       ;; the companion view buffer (derived from the chat buffer name).
       (let* ((workspace (mevedel-session-workspace session))
@@ -5473,7 +7024,10 @@ Works from a chat buffer or a view buffer."
                    (concat new-data-name ":view"))))
             (with-current-buffer view-buf
               (rename-buffer new-view-name t)))))
-      (message "Session renamed to %s" sanitized))))
+      (message "Session renamed to %s" sanitized)
+      (when post-commit-error
+        (error "Remote Rename committed, but lease finalization failed: %s"
+               (error-message-string post-commit-error)))))))
 
 
 ;;
@@ -5557,18 +7111,34 @@ its previously parsed summary."
   "Return a list of `(:save-path :summary)' plists for WORKSPACE's sessions.
 
 Sorted by `:updated-at' descending.  Sessions whose sidecar can't be
-parsed are silently dropped."
+parsed are silently dropped.  Remote sessions are listed only when their
+lease names a valid immutable publication; fixed remote sidecars are ignored."
   (let* ((sessions-dir (mevedel-session-persistence--sessions-dir workspace))
+         (remote-p (file-remote-p sessions-dir))
          (results nil))
     (when (file-directory-p sessions-dir)
       (dolist (entry (directory-files sessions-dir t "\\`[^.]"))
         (when (file-directory-p entry)
-          (let* ((sidecar (file-name-concat entry "session.meta.el"))
-                 (summary (mevedel-session-persistence--read-summary sidecar)))
-            (when summary
-              (push (list :save-path (file-name-as-directory entry)
-                          :summary   summary)
-                    results))))))
+          (condition-case nil
+              (let* ((publication
+                      (when remote-p
+                        (require 'mevedel-session-durability)
+                        (mevedel-session-durability-read-publication entry)))
+                     (sidecar
+                      (if remote-p
+                          (plist-get publication :sidecar)
+                        (file-name-concat entry "session.meta.el")))
+                     (summary
+                      (and sidecar
+                           (mevedel-session-persistence--read-summary sidecar))))
+                (when summary
+                  (let ((item
+                         (list :save-path (file-name-as-directory entry)
+                               :summary summary)))
+                    (when publication
+                      (setq item (plist-put item :publication publication)))
+                    (push item results))))
+            (error nil)))))
     (sort results
           (lambda (a b)
             (string-greaterp
@@ -5853,6 +7423,7 @@ To rename the current session in place, use `mevedel-rename-session'."
          (session (buffer-local-value 'mevedel--session data-buf)))
     (unless session
       (user-error "Active buffer has no mevedel session"))
+    (mevedel-session-persistence-assert-mutation-authority session data-buf)
     (when arg
       (require 'mevedel-agent-control)
       (when (mevedel-agent-control-active-turn-p session)
@@ -5865,6 +7436,160 @@ To rename the current session in place, use `mevedel-rename-session'."
         (set-buffer-modified-p t))
       (mevedel-session-persistence-save session data-buf)
       (message "Session saved.")))))
+
+(defun mevedel-session-persistence--commit-remote-save-as
+    (session buffer old-save-path old-id new-name new-id new-save-path)
+  "Clone remote SESSION and commit its first child publication.
+
+BUFFER is SESSION's root data buffer.  OLD-SAVE-PATH and OLD-ID identify the
+still-leased parent.  NEW-NAME, NEW-ID, and NEW-SAVE-PATH identify the child.
+Return a post-commit lease error, or nil."
+  (require 'mevedel-session-durability)
+  (let* ((parent-publication
+          (or (mevedel-session-publication session)
+              (mevedel-session-durability-read-publication old-save-path)
+              (error "Remote Save As requires a committed publication")))
+         (parent-head (plist-get parent-publication :head))
+         (old-name (mevedel-session-name session))
+         (old-fork-id (mevedel-session-forked-from-session-id session))
+         (old-fork-turn (mevedel-session-forked-from-turn session))
+         (old-buffer-file (buffer-local-value 'buffer-file-name buffer))
+         (old-buffer-truename
+          (buffer-local-value 'buffer-file-truename buffer))
+         (new-buffer-file
+          (and old-buffer-file
+               (file-name-concat
+                new-save-path (file-name-nondirectory old-buffer-file))))
+         child-claimed child-bound session-switched committed failure
+         cleanup-error post-commit-error)
+    (unless parent-head
+      (error "Remote Save As requires a committed publication"))
+    (unwind-protect
+        (condition-case err
+            (progn
+              ;; The parent stays fenced throughout the long copy.  Timer
+              ;; renewal performs no reentrant target I/O in this window.
+              (mevedel-session-durability-call-with-reserved-lease
+               session
+               (lambda ()
+                 (copy-directory old-save-path new-save-path nil t t)
+                 (let ((remote-file-name-inhibit-cache t)
+                       (lock-in-clone
+                        (mevedel-session-persistence--lock-path new-save-path))
+                       (lease-in-clone
+                        (file-name-concat new-save-path ".lease")))
+                   (when (file-exists-p lock-in-clone)
+                     (delete-file lock-in-clone))
+                   (when (file-directory-p lease-in-clone)
+                     (delete-directory lease-in-clone t)))))
+              ;; Claim the child without rebinding the live session.  Parent
+              ;; renewal remains intact until a fresh child generation exists.
+              (unless
+                  (mevedel-session-persistence-lock-acquire
+                   new-save-path (buffer-name buffer))
+                (error "Could not acquire cloned session lock"))
+              (setq child-claimed t)
+              ;; Suppress timer target I/O while the bound session path moves
+              ;; from the parent lease to the already-claimed child lease.
+              (setf (mevedel-session-publication-active-p session) t)
+              (unwind-protect
+                  (progn
+                    (setq session-switched t)
+                    (setf (mevedel-session-save-path session) new-save-path
+                          (mevedel-session-session-id session) new-id
+                          (mevedel-session-name session) new-name
+                          (mevedel-session-forked-from-session-id session)
+                          old-id
+                          (mevedel-session-forked-from-turn session)
+                          (mevedel-session-turn-count session)
+                          (mevedel-session-publication session) nil)
+                    (with-current-buffer buffer
+                      (setq buffer-file-name new-buffer-file
+                            buffer-file-truename nil))
+                    (unless
+                        (mevedel-session-persistence-lock-acquire
+                         new-save-path (buffer-name buffer) session)
+                      (error "Could not bind cloned session lease"))
+                    (setq child-bound t))
+                (setf (mevedel-session-publication-active-p session) nil))
+              ;; The copied parent manifest is only a transient merge base.
+              ;; The child stays undiscoverable until its rewritten sidecar
+              ;; performs the first head CAS.
+              (mevedel-session-durability-seed-publication-base
+               session parent-head)
+              (condition-case publish-error
+                  (mevedel-session-durability-publish
+                   session
+                   (list
+                    (list
+                     :path
+                     (mevedel-session-persistence--sidecar-path new-save-path)
+                     :content
+                     (mevedel-session-persistence--printed-value
+                      (mevedel-session-persistence--build-sidecar
+                       session buffer))
+                     :commit-marker t)))
+                (error
+                 (if-let ((publication
+                           (condition-case nil
+                               (mevedel-session-durability-read-publication
+                                new-save-path)
+                             (error nil))))
+                     (setq committed t
+                           post-commit-error publish-error
+                           parent-publication publication)
+                   (signal (car publish-error) (cdr publish-error)))))
+              (unless committed
+                (setq parent-publication
+                      (or
+                       (mevedel-session-durability-read-publication
+                        new-save-path)
+                       (error "Remote Save As did not commit a child head"))
+                      committed t))
+              (setf (mevedel-session-publication session)
+                    parent-publication))
+          (error (setq failure err)))
+      (if committed
+          ;; SESSION now owns the child.  Release the parent without clearing
+          ;; the child's bound generation or renewal timer.
+          (condition-case err
+              (mevedel-session-persistence-lock-release old-save-path)
+            (error (setq cleanup-error err)))
+        (condition-case err
+            (progn
+              (when (mevedel-session-pending-publication session)
+                (mevedel-session-durability-discard-rolled-back-publication
+                 session))
+              (when child-claimed
+                (mevedel-session-persistence-lock-release
+                 new-save-path (and child-bound session)))
+              (setf (mevedel-session-save-path session) old-save-path
+                    (mevedel-session-session-id session) old-id
+                    (mevedel-session-name session) old-name
+                    (mevedel-session-forked-from-session-id session)
+                    old-fork-id
+                    (mevedel-session-forked-from-turn session) old-fork-turn
+                    (mevedel-session-publication session) parent-publication)
+              (with-current-buffer buffer
+                (setq buffer-file-name old-buffer-file
+                      buffer-file-truename old-buffer-truename))
+              (when session-switched
+                (unless
+                    (mevedel-session-persistence-lock-acquire
+                     old-save-path (buffer-name buffer) session)
+                  (error "Could not restore parent session lease")))
+              (when (file-directory-p new-save-path)
+                (delete-directory new-save-path t)))
+          (error (setq cleanup-error err)))))
+    (when cleanup-error
+      (error "Remote Save As cleanup failed%s: %s"
+             (if failure
+                 (format " after %s" (error-message-string failure))
+               "")
+             (error-message-string cleanup-error)))
+    (when failure
+      (signal (car failure) (cdr failure)))
+    post-commit-error))
 
 (defun mevedel-session-persistence--save-as (session data-buf)
   "Clone SESSION's on-disk directory under a fresh id.
@@ -5889,53 +7614,66 @@ repoints the DATA-BUF at the clone."
                   sanitized parent-dir))
          (new-save-path (file-name-as-directory
                          (file-name-concat parent-dir new-id))))
-    ;; Save any pending changes into the parent first.
-    (with-current-buffer data-buf
-      (when (and buffer-file-name (buffer-modified-p))
-        (save-buffer)))
-    (mevedel-session-persistence--save-instructions session data-buf)
-    ;; Release the parent's lock so the clone can acquire a fresh one.
-    (condition-case _
-        (mevedel-session-persistence-lock-release old-save-path)
-      (error nil))
-    ;; Copy directory tree verbatim.  Excludes the .lock file so the
-    ;; clone starts unlocked and can be independently acquired.
-    (copy-directory old-save-path new-save-path nil t t)
-    (let ((lock-in-clone
-           (mevedel-session-persistence--lock-path new-save-path)))
-      (when (file-exists-p lock-in-clone)
-        (delete-file lock-in-clone)))
-    ;; Mutate the session struct to point at the clone.
-    (setf (mevedel-session-session-id session) new-id)
-    (setf (mevedel-session-save-path session) new-save-path)
-    (setf (mevedel-session-name session) sanitized)
-    (setf (mevedel-session-forked-from-session-id session) old-id)
-    (setf (mevedel-session-forked-from-turn session)
-          (mevedel-session-turn-count session))
-    ;; Repoint buffer-file-name at the cloned segment, acquire new
-    ;; lock, rename buffers, rewrite sidecar.
-    (with-current-buffer data-buf
-      (when buffer-file-name
-        (setq buffer-file-name
-              (file-name-concat new-save-path
-                                (file-name-nondirectory buffer-file-name)))))
-    (mevedel-session-persistence-lock-acquire
-     new-save-path (buffer-name data-buf))
-    (mevedel-session-persistence-write
-     (mevedel-session-persistence--sidecar-path new-save-path)
-     (mevedel-session-persistence--build-sidecar session data-buf))
-    (let* ((workspace (mevedel-session-workspace session))
-           (new-data-name (mevedel-session-buffer-name sanitized workspace))
-           (view-buf (buffer-local-value 'mevedel--view-buffer data-buf)))
-      (with-current-buffer data-buf
-        (rename-buffer new-data-name t))
-      (when (buffer-live-p view-buf)
-        (let ((new-view-name
-               (if (string-match "\\*$" new-data-name)
-                   (replace-match ":view*" t t new-data-name)
-                 (concat new-data-name ":view"))))
-          (with-current-buffer view-buf
-            (rename-buffer new-view-name t)))))
+    ;; Publish the parent completely before cloning it.
+    (mevedel-session-persistence-save session data-buf)
+    (let (post-commit-error)
+      (if (file-remote-p old-save-path)
+          (setq post-commit-error
+                (mevedel-session-persistence--commit-remote-save-as
+                 session data-buf old-save-path old-id sanitized new-id
+                 new-save-path))
+        (let (child-acquired)
+          (unwind-protect
+              (progn
+                (copy-directory old-save-path new-save-path nil t t)
+                (let ((lock-in-clone
+                       (mevedel-session-persistence--lock-path new-save-path)))
+                  (when (file-exists-p lock-in-clone)
+                    (delete-file lock-in-clone)))
+                (unless
+                    (mevedel-session-persistence-lock-acquire
+                     new-save-path (buffer-name data-buf) session)
+                  (error "Could not acquire cloned session lock"))
+                (setq child-acquired t)
+                (setf (mevedel-session-save-path session) new-save-path
+                      (mevedel-session-session-id session) new-id
+                      (mevedel-session-name session) sanitized
+                      (mevedel-session-forked-from-session-id session) old-id
+                      (mevedel-session-forked-from-turn session)
+                      (mevedel-session-turn-count session))
+                (with-current-buffer data-buf
+                  (when buffer-file-name
+                    (setq buffer-file-name
+                          (file-name-concat
+                           new-save-path
+                           (file-name-nondirectory buffer-file-name)))))
+                (mevedel-session-persistence-publish-text
+                 session
+                 (mevedel-session-persistence--sidecar-path new-save-path)
+                 (mevedel-session-persistence--printed-value
+                  (mevedel-session-persistence--build-sidecar
+                   session data-buf))))
+            (when child-acquired
+              (condition-case _
+                  (mevedel-session-persistence-lock-release old-save-path)
+                (error nil))))))
+      (let* ((workspace (mevedel-session-workspace session))
+             (new-data-name
+              (mevedel-session-buffer-name sanitized workspace))
+             (view-buf
+              (buffer-local-value 'mevedel--view-buffer data-buf)))
+        (with-current-buffer data-buf
+          (rename-buffer new-data-name t))
+        (when (buffer-live-p view-buf)
+          (let ((new-view-name
+                 (if (string-match "\\*$" new-data-name)
+                     (replace-match ":view*" t t new-data-name)
+                   (concat new-data-name ":view"))))
+            (with-current-buffer view-buf
+              (rename-buffer new-view-name t)))))
+      (when post-commit-error
+        (error "Remote Save As committed, but lease finalization failed: %s"
+               (error-message-string post-commit-error))))
     (message "Session saved as %s" sanitized)
     new-save-path))
 
@@ -5983,25 +7721,27 @@ Scans session directories independently of resume compatibility.  Uses
 `:updated-at' when available, otherwise the sidecar or directory modification
 time.
 
-Skips sessions with an active lock.  Cross-host locks are active.
+Remote session stores are not auto-cleaned.  Local cleanup skips sessions
+with an active lock.  Cross-host locks are active.
 Same-host locks are stale when their PID is dead or when the live
 process start time proves PID reuse.  Throttled to at most once per
 `(workspace-type . workspace-id)' per Emacs invocation; when FORCE is
 non-nil the throttle is bypassed.
 
 Returns the number of sessions deleted, or nil when the cap is nil or
-the throttle has already fired."
-  (when mevedel-session-max-age-days
-    (let* ((ws-key (cons (mevedel-workspace-type workspace)
-                         (mevedel-workspace-id workspace)))
-           (already-ran (gethash ws-key
-                                 mevedel-session-persistence--cleanup-throttle)))
+the workspace store is remote or the throttle has already fired."
+  (let ((sessions-dir
+         (mevedel-session-persistence--sessions-dir workspace)))
+    (when (and mevedel-session-max-age-days
+               (not (file-remote-p sessions-dir)))
+      (let* ((ws-key (cons (mevedel-workspace-type workspace)
+                           (mevedel-workspace-id workspace)))
+             (already-ran
+              (gethash ws-key mevedel-session-persistence--cleanup-throttle)))
       (when (or force (not already-ran))
         (puthash ws-key t mevedel-session-persistence--cleanup-throttle)
         (let ((threshold-secs (* mevedel-session-max-age-days 24 60 60))
               (now            (float-time))
-              (sessions-dir
-               (mevedel-session-persistence--sessions-dir workspace))
               (deleted        0))
           (dolist (save-path
                    (and (file-directory-p sessions-dir)
@@ -6033,7 +7773,7 @@ the throttle has already fired."
           (when (> deleted 0)
             (message "Cleaned up %d expired session%s"
                      deleted (if (= deleted 1) "" "s")))
-          deleted)))))
+          deleted))))))
 
 
 ;;

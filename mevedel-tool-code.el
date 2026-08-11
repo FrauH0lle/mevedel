@@ -16,6 +16,14 @@
 (declare-function imenu--make-index-alist "imenu" (&optional noerror))
 (defvar imenu--index-alist)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-create
+                  "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
 
@@ -63,20 +71,27 @@
          (hack-local-variables-hook nil))
      ,@body))
 
+(defun mevedel-tool-code--execution-target (path)
+  "Return the execution target containing absolute PATH."
+  (require 'mevedel-execution-target)
+  (mevedel-execution-target-create (file-name-directory path)))
+
 (defun mevedel-tool-code--with-file-buffer (file-path callback)
-  "Call CALLBACK with FILE-PATH's full path and buffer.
-CALLBACK receives FILE-PATH, the expanded file name, and the visiting
-buffer.  If this function opens the buffer itself, kill it afterward
-unless it was modified."
-  (let ((full-path (expand-file-name file-path)))
+  "Call CALLBACK with FILE-PATH's target-native path and visiting buffer.
+CALLBACK also receives the qualified expanded file name.  If this function
+opens the buffer itself, kill it afterward unless it was modified."
+  (let* ((full-path (expand-file-name file-path))
+         (target (mevedel-tool-code--execution-target full-path))
+         (native-path
+          (mevedel-execution-target-native-path target full-path)))
     (unless (file-exists-p full-path)
-      (error "File %s does not exist" file-path))
+      (error "File %s does not exist" native-path))
     (let* ((existing-buffer (find-buffer-visiting full-path))
            (target-buffer (or existing-buffer
                               (mevedel-tool-code--with-quiet-file-visit
                                 (find-file-noselect full-path)))))
       (unwind-protect
-          (funcall callback file-path full-path target-buffer)
+          (funcall callback native-path full-path target-buffer)
         (when (and (not existing-buffer)
                    (buffer-live-p target-buffer)
                    (not (buffer-modified-p target-buffer)))
@@ -110,18 +125,34 @@ unless it was modified."
               (kill-buffer marker-buffer)))
           line))))
 
-(defun mevedel-tool-code--format-xref-items (xref-items)
-  "Format XREF-ITEMS as a newline-separated string of file:line: summary."
+(defun mevedel-tool-code--format-xref-items (xref-items &optional target)
+  "Format XREF-ITEMS as a newline-separated string of file:line: summary.
+When TARGET is non-nil, render locations in its target-native path domain."
   (string-join
    (mapcar (lambda (item)
              (mevedel-tool-code--with-quiet-file-visit
                (let* ((location (xref-item-location item))
                       (file (xref-location-group location))
+                      (file (if (and target (stringp file))
+                                (mevedel-execution-target-native-path
+                                 target file)
+                              file))
                       (line (mevedel-tool-code--xref-location-line location))
                       (summary (xref-item-summary item)))
                  (format "%s:%s: %s" file (or line "?") summary))))
            xref-items)
    "\n"))
+
+(defun mevedel-tool-code--remote-xref-backend-error
+    (target backend operation)
+  "Return a diagnostic when BACKEND cannot run OPERATION on remote TARGET."
+  (when (and (mevedel-execution-target-remote-p target)
+             (not (and (eq operation 'references)
+                       (eq backend 'elisp))))
+    (format
+     "Error: Remote Xref %s with backend `%s' is not supported for remote workspaces; use Imenu, Grep, or an explicitly tested TRAMP-aware backend"
+     (if (eq operation 'references) "reference search" "definition search")
+     backend)))
 
 (defun mevedel-tool-code--xref-references (callback args)
   "Find references to an identifier using xref.
@@ -135,37 +166,47 @@ and :file_path."
      (lambda (file-path full-path target-buffer)
        (with-current-buffer target-buffer
          (condition-case err
-             (let ((backend (mevedel-tool-code--with-quiet-file-visit
-                              (xref-find-backend)))
-                   ;; Prevent interactive project selection when the file
-                   ;; is not inside a recognized project.
-                   (project-current-directory-override
-                    (file-name-directory full-path)))
-               (unless backend
+             (let* ((backend (mevedel-tool-code--with-quiet-file-visit
+                               (xref-find-backend)))
+                    (target (mevedel-tool-code--execution-target full-path))
+                    (backend-error
+                     (mevedel-tool-code--remote-xref-backend-error
+                      target backend 'references))
+                    ;; Prevent interactive project selection when the file
+                    ;; is not inside a recognized project.
+                    (project-current-directory-override
+                     (file-name-directory full-path)))
+               (cond
+                ((not backend)
                  (error "No xref backend available for %s" file-path))
-               (let ((xref-items
-                      (mevedel-tool-code--with-quiet-file-visit
-                        (if (eq backend 'elisp)
-                            (let ((project-files-relative-names nil))
-                              (when-let* ((project (project-current t))
-                                          (files (project-files project)))
-                                (let ((symbol-regexp
-                                       (format "\\_<%s\\_>"
-                                               (regexp-quote identifier))))
-                                  (cl-remove-if-not
-                                   (lambda (item)
-                                     (string-match-p
-                                      symbol-regexp (xref-item-summary item)))
-                                   (xref-matches-in-files
-                                    (regexp-quote identifier) files)))))
-                          (xref-backend-references backend identifier)))))
-                 (funcall callback
-                          (list :result
-                                (if xref-items
-                                    (mevedel-tool-code--format-xref-items
-                                     xref-items)
-                                  (format "No references found for '%s'"
-                                          identifier))))))
+                (backend-error
+                 (funcall
+                  callback
+                  (list :result backend-error)))
+                (t
+                 (let ((xref-items
+                        (mevedel-tool-code--with-quiet-file-visit
+                          (if (eq backend 'elisp)
+                              (let ((project-files-relative-names nil))
+                                (when-let* ((project (project-current t))
+                                            (files (project-files project)))
+                                  (let ((symbol-regexp
+                                         (format "\\_<%s\\_>"
+                                                 (regexp-quote identifier))))
+                                    (cl-remove-if-not
+                                     (lambda (item)
+                                       (string-match-p
+                                        symbol-regexp (xref-item-summary item)))
+                                     (xref-matches-in-files
+                                      (regexp-quote identifier) files)))))
+                            (xref-backend-references backend identifier)))))
+                   (funcall callback
+                            (list :result
+                                  (if xref-items
+                                      (mevedel-tool-code--format-xref-items
+                                       xref-items target)
+                                    (format "No references found for '%s'"
+                                            identifier))))))))
            (error
             (funcall callback
                      (list :result
@@ -187,18 +228,26 @@ and :file_path."
      (lambda (file-path full-path target-buffer)
        (with-current-buffer target-buffer
          (condition-case err
-             (let ((backend (mevedel-tool-code--with-quiet-file-visit
-                              (xref-find-backend)))
-                   ;; Prevent interactive project selection when the file
-                   ;; is not inside a recognized project.
-                   (project-current-directory-override
-                    (file-name-directory full-path)))
+             (let* ((backend (mevedel-tool-code--with-quiet-file-visit
+                               (xref-find-backend)))
+                    (target (mevedel-tool-code--execution-target full-path))
+                    (backend-error
+                     (mevedel-tool-code--remote-xref-backend-error
+                      target backend 'definitions))
+                    ;; Prevent interactive project selection when the file
+                    ;; is not inside a recognized project.
+                    (project-current-directory-override
+                     (file-name-directory full-path)))
                (cond
                 ((not backend)
                  (funcall callback
                           (list :result
                                 (format "No xref backend available for %s"
                                         file-path))))
+                (backend-error
+                 (funcall
+                  callback
+                  (list :result backend-error)))
                 ;; Special handling for etags without tags table
                 ((and (eq backend 'etags)
                       (not (or (and (boundp 'tags-file-name) tags-file-name
@@ -216,7 +265,7 @@ and :file_path."
                             (list :result
                                   (if xref-items
                                       (mevedel-tool-code--format-xref-items
-                                       xref-items)
+                                       xref-items target)
                                     (format
                                      "No symbols found matching pattern '%s'"
                                      pattern))))))))

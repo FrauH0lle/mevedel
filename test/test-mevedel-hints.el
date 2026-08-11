@@ -76,7 +76,20 @@
   (let* ((path (mevedel-tools--hints-file-path))
          (expected (file-name-concat (mevedel-workspace-root mevedel--workspace) mevedel-hints-file)))
     (should (equal path expected))
-    (should (file-name-absolute-p path))))
+    (should (file-name-absolute-p path)))
+  (let* ((native-root (file-name-as-directory
+                       (make-temp-file "mevedel-hints-remote-" t)))
+         (remote-root (format "/mevedelmock:hints:%s" native-root))
+         (native-file (file-name-concat native-root "absolute-hints.md")))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("hints")
+          (cl-letf (((symbol-function 'mevedel-workspace-root)
+                     (lambda (_workspace) remote-root)))
+            (let ((mevedel-hints-file native-file))
+              (should
+               (equal (format "/mevedelmock:hints:%s" native-file)
+                      (mevedel-tools--hints-file-path))))))
+      (delete-directory native-root t))))
 
 (mevedel-deftest mevedel-tools--read-hints-file-empty
   (:doc "Return empty alist when file doesn't exist"

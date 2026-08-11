@@ -7,6 +7,8 @@
 ;;; Code:
 
 (require 'gptel)
+(require 'mevedel-execution-target)
+(require 'mevedel-session-durability)
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
 (require 'mevedel-view-render)
@@ -43,7 +45,10 @@
       (nreverse entries))))
 
 (mevedel-deftest mevedel-telemetry-record
-  (:doc "buffers safe enriched events until session materialization")
+  ()
+  ,test
+  (test)
+  :doc "buffers safe enriched events until session materialization"
   (let* ((root (make-temp-file "mevedel-telemetry-" t))
          (session (test-mevedel-telemetry--session root))
          (goal (mevedel-goal--create
@@ -89,6 +94,69 @@
           (should-not (mevedel-session-telemetry-pending session))
           (should-not (string-match-p "Added to"
                                       (or (current-message) ""))))
+      (delete-directory root t)))
+
+  :doc "retains a materialized event when persistence fails and retries it"
+  (let* ((root (make-temp-file "mevedel-telemetry-retry-" t))
+         (blocked (file-name-concat root "blocked"))
+         (restored (file-name-concat root "restored"))
+         (session (test-mevedel-telemetry--session root)))
+    (unwind-protect
+        (progn
+          (write-region "not a directory" nil blocked nil 'silent)
+          (setf (mevedel-session-save-path session) blocked)
+          (mevedel-telemetry-record session 'provider-request
+                                    :stage 'finish)
+          (should (= 1 (length (mevedel-session-telemetry-pending session))))
+          (setf (mevedel-session-save-path session) restored)
+          (mevedel-telemetry-record session 'provider-response
+                                    :stage 'finish)
+          (should (= 2 (length (mevedel-session-telemetry-pending session))))
+          (mevedel-telemetry-flush session)
+          (should-not (mevedel-session-telemetry-pending session))
+          (let ((entries
+                 (test-mevedel-telemetry--read
+                  (file-name-concat restored "telemetry-log.el"))))
+            (should (= 2 (length entries)))
+            (should (eq 'provider-request
+                        (plist-get (car entries) :event)))
+            (should (eq 'provider-response
+                        (plist-get (cadr entries) :event)))))
+      (delete-directory root t)))
+
+  :doc "defers remote events and combines them into one serialized append"
+  (let* ((root (make-temp-file "mevedel-telemetry-remote-" t))
+         (target
+          (mevedel-execution-target-create
+           "/ssh:telemetry-host:/workspace/"))
+         (session
+          (mevedel-session--create
+           :name "main" :execution-target target :save-path root))
+         calls)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function
+               'mevedel-session-durability-append-diagnostic)
+              (lambda (_session path content)
+                (push (list path content) calls)
+                t)))
+          (mevedel-telemetry-record session 'provider-request :stage 'start)
+          (mevedel-telemetry-record session 'provider-request :stage 'finish)
+          (should (= 2 (length
+                        (mevedel-session-telemetry-pending session))))
+          (should-not calls)
+          (mevedel-telemetry-flush session)
+          (should-not (mevedel-session-telemetry-pending session))
+          (pcase-let ((`((,path ,content)) calls))
+            (should
+             (equal (file-name-concat root "telemetry-log.el") path))
+            (with-temp-buffer
+              (insert content)
+              (goto-char (point-min))
+              (should (eq 'start
+                          (plist-get (read (current-buffer)) :stage)))
+              (should (eq 'finish
+                          (plist-get (read (current-buffer)) :stage))))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry-finish
@@ -274,11 +342,38 @@
   (should-not (mevedel-telemetry--process-output "git" "not-a-command")))
 
 (mevedel-deftest mevedel-telemetry--git-snapshot
-  (:doc "captures commit, dirty counts, and exact dirty-content identity")
+  (:doc "captures local and remote commit and dirty-content identity")
   (let ((snapshot (mevedel-telemetry--git-snapshot default-directory)))
     (should (stringp (plist-get snapshot :git-head)))
     (should (numberp (plist-get snapshot :dirty-file-count)))
-    (should (= 64 (length (plist-get snapshot :dirty-content-hash))))))
+    (should (= 64 (length (plist-get snapshot :dirty-content-hash)))))
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-telemetry-remote-" t)))
+         (remote-root (format "/mevedelmock:telemetry:%s" root)))
+    (unwind-protect
+        (progn
+          (let ((default-directory root))
+            (should (zerop (process-file "git" nil nil nil
+                                         "init" "--quiet")))
+            (should (zerop (process-file "git" nil nil nil
+                                         "config" "user.name" "Test")))
+            (should (zerop (process-file "git" nil nil nil
+                                         "config" "user.email"
+                                         "test@example.invalid")))
+            (with-temp-file (file-name-concat root "tracked.txt")
+              (insert "tracked\n"))
+            (should (zerop (process-file "git" nil nil nil
+                                         "add" "tracked.txt")))
+            (should (zerop (process-file "git" nil nil nil
+                                         "commit" "--quiet" "-m" "initial"))))
+          (mevedel-test--with-local-shell-tramp '("telemetry")
+            (let ((snapshot
+                   (mevedel-telemetry--git-snapshot remote-root)))
+              (should (stringp (plist-get snapshot :git-head)))
+              (should (= 64
+                         (length
+                          (plist-get snapshot :dirty-content-hash)))))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry--library-snapshot
   (:doc "identifies a loaded library by content and repository commit")

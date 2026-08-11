@@ -86,7 +86,7 @@
     (should (eq goal (mevedel-session-goal session)))))
 
 (mevedel-deftest mevedel-goal-active-context
-  (:doc "pauses and persists before dispatch when an accepted plan mutates")
+  (:doc "pauses when verified publication bytes violate the accepted hash")
   (progn
    (let* ((root (make-temp-file "mevedel-goal-plan-" t))
          (plan-file (file-name-concat root "accepted-plan.md"))
@@ -99,14 +99,24 @@
          saved)
     (unwind-protect
         (progn
-          (write-region "accepted" nil plan-file nil 'silent)
+          (write-region "poisoned fixed cache" nil plan-file nil 'silent)
           (setf (mevedel-session-goal session) goal
                 (mevedel-session-plan-metadata session)
                 (list :accepted-path "accepted-plan.md"
                       :accepted-hash (mevedel-plan-hash "different")))
           (with-temp-buffer
             (setq-local mevedel--session session)
-            (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+            (cl-letf (((symbol-function
+                        'mevedel-session-persistence-artifact-present-p)
+                       (lambda (seen-session logical)
+                         (should (eq session seen-session))
+                         (should (equal "accepted-plan.md" logical))
+                         t))
+                      ((symbol-function
+                        'mevedel-session-persistence-read-artifact)
+                       (lambda (_session _logical &optional _committed-only)
+                         (encode-coding-string "accepted" 'utf-8-unix)))
+                      ((symbol-function 'mevedel-session-persistence-save)
                        (lambda (&rest _) (setq saved t))))
               (should-error (mevedel-goal-active-context session))))
           (should saved)

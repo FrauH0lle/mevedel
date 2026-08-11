@@ -432,33 +432,48 @@ means that the resulting color is the same as the TINT-COLOR-NAME color."
 WORKSPACE defaults to current `mevedel-workspace'.  WORKING-DIRECTORY
 overrides the workspace root.  The string includes:
 - Working directory
-- Git repository status
 - Platform (operating system type)
 - OS version
 - Emacs version
 - Current date"
-  (let* ((dir (or working-directory
-                  (mevedel-workspace-root
-                   (or workspace (mevedel-workspace)))))
+  (let* ((dir (file-name-as-directory
+               (or working-directory
+                   (mevedel-workspace-root
+                    (or workspace (mevedel-workspace))))))
          (default-directory dir)
-         (is-git-repo (and (executable-find "git")
-                           (= 0 (call-process "git" nil nil nil
-                                              "rev-parse" "--git-dir"))))
+         (remote (file-remote-p dir))
+         (find-executable
+          (lambda (name)
+            (if remote
+                (executable-find name remote)
+              (executable-find name))))
+         (process-line
+          (lambda (program &rest args)
+            (when (funcall find-executable program)
+              (with-temp-buffer
+                (when (zerop (apply #'process-file
+                                    program nil t nil args))
+                  (string-trim (buffer-string)))))))
+         (os-name (ignore-errors (funcall process-line "uname" "-s")))
          (os-version
-          (or (and (executable-find "uname")
-                   (ignore-errors (car (process-lines "uname" "-r"))))
+          (or (ignore-errors (funcall process-line "uname" "-r"))
               system-configuration))
-         (platform (pcase system-type
-                     ('gnu/linux "linux")
-                     ('darwin "darwin")
-                     ('windows-nt "windows")
-                     ('cygwin "cygwin")
-                     ('berkeley-unix "bsd")
-                     (_ (symbol-name system-type))))
+         (platform
+          (if os-name
+              (downcase os-name)
+            (pcase system-type
+              ('gnu/linux "linux")
+              ('darwin "darwin")
+              ('windows-nt "windows")
+              ('cygwin "cygwin")
+              ('berkeley-unix "bsd")
+              (_ (symbol-name system-type)))))
+         (display-directory
+          (or (file-remote-p dir 'localname 'never)
+              (expand-file-name dir)))
          (date (format-time-string "%Y-%m-%d")))
-    (format "Working directory: %s\nIs directory a git repo: %s\nPlatform: %s\nOS Version: %s\nEmacs version: %s\nToday's date: %s"
-            (expand-file-name dir)
-            (if is-git-repo "Yes" "No")
+    (format "Working directory: %s\nPlatform: %s\nOS Version: %s\nEmacs version: %s\nToday's date: %s"
+            display-directory
             platform
             os-version
             emacs-version

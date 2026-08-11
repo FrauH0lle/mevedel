@@ -193,6 +193,12 @@ it rewrites source-checkout absolute paths relative to the repository root.
 The successful result is cached in the durable retry record, so a later
 artifact, worktree, or implementation-start failure does not regenerate it.
 
+Durable Plan descriptors contain only a normalized session-relative artifact
+path and its content hash. The qualified logical path is derived after the
+owning target session is known; remote consumers read verified publication
+bytes for that logical artifact. Absolute source or publication paths are not
+part of Plan metadata or retry records.
+
 After any valid location/context preparation, Direct submits its ordinary
 one-turn instruction. Goal instead constructs a phase-free Goal in the prepared
 target session, using the target-owned immutable accepted-plan path and the
@@ -217,8 +223,11 @@ prompt while the rendered view keeps the compact implementation label.
 For Worktree execution, the target session owns the Goal, accepted artifact,
 selected permission mode, accepted model/effort snapshot, and selected Goal
 budget. The source session keeps its original permission mode and remains
-otherwise unchanged. Later Goal turns derive exact read authority only for the
-validated target-local artifact.
+otherwise unchanged. Branch acceptance first proves that Git and its worktree
+command are available on the source session's execution target; preparation
+then creates the linked worktree on that target and opens the target session
+there. Later Goal turns derive exact read authority only for the validated
+target-local artifact.
 
 Acceptance is final even if preparation fails. The source session persists a
 bounded retry record, and `mevedel-retry-plan-implementation` resumes from the

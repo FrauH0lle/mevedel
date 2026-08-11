@@ -1295,7 +1295,7 @@ allowed-tools:
     (with-temp-buffer
       (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-skills--run-body-injections-async)
-                 (lambda (body callback)
+                 (lambda (body callback &rest _)
                    (setq injection-rules
                          (mevedel-request-skill-permission-rules
                           mevedel--current-request))
@@ -1363,7 +1363,148 @@ allowed-tools:
       (should (eq 'command
                   (mevedel-skill-invocation-record-role record)))
       (should (eq 'user
-                  (mevedel-skill-invocation-record-origin record))))))
+                  (mevedel-skill-invocation-record-origin record)))))
+
+  :doc "remote project and same-target plugin shell bodies use Bash with native skill paths"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-skill-remote" t)))
+         (remote-root (format "/mevedelmock:%s:%s"
+                              (system-name) root))
+         (native-skill-dir (file-name-concat root "skill"))
+         (remote-skill-dir (file-name-concat remote-root "skill"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id "remote-skill" :root remote-root
+                     :name "remote-skill"
+                     :file-cache (mevedel-file-cache--create
+                                  :table (make-hash-table :test #'equal)
+                                  :order nil :total-bytes 0)))
+         session
+         calls)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (setq session
+                (mevedel-session-create "remote-skill" workspace remote-root))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+                       (lambda (tool callback args)
+                         (push (list (mevedel-tool-name tool)
+                                     (plist-get args :command))
+                               calls)
+                         (funcall callback "expanded"))))
+              (dolist (source '(project plugin))
+                (let ((skill (mevedel-skill--create
+                              :name (symbol-name source)
+                              :source source
+                              :source-dir remote-skill-dir
+                              :body (concat
+                                     "dir=${MEVEDEL_SKILL_DIR}|"
+                                     "${CLAUDE_SKILL_DIR} shell=!`pwd`")))
+                      outcome)
+                  (mevedel-skills-prepare
+                   skill "" (lambda (value) (setq outcome value))
+                   :role 'command :origin 'model)
+                  (should (eq 'ok (plist-get outcome :status)))
+                  (should
+                   (equal (format "dir=%s|%s shell=expanded"
+                                  native-skill-dir native-skill-dir)
+                          (plist-get outcome :body))))))))
+      (delete-directory root t))
+    (should (equal '(("Bash" "pwd") ("Bash" "pwd")) calls)))
+
+  :doc "remote sessions refuse client-local and foreign shell bodies before Bash"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-skill-origin" t)))
+         (remote-root (format "/mevedelmock:%s:%s"
+                              (system-name) root))
+         (foreign-root (format "/mevedelmock:foreign:%s" root))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id "remote-origin" :root remote-root
+                     :name "remote-origin"
+                     :file-cache (mevedel-file-cache--create
+                                  :table (make-hash-table :test #'equal)
+                                  :order nil :total-bytes 0)))
+         session
+         dispatched)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("foreign")
+          (setq session
+                (mevedel-session-create "remote-origin" workspace remote-root))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+                       (lambda (&rest _)
+                         (setq dispatched t))))
+              (dolist (skill
+                       (list
+                        (mevedel-skill--create
+                         :name "user" :source 'user
+                         :source-dir (file-name-concat root "user")
+                         :body "!`pwd`")
+                        (mevedel-skill--create
+                         :name "bundled" :source 'bundled
+                         :source-dir (file-name-concat root "bundled")
+                         :body "!`pwd`")
+                        (mevedel-skill--create
+                         :name "managed" :source 'managed
+                         :source-dir (file-name-concat root "managed")
+                         :body "!`pwd`")
+                        (mevedel-skill--create
+                         :name "client-plugin" :source 'plugin
+                         :source-dir (file-name-concat root "plugin")
+                         :body "!`pwd`")
+                        (mevedel-skill--create
+                         :name "foreign-plugin" :source 'plugin
+                         :source-dir (file-name-concat foreign-root "plugin")
+                         :body "!`pwd`")))
+                (let (outcome)
+                  (mevedel-skills-prepare
+                   skill "" (lambda (value) (setq outcome value))
+                   :role 'command :origin 'model)
+                  (should (eq 'error (plist-get outcome :status)))
+                  (should (eq 'resource-target (plist-get outcome :reason)))
+                  (should (string-match-p "execution target"
+                                          (plist-get outcome :message))))))))
+      (delete-directory root t))
+    (should-not dispatched))
+
+  :doc "remote sessions keep client-local Elisp body injections local"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-skill-elisp" t)))
+         (remote-root (format "/mevedelmock:%s:%s"
+                              (system-name) root))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id "remote-elisp" :root remote-root
+                     :name "remote-elisp"
+                     :file-cache (mevedel-file-cache--create
+                                  :table (make-hash-table :test #'equal)
+                                  :order nil :total-bytes 0)))
+         session
+         (skill (mevedel-skill--create
+                 :name "user" :source 'user
+                 :source-dir (file-name-concat root "user")
+                 :body "value=!el`(+ 1 2)`"))
+         outcome expression)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (setq session
+                (mevedel-session-create "remote-elisp" workspace remote-root))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (cl-letf (((symbol-function 'mevedel-skills--run-elisp-expression-async)
+                       (lambda (form _marker callback)
+                         (setq expression form)
+                         (funcall callback '(:status ok :output "3"))))
+                      ((symbol-function 'mevedel-pipeline-run-tool)
+                       (lambda (&rest _)
+                         (ert-fail "Elisp injection reached Bash"))))
+              (mevedel-skills-prepare
+               skill "" (lambda (value) (setq outcome value))
+               :role 'command :origin 'model))))
+      (delete-directory root t))
+    (should (equal "(+ 1 2)" expression))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "value=3" (plist-get outcome :body)))))
 
 (mevedel-deftest mevedel-skills-invoke ()
   ,test
@@ -1528,7 +1669,7 @@ allowed-tools:
       (setq mevedel--session session)
       (setq-local mevedel-skills--pending-request-context nil)
       (cl-letf (((symbol-function 'mevedel-skills--run-body-injections-async)
-                 (lambda (_text callback)
+                 (lambda (_text callback &rest _)
                    (funcall callback
                             '(:status error
                               :reason injection-failed

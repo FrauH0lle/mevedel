@@ -249,6 +249,40 @@
   (should (equal "#ff7f7f" (mevedel--tint "unspecified-bg" "red" 0.5)))
   (should (equal "#7f7f7f" (mevedel--tint "unspecified-fg" "white" 0.5))))
 
+(mevedel-deftest mevedel--environment-info-string ()
+  ,test
+  (test)
+  :doc "reports the target directory and operating system without probing Git"
+  (let (programs)
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name &optional remote)
+                 (push (list name remote) programs)
+                 (concat (or remote "") "/usr/bin/" name)))
+              ((symbol-function 'process-file)
+               (lambda (program _in destination _display &rest args)
+                 (when destination
+                   (with-current-buffer (if (eq destination t)
+                                            (current-buffer)
+                                          destination)
+                     (insert
+                      (pcase (cons program args)
+                        (`("uname" "-s") "Linux\n")
+                        (`("uname" "-r") "6.8.0-target\n")
+                        (_ "")))))
+                 0)))
+      (let ((result
+             (mevedel--environment-info-string
+              (mevedel-workspace--create
+               :root "/ssh:user@host:/srv/project/")
+              "/ssh:user@host:/srv/project/lib/")))
+        (should (string-match-p "Working directory: /srv/project/lib/"
+                                result))
+        (should-not (string-match-p "git repo" result))
+        (should (string-match-p "Platform: linux" result))
+        (should (string-match-p "OS Version: 6.8.0-target" result))))
+    (should-not (seq-some (lambda (call) (equal (car call) "git"))
+                          programs))))
+
 (mevedel-deftest mevedel--clear-user-turn-gptel-properties ()
   ,test
   (test)

@@ -668,6 +668,152 @@
        (mevedel-agent-runtime-queue-execution-completion
        invocation "/root/explore" "duplicate")))))
 
+(defun test-mevedel-agent-runtime--terminal-settlement-events (artifact-p)
+  "Return terminal persistence events with committed sidecar ARTIFACT-P."
+  (let* ((save-path
+          (file-name-as-directory
+           (make-temp-file "mevedel-agent-terminal-" t)))
+         (parent (generate-new-buffer " *agent-terminal-parent*"))
+         (child (generate-new-buffer " *agent-terminal-child*"))
+         (target 'remote-target)
+         (session
+          (mevedel-session--create
+           :name "main" :execution-target target :save-path save-path))
+         (invocation (mevedel-agent-runtime-test--invocation child))
+         events)
+    (unwind-protect
+        (progn
+          (require 'mevedel-execution-target)
+          ;; Keep the materialized cache opposite to the authoritative
+          ;; publication membership so this test detects fixed-path reads.
+          (unless artifact-p
+            (write-region
+             "(:poisoned-cache t)" nil
+             (file-name-concat save-path "session.meta.el") nil 'silent))
+          (setf (mevedel-agent-invocation-parent-session invocation) session
+                (mevedel-agent-invocation-parent-data-buffer invocation) parent
+                (mevedel-agent-invocation-transcript-relative-path invocation)
+                "agents/explorer.chat.org"
+                (mevedel-agent-invocation-runtime-settle-callback invocation)
+                (lambda (&rest _)
+                  (push (list 'callback
+                              mevedel-agent-control-suppress-persistence)
+                        events)))
+          (cl-letf (((symbol-function 'mevedel-execution-target-remote-p)
+                     (lambda (candidate) (eq candidate target)))
+                    ((symbol-function
+                      'mevedel-session-persistence-artifact-present-p)
+                     (lambda (seen-session logical)
+                       (push (list 'presence logical) events)
+                       (and (eq seen-session session)
+                            (equal logical "session.meta.el")
+                            artifact-p)))
+                    ((symbol-function 'mevedel-agent-runtime--finalize)
+                     (lambda (inv status)
+                       (push
+                        (list 'finalize
+                              mevedel-agent-runtime--defer-terminal-publication-p)
+                        events)
+                       (setf (mevedel-agent-invocation-transcript-status inv)
+                             status)))
+                    ((symbol-function
+                      'mevedel-session-persistence-publish-agent-terminal-state)
+                     (lambda (&rest _)
+                       (push 'publication events)
+                       t)))
+            (mevedel-agent-runtime--settle invocation "finished"))
+          (nreverse events))
+      (kill-buffer child)
+      (kill-buffer parent)
+      (delete-directory save-path t))))
+
+(mevedel-deftest mevedel-agent-runtime--setup-transcript
+  (:doc "allocates transcript names from authoritative artifact membership")
+  (let* ((save-path
+          (file-name-as-directory
+           (make-temp-file "mevedel-agent-allocation-" t)))
+         (parent (generate-new-buffer " *agent-allocation-parent*"))
+         (child (generate-new-buffer " *agent-allocation-child*"))
+         (session (mevedel-session--create :name "main" :save-path save-path))
+         (invocation (mevedel-agent-runtime-test--invocation child))
+         (first "agents/explorer--2026-01-02T03-04-05--test.chat.org")
+         (second "agents/explorer--2026-01-02T03-04-05--test-2.chat.org")
+         (second-fixed (expand-file-name second save-path))
+         checked recorded)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory second-fixed) t)
+          ;; The first fixed cache is absent and the second is poisoned: only
+          ;; artifact membership may decide which logical name is free.
+          (write-region "poisoned cache" nil second-fixed nil 'silent)
+          (setf (mevedel-agent-invocation-parent-session invocation) session
+                (mevedel-agent-invocation-parent-data-buffer invocation) parent
+                (mevedel-agent-invocation-parent-turn invocation) 3)
+          (with-current-buffer parent
+            (setq-local mevedel-session--read-only-mode nil))
+          (cl-letf (((symbol-function 'format-time-string)
+                     (lambda (&rest _) "2026-01-02T03-04-05"))
+                    ((symbol-function
+                      'mevedel-session-persistence--shallow-ensure-files)
+                     (lambda (&rest _) save-path))
+                    ((symbol-function
+                      'mevedel-session-persistence-artifact-present-p)
+                     (lambda (seen-session logical)
+                       (should (eq seen-session session))
+                       (push logical checked)
+                       (equal logical first)))
+                    ((symbol-function
+                      'mevedel-session-persistence--record-running-transcript)
+                     (lambda (_session entry) (setq recorded entry))))
+            (mevedel-agent-runtime--setup-transcript invocation child))
+          (should (equal second
+                         (mevedel-agent-invocation-transcript-relative-path
+                          invocation)))
+          (should (equal second (plist-get (cdr recorded) :path)))
+          (should (equal (list first second) (nreverse checked)))
+          (with-current-buffer child
+            (should (equal second-fixed buffer-file-name))
+            (should-not (equal "poisoned cache" (buffer-string)))))
+      (dolist (buffer (list child parent))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (delete-directory save-path t))))
+
+(mevedel-deftest mevedel-agent-runtime--settle
+  (:doc "batches only materialized remote terminal state after registry update")
+  (should
+   (equal '((presence "session.meta.el")
+            (finalize t) (callback t) publication)
+          (test-mevedel-agent-runtime--terminal-settlement-events t)))
+  (should
+   (equal '((presence "session.meta.el") (finalize nil) (callback nil))
+          (test-mevedel-agent-runtime--terminal-settlement-events nil))))
+
+(mevedel-deftest mevedel-agent-runtime--transcript-path
+  (:doc "returns a published remote transcript's qualified logical path")
+  (let* ((save-path "/ssh:fixture:/srv/project/.mevedel/sessions/main/")
+         (session (mevedel-session--create :name "main" :save-path save-path))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         seen)
+    (setf (mevedel-agent-invocation-parent-session invocation) session
+          (mevedel-agent-invocation-transcript-relative-path invocation)
+          "agents/explorer.chat.org")
+    (cl-letf (((symbol-function
+                'mevedel-session-persistence-artifact-present-p)
+               (lambda (seen-session logical)
+                 (setq seen (list seen-session logical))
+                 t)))
+      (should
+       (equal (concat save-path "agents/explorer.chat.org")
+              (mevedel-agent-runtime--transcript-path invocation)))
+      (should (equal (list session "agents/explorer.chat.org") seen))
+      (cl-letf (((symbol-function
+                  'mevedel-session-persistence-artifact-present-p)
+                 (lambda (&rest _) nil)))
+        (should-not
+         (mevedel-agent-runtime--transcript-path invocation))))))
+
 (mevedel-deftest mevedel-agent-runtime-bound-turn ()
   ,test
   (test)

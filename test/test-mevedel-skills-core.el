@@ -12,6 +12,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-hooks)
+(require 'mevedel-execution-target)
 (require 'mevedel-plugins)
 (require 'mevedel-skills-core)
 (require 'mevedel-structs)
@@ -870,6 +871,12 @@ hooks:
                            :hook-rules hooks))
                  decision)
             (should (eq 'PreToolUse (caar hooks)))
+            (let ((handler
+                   (car (mevedel-hooks--matching-handlers
+                         'PreToolUse '(:tool-name "Bash") hooks))))
+              (should (eq 'project-file (plist-get handler :source)))
+              (should (equal (mevedel-skill-source-file skill)
+                             (plist-get handler :source-file))))
             (mevedel-hooks-run-event
              'PreToolUse
              (mevedel-hooks-event-plist
@@ -1439,6 +1446,110 @@ paths:
 
 
 ;;
+;;; File watchers
+
+(mevedel-deftest mevedel-skills--ensure-watcher
+  (:before-each (mevedel-skills-test--reset-watchers)
+   :after-each (mevedel-skills-test--reset-watchers))
+  ,test
+  (test)
+  :doc "skips unsupported remote watches and reports once per target state"
+  (let* ((target (mevedel-execution-target-create
+                  "/ssh:user@host:/srv/project/"))
+         (dir "/ssh:user@host:/srv/project/.mevedel/skills/")
+         (watch-calls 0)
+         messages)
+    (setf (mevedel-execution-target-readiness target)
+          '(:status ready :capabilities nil))
+    (cl-letf (((symbol-function 'file-directory-p) (lambda (_dir) t))
+              ((symbol-function 'file-notify-add-watch)
+               (lambda (&rest _args)
+                 (cl-incf watch-calls)
+                 'descriptor))
+              ((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (push (apply #'format format-string args) messages))))
+      (mevedel-skills--ensure-watcher dir target)
+      (mevedel-skills--ensure-watcher dir target))
+    (should (= 0 watch-calls))
+    (should (= 1 (length messages)))
+    (should (string-match-p "inotifywait or gio" (car messages))))
+
+  :doc "uses native file notification when either remote backend exists"
+  (dolist (capability '(gio inotifywait))
+    (let* ((target (mevedel-execution-target-create
+                    "/ssh:user@host:/srv/project/"))
+           (dir (format "/ssh:user@host:/srv/project/%s/" capability))
+           (descriptor (list 'descriptor capability)))
+      (setf (mevedel-execution-target-readiness target)
+            `(:status ready
+              :capabilities ((,capability . ,(format "/usr/bin/%s"
+                                                      capability)))))
+      (cl-letf (((symbol-function 'file-directory-p) (lambda (_dir) t))
+                ((symbol-function 'file-notify-add-watch)
+                 (lambda (&rest _args) descriptor)))
+        (mevedel-skills--ensure-watcher dir target))
+      (should (equal descriptor
+                     (gethash (file-name-as-directory dir)
+                              mevedel-skills--watchers)))))
+
+  :doc "still watches local skill directories for a remote session"
+  (let* ((target (mevedel-execution-target-create
+                  "/ssh:user@host:/srv/project/"))
+         (dir (file-name-as-directory temporary-file-directory)))
+    (setf (mevedel-execution-target-readiness target)
+          '(:status ready :capabilities nil))
+    (cl-letf (((symbol-function 'file-notify-add-watch)
+               (lambda (&rest _args) 'local-descriptor)))
+      (mevedel-skills--ensure-watcher dir target))
+    (should (eq 'local-descriptor
+                (gethash dir mevedel-skills--watchers))))
+
+  :doc "unexpected watcher warnings preserve the caller's current buffer"
+  (let ((origin (generate-new-buffer " *mevedel-watch-origin*"))
+        (other (generate-new-buffer " *mevedel-watch-other*")))
+    (unwind-protect
+        (with-current-buffer origin
+          (cl-letf (((symbol-function 'file-directory-p) (lambda (_dir) t))
+                    ((symbol-function 'file-notify-add-watch)
+                     (lambda (&rest _args) (error "Watcher failed")))
+                    ((symbol-function 'display-warning)
+                     (lambda (&rest _args) (set-buffer other))))
+            (mevedel-skills--ensure-watcher
+             (file-name-as-directory temporary-file-directory)))
+          (should (eq origin (current-buffer))))
+      (when (buffer-live-p origin) (kill-buffer origin))
+      (when (buffer-live-p other) (kill-buffer other)))))
+
+(mevedel-deftest mevedel-skills--register-buffer
+  (:before-each (mevedel-skills-test--reset-watchers)
+   :after-each (mevedel-skills-test--reset-watchers))
+  ,test
+  (test)
+  :doc "retains remote directory registration when watching is unavailable"
+  (let* ((mevedel-skills-check-for-modifications '(watch-files))
+         (target (mevedel-execution-target-create
+                  "/ssh:user@host:/srv/project/"))
+         (dir "/ssh:user@host:/srv/project/.mevedel/skills/")
+         (buffer (generate-new-buffer " *mevedel-remote-skill-consumer*")))
+    (setf (mevedel-execution-target-readiness target)
+          '(:status ready :capabilities nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'file-directory-p) (lambda (_dir) t))
+                  ((symbol-function 'file-notify-add-watch)
+                   (lambda (&rest _args)
+                     (ert-fail "remote watcher was installed")))
+                  ((symbol-function 'message) #'ignore))
+          (mevedel-skills--register-buffer buffer (list dir) target)
+          (should (memq buffer
+                        (gethash (file-name-as-directory dir)
+                                 mevedel-skills--dir-buffers)))
+          (should-not (gethash (file-name-as-directory dir)
+                               mevedel-skills--watchers)))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+
+;;
 ;;; Path-scoped activation
 
 (mevedel-deftest mevedel-skills--glob-matches-p ()
@@ -1831,6 +1942,8 @@ paths:
             (add-hook 'kill-buffer-hook
                       #'mevedel-skills--release-on-kill nil t))
           (puthash dir descriptor mevedel-skills--watchers)
+          (puthash '(:method ssh :host "host") nil
+                   mevedel-skills--remote-watch-states)
           (puthash dir (list buf) mevedel-skills--dir-buffers)
           (puthash buf t mevedel-skills--dirty-buffers)
           (puthash (mevedel-skills--mtime-cache-key buf file)
@@ -1843,6 +1956,8 @@ paths:
           (should (= 0 (hash-table-count mevedel-skills--dir-buffers)))
           (should (= 0 (hash-table-count mevedel-skills--dirty-buffers)))
           (should (= 0 (hash-table-count mevedel-skills--mtime-cache)))
+          (should (= 0 (hash-table-count
+                        mevedel-skills--remote-watch-states)))
           (with-current-buffer buf
             (should-not (memq #'mevedel-skills--release-on-kill
                               kill-buffer-hook))))

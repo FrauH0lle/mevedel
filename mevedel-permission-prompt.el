@@ -10,6 +10,12 @@
   (require 'cl-lib)
   (require 'subr-x))
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--data-buffer
                   "mevedel-interaction-prompt" (&optional buffer))
@@ -45,6 +51,10 @@
 (declare-function mevedel-side-conversation-mutation-warning-pending-p
                   "mevedel-side-conversation" (record))
 
+;; `mevedel-structs'
+(declare-function mevedel-session-execution-target
+                  "mevedel-structs" (session))
+
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
                   "mevedel-view-interaction" (descriptor))
@@ -54,6 +64,15 @@
 
 ;;
 ;;; Permission prompt controls
+
+(defun mevedel-permission--display-path (entry path)
+  "Return PATH for display in the execution domain of ENTRY."
+  (if-let* ((session (plist-get entry :session))
+            (target (mevedel-session-execution-target session))
+            ((mevedel-execution-target-remote-p target))
+            ((file-remote-p path)))
+      (mevedel-execution-target-native-path target path)
+    path))
 
 (defun mevedel-permission--prompt-self-insert ()
   "Insert the typed permission key when no permission prompt is active."
@@ -73,6 +92,8 @@
   (if-let ((ov (mevedel--prompt--overlay-at-point
                 'mevedel-permission-prompt)))
       (let ((entry (overlay-get ov 'mevedel-view-interaction-entry)))
+        (when (plist-get entry :mutation-p)
+          (require 'mevedel-side-conversation))
         (if (and (plist-get entry :mutation-p)
                  (mevedel-side-conversation-mutation-warning-pending-p entry))
             (progn
@@ -154,7 +175,8 @@
                        (format "%s %s"
                                (capitalize
                                 (symbol-name (plist-get grant :access)))
-                               (plist-get grant :path))
+                               (mevedel-permission--display-path
+                                entry (plist-get grant :path)))
                        grant))
                     resources))
                   (grant
@@ -211,6 +233,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
              &optional count entry suppress-allow-session once-only)
   "Display a permission prompt for CONTENT and call CONT with its outcome."
   (require 'mevedel-interaction-prompt)
+  (require 'mevedel-side-conversation)
   (let* ((source-buffer (current-buffer))
          (target-buf
           (if (fboundp 'mevedel-view--interaction-target-buffer)
@@ -321,7 +344,8 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
           (format "[%s] %s %s"
                   (if (member grant missing-grants) " " "x")
                   (capitalize (symbol-name (plist-get grant :access)))
-                  (plist-get grant :path)))
+                  (mevedel-permission--display-path
+                   entry (plist-get grant :path))))
         (plist-get requested :file-system)
         "\n")
        (and (plist-get requested :file-system) "\n")
@@ -353,7 +377,8 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                  "x"
                " ")
              (capitalize (symbol-name (plist-get grant :access)))
-             (plist-get grant :path)))
+             (mevedel-permission--display-path
+              entry (plist-get grant :path))))
           resources "\n")
          (and resources "\n(p selects an exact path)\n")
          "\n")))))
@@ -361,7 +386,8 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
 (defun mevedel-permission--prompt-async-attributed
     (tool-name path include-always origin cont &optional count entry)
   "Display an attributed permission prompt and call CONT with its outcome."
-  (let* ((once-only (and entry (plist-get entry :once-only)))
+  (let* ((path (and path (mevedel-permission--display-path entry path)))
+         (once-only (and entry (plist-get entry :once-only)))
          (content
          (concat
           (propertize "Permission Request\n"

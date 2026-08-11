@@ -52,7 +52,11 @@
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--find-file-noselect "mevedel-session-persistence" (file))
+(declare-function mevedel-session-persistence-artifact-present-p
+                  "mevedel-session-persistence" (session logical))
+(declare-function mevedel-session-persistence-find-artifact-noselect
+                  "mevedel-session-persistence"
+                  (session logical &optional inspection))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-agent-transcripts "mevedel-structs" (cl-x) t)
@@ -696,16 +700,17 @@ Signals `user-error' when no transcript source can be opened."
       (unless (mevedel-agent-persistence-transcript-path-p
                rel-path save-path)
         (user-error "Transcript path failed validation: %s" rel-path))
-      (let ((abs (expand-file-name rel-path save-path)))
-        (unless (file-exists-p abs)
-          (user-error "Transcript file missing: %s" abs))
+      (let ((logical-path (expand-file-name rel-path save-path)))
+        (unless (mevedel-session-persistence-artifact-present-p
+                 session rel-path)
+          (user-error "Transcript artifact missing: %s" logical-path))
         (append (list :agent-path agent-path
                       :status status
                       :entry entry
                       :session session
                       :save-path save-path
                       :relative-path rel-path
-                      :absolute-path abs
+                      :logical-path logical-path
                       :session-label (or (mevedel-session-session-id session)
                                          (mevedel-session-name session)
                                          "unknown"))
@@ -759,8 +764,10 @@ Signals `user-error' when no transcript source can be opened."
 PARENT-VIEW is the session view that opened the transcript."
   (let* ((live-p (plist-get info :live-buffer))
          (agent-data (or (plist-get info :buffer)
-                         (mevedel-session-persistence--find-file-noselect
-                          (plist-get info :absolute-path))))
+                         (mevedel-session-persistence-find-artifact-noselect
+                          (plist-get info :session)
+                          (plist-get info :relative-path)
+                          t)))
          (view-name (format "*mevedel-agent:%s*" agent-path))
          (agent-view
           (mevedel-view--ensure

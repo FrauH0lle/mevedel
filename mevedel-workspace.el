@@ -188,19 +188,14 @@ registry, creating one lazily if needed."
 
 (defun mevedel-workspace--git-exclude-file (root)
   "Return ROOT's `.git/info/exclude' path, or nil outside Git."
-  (when (and (stringp root)
-             (file-directory-p root)
-             (executable-find "git"))
-    (let ((default-directory root))
-      (when (zerop (process-file "git" nil nil nil
-                                 "rev-parse" "--is-inside-work-tree"))
-        (with-temp-buffer
-          (when (zerop (process-file "git" nil t nil
-                                     "rev-parse" "--git-dir"))
-            (expand-file-name
-             "info/exclude"
-             (replace-regexp-in-string "[\r\n]+\\'" ""
-                                       (buffer-string)))))))))
+  (when-let* (((stringp root))
+              ((file-directory-p root))
+              (git-root (locate-dominating-file root ".git"))
+              (dot-git (file-name-concat git-root ".git"))
+              ((file-directory-p dot-git))
+              ((file-in-directory-p (file-truename dot-git)
+                                     (file-truename git-root))))
+    (file-name-concat dot-git "info" "exclude")))
 
 (defun mevedel-workspace-ensure-generated-state-ignored (workspace)
   "Add mevedel generated-state paths to WORKSPACE's Git exclude file.

@@ -607,6 +607,7 @@ The whole patch, each operation, and each Update hunk."
 (defun mevedel-patch-review-start (proposal callback data-buffer)
   "Stage PROPOSAL for review and settle it through CALLBACK.
 DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
+  (require 'mevedel-side-conversation)
   (mevedel-tool-patch--annotate-line-numbers proposal)
   (plist-put proposal :id
              (list 'patch-review (cl-incf mevedel-tool-patch--review-counter)))

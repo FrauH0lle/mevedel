@@ -309,6 +309,13 @@ Generated task background is ordinary persisted conversation context with its
 own structural type. Follow-ups and agent compaction therefore absorb it
 naturally without replaying or regenerating it.
 
+The registry stores each conversation location as a session-relative path.
+For a remote session, cold hydration, terminal inspection, recovery links, and
+compaction resolve that logical path through the session's staged or captured
+publication and verify its digest; a materialized fixed-path cache is never
+read as authority. The conversation buffer still visits the qualified logical
+path, so immutable publication filenames never reach tools, prompts, or views.
+
 `mevedel-agent-conversation.el` owns conversation creation and hydration,
 frozen request-local installation, activity snapshots, response extraction,
 and transcript saves. `mevedel-agent-exec.el` is the provider adapter: it owns

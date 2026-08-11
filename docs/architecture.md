@@ -50,9 +50,10 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   request, authored-request snapshot, terminal answer or error, outcome,
   optional selected-attempt index, session/turn checkpoint, and directive-local
   settlement sequence.
-- **`mevedel-session`**: per-chat state: workspace, working
-  directory, tasks, touched-files, permission rules/mode, exact resource grants,
-  reminders, persisted per-conversation workspace-instruction content hashes,
+- **`mevedel-session`**: per-chat state: workspace, immutable execution target,
+  qualified working directory, tasks, touched-files, permission rules/mode,
+  exact resource grants, reminders, persisted per-conversation
+  workspace-instruction content hashes,
   deferred tool state, mailbox messages, the retained agent registry,
   transient unpublished agent reservations, root activity and tree capacity, mention
   dedup, queued follow-up user messages, skills, session persistence metadata, agent transcript index,
@@ -188,6 +189,13 @@ the session working directory. File modifications are tracked per request
 via `mevedel-request-file-snapshots`, while cross-turn file metadata
 lives on the workspace file cache and session touched-files map.
 
+`mevedel-execution-target.el` binds each session to one local or TRAMP target,
+owns qualified/native path conversion, and probes target readiness.  Required
+`rg` compatibility is verified against a bounded target-side fixture using the
+Glob and Grep flag surface, rather than inferred from a version string.  The
+project-owned identity in `mevedel-workspace-identity.el` lets equivalent
+client-specific TRAMP spellings reopen the same workspace.
+
 `mevedel-execution.el` is the operating-system process boundary. It owns
 process creation, process-group signaling, timeout cleanup, Bubblewrap launch
 and fallback, stable child environments, bounded disk spooling, and opaque
@@ -198,6 +206,10 @@ execution module's confined one-shot helper interface without entering the
 Bash scheduler. The Bash adapter also captures its analyzed exit-outcome
 resolver at spawn, so later observations derive the same canonical facts
 without moving command semantics into the process module.
+
+`mevedel-session-durability.el` owns remote mutation leases and serializes
+authoritative session publication.  `mevedel-session-persistence.el` remains
+the session codec and workflow layer above that boundary.
 
 Each mutable process record points to one immutable origin record containing
 the session, owner, private mailbox context, data buffer, tool arguments, and

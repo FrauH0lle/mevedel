@@ -66,6 +66,18 @@
                   "mevedel-execution"
                   (session owner execution-id callback))
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-create
+                  "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-environment
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-expand-path
+                  "mevedel-execution-target" (target path &optional directory))
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt-attribution-line
                   "mevedel-interaction-prompt" (origin))
@@ -130,7 +142,7 @@
 (declare-function mevedel-permission--path-in-allowed-roots-p
                   "mevedel-permissions" (path roots))
 (declare-function mevedel-permission--path-protected-p
-                  "mevedel-permissions" (path))
+                  "mevedel-permissions" (path &optional target))
 (declare-function mevedel-permission--plan-mode-p
                   "mevedel-permissions" (&optional session))
 (declare-function mevedel-permission--qualified-buckets
@@ -157,7 +169,8 @@
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-pending-facts
                   "mevedel-sandbox"
-                  (&optional additional-permissions sandbox-permissions mode))
+                  (&optional additional-permissions sandbox-permissions mode
+                             workdir))
 (declare-function mevedel-sandbox-mode-effective
                   "mevedel-sandbox" (&optional session))
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
@@ -169,6 +182,8 @@
 (declare-function mevedel-request-push-canceller
                   "mevedel-structs" (request canceller))
 (declare-function mevedel-request-skill-permission-rules
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-p "mevedel-structs" (cl-x))
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
@@ -369,8 +384,10 @@ Fall back to direct queue admission for callers outside the tool pipeline."
           (error "Unknown %s field: %s" label key)))))
   value)
 
-(defun mevedel-tool-exec--filesystem-paths (value access)
-  "Return exact filesystem permission entries from VALUE at ACCESS."
+(defun mevedel-tool-exec--filesystem-paths
+    (value access &optional target directory)
+  "Return exact filesystem permission entries from VALUE at ACCESS.
+TARGET and DIRECTORY bind target-native paths to their execution target."
   (let ((paths
          (cond
           ((or (null value) (eq value :json-false)) nil)
@@ -383,11 +400,17 @@ Fall back to direct queue admission for callers outside the tool pipeline."
                     (not (string-empty-p path))
                     (file-name-absolute-p path))
          (error "Filesystem permission path must be absolute: %S" path))
-       (list :path (expand-file-name path) :access access))
+       (list :path (if target
+                       (mevedel-execution-target-expand-path
+                        target path directory)
+                     (expand-file-name path))
+             :access access))
      paths)))
 
-(defun mevedel-tool-exec--normalize-additional-permissions (additional)
-  "Return validated ADDITIONAL permissions, or nil when none are requested."
+(defun mevedel-tool-exec--normalize-additional-permissions
+    (additional &optional target directory)
+  "Return validated ADDITIONAL permissions, or nil when none are requested.
+TARGET and DIRECTORY bind target-native filesystem paths."
   (mevedel-tool-exec--validate-additional-plist
    additional '(:network :file_system) "Additional permissions")
   (let ((network (plist-get additional :network))
@@ -399,9 +422,9 @@ Fall back to direct queue admission for callers outside the tool pipeline."
       (mevedel-tool-exec--validate-additional-plist
        file-system '(:read :write) "Filesystem permissions")
       (let ((reads (mevedel-tool-exec--filesystem-paths
-                    (plist-get file-system :read) 'read))
+                    (plist-get file-system :read) 'read target directory))
             (writes (mevedel-tool-exec--filesystem-paths
-                     (plist-get file-system :write) 'write)))
+                     (plist-get file-system :write) 'write target directory)))
         (dolist (grant (append reads writes))
           (let* ((path (plist-get grant :path))
                  (existing
@@ -419,10 +442,20 @@ Fall back to direct queue admission for callers outside the tool pipeline."
     profile))
 
 (defun mevedel-tool-exec--sandbox-request
-    (args tool &optional eval-mode)
+    (args tool &optional eval-mode permission-context)
   "Return the validated child-execution request from ARGS.
-TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
-  (let* ((raw-level (plist-get args :sandbox_permissions))
+TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval.
+PERMISSION-CONTEXT supplies the session execution target."
+  (let* ((session (or (plist-get permission-context :session)
+                      (and (boundp 'mevedel--session) mevedel--session)))
+         (directory
+          (or (and session (mevedel-session-working-directory session))
+              (mevedel-tool-exec--default-directory)))
+         (target (or (and session
+                          (mevedel-session-execution-target session))
+                     (and (file-remote-p directory)
+                          (mevedel-execution-target-create directory))))
+         (raw-level (plist-get args :sandbox_permissions))
          (level
           (cond
            ((or (null raw-level)
@@ -435,10 +468,10 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
            (t (error "Unknown sandbox permission level: %s" raw-level))))
          (additional (plist-get args :additional_permissions))
          (normalized-additional
-          (and additional
+         (and additional
                (not (eq additional :json-false))
                (mevedel-tool-exec--normalize-additional-permissions
-                additional)))
+                additional target directory)))
          (justification (plist-get args :justification)))
     (pcase level
       ('use-default
@@ -600,7 +633,8 @@ EVAL-MODE distinguishes live from batch Eval.  PERMISSION-CONTEXT supplies
 remembered direct user authority."
   (let ((request
          (mevedel-tool-exec--sandbox-request
-          args (if (equal tool-name "Bash") 'bash 'eval) eval-mode)))
+          args (if (equal tool-name "Bash") 'bash 'eval) eval-mode
+          permission-context)))
     (if (eq (plist-get request :level) 'escalated)
         request
       (let ((profile
@@ -1064,17 +1098,52 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
                (plist-get (mevedel-tool-exec--analyze-bash detail)
                           :class)))))
 
+(defun mevedel-tool-exec--bash-resource-paths
+    (command &optional analysis permission-context)
+  "Return canonical literal resource paths identified in COMMAND.
+Dynamic expansions remain complex and are not evaluated.  Reuse ANALYSIS when
+the caller already analyzed COMMAND.  PERMISSION-CONTEXT supplies the target."
+  (let* ((session (or (plist-get permission-context :session)
+                      (and (boundp 'mevedel--session) mevedel--session)))
+         (base (or (and session
+                        (mevedel-session-working-directory session))
+                   (mevedel-tool-exec--default-directory)))
+         (target (or (and session
+                          (mevedel-session-execution-target session))
+                     (and (file-remote-p base)
+                          (mevedel-execution-target-create base)))))
+    (mapcar
+     (lambda (path)
+       (let ((remote-file-name-inhibit-cache t))
+         (file-truename
+          (if target
+              (mevedel-execution-target-expand-path target path base)
+            (expand-file-name path base)))))
+     (plist-get (or analysis (mevedel-tool-exec--analyze-bash command))
+                :resources))))
+
 (defun mevedel-tool-exec--bash-missing-resource-paths
     (command permission-context request)
   "Return COMMAND resources lacking authority under PERMISSION-CONTEXT.
 REQUEST may supply exact additive filesystem grants for this invocation."
   (require 'mevedel-sandbox)
-  (let* ((base (mevedel-tool-exec--default-directory))
+  (let* ((session (or (plist-get permission-context :session)
+                      (and (boundp 'mevedel--session) mevedel--session)))
+         (base (or (and session
+                        (mevedel-session-working-directory session))
+                   (mevedel-tool-exec--default-directory)))
+         (target (or (and session
+                          (mevedel-session-execution-target session))
+                     (and (file-remote-p base)
+                          (mevedel-execution-target-create base))))
          (roots (or (plist-get permission-context :allowed-roots)
                     (and-let* ((root (plist-get permission-context
                                                 :workspace-root)))
                       (list root))
                     (list base temporary-file-directory)))
+         (roots
+          (let ((remote-file-name-inhibit-cache t))
+            (mapcar #'file-truename roots)))
          (grants
           (append
            (plist-get permission-context :resource-grants)
@@ -1082,13 +1151,18 @@ REQUEST may supply exact additive filesystem grants for this invocation."
                       :file-system)))
          missing)
     (dolist (resource
-             (plist-get (mevedel-tool-exec--analyze-bash command) :resources))
-      (let ((path (expand-file-name resource base)))
-        (unless (or (member path mevedel-sandbox-intrinsic-paths)
+             (mevedel-tool-exec--bash-resource-paths
+              command nil permission-context))
+      (let ((path resource))
+        (unless (or (member (file-local-name path)
+                            mevedel-sandbox-intrinsic-paths)
                     (mevedel-permission--path-in-allowed-roots-p path roots)
                     (mevedel-permission--resource-granted-p
                      path 'read grants))
-          (push path missing))))
+          (push (if target
+                    (mevedel-execution-target-native-path target path)
+                  path)
+                missing))))
     (delete-dups (nreverse missing))))
 
 
@@ -1293,37 +1367,43 @@ avoids saving a brittle whole-chain string such as
    (or (plist-get permission-context :session)
        (and (boundp 'mevedel--session) mevedel--session))))
 
-(defun mevedel-tool-exec--bash-literal-path-tokens (command &optional analysis)
-  "Return literal path resources identified in COMMAND.
-Dynamic expansions remain complex and are not evaluated.  Reuse ANALYSIS when
-the caller already analyzed COMMAND."
-  (plist-get (or analysis (mevedel-tool-exec--analyze-bash command))
-             :resources))
-
-(defun mevedel-tool-exec--bash-protected-path-p (command &optional analysis)
-  "Return non-nil if COMMAND has an obvious protected path in ANALYSIS."
-  (cl-some
-   (lambda (path)
-     (or (mevedel-permission--path-protected-p path)
-         ;; Directory roots such as `.git' may be protected by a
-         ;; `**/.git/**' policy even when the literal token has no child.
-         (mevedel-permission--path-protected-p
-          (file-name-as-directory path))
-         (cl-some
-          (lambda (name)
-            (and (cl-some (lambda (pattern)
-                            (string-match-p
-                             (concat "\\." (regexp-quote name)
-                                     "\\(?:/\\|\\'\\)")
-                             pattern))
-                          (mapcar #'car
-                                  (mevedel-permission-protected-path-policy)))
-                 (string-match-p
-                  (concat "\\(?:\\`\\|/\\)\\." (regexp-quote name)
-                          "\\(?:/\\|\\'\\)")
-                  path)))
-          '("git" "ssh" "gnupg"))))
-   (mevedel-tool-exec--bash-literal-path-tokens command analysis)))
+(defun mevedel-tool-exec--bash-protected-path-p
+    (command &optional analysis permission-context)
+  "Return non-nil if COMMAND has an obvious protected path in ANALYSIS.
+PERMISSION-CONTEXT supplies the owning execution target."
+  (let* ((session (or (plist-get permission-context :session)
+                      (and (boundp 'mevedel--session) mevedel--session)))
+         (base (or (and session
+                        (mevedel-session-working-directory session))
+                   (mevedel-tool-exec--default-directory)))
+         (target (or (and session
+                          (mevedel-session-execution-target session))
+                     (and (file-remote-p base)
+                          (mevedel-execution-target-create base)))))
+    (cl-some
+     (lambda (path)
+       (or (mevedel-permission--path-protected-p path target)
+           ;; Directory roots such as `.git' may be protected by a
+           ;; `**/.git/**' policy even when the literal token has no child.
+           (mevedel-permission--path-protected-p
+            (file-name-as-directory path) target)
+           (cl-some
+            (lambda (name)
+              (and (cl-some (lambda (pattern)
+                              (string-match-p
+                               (concat "\\." (regexp-quote name)
+                                       "\\(?:/\\|\\'\\)")
+                               pattern))
+                            (mapcar
+                             #'car
+                             (mevedel-permission-protected-path-policy)))
+                   (string-match-p
+                    (concat "\\(?:\\`\\|/\\)\\." (regexp-quote name)
+                            "\\(?:/\\|\\'\\)")
+                    path)))
+            '("git" "ssh" "gnupg"))))
+     (mevedel-tool-exec--bash-resource-paths
+      command analysis permission-context))))
 
 (defun mevedel-tool-exec--bash-deny-candidates (command &optional analysis)
   "Return Bash strings explicit deny rules should check for COMMAND.
@@ -1477,7 +1557,8 @@ authorize dangerous or complex syntax."
 
     (when (and (not (plist-get permission-context
                                :resource-authority-separated-p))
-               (mevedel-tool-exec--bash-protected-path-p command analysis))
+               (mevedel-tool-exec--bash-protected-path-p
+                command analysis permission-context))
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
     (when (and (plist-get permission-context :one-shot-mutations-p)
@@ -1800,7 +1881,8 @@ suspicious Bash."
           (mevedel-sandbox-pending-facts
            additional-permissions sandbox-permissions
            (mevedel-tool-exec--effective-sandbox-mode
-            permission-context)))))
+            permission-context)
+           working-directory))))
 
 (defun mevedel-tool-exec--bash-deny-only-guardian-async
     (command cont &optional metadata-p permission-context)
@@ -2063,29 +2145,47 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
   (condition-case err
       (let* ((input (mevedel-tool-exec--capture-permission-origin input))
              (mode (mevedel-tool-exec--eval-mode input))
-             (request
-              (mevedel-tool-exec--prepare-additional-authority-request
-               "Eval"
-               (mevedel-tool-exec--effective-sandbox-request
-                input "Eval" (plist-get input :expression) mode
-                (plist-get input :permission-context))
-               (plist-get input :permission-context)
-               (plist-get input :expression)))
-             (sandbox-mode
-              (mevedel-tool-exec--effective-sandbox-mode
-               (plist-get input :permission-context)))
-             (command-input
-              (mevedel-tool-exec--command-permission-input
-               input request)))
-        (if (and (eq (plist-get request :level) 'escalated)
-                 (not (eq sandbox-mode 'off)))
-            (mevedel-tool-exec--check-full-escalation-async
-             "Eval" (plist-get input :expression) input request cont)
-          (mevedel-tool-exec--eval-check-command-permission-async
-           tool-struct command-input
-           (lambda (outcome)
-             (mevedel-tool-exec--check-additional-permission-async
-              "Eval" (plist-get input :expression) input request outcome cont)))))
+             (permission-context (plist-get input :permission-context))
+             (session (or (plist-get permission-context :session)
+                          (mevedel-tool-exec--permission-log-session)))
+             (target (and session
+                          (mevedel-session-execution-target session))))
+        (if (and (eq mode 'batch)
+                 target
+                 (progn
+                   (require 'mevedel-execution-target)
+                   (mevedel-execution-target-remote-p target)))
+            (funcall
+             cont
+             (mevedel-tool-exec--permission-decision-result
+              (plist-get input :permission-decision-metadata)
+              (cons 'deny
+                    "Batch Eval is unavailable for remote sessions; use Live Eval or Bash on the execution target")
+              'eval-policy))
+          (let* ((request
+                  (mevedel-tool-exec--prepare-additional-authority-request
+                   "Eval"
+                   (mevedel-tool-exec--effective-sandbox-request
+                    input "Eval" (plist-get input :expression) mode
+                    permission-context)
+                   permission-context
+                   (plist-get input :expression)))
+                 (sandbox-mode
+                  (mevedel-tool-exec--effective-sandbox-mode
+                   permission-context))
+                 (command-input
+                  (mevedel-tool-exec--command-permission-input
+                   input request)))
+            (if (and (eq (plist-get request :level) 'escalated)
+                     (not (eq sandbox-mode 'off)))
+                (mevedel-tool-exec--check-full-escalation-async
+                 "Eval" (plist-get input :expression) input request cont)
+              (mevedel-tool-exec--eval-check-command-permission-async
+               tool-struct command-input
+               (lambda (outcome)
+                 (mevedel-tool-exec--check-additional-permission-async
+                  "Eval" (plist-get input :expression) input request outcome
+                  cont)))))))
     (error
      (funcall
       cont
@@ -2398,27 +2498,50 @@ instead of failing the tool call."
 
 (defun mevedel-tool-exec--execution-artifact-directory (session)
   "Return SESSION's retained execution artifact directory, if available."
-  (when-let* ((root
-              (mevedel-pipeline--tool-results-dir
-               session
-               (or (and (boundp 'mevedel--data-buffer)
-                        mevedel--data-buffer)
-                   (current-buffer)))))
-    (file-name-concat root "executions")))
+  (unless (and (mevedel-session-execution-target session)
+               (mevedel-execution-target-remote-p
+                (mevedel-session-execution-target session)))
+    (when-let* ((root
+                (mevedel-pipeline--tool-results-dir
+                 session
+                 (or (and (boundp 'mevedel--data-buffer)
+                          mevedel--data-buffer)
+                     (current-buffer)))))
+      (file-name-concat root "executions"))))
 
 (defun mevedel-tool-exec--sandbox-writable-roots (workdir)
   "Return writable child-confinement roots for WORKDIR."
-  (let ((roots
+  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+         (target (and session (mevedel-session-execution-target session)))
+         (remote (and target
+                      (mevedel-execution-target-remote-p target)))
+         (temporary-root
+          (if remote
+              (mevedel-execution-target-expand-path
+               target
+               (or (cdr (assoc "TMPDIR"
+                               (mevedel-execution-target-environment target)))
+                   "/tmp")
+               workdir)
+            temporary-file-directory))
+         (roots
          (condition-case nil
              (progn
                (require 'mevedel-workspace)
                (mevedel--all-allowed-roots (current-buffer)))
            (error nil))))
+    (when remote
+      (setq roots
+            (cl-remove-if-not
+             (lambda (root)
+               (equal (file-remote-p root)
+                      (file-remote-p workdir)))
+             roots)))
     (delete-dups
      (append (or roots
                  (list (file-name-as-directory (expand-file-name workdir))))
              (list (file-name-as-directory
-                    (expand-file-name temporary-file-directory)))))))
+                    (expand-file-name temporary-root)))))))
 
 (defconst mevedel-tool-exec--sandbox-recovery-guidance
   (concat

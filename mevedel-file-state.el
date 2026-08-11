@@ -159,29 +159,33 @@ changes are not re-reported."
   (let (changes)
     (maphash
      (lambda (path state)
-       (cond
-        ((not (file-exists-p path))
-         (push (list :path path
-                     :status 'deleted
-                     :old (mevedel-file-state-content state)
-                     :new nil)
-               changes))
-        ((file-readable-p path)
-         (let* ((current-mtime (file-attribute-modification-time
-                                (file-attributes path)))
-                (cached-mtime (mevedel-file-state-mtime state)))
-           (when (and current-mtime cached-mtime
-                      (time-less-p cached-mtime current-mtime))
-             (let ((new-content (with-temp-buffer
-                                  (insert-file-contents-literally path)
-                                  (buffer-string))))
-               (unless (equal new-content
-                              (mevedel-file-state-content state))
-                 (push (list :path path
-                             :status 'modified
-                             :old (mevedel-file-state-content state)
-                             :new new-content)
-                       changes))))))))
+       (let ((remote-file-name-inhibit-cache
+              (if (file-remote-p path)
+                  t
+                remote-file-name-inhibit-cache)))
+         (cond
+          ((not (file-exists-p path))
+           (push (list :path path
+                       :status 'deleted
+                       :old (mevedel-file-state-content state)
+                       :new nil)
+                 changes))
+          ((file-readable-p path)
+           (let* ((current-mtime (file-attribute-modification-time
+                                  (file-attributes path)))
+                  (cached-mtime (mevedel-file-state-mtime state)))
+             (when (and current-mtime cached-mtime
+                        (time-less-p cached-mtime current-mtime))
+               (let ((new-content (with-temp-buffer
+                                    (insert-file-contents-literally path)
+                                    (buffer-string))))
+                 (unless (equal new-content
+                                (mevedel-file-state-content state))
+                   (push (list :path path
+                               :status 'modified
+                               :old (mevedel-file-state-content state)
+                               :new new-content)
+                         changes)))))))))
      (mevedel-file-cache-table cache))
     (nreverse changes)))
 

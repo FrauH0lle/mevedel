@@ -13,8 +13,16 @@
   (require 'mevedel-structs))
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-artifact-present-p
+                  "mevedel-session-persistence" (session logical))
 (declare-function mevedel-session-persistence-ensure-files
 		  "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence-publish-text
+                  "mevedel-session-persistence"
+                  (session path content &optional coding))
+(declare-function mevedel-session-persistence-read-artifact
+                  "mevedel-session-persistence"
+                  (session logical &optional committed-only))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-plan-metadata "mevedel-structs"
@@ -125,7 +133,23 @@ below `local/plans/'."
           (t (error "Plan artifact path is outside managed plan storage")))))
     (concat "local://plans/" tail)))
 
-(defun mevedel-plan-current-path (&optional session buffer)
+(defun mevedel-plan-artifact-path-p (path)
+  "Return non-nil when PATH is a normalized session-relative artifact path."
+  (and (stringp path)
+       (not (string-empty-p path))
+       (not (file-name-absolute-p path))
+       (not (file-remote-p path))
+       (not (string-prefix-p "~" path))
+       (not (string-suffix-p "/" path))
+       (not (member path '(".lease" ".publications")))
+       (not (string-prefix-p ".lease/" path))
+       (not (string-prefix-p ".publications/" path))
+       (let ((components (split-string path "/" nil)))
+         (and (not (member "" components))
+              (not (member "." components))
+              (not (member ".." components))))))
+
+(defun mevedel-plan-current-path (&optional session buffer relative-path)
   "Return the session-local current plan path for SESSION.
 Materialize the session directory when needed.  BUFFER defaults to the
 current data buffer."
@@ -139,92 +163,149 @@ current data buffer."
                            session buffer)))))
     (unless save-path
       (error "Could not materialize session for plan"))
-    (file-name-concat save-path
-                      mevedel-plan--relative-current-path)))
+    (let ((relative (or relative-path mevedel-plan--relative-current-path)))
+      (unless (mevedel-plan-artifact-path-p relative)
+        (error "Invalid plan artifact path: %S" relative))
+      (file-name-concat save-path relative))))
+
+(defun mevedel-plan-artifact-path (session artifact)
+  "Return ARTIFACT's qualified logical path in SESSION.
+
+ARTIFACT must carry one normalized session-relative `:path'.  The returned
+path names the logical artifact, never an immutable publication file."
+  (require 'mevedel-structs)
+  (let* ((save-path (mevedel-session-save-path session))
+         (relative (plist-get artifact :path)))
+    (unless (and save-path (mevedel-plan-artifact-path-p relative))
+      (error "Invalid plan artifact path: %S" relative))
+    (file-name-concat save-path relative)))
+
+(defun mevedel-plan--read-path (session relative)
+  "Return SESSION artifact RELATIVE decoded as UTF-8 text."
+  (require 'mevedel-session-persistence)
+  (decode-coding-string
+   (mevedel-session-persistence-read-artifact session relative)
+   'utf-8-unix))
+
+(defun mevedel-plan-read-artifact (session artifact)
+  "Return SESSION's verified accepted-plan ARTIFACT body."
+  (require 'mevedel-utilities)
+  (let ((relative (plist-get artifact :path))
+        (hash (plist-get artifact :hash)))
+    (unless (and (stringp relative) (stringp hash))
+      (error "Accepted plan artifact is unavailable"))
+    ;; Resolve the logical display path as a structural validation before the
+    ;; publication resolver accepts the artifact name.
+    (mevedel-plan-artifact-path session artifact)
+    (let ((body
+           (mevedel--normalize-message-text
+            (mevedel-plan--read-path session relative))))
+      (unless (equal hash (mevedel-plan-hash body))
+        (error "Accepted plan artifact hash does not match"))
+      body)))
 
 (defun mevedel-plan--metadata-path (session)
   "Return SESSION's canonical current plan path, when available."
   (require 'mevedel-structs)
-  (when-let ((save-path (mevedel-session-save-path session)))
-    (file-name-concat save-path mevedel-plan--relative-current-path)))
+  (let ((metadata (mevedel-session-plan-metadata session)))
+    (when-let* ((path (or (plist-get metadata :path)
+                          mevedel-plan--relative-current-path)))
+      (mevedel-plan-artifact-path session (list :path path)))))
 
-(defun mevedel-plan-write-current (plan-markdown session buffer)
+(defun mevedel-plan-write-current
+    (plan-markdown session buffer &optional relative-path)
   "Write PLAN-MARKDOWN to SESSION's current plan artifact for BUFFER.
-Return an explicit artifact plist containing `:path', `:absolute-path', and
-`:hash'."
+RELATIVE-PATH overrides the default path below SESSION's save directory.
+Return an explicit artifact plist containing `:path' and `:hash'."
   (require 'mevedel-structs)
-  (let* ((path (mevedel-plan-current-path session buffer))
+  (let* ((relative-path (or relative-path
+                            mevedel-plan--relative-current-path))
+         (path (mevedel-plan-current-path session buffer relative-path))
          (plan-markdown (mevedel-plan-validate plan-markdown))
          (hash (mevedel-plan-hash plan-markdown)))
-    (make-directory (file-name-directory path) t)
-    (let ((coding-system-for-write 'utf-8-unix))
-      (write-region plan-markdown nil path nil 'silent))
-    (let ((turn (or (mevedel-session-turn-count session) 0))
-          (metadata (copy-sequence (or (mevedel-session-plan-metadata session)
-                                       nil))))
-      (setq metadata (plist-put metadata :path
-                                mevedel-plan--relative-current-path))
-      (setq metadata (plist-put metadata :absolute-path path))
-      (setq metadata (plist-put metadata :hash hash))
-      (setq metadata (plist-put metadata :status 'presented))
-      (setq metadata (plist-put metadata :updated-turn turn))
-      (setq metadata (plist-put metadata :updated-at
-                                (format-time-string "%FT%H-%M-%S")))
-      (cl-remf metadata :accepted-path)
-      (cl-remf metadata :accepted-absolute-path)
-      (cl-remf metadata :accepted-hash)
-      (setq metadata (plist-put metadata :verification-pending nil))
-      (setq metadata (plist-put metadata :accepted-turn nil))
-      (setq metadata (plist-put metadata :accepted-at nil))
+    (require 'mevedel-session-persistence)
+    (mevedel-session-persistence-publish-text
+     session path plan-markdown 'utf-8-unix)
+    (let* ((turn (or (mevedel-session-turn-count session) 0))
+           (previous (mevedel-session-plan-metadata session))
+           (metadata
+            (list :path relative-path
+                  :hash hash
+                  :status 'presented
+                  :updated-turn turn
+                  :updated-at (format-time-string "%FT%H-%M-%S")
+                  :verification-pending nil
+                  :accepted-turn nil
+                  :accepted-at nil)))
+      (when (plist-member previous :selection)
+        (setq metadata
+              (plist-put metadata :selection
+                         (copy-tree (plist-get previous :selection)))))
       (setf (mevedel-session-plan-metadata session) metadata))
-    (list :path mevedel-plan--relative-current-path
-          :absolute-path path
-          :hash hash)))
+    (list :path relative-path :hash hash)))
 
-(defun mevedel-plan-archive-accepted (current-artifact session)
+(defun mevedel-plan-archive-accepted
+    (current-artifact session &optional relative-path source-session)
   "Archive CURRENT-ARTIFACT as an accepted plan for SESSION.
 CURRENT-ARTIFACT is the plist returned by `mevedel-plan-write-current'.
-The immutable destination is always a canonical `accepted-TIMESTAMP.md'
-name below `local/plans/', so every archive is addressable through
-`mevedel-plan-resource-address'.
-Return a plist containing `:path', `:absolute-path', and `:hash'."
+RELATIVE-PATH names a deterministic immutable destination when non-nil.
+SOURCE-SESSION owns CURRENT-ARTIFACT and defaults to SESSION.
+Return a plist containing `:path' and `:hash'."
   (require 'mevedel-structs)
-  (let ((plan-path (plist-get current-artifact :absolute-path))
-        (plan-hash (plist-get current-artifact :hash)))
-    (unless (and plan-path plan-hash (file-exists-p plan-path))
-      (error "Accepted plan artifact does not exist"))
-    (let* ((save-path (mevedel-session-save-path session))
-           (dir (file-name-concat save-path "local" "plans"))
-           (timestamp (format-time-string "%Y%m%d-%H%M%S"))
-           (archive-path (file-name-concat dir
-                                           (format "accepted-%s.md" timestamp)))
-           (index 1))
-      (make-directory dir t)
-      (while (file-exists-p archive-path)
-        (setq archive-path
-              (file-name-concat dir (format "accepted-%s-%d.md"
-                                            timestamp index)))
-        (setq index (1+ index)))
-      (copy-file plan-path archive-path)
-      (list :path (and save-path (file-relative-name archive-path save-path))
-            :absolute-path archive-path
-            :hash plan-hash))))
+  (let* ((source-session (or source-session session))
+         (plan-relative (plist-get current-artifact :path))
+         (plan-hash (plist-get current-artifact :hash))
+         (body (mevedel-plan-read-artifact source-session current-artifact))
+         (dir (or (file-name-directory plan-relative) ""))
+         (timestamp (format-time-string "%Y%m%d-%H%M%S"))
+         (archive-relative
+          (if relative-path
+              relative-path
+            (file-name-concat dir (format "accepted-%s.md" timestamp))))
+         (index 1))
+      (unless relative-path
+        (while (mevedel-session-persistence-artifact-present-p
+                session archive-relative)
+          (setq archive-relative
+                (file-name-concat dir (format "accepted-%s-%d.md"
+                                              timestamp index)))
+          (setq index (1+ index))))
+      (if (mevedel-session-persistence-artifact-present-p
+           session archive-relative)
+          (unless (and relative-path
+                       (equal body
+                              (mevedel-plan-read-artifact
+                               session
+                               (list :path archive-relative
+                                     :hash plan-hash))))
+            (error "Accepted plan artifact already exists with different content"))
+        (require 'mevedel-session-persistence)
+        (mevedel-session-persistence-publish-text
+         session
+         (mevedel-plan-artifact-path
+          session (list :path archive-relative))
+         body 'utf-8-unix))
+      (list :path archive-relative :hash plan-hash)))
 
 (defun mevedel-plan-current-body (&optional session)
   "Return SESSION's current plan artifact contents, or nil."
   (require 'mevedel-utilities)
   (when-let* ((session (or session mevedel--session)))
-    (let ((path (mevedel-plan--metadata-path session)))
-      (when (and path (file-exists-p path))
-        (with-temp-buffer
-          (insert-file-contents path)
-          (mevedel--normalize-message-text (buffer-string)))))))
+    (let* ((metadata (mevedel-session-plan-metadata session))
+           (relative (or (plist-get metadata :path)
+                         mevedel-plan--relative-current-path)))
+      (when (mevedel-session-persistence-artifact-present-p session relative)
+        (mevedel--normalize-message-text
+         (mevedel-plan--read-path session relative))))))
 
 (defun mevedel-plan-current-exists-p (&optional session)
   "Return non-nil when SESSION has a current plan artifact on disk."
   (when-let* ((session (or session mevedel--session)))
-    (let ((path (mevedel-plan--metadata-path session)))
-      (and path (file-exists-p path)))))
+    (let* ((metadata (mevedel-session-plan-metadata session))
+           (relative (or (plist-get metadata :path)
+                         mevedel-plan--relative-current-path)))
+      (require 'mevedel-session-persistence)
+      (mevedel-session-persistence-artifact-present-p session relative))))
 
 (defun mevedel-plan-mark-accepted
     (session current-artifact accepted-artifact &optional skip-verification)
@@ -232,26 +313,23 @@ Return a plist containing `:path', `:absolute-path', and `:hash'."
 ACCEPTED-ARTIFACT identifies the immutable archived plan.  When
 SKIP-VERIFICATION is non-nil, do not leave verification pending."
   (require 'mevedel-structs)
-  (let ((metadata (copy-sequence (or (mevedel-session-plan-metadata session)
-                                     nil))))
-    (setq metadata (plist-put metadata :path
-                              (plist-get current-artifact :path)))
-    (setq metadata (plist-put metadata :status 'accepted))
-    (setq metadata (plist-put metadata :accepted-turn
-                              (or (mevedel-session-turn-count session) 0)))
-    (setq metadata (plist-put metadata :accepted-at
-                              (format-time-string "%FT%H-%M-%S")))
-    (if skip-verification
-        (cl-remf metadata :verification-pending)
+  (let* ((previous (mevedel-session-plan-metadata session))
+         (metadata
+          (list :path (plist-get current-artifact :path)
+                :hash (plist-get current-artifact :hash)
+                :status 'accepted
+                :updated-turn (plist-get previous :updated-turn)
+                :updated-at (plist-get previous :updated-at)
+                :accepted-turn (or (mevedel-session-turn-count session) 0)
+                :accepted-at (format-time-string "%FT%H-%M-%S")
+                :accepted-path (plist-get accepted-artifact :path)
+                :accepted-hash (plist-get accepted-artifact :hash))))
+    (dolist (key '(:selection :proposal-id))
+      (when (plist-member previous key)
+        (setq metadata
+              (plist-put metadata key (copy-tree (plist-get previous key))))))
+    (unless skip-verification
       (setq metadata (plist-put metadata :verification-pending t)))
-    (setq metadata (plist-put metadata :absolute-path
-                              (plist-get current-artifact :absolute-path)))
-    (setq metadata (plist-put metadata :accepted-path
-                              (plist-get accepted-artifact :path)))
-    (setq metadata (plist-put metadata :accepted-absolute-path
-                              (plist-get accepted-artifact :absolute-path)))
-    (setq metadata (plist-put metadata :accepted-hash
-                              (plist-get accepted-artifact :hash)))
     (setf (mevedel-session-plan-metadata session) metadata)
     metadata))
 

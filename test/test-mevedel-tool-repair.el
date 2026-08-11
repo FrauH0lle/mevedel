@@ -7,6 +7,8 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair)
 (require 'mevedel-agents)
+(require 'mevedel-execution-target)
+(require 'mevedel-session-durability)
 (require 'mevedel-structs)
 (require 'mevedel-utilities)
 (require 'gptel)
@@ -945,11 +947,12 @@
           (mevedel-tool-repair-log-event
            session (plist-put (copy-sequence event) :outcome 'invalid))
           (should (= 2 (length (mevedel-session-repair-log session))))
+          (mevedel-tool-repair-flush-log session)
           (with-temp-buffer
             (insert-file-contents
              (mevedel-tool-repair-log-path session))
             (goto-char (point-min))
-            (should (= 2 (count-lines (point-min) (point-max))))))
+            (should (= 3 (count-lines (point-min) (point-max))))))
       (delete-directory dir t)))
 
   :doc "forwards value-free repair outcomes into the unified telemetry stream"
@@ -1081,7 +1084,96 @@
         (should (eq 'unknown (plist-get safe :execution)))
         (should (eq 'unknown (plist-get safe :result)))
         (should-not (plist-get safe :failure-class))
-        (should-not (string-match-p "sentinel" printed))))))
+        (should-not (string-match-p "sentinel" printed)))))
+
+  :doc "defers a materialized remote append until session settlement"
+  (let* ((root (make-temp-file "mevedel-repair-log-remote-" t))
+         (target
+          (mevedel-execution-target-create "/ssh:repair-host:/workspace/"))
+         (session
+          (mevedel-session--create
+           :name "main" :execution-target target :save-path root))
+         (event '(:time "now" :origin "/root" :backend backend
+                        :model model :tool "Read" :outcome repaired
+                        :repair-enabled t :rules (array-to-list)
+                        :paths ((names)) :issue-kinds (wrong-shape)
+                        :execution executed :result success))
+         (later-event
+          '(:time "later" :origin "/root" :backend backend
+                  :model model :tool "Read" :outcome invalid
+                  :repair-enabled t :rules nil :paths ((names))
+                  :issue-kinds (wrong-shape)
+                  :execution not-executed :result none))
+         (mevedel-tool-repair-persist-log t)
+         calls)
+    (unwind-protect
+        (progn
+          (cl-letf
+              (((symbol-function
+                 'mevedel-session-durability-append-diagnostic)
+                (lambda (_session path content)
+                  (push (list path content) calls)
+                  t))
+               ((symbol-function 'mevedel-telemetry-record-audit) #'ignore))
+            (mevedel-tool-repair-log-event session event)
+            (mevedel-tool-repair-log-event session later-event)
+            (should (= 2 (length
+                          (mevedel-session-repair-log-pending session))))
+            (should-not calls)
+            (should-not
+             (file-exists-p (mevedel-tool-repair-log-path session)))
+            (mevedel-tool-repair-flush-log session))
+          (should-not (mevedel-session-repair-log-pending session))
+          (pcase-let ((`((,path ,content)) calls))
+            (should (equal (mevedel-tool-repair-log-path session) path))
+            (with-temp-buffer
+              (insert content)
+              (goto-char (point-min))
+              (should (eq 'repaired
+                          (plist-get (read (current-buffer)) :outcome)))
+              (should (eq 'invalid
+                          (plist-get (read (current-buffer)) :outcome))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-repair-flush-log
+  (:doc "retains a failed append and persists it on a later flush")
+  (let* ((root (make-temp-file "mevedel-repair-log-retry-" t))
+         (blocked (file-name-concat root "blocked"))
+         (restored (file-name-concat root "restored"))
+         (session (mevedel-session--create :name "main"))
+         (event '(:time "now" :origin "/root" :backend backend
+                        :model model :tool "Read" :outcome repaired
+                        :repair-enabled t :rules (array-to-list)
+                        :paths ((names)) :issue-kinds (wrong-shape)
+                        :execution executed :result success))
+         (later-event '(:time "later" :origin "/root" :backend backend
+                              :model model :tool "Read" :outcome invalid
+                              :repair-enabled t :rules nil :paths ((names))
+                              :issue-kinds (wrong-shape)
+                              :execution not-executed :result none))
+         (mevedel-tool-repair-persist-log t))
+    (unwind-protect
+        (progn
+          (write-region "not a directory" nil blocked nil 'silent)
+          (setf (mevedel-session-save-path session) blocked)
+          (mevedel-tool-repair-log-event session event)
+          (should (= 1 (length
+                        (mevedel-session-repair-log-pending session))))
+          (setf (mevedel-session-save-path session) restored)
+          (mevedel-tool-repair-log-event session later-event)
+          (should (= 2 (length
+                        (mevedel-session-repair-log-pending session))))
+          (mevedel-tool-repair-flush-log session)
+          (should-not (mevedel-session-repair-log-pending session))
+          (with-temp-buffer
+            (insert-file-contents (mevedel-tool-repair-log-path session))
+            (let ((first (read (current-buffer)))
+                  (second (read (current-buffer))))
+              (should (eq 'repaired (plist-get first :outcome)))
+              (should (equal '(array-to-list)
+                             (plist-get first :rules)))
+              (should (eq 'invalid (plist-get second :outcome))))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-tool-repair-record-result
   ()

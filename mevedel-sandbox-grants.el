@@ -18,10 +18,14 @@
 
 (defun mevedel-sandbox--symlink-chain (path)
   "Return the ordered symbolic links traversed while resolving PATH."
-  (let ((pending (split-string (expand-file-name path) "/" t))
-        (current "/")
-        (remaining 40)
-        links)
+  (let* ((path (expand-file-name path))
+         (target-prefix (file-remote-p path))
+         (pending
+          (split-string
+           (or (file-remote-p path 'localname 'never) path) "/" t))
+         (current (if target-prefix (concat target-prefix "/") "/"))
+         (remaining 40)
+         links)
     (while pending
       (setq current (file-name-concat current (pop pending)))
       (when-let ((target (file-symlink-p current)))
@@ -30,13 +34,18 @@
                   (list (format "Filesystem symlink chain is too deep: %s"
                                 path))))
         (push (cons current target) links)
-        (setq pending
-              (append
-               (split-string
-                (expand-file-name target (file-name-directory current))
-                "/" t)
-               pending)
-              current "/")))
+        (let ((expanded
+               (if (and target-prefix (file-name-absolute-p target))
+                   (concat target-prefix target)
+                 (expand-file-name target (file-name-directory current)))))
+          (setq pending
+                (append
+                 (split-string
+                  (or (file-remote-p expanded 'localname 'never) expanded)
+                  "/" t)
+                 pending)
+                current
+                (if target-prefix (concat target-prefix "/") "/")))))
     (nreverse links)))
 
 (defun mevedel-sandbox--resolve-filesystem-permissions (permissions)
@@ -95,12 +104,19 @@ FIRST-FD defaults to 10."
               paths (append paths (list source)))))
     (list :arguments arguments :paths paths)))
 
-(defun mevedel-sandbox--fd-backed-command (command paths)
-  "Return COMMAND wrapped to preserve exact host PATHS on file descriptors."
+(defun mevedel-sandbox--fd-backed-command (command paths &optional workdir)
+  "Wrap COMMAND to preserve exact target PATHS on file descriptors.
+When WORKDIR is remote, discover and launch the wrapper on that target."
   (require 'subr-x)
   (if (not paths)
       command
-    (let ((bash (executable-find "bash")))
+    (let* ((remote (and workdir (file-remote-p workdir)))
+           (bash
+            (if remote
+                (with-temp-buffer
+                  (setq default-directory workdir)
+                  (executable-find "bash" remote))
+              (executable-find "bash"))))
       (unless bash
         (signal 'mevedel-sandbox-policy-error
                 '("Additive filesystem confinement requires 'bash'")))

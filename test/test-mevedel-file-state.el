@@ -311,7 +311,29 @@
           (let ((state (mevedel-file-cache-get
                         cache (expand-file-name tmp))))
             (should (equal "hello" (mevedel-file-state-content state)))))
-      (when (file-exists-p tmp) (delete-file tmp)))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "bypasses stale TRAMP attributes when the target changes externally"
+  (let* ((cache (mevedel-test-file-cache-create))
+         (root (make-temp-file "mevedel-remote-ec-" t))
+         (native (file-name-concat root "a.txt"))
+         (remote (concat "/mevedelmock:external-change:" native)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("external-change")
+          (with-temp-file native (insert "old"))
+          (mevedel-file-cache-put
+           cache (mevedel-file-state-from-file remote))
+          (with-temp-file native (insert "new-value"))
+          (set-file-times native (time-add (current-time) 2))
+          (let ((changes (mevedel-file-cache-detect-external-changes cache)))
+            (should (= 1 (length changes)))
+            (should (equal "new-value" (plist-get (car changes) :new)))
+            (mevedel-file-cache-consume-external-changes cache changes))
+          (should
+           (equal "new-value"
+                  (mevedel-file-state-content
+                   (mevedel-file-cache-get cache remote)))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-file-cache-consume-external-changes
   ()

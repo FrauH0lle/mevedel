@@ -272,8 +272,6 @@
   (:doc "`mevedel-workspace-ensure-generated-state-ignored' writes exact generated-state excludes")
   ,test
   (test)
-  (unless (executable-find "git")
-    (ert-skip "git is required"))
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-ws-ignore-" t)))
          (workspace (mevedel-workspace--create
@@ -281,9 +279,12 @@
          (exclude (file-name-concat root ".git" "info" "exclude")))
     (unwind-protect
         (progn
-          (should (zerop (call-process "git" nil nil nil "init" root)))
-          (mevedel-workspace-ensure-generated-state-ignored workspace)
-          (mevedel-workspace-ensure-generated-state-ignored workspace)
+          (make-directory (file-name-directory exclude) t)
+          (cl-letf (((symbol-function 'process-file)
+                     (lambda (&rest _)
+                       (ert-fail "Generated-state ignore invoked Git"))))
+            (mevedel-workspace-ensure-generated-state-ignored workspace)
+            (mevedel-workspace-ensure-generated-state-ignored workspace))
           (with-temp-buffer
             (insert-file-contents exclude)
             (let ((content (buffer-string)))
@@ -299,7 +300,48 @@
                               (concat "^" (regexp-quote entry) "$")
                               (point-min) (point-max)))))
               (should-not (string-match-p "^/.mevedel/$" content)))))
-      (delete-directory root t))))
+      (delete-directory root t)))
+
+  :doc "writes generated-state excludes through a TRAMP workspace"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-ws-remote-ignore-" t)))
+         (qualified (concat "/mevedelmock:workspace:" root))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id qualified :root qualified
+                     :name "remote-ignore"))
+         (exclude (file-name-concat root ".git" "info" "exclude")))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory exclude) t)
+          (mevedel-test--with-local-shell-tramp '("workspace")
+            (cl-letf (((symbol-function 'process-file)
+                       (lambda (&rest _)
+                         (ert-fail "Generated-state ignore invoked Git"))))
+              (mevedel-workspace-ensure-generated-state-ignored workspace)))
+          (with-temp-buffer
+            (insert-file-contents exclude)
+            (should (string-match-p
+                     "^/.mevedel/sessions/$" (buffer-string)))))
+      (delete-directory root t)))
+
+  :doc "does not follow project-controlled Git metadata outside the workspace"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-ws-external-git-" t)))
+         (metadata (file-name-as-directory
+                    (make-temp-file "mevedel-ws-external-meta-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "external"))
+         (exclude (file-name-concat metadata "info" "exclude")))
+    (unwind-protect
+        (progn
+          (make-symbolic-link metadata (file-name-concat root ".git"))
+          (cl-letf (((symbol-function 'process-file)
+                     (lambda (&rest _)
+                       (ert-fail "Generated-state ignore invoked Git"))))
+            (mevedel-workspace-ensure-generated-state-ignored workspace))
+          (should-not (file-exists-p exclude)))
+      (delete-directory root t)
+      (delete-directory metadata t))))
 
 (provide 'test-mevedel-workspace)
 ;;; test-mevedel-workspace.el ends here

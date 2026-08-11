@@ -225,24 +225,46 @@ part of the current implementation.
 ## Handler types
 
 `command` runs a shell command with JSON input on stdin and captures
-stdout/stderr.  User/global command hooks run in the session working
-directory, falling back to the workspace root when no session cwd is
-available.  Project hook commands from `<workspace>/.mevedel/hooks.*`
-run from the workspace root so relative commands such as
-`.mevedel/hooks/block-rm.sh` resolve consistently regardless of the
+stdout/stderr.  Execution follows the configuration resource's origin:
+
+- trusted project-file commands run on the session target from the workspace
+  root through the target's Emacs file handler;
+- user defcustom commands run locally from `user-emacs-directory`, user-file
+  commands run locally from the directory containing the user hook file; and
+- plugin commands discovered inside the project run on the session target from
+  the plugin root; client-local plugin commands remain local there.
+
+Commands executed on a remote session target inherit that target's shell
+environment.  Mevedel does not forward the client's `process-environment`;
+project plugins receive only their deliberate compatibility variables in
+addition to the target environment.  Client-local user and plugin commands
+continue to inherit the client environment.
+
+Loaded handlers retain `:source-file` and `:source-root` metadata so dispatch
+does not infer origin from the event cwd or copy executable code between
+machines.  Project-relative commands such as
+`.mevedel/hooks/block-rm.sh` therefore resolve consistently regardless of the
 session cwd.  Default timeout is 30 seconds with a global cap. Each
 stdout/stderr stream is capped by `mevedel-hooks-command-output-max-chars`
 before parsing decisions or writing log previews, so noisy hooks cannot
 inject unbounded output through `updated_result` or block reasons.
 
-Plugin command hooks run from the same event cwd as user/global hooks but
-receive compatibility environment variables:
+Plugin command hooks receive compatibility environment variables:
 
 - `PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, and `MEVEDEL_PLUGIN_ROOT` point at
   the plugin root.
 - `PLUGIN_DATA`, `CLAUDE_PLUGIN_DATA`, and `MEVEDEL_PLUGIN_DATA` point at
   `<workspace>/.mevedel/plugin-data/<plugin-name>` and are created before
   the command starts.
+
+For a project plugin on a remote target, all six values use target-native
+paths.  A plugin root naming another execution target is refused before the
+command process starts.
+
+A client-local plugin in a remote session receives the three root variables
+but not the three data variables: its workspace data is authoritative on the
+target, and a local command cannot consume a TRAMP file name.  Target identity
+and target-native workspace facts remain available in the JSON event input.
 
 Superpowers is treated specially when its hooks are enabled: mevedel
 installs a native `SessionStart` Elisp hook that loads the bundled
@@ -328,8 +350,14 @@ Top-level terminal events add:
 - `:terminal-reason` for `StopFailure`
 
 Command handlers receive the same data encoded as JSON with snake_case
-keys.  Elisp handlers receive the plist directly, with `:hook-handler`
-holding the normalized handler metadata for declarative handlers.
+keys.  Their `cwd`, `workspace_root`, and `transcript_path` values are
+target-native paths, and `execution_target` contains the session's structured
+target identity.  This lets a local user or plugin hook reason about a remote
+event without receiving a client-specific TRAMP prefix or pretending to have a
+remote process cwd.
+Elisp handlers receive the plist directly, with Emacs-qualified paths and
+`:hook-handler` holding the normalized handler metadata for declarative
+handlers.
 
 Decision plist fields:
 
@@ -532,9 +560,9 @@ terminal state.
 
 ## Trust and permissions
 
-Shell hooks are arbitrary local code.  Project-local command hooks should
-not run unless the workspace hook config is trusted.  A minimal first trust
-model:
+Shell hooks are arbitrary code in their resource environment.  Project-file
+commands run on the target and must not run unless the workspace hook config
+is trusted.  A minimal first trust model:
 
 - user defcustom plus `~/.mevedel/hooks.el` and
   `~/.mevedel/hooks.json` are trusted by the user.
@@ -613,12 +641,15 @@ model-visible context, submitted content, control flow, or permissions,
 the hook audit surface includes the system message as supporting detail.
 
 When the session has been materialized on disk, the same entries are also
-appended to `<session>/hook-log.el` as one sanitized plist per line when
-each log entry is recorded.  Bounded entries created before the session has
-a save path are backfilled when it first materializes.  Non-readable runtime
-values such as closures are converted to printable strings before writing.
-The in-memory log remains capped by `mevedel-hooks-log-limit`; the persistent
-file is append-only for the session.
+appended to `<session>/hook-log.el` as one sanitized plist per line.  Local
+sessions append when each entry is recorded; remote process callbacks enqueue
+and the next successful session settlement publishes the append atomically.
+Bounded entries created before the session has a save path are backfilled when
+it first materializes.  Non-readable runtime values such as closures are
+converted to printable strings before writing.  The in-memory log remains
+capped by `mevedel-hooks-log-limit`; the persistent file is append-only for the
+session.  A failed append warns, remains queued, and retries after the next
+successful session save.
 
 Raw hook stdout/stderr should stay out of the model transcript by default.
 Only explicit structured fields such as `:additional-context`,
@@ -670,6 +701,9 @@ Implemented:
    the model transcript.
 6. Hook log entries are persisted to `hook-log.el` under materialized
    session directories.
+7. Command hooks dispatch by resource origin: trusted project files and
+   same-target project plugins use the session target, while user files and
+   client-local plugins remain local and receive target-native workspace facts.
 
 Deferred:
 
@@ -685,3 +719,6 @@ Deferred:
   `:fail-closed t` for strict policy hooks.
 - Hook stdout/stderr stays out of the model transcript by default; only
   explicit decision fields can add model-visible content.
+- Command hook execution follows the handler's annotated resource origin;
+  local hooks receive target identity and target-native paths as data instead
+  of inheriting a remote process cwd, and foreign-target roots are refused.

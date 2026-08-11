@@ -140,7 +140,7 @@
   "Return non-nil when ACTIVITY owns one active-turn slot."
   (memq activity mevedel-agent-control--active-activities))
 
-(defvar mevedel-agent-control--suppress-persistence nil
+(defvar mevedel-agent-control-suppress-persistence nil
   "Non-nil while a multi-step registry repair must be persisted atomically.")
 
 (cl-defstruct (mevedel-agent-waiter
@@ -208,7 +208,7 @@ Return the normalized payload stored in the record."
 
 (defun mevedel-agent-control--persist-session (session)
   "Best-effort persist SESSION's changed agent state."
-  (unless mevedel-agent-control--suppress-persistence
+  (unless mevedel-agent-control-suppress-persistence
     (when (mevedel-session-save-path session)
       (require 'mevedel-session-persistence)
       (mevedel-session-persistence-save-agent-state session))))
@@ -626,7 +626,7 @@ Return the resolved recipient path.  Sending never activates a turn."
 
 Return the number of repaired records.  The caller owns the atomic sidecar
 rewrite after the complete registry has been repaired."
-  (let ((mevedel-agent-control--suppress-persistence t)
+  (let ((mevedel-agent-control-suppress-persistence t)
         (count 0))
     (dolist (entry (mevedel-session-agent-registry session))
       (let ((record (cdr entry)))

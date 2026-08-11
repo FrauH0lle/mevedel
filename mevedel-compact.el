@@ -59,6 +59,10 @@
 (declare-function mevedel-agent-exec-request-snapshot
                   "mevedel-agent-exec" (policy))
 
+;; `mevedel-agent-persistence'
+(declare-function mevedel-agent-persistence-transcript-path-p
+                  "mevedel-agent-persistence" (path save-path))
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-buffer
                   "mevedel-agents" (cl-x) t)
@@ -114,6 +118,11 @@
                   "mevedel-session-persistence" (summary))
 (declare-function mevedel-session-persistence--summary-block
                   "mevedel-session-persistence" (summary))
+(declare-function mevedel-session-persistence-artifact-present-p
+                  "mevedel-session-persistence" (session logical))
+(declare-function mevedel-session-persistence-publish-text
+                  "mevedel-session-persistence"
+                  (session path content &optional coding))
 (declare-function mevedel-session-persistence-rotate-segment
                   "mevedel-session-persistence" (session buffer summary
                                                          &rest keys))
@@ -1412,6 +1421,7 @@ current agent buffer's invocation."
 
 (defun mevedel--compact-agent-target (invocation)
   "Return the private compaction target for persisted INVOCATION, or nil."
+  (require 'mevedel-agent-persistence)
   (when-let* (((mevedel-agent-invocation-p invocation))
               (buffer (mevedel-agent-invocation-buffer invocation))
               ((eq buffer (current-buffer)))
@@ -1419,13 +1429,21 @@ current agent buffer's invocation."
               (save-path (mevedel-session-save-path session))
               (relative-path
                (mevedel-agent-invocation-transcript-relative-path invocation))
+              ((mevedel-agent-persistence-transcript-path-p
+                relative-path save-path))
               (canonical-path (expand-file-name relative-path save-path))
               (buffer-path buffer-file-name)
-              ((mevedel--same-file-p buffer-path canonical-path))
-              ((file-regular-p canonical-path))
-              ((not (file-symlink-p canonical-path)))
-              ((file-writable-p canonical-path))
-              ((file-writable-p (file-name-directory canonical-path)))
+              ((if (file-remote-p save-path)
+                   (and (equal (expand-file-name buffer-path)
+                               canonical-path)
+                        (mevedel-session-persistence-artifact-present-p
+                         session relative-path))
+                 (and (mevedel--same-file-p buffer-path canonical-path)
+                      (file-regular-p canonical-path)
+                      (not (file-symlink-p canonical-path))
+                      (file-writable-p canonical-path)
+                      (file-writable-p
+                       (file-name-directory canonical-path)))))
               (task-heading (mevedel--compact-agent-task-heading invocation))
               (first-output
                (cl-find-if
@@ -1470,14 +1488,27 @@ current agent buffer's invocation."
                 :fail #'mevedel--compact-agent-terminal-failure
                 :warn-on-completion nil))))))
 
-(defun mevedel--compact-agent-archive-path (canonical-path)
-  "Return the next unused numbered archive for CANONICAL-PATH."
-  (let ((stem (if (string-suffix-p ".chat.org" canonical-path)
-                  (string-remove-suffix ".chat.org" canonical-path)
-                canonical-path)))
+(defun mevedel--compact-agent-archive-path (session canonical-path)
+  "Return SESSION's next unused archive for CANONICAL-PATH."
+  (require 'mevedel-session-persistence)
+  (let* ((save-path
+          (file-name-as-directory (mevedel-session-save-path session)))
+         (remote-p (file-remote-p save-path))
+         (stem (if (string-suffix-p ".chat.org" canonical-path)
+                   (string-remove-suffix ".chat.org" canonical-path)
+                 canonical-path)))
     (cl-loop for number from 1
              for path = (format "%s.compact-%04d.chat.org" stem number)
-             unless (file-exists-p path) return path)))
+             for logical =
+             (and (string-prefix-p save-path path)
+                  (substring path (length save-path)))
+             unless logical
+             do (error "Archive path escaped session: %s" path)
+             unless (if remote-p
+                        (mevedel-session-persistence-artifact-present-p
+                         session logical)
+                      (file-exists-p path))
+             return path)))
 
 (defun mevedel--compact-archived-tool-use-ids (begin end)
   "Return live tool-use ids removed within BEGIN..END.
@@ -1549,13 +1580,19 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
   (let* ((invocation (plist-get target :invocation))
          (session (plist-get target :session))
          (canonical-path (plist-get target :transcript-path))
-         (archive-path (mevedel--compact-agent-archive-path canonical-path))
+         (archive-path
+          (mevedel--compact-agent-archive-path
+           (plist-get target :session) canonical-path))
          (summary (mevedel--compact-append-hook-audits summary hook-audits))
          (execution-archive-text
           (mevedel--compact-execution-row-archive-text target)))
     (unless (mevedel-agent-conversation-save invocation)
       (error "Could not persist agent transcript before compaction"))
-    (copy-file canonical-path archive-path nil)
+    (require 'mevedel-session-persistence)
+    (mevedel-session-persistence-publish-text
+     (plist-get target :session) archive-path
+     (buffer-substring-no-properties (point-min) (point-max))
+     'utf-8-unix)
     (let ((inhibit-read-only t))
       (erase-buffer)
       (insert (plist-get target :anchor-text))

@@ -10,7 +10,9 @@
 (require 'mevedel-tool-media)
 (require 'mevedel-permissions)
 (require 'mevedel-execution)
+(require 'mevedel-execution-target)
 (require 'mevedel-tool-exec)
+(require 'mevedel-tool-fs)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-patch)
 (require 'mevedel-plan-mode)
@@ -91,6 +93,21 @@
                            record-start (match-beginning 0)))))
               (push record records))))))
     (nreverse records)))
+
+(defun test-mevedel-pipeline--run-tool-and-wait (tool args)
+  "Run TOOL with ARGS and return its eventual pipeline result."
+  (let ((deadline (+ (float-time) 5.0))
+        done result)
+    (mevedel-pipeline-run-tool
+     tool
+     (lambda (value)
+       (setq result value
+             done t))
+     args)
+    (while (and (not done) (< (float-time) deadline))
+      (accept-process-output nil 0.01))
+    (should done)
+    result))
 
 
 ;;
@@ -388,7 +405,60 @@
 		 (progn
 		   (should (equal "" (mevedel-pipeline--normalize-path-value "")))
 		   (should (null (mevedel-pipeline--normalize-path-value nil)))
-		   (should (equal 7 (mevedel-pipeline--normalize-path-value 7)))))
+		   (should (equal 7 (mevedel-pipeline--normalize-path-value 7))))
+		 :doc "expands against the execution target environment"
+		 (let ((target (mevedel-execution-target-create
+			       "/ssh:user@host:/srv/project/")))
+		   (setf (mevedel-execution-target-environment target)
+			 '(("HOME" . "/home/user")
+			   ("PROJECT_ROOT" . "/srv/project")))
+		   (should
+		    (equal "/ssh:user@host:/srv/project/lib/a.el"
+			   (mevedel-pipeline--normalize-path-value
+			    "$PROJECT_ROOT/lib/a.el" target "/srv/project/"))))
+		 :doc "rejects unknown target environment variables"
+		 (let ((target (mevedel-execution-target-create
+			       "/docker:dev:/workspace/")))
+		   (setf (mevedel-execution-target-environment target)
+			 '(("HOME" . "/root")))
+		   (should-error
+		    (mevedel-pipeline--normalize-path-value
+		     "$UNKNOWN_MEVEDEL_ROOT/a.el" target "/workspace/")
+		    :type 'mevedel-execution-target-error)))
+
+(mevedel-deftest mevedel-pipeline--canonicalize-path-value ()
+		 ,test
+		 (test)
+		 :doc "resolves a symlink ancestor while preserving a nonexistent tail"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-canonical-root-" t)))
+			(outside (file-name-as-directory
+				  (make-temp-file "mevedel-canonical-outside-" t)))
+			(link (file-name-concat root "linked"))
+			(path (file-name-concat link "missing" "file.txt"))
+			(expected
+			 (file-name-concat outside "missing" "file.txt")))
+		   (unwind-protect
+		       (progn
+			 (make-symbolic-link outside link)
+			 (should
+			  (equal expected
+				 (mevedel-pipeline--canonicalize-path-value path))))
+		     (delete-directory root t)
+		     (delete-directory outside t))))
+
+(mevedel-deftest mevedel-pipeline-canonical-path ()
+		 ,test
+		 (test)
+		 :doc "returns only paths precomputed for the active handler"
+		 (let ((mevedel-pipeline--canonical-path-map
+			'(("/workspace/link" . "/outside/target"))))
+		   (should
+		    (equal "/outside/target"
+			   (mevedel-pipeline-canonical-path "/workspace/link")))
+		   (should
+		    (equal "/workspace/other"
+			   (mevedel-pipeline-canonical-path "/workspace/other")))))
 
 (mevedel-deftest mevedel-pipeline--step-normalize-paths ()
 		 ,test
@@ -444,6 +514,33 @@
 		   (mevedel-pipeline--step-normalize-paths
 		    ctx (lambda (c) (setq updated c)) #'ignore)
 		   (should (eq args (plist-get updated :args))))
+		 :doc "uses the session target before authorization"
+		 (let ((root (file-name-as-directory
+			     (make-temp-file "mevedel-normalize-remote-" t))))
+		   (unwind-protect
+		       (mevedel-test--with-local-shell-tramp '("normalize")
+			 (let* ((remote-root
+				 (format "/mevedelmock:normalize:%s" root))
+				(target (mevedel-execution-target-create remote-root))
+				(session (mevedel-session--create
+					  :name "remote-path-normalization"
+					  :execution-target target
+					  :working-directory remote-root))
+				(tool (mevedel-tool--create
+				       :name "RemotePath"
+				       :args '((file_path path :required "Path"))))
+				(context (list :tool tool
+					       :session session
+					       :default-directory remote-root
+					       :args '(:file_path "lib/a.el")))
+				updated)
+			   (mevedel-pipeline--step-normalize-paths
+			    context (lambda (value) (setq updated value)) #'ignore)
+			   (should
+			    (equal (file-name-concat remote-root "lib/a.el")
+				   (plist-get
+				    (plist-get updated :args) :file_path)))))
+		     (delete-directory root t)))
 		 :doc "authorization and handler observe one identical path"
 		 (let* ((root (file-name-as-directory
 				 (make-temp-file "mevedel-normalize-" t)))
@@ -3112,6 +3209,297 @@
           (should attempt-seen)))
       (delete-directory save-path t)))
 
+  :doc "Read authorizes a workspace symlink as its outside target"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-pipeline-symlink-root-" t)))
+         (outside (file-name-as-directory
+                   (make-temp-file "mevedel-pipeline-symlink-outside-" t)))
+         (secret (file-name-concat outside "secret.txt"))
+         (link (file-name-concat root "innocent.txt"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id root :root root :name "symlink-root"))
+         (tool
+          (mevedel-tool--create
+           :name "Read"
+           :handler #'mevedel-tool-fs--read
+           :args '((file_path path :required "Path"))
+           :groups '(read)
+           :read-only-p t
+           :get-path (lambda (args) (plist-get args :file_path))))
+         (mevedel-permission-rules
+          (list (list "Read" :path secret :action 'deny)))
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'full-auto)
+         results)
+    (unwind-protect
+        (progn
+          (write-region "TOP-SECRET\n" nil secret nil 'silent)
+          (make-symbolic-link secret link)
+          (with-temp-buffer
+            (setq-local default-directory root)
+            (setq-local mevedel--workspace workspace)
+            (dolist (path (list secret link))
+              (let (result)
+                (mevedel-pipeline-run-tool
+                 tool (lambda (value) (setq result value))
+                 (list :file_path path))
+                (push result results))))
+          (should
+           (cl-every
+            (lambda (result)
+              (string-prefix-p "Error: Permission denied" result))
+            results)))
+      (delete-directory root t)
+      (delete-directory outside t)))
+  :doc "remote Read authorizes a symlink as its target-native destination"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-pipeline-remote-root-" t)))
+         (outside (file-name-as-directory
+                   (make-temp-file "mevedel-pipeline-remote-outside-" t)))
+         (secret (file-name-concat outside "secret.txt"))
+         (link (file-name-concat root "innocent.txt"))
+         (tool
+          (mevedel-tool--create
+           :name "Read"
+           :handler #'mevedel-tool-fs--read
+           :args '((file_path path :required "Path"))
+           :groups '(read)
+           :read-only-p t
+           :get-path (lambda (args) (plist-get args :file_path))))
+         (mevedel-protected-paths nil)
+         results)
+    (unwind-protect
+        (progn
+          (write-region "REMOTE-SECRET\n" nil secret nil 'silent)
+          (make-symbolic-link secret link)
+          (mevedel-test--with-local-shell-tramp '("read-link")
+            (let* ((remote-root
+                    (format "/mevedelmock:read-link:%s" root))
+                   (remote-secret
+                    (format "/mevedelmock:read-link:%s" secret))
+                   (remote-link
+                    (format "/mevedelmock:read-link:%s" link))
+                   (target
+                    (mevedel-execution-target-create remote-root))
+                   (workspace
+                    (mevedel-workspace--create
+                     :type 'project :id remote-root :root remote-root
+                     :name "remote-symlink-root"
+                     :file-cache (mevedel-test-file-cache-create)))
+                   (session
+                    (mevedel-session--create
+                     :name "remote-symlink" :workspace workspace
+                     :execution-target target
+                     :working-directory remote-root
+                     :permission-mode 'full-auto
+                     :permission-rules
+                     (list (list "Read" :path remote-secret
+                                 :action 'deny)))))
+              (with-temp-buffer
+                (setq-local default-directory remote-root)
+                (setq-local mevedel--workspace workspace)
+                (setq-local mevedel--session session)
+                (dolist (path (list remote-secret remote-link))
+                  (let (result)
+                    (mevedel-pipeline-run-tool
+                     tool (lambda (value) (setq result value))
+                     (list :file_path path))
+                    (push result results))))))
+          (should
+           (cl-every
+            (lambda (result)
+              (string-prefix-p "Error: Permission denied" result))
+            results)))
+      (delete-directory root t)
+      (delete-directory outside t)))
+  :doc "Glob and Grep authorize a symlink root as its outside directory"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-pipeline-search-root-" t)))
+         (outside-directory (file-name-as-directory
+                         (make-temp-file
+                          "mevedel-pipeline-search-outside-" t)))
+         (outside (directory-file-name outside-directory))
+         (link (file-name-concat root "search-root"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id root :root root :name "search-symlink-root"))
+         (session
+          (mevedel-session--create
+           :name "search-symlink" :workspace workspace
+           :working-directory root :permission-mode 'full-auto
+           :sandbox-mode 'off
+           :permission-rules
+           (list (list "Glob" :path outside :action 'deny)
+                 (list "Grep" :path outside :action 'deny))))
+         (glob
+          (mevedel-tool--create
+           :name "Glob" :handler #'mevedel-tool-fs--glob
+           :args '((pattern string :required "Pattern")
+                   (path path :optional "Root"))
+           :async-p t :read-only-p t :groups '(read)
+           :get-path (lambda (args) (plist-get args :path))))
+         (grep
+          (mevedel-tool--create
+           :name "Grep" :handler #'mevedel-tool-fs--grep
+           :args '((pattern string :required "Pattern")
+                   (path path :optional "Root"))
+           :async-p t :read-only-p t :groups '(read)
+           :get-path (lambda (args) (plist-get args :path))))
+         (mevedel-protected-paths nil)
+         results)
+    (unless (executable-find "rg")
+      (ert-skip "rg is required"))
+    (unwind-protect
+        (progn
+          (write-region "needle\n" nil
+                        (file-name-concat outside "found.el")
+                        nil 'silent)
+          (make-symbolic-link outside link)
+          (with-temp-buffer
+            (setq-local default-directory root)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel--session session)
+            (dolist (entry (list (cons glob '(:pattern "*.el"))
+                          (cons grep '(:pattern "needle"))))
+              (dolist (path (list outside link))
+                (push
+                 (test-mevedel-pipeline--run-tool-and-wait
+                  (car entry)
+                  (append (copy-sequence (cdr entry))
+                          (list :path path)))
+                 results))))
+          (should
+           (cl-every
+            (lambda (result)
+              (string-prefix-p "Error: Permission denied" result))
+            results)))
+      (delete-directory root t)
+      (delete-directory outside t)))
+  :doc "ApplyPatch authorizes a nonexistent symlink tail as its destination"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-pipeline-patch-root-" t)))
+         (outside (file-name-as-directory
+                   (make-temp-file "mevedel-pipeline-patch-outside-" t)))
+         (link (file-name-concat root "linked"))
+         (destination
+          (file-name-concat outside "new" "sub" "created.txt"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id root :root root :name "patch-symlink-root"
+           :file-cache (mevedel-test-file-cache-create)))
+         (session
+          (mevedel-session--create
+           :name "patch-symlink" :workspace workspace
+           :working-directory root :permission-mode 'full-auto
+           :permission-rules
+           (list (list "ApplyPatch" :path destination
+                       :action 'deny))))
+         (tool
+          (mevedel-tool--create
+           :name "ApplyPatch"
+           :handler #'mevedel-tool-patch-handler
+           :args '((patch string :required "Patch"))
+           :async-p t :groups '(edit reviewed-edit) :snapshot-p t
+           :get-paths #'mevedel-tool-patch--get-paths))
+         (patch
+          (string-join
+           '("*** Begin Patch"
+             "*** Add File: linked/new/sub/created.txt"
+             "+created"
+             "*** End Patch")
+           "\n"))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         result)
+    (unwind-protect
+        (progn
+          (make-symbolic-link outside link)
+          (with-temp-buffer
+            (setq-local default-directory root)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel--session session)
+            (setq result
+                  (test-mevedel-pipeline--run-tool-and-wait
+                   tool (list :patch patch))))
+          (should
+           (string-prefix-p "Error: Permission denied" result))
+          (should-not (file-exists-p destination)))
+      (delete-directory root t)
+      (delete-directory outside t)))
+  :doc "ApplyPatch keeps its authorized destination across review delay"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-pipeline-review-root-" t)))
+           (outside-a (file-name-as-directory
+                       (make-temp-file
+                        "mevedel-pipeline-review-a-" t)))
+           (outside-b (file-name-as-directory
+                       (make-temp-file
+                        "mevedel-pipeline-review-b-" t)))
+           (link (file-name-concat root "linked"))
+           (destination-a
+            (file-name-concat outside-a "new" "created.txt"))
+           (destination-b
+            (file-name-concat outside-b "new" "created.txt"))
+           (workspace
+            (mevedel-workspace--create
+             :type 'project :id root :root root
+             :name "review-symlink-root"
+             :file-cache (mevedel-test-file-cache-create)))
+           (session
+            (mevedel-session--create
+             :name "review-symlink" :workspace workspace
+             :working-directory root :permission-mode 'ask
+             :resource-grants
+             (list (list :path destination-a :access 'write))))
+           (tool
+            (mevedel-tool--create
+             :name "ApplyPatch"
+             :handler #'mevedel-tool-patch-handler
+             :args '((patch string :required "Patch"))
+             :async-p t :groups '(edit reviewed-edit) :snapshot-p t
+             :get-paths #'mevedel-tool-patch--get-paths))
+           (patch
+            (string-join
+             '("*** Begin Patch"
+               "*** Add File: linked/new/created.txt"
+               "+authorized"
+               "*** End Patch")
+             "\n"))
+           (mevedel-permission-rules nil)
+           (mevedel-protected-paths nil)
+           result)
+      (unwind-protect
+          (progn
+            (make-symbolic-link outside-a link)
+            (with-current-buffer data-buf
+              (setq-local default-directory root)
+              (setq-local mevedel--workspace workspace)
+              (setq-local mevedel--session session)
+              (mevedel-pipeline-run-tool
+               tool (lambda (value) (setq result value))
+               (list :patch patch)))
+            (should-not result)
+            (delete-file link)
+            (make-symbolic-link outside-b link)
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "[ Apply 1 change in 1 file ]")
+              (backward-char 2)
+              (let ((command (key-binding (kbd "RET"))))
+                (should (eq command #'mevedel-patch-review-submit))
+                (call-interactively command)))
+            (should (string-search "Applied patch" result))
+            (should
+             (equal "authorized\n"
+                    (with-temp-buffer
+                      (insert-file-contents destination-a)
+                      (buffer-string))))
+            (should-not (file-exists-p destination-b)))
+        (delete-directory root t)
+        (delete-directory outside-a t)
+        (delete-directory outside-b t))))
   :doc "side tool lifecycle audit uses the durable target without content"
 		 (let* ((parent (mevedel-session--create :name "parent"))
 			(side (mevedel-session--create
@@ -4230,6 +4618,49 @@
 					    (insert-file-contents (car files))
 					    (buffer-string))))))
 		     (delete-directory tmpdir t)))
+		 :doc "publishes remote artifacts and reports a target-native path"
+		 (let ((host "artifact")
+		       (tmpdir (file-name-as-directory
+				(make-temp-file "mevedel-result-remote-" t)))
+			published)
+		   (unwind-protect
+		       (mevedel-test--with-local-shell-tramp (list host)
+			 (let* ((root (format "/mevedelmock:%s:%s/" host tmpdir))
+				(ws (mevedel-workspace--create :root root))
+				(target (mevedel-execution-target-create root))
+				(save-path (file-name-as-directory
+					    (file-name-concat
+					     root ".mevedel" "sessions" "main")))
+				(session (mevedel-session--create
+					  :name "main" :workspace ws
+					  :save-path save-path
+					  :execution-target target))
+				(tool (mevedel-tool--create :name "TestTool"))
+				(result (make-string 500 ?x)))
+			   (cl-letf (((symbol-function
+					'mevedel-session-persistence-publish-text)
+				       (lambda (seen-session path content
+						&optional coding)
+					 (should-not
+					  (file-directory-p
+					   (file-name-directory path)))
+					 (setq published
+					       (list seen-session path content coding)))))
+			     (let ((preview
+				    (mevedel-pipeline--persist-result
+				     result tool session)))
+			       (pcase-let ((`(,seen-session ,path ,content ,coding)
+					    published))
+				 (should (eq session seen-session))
+				 (should (equal result content))
+				 (should (eq 'utf-8-unix coding))
+				 (should (file-remote-p path))
+				 (should (string-search
+					  (file-remote-p path 'localname 'never)
+					  preview))
+				 (should-not
+				  (string-search "/mevedelmock:" preview)))))))
+		     (delete-directory tmpdir t)))
 		 :doc "normalizes raw UTF-8 bytes before writing persisted results"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
 			(ws (mevedel-workspace--create :root tmpdir))
@@ -4281,7 +4712,10 @@
 		 :doc "materializes session directory when save path is absent"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
 			(ws (mevedel-workspace--create :root tmpdir))
-			(session (mevedel-session--create :name "main" :workspace ws))
+			(session (mevedel-session--create
+				  :name "main" :workspace ws
+				  :execution-target
+				  (mevedel-execution-target-create tmpdir)))
 			(tool (mevedel-tool--create :name "TestTool" :max-result-size 100))
 			(result (make-string 500 ?x))
 			persisted)

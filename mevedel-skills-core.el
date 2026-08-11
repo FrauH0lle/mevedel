@@ -25,7 +25,20 @@
 (declare-function gptel-agent-read-file
                   "gptel-agent" (agent-file &optional templates metadata-only))
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-capability
+                  "mevedel-execution-target" (target name))
+(declare-function mevedel-execution-target-identity
+                  "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-label
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-prefix
+                  "mevedel-execution-target" (cl-x) t)
+
 ;; `mevedel-hooks'
+(declare-function mevedel-hooks-annotate-rules-source
+                  "mevedel-hooks"
+                  (rules source &optional source-file source-root))
 (declare-function mevedel-hooks-normalize-rules
                   "mevedel-hooks" (rules &optional scope))
 
@@ -452,8 +465,14 @@ the fallback."
      :argument-names (mevedel-skills--parse-argument-names arguments)
      :path-patterns (mevedel-skills--coerce-list paths)
      :shell (mevedel-skills--validate-shell shell source-file)
-     :hooks (mevedel-skills--normalize-hooks
-             hooks (and (eq context 'fork) 'skill-fork))
+     :hooks
+     (when-let* ((rules (mevedel-skills--normalize-hooks
+                         hooks (and (eq context 'fork) 'skill-fork))))
+       (mevedel-hooks-annotate-rules-source
+        rules
+        (if (eq source 'project) 'project-file
+          (if (eq source 'plugin) 'plugin 'user-file))
+        source-file (file-name-directory source-file)))
      :warnings warnings
      :active-p (null paths))))
 
@@ -785,7 +804,8 @@ are refreshed to match the freshly scanned skill set."
          (dirs (mevedel-skills--collect-roots root skills ws)))
     (setf (mevedel-session-skills session) skills)
     (when (buffer-live-p buffer)
-      (mevedel-skills--register-buffer buffer dirs))
+      (mevedel-skills--register-buffer
+       buffer dirs (mevedel-session-execution-target session)))
     (mevedel-skills--refresh-mtime-cache skills buffer)
     (remhash buffer mevedel-skills--dirty-buffers)
     session))
@@ -892,6 +912,10 @@ are added by `mevedel-skills--ensure-watcher' and removed by
 `mevedel-skills--remove-watcher-if-unused' when no buffer consumes
 them anymore.")
 
+(defvar mevedel-skills--remote-watch-states
+  (make-hash-table :test #'equal)
+  "Last reported file-notification support state per execution target.")
+
 (defvar mevedel-skills--dir-buffers (make-hash-table :test #'equal)
   "Map of absolute directory path to list of consumer chat buffers.
 A buffer joins the list for every directory its session resolves
@@ -974,19 +998,20 @@ nil.  Plugin roots are resolved from plugins enabled in WORKSPACE."
       (maphash (lambda (k _v) (push k result)) dirs)
       result)))
 
-(defun mevedel-skills--register-buffer (buffer dirs)
+(defun mevedel-skills--register-buffer (buffer dirs &optional target)
   "Register BUFFER as a consumer of every directory in DIRS.
 Drops BUFFER's prior registrations to keep the registry consistent
 when the resolved directory set changes (e.g. a leaf directory was
 deleted), then installs watchers on the new set when `watch-files' is
-active.  Removes now-orphan watchers."
+active.  TARGET supplies cached remote notification capabilities.
+Removes now-orphan watchers."
   (mevedel-skills--unregister-buffer buffer)
   (dolist (dir dirs)
     (let ((entry (gethash dir mevedel-skills--dir-buffers)))
       (puthash dir (cons buffer entry) mevedel-skills--dir-buffers)))
   (when (mevedel-skills--strategy-active-p 'watch-files)
     (dolist (dir dirs)
-      (mevedel-skills--ensure-watcher dir)))
+      (mevedel-skills--ensure-watcher dir target)))
   (mevedel-skills--gc-watchers))
 
 (defun mevedel-skills--unregister-buffer (buffer)
@@ -1080,14 +1105,41 @@ SKILL.md files in one walk.  The `stopped' action is ignored."
                    (mevedel-skills--mark-dir-dirty dir)))
                mevedel-skills--watchers))))
 
-(defun mevedel-skills--ensure-watcher (dir)
+(defun mevedel-skills--ensure-watcher (dir &optional target)
   "Install a `file-notify' watcher on DIR if none is live yet.
-Silently no-ops on platforms without filenotify support, or when DIR
-does not exist.  Errors during watcher installation are downgraded to
+Silently no-ops on platforms without filenotify support, when DIR does
+not exist, or when matching remote TARGET has neither `inotifywait'
+nor `gio'.  Errors during watcher installation are downgraded to
 warnings -- a missing watcher only degrades hot-reload, it never
 breaks normal operation."
-  (let ((dir (file-name-as-directory (expand-file-name dir))))
-    (when (file-directory-p dir)
+  (let* ((dir (file-name-as-directory (expand-file-name dir)))
+         (remote-prefix (file-remote-p dir))
+         (watch-supported-p t))
+    (when (and remote-prefix target)
+      (require 'mevedel-execution-target)
+      (when (equal remote-prefix
+                   (mevedel-execution-target-prefix target))
+        (let* ((identity (mevedel-execution-target-identity target))
+               (supported
+                (and (or (mevedel-execution-target-capability
+                          target 'inotifywait)
+                         (mevedel-execution-target-capability target 'gio))
+                     t))
+               (previous
+                (gethash identity mevedel-skills--remote-watch-states
+                         'unknown)))
+          (setq watch-supported-p supported)
+          (unless (eq previous supported)
+            (puthash identity supported
+                     mevedel-skills--remote-watch-states)
+            (unless supported
+              (message
+               (concat
+                "mevedel: remote skill watching unavailable on %s; "
+                "save checks and M-x mevedel-skills-rescan remain "
+                "available (install inotifywait or gio to enable watching)")
+               (mevedel-execution-target-label target)))))))
+    (when (and watch-supported-p (file-directory-p dir))
       (let ((existing (gethash dir mevedel-skills--watchers)))
         (when (and existing
                    (not (ignore-errors (file-notify-valid-p existing))))
@@ -1100,11 +1152,12 @@ breaks normal operation."
                            #'mevedel-skills--watch-callback)))
                 (puthash dir desc mevedel-skills--watchers))
             (error
-             (display-warning
-              'mevedel
-              (format "Skill watcher failed for %s: %s"
-                      dir (error-message-string err))
-              :warning))))))))
+             (save-current-buffer
+               (display-warning
+                'mevedel
+                (format "Skill watcher failed for %s: %s"
+                        dir (error-message-string err))
+                :warning)))))))))
 
 (defun mevedel-skills--remove-watcher-if-unused (dir)
   "Tear down the watcher for DIR when no buffer consumes it."
@@ -1211,8 +1264,15 @@ restarting Emacs."
     (remove-hook 'before-save-hook #'mevedel-skills--before-save-hook)))
   (cond
    ((mevedel-skills--strategy-active-p 'watch-files)
-    (maphash (lambda (dir _consumers)
-               (mevedel-skills--ensure-watcher dir))
+    (maphash (lambda (dir consumers)
+               (let* ((buffer (cl-find-if #'buffer-live-p consumers))
+                      (session
+                       (and buffer
+                            (buffer-local-value 'mevedel--session buffer)))
+                      (target
+                       (and session
+                            (mevedel-session-execution-target session))))
+                 (mevedel-skills--ensure-watcher dir target)))
              mevedel-skills--dir-buffers))
    (t
     (mevedel-skills--teardown-all-watchers))))
@@ -1235,7 +1295,8 @@ restarting Emacs."
            mevedel-skills--dir-buffers)
   (clrhash mevedel-skills--dir-buffers)
   (clrhash mevedel-skills--dirty-buffers)
-  (clrhash mevedel-skills--mtime-cache))
+  (clrhash mevedel-skills--mtime-cache)
+  (clrhash mevedel-skills--remote-watch-states))
 
 (mevedel-skills--reconcile-strategies)
 

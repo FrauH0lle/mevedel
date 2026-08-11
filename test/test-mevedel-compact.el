@@ -1494,6 +1494,9 @@ missing or zero prompt-side usage cannot become the active baseline"
       (dolist (operation '(:apply :start :complete :resume :fail))
         (should (functionp (plist-get target operation)))))
     (setf (mevedel-agent-invocation-transcript-relative-path invocation)
+          "/ssh:foreign:/tmp/agent.chat.org")
+    (should-not (mevedel--compact-agent-target invocation))
+    (setf (mevedel-agent-invocation-transcript-relative-path invocation)
           "agents/other.chat.org")
     (should-not (mevedel--compact-agent-target invocation)))
 
@@ -1539,7 +1542,40 @@ missing or zero prompt-side usage cannot become the active baseline"
         (should target)
         (should (= tool-start (plist-get target :body-start)))
         (should (string-match-p "Keep this task"
-                                (plist-get target :anchor-text)))))))
+                                (plist-get target :anchor-text))))))
+
+  :doc "uses publication membership for a remote canonical transcript"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
+    (let ((start (point)))
+      (insert "Agent response.\n")
+      (put-text-property start (point) 'gptel 'response))
+    (basic-save-buffer)
+    (delete-file canonical-path)
+    (let ((save-path (mevedel-session-save-path session))
+          seen)
+      (cl-letf (((symbol-function 'file-remote-p)
+                 (lambda (path &rest _)
+                   (and (equal path save-path) "/mock:")))
+                ((symbol-function
+                  'mevedel-session-persistence-artifact-present-p)
+                 (lambda (seen-session logical)
+                   (setq seen (list seen-session logical))
+                   t)))
+        (should (mevedel--compact-agent-target invocation))
+        (should
+         (equal (list session "agents/explorer-test.chat.org") seen)))
+      (make-directory (file-name-directory canonical-path) t)
+      (write-region "poisoned cache" nil canonical-path nil 'silent)
+      (cl-letf (((symbol-function 'file-remote-p)
+                 (lambda (path &rest _)
+                   (and (equal path save-path) "/mock:")))
+                ((symbol-function
+                  'mevedel-session-persistence-artifact-present-p)
+                 (lambda (&rest _) nil)))
+        (should-not (mevedel--compact-agent-target invocation))))))
 
 (mevedel-deftest mevedel--compact-agent-archive-path ()
   ,test
@@ -1547,16 +1583,52 @@ missing or zero prompt-side usage cannot become the active baseline"
   :doc "selects the first unused numbered sibling archive"
   (let* ((tempdir (make-temp-file "mevedel-compact-archive-test-" t))
          (canonical (expand-file-name "agent.chat.org" tempdir))
-         (first (expand-file-name "agent.compact-0001.chat.org" tempdir)))
+         (first (expand-file-name "agent.compact-0001.chat.org" tempdir))
+         (session
+          (mevedel-session--create
+           :name "main" :save-path (file-name-as-directory tempdir))))
     (unwind-protect
         (progn
           (write-region "canonical" nil canonical nil 'silent)
           (should (equal first
-                         (mevedel--compact-agent-archive-path canonical)))
+                         (mevedel--compact-agent-archive-path
+                          session canonical)))
           (write-region "archive" nil first nil 'silent)
           (should
            (equal (expand-file-name "agent.compact-0002.chat.org" tempdir)
-                  (mevedel--compact-agent-archive-path canonical))))
+                  (mevedel--compact-agent-archive-path
+                   session canonical)))
+          (let ((save-path (mevedel-session-save-path session)))
+            (cl-letf (((symbol-function 'file-remote-p)
+                       (lambda (path &rest _)
+                         (and (equal path save-path) "/mock:")))
+                      ((symbol-function
+                        'mevedel-session-persistence-artifact-present-p)
+                       (lambda (&rest _) nil)))
+              (should
+               (equal first
+                      (mevedel--compact-agent-archive-path
+                       session canonical))))
+            (delete-file first)
+            (let (seen-logicals)
+              (cl-letf (((symbol-function 'file-remote-p)
+                         (lambda (path &rest _)
+                           (and (equal path save-path) "/mock:")))
+                        ((symbol-function
+                          'mevedel-session-persistence-artifact-present-p)
+                         (lambda (_seen-session logical)
+                           (push logical seen-logicals)
+                           (equal logical
+                                  "agent.compact-0001.chat.org"))))
+                (should
+                 (equal (expand-file-name
+                         "agent.compact-0002.chat.org" tempdir)
+                        (mevedel--compact-agent-archive-path
+                         session canonical)))
+                (should
+                 (equal '("agent.compact-0001.chat.org"
+                          "agent.compact-0002.chat.org")
+                        (nreverse seen-logicals)))))))
       (delete-directory tempdir t))))
 
 (mevedel-deftest mevedel--compact-archived-tool-use-ids ()
@@ -1627,11 +1699,24 @@ missing or zero prompt-side usage cannot become the active baseline"
            (_ (setf (mevedel-session-agent-registry session)
                     (list (cons "/root/explorer" record))))
            (original (buffer-string))
+           (original-publish
+            (symbol-function 'mevedel-session-persistence-publish-text))
+           published
            (target (mevedel--compact-agent-target invocation))
            (archive
-            (mevedel--compact-agent-apply
-             target "## Goal\n- Continue" "Recent tail.\n"
-             "Pending result.\n" nil)))
+            (cl-letf (((symbol-function
+                        'mevedel-session-persistence-publish-text)
+                       (lambda (seen-session path content &optional coding)
+                         (setq published
+                               (list seen-session path content coding))
+                         (funcall original-publish
+                                  seen-session path content coding))))
+              (mevedel--compact-agent-apply
+               target "## Goal\n- Continue" "Recent tail.\n"
+               "Pending result.\n" nil))))
+      (should (equal (list session archive
+                           (substring-no-properties original) 'utf-8-unix)
+                     published))
       (should (file-exists-p archive))
       (should (equal original
                      (with-temp-buffer

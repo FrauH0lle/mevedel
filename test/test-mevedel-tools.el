@@ -38,6 +38,8 @@
 
 (declare-function gptel-make-openai "ext:gptel-openai" (name &rest args))
 
+(defvar gptel--known-backends)
+
 (defvar mevedel-tools-test--agent-registry
   (copy-sequence mevedel-agent--registry)
   "Stable built-in agent registry for isolated tool tests.")
@@ -341,7 +343,10 @@
           (advice-remove 'gptel-curl--stream-insert-response advice))))))
 
 (mevedel-deftest mevedel-tools--handle-steering-inject
-  (:after-each (mevedel-workspace-clear-registry))
+  (:vars ((gptel--known-backends (copy-tree gptel--known-backends))
+          (gptel-backend gptel-backend)
+          (gptel-model gptel-model))
+   :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
 

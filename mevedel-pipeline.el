@@ -41,6 +41,14 @@
                   "mevedel-execution" (summary))
 (defvar mevedel-execution--sandbox-summary-cell)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-expand-path
+                  "mevedel-execution-target" (target path &optional directory))
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+(declare-function mevedel-execution-target-prefix
+                  "mevedel-execution-target" (cl-x) t)
+
 ;; `mevedel-goal'
 (declare-function mevedel-goal-tool-result-budget-warning
                   "mevedel-goal" (session fsm))
@@ -96,6 +104,9 @@
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--shallow-ensure-files
                   "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence-publish-text
+                  "mevedel-session-persistence"
+                  (session path content &optional coding))
 
 ;; `mevedel-specialist-nudges'
 (declare-function mevedel-specialist-nudges-apply
@@ -107,6 +118,8 @@
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (declare-function mevedel-request-note-untracked-effect
                   "mevedel-structs" (request source reason))
+(declare-function mevedel-session-execution-target
+                  "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
 ;; `mevedel-telemetry'
@@ -131,14 +144,14 @@
                   "mevedel-tool-media" (backend parsed media-by-index))
 (declare-function mevedel-tool-media-attach-result
                   "mevedel-tool-media"
-                  (result media tool-results-dir tool-use-id))
+                  (result media tool-results-dir tool-use-id &optional session))
 (declare-function mevedel-tool-media-extract
                   "mevedel-tool-media"
                   (result-string &optional tool-results-dir expected-tool-use-id
-                                 allow-payload-tool-use-id))
+                                 allow-payload-tool-use-id session))
 (declare-function mevedel-tool-media-prepare-tool-result
                   "mevedel-tool-media"
-                  (backend tool-call tool-results-dir))
+                  (backend tool-call tool-results-dir &optional session))
 (declare-function mevedel-tool-media-result-for-hooks
                   "mevedel-tool-media" (result))
 (declare-function mevedel-tool-media-strip-blocks
@@ -196,6 +209,13 @@
 
 (defvar mevedel-pipeline--auto-apply-edit-p nil
   "Non-nil while direct user authority auto-applies a native edit.")
+
+(defvar mevedel-pipeline--canonical-path-map nil
+  "Pre-authorized lexical-to-canonical paths for the active handler.")
+
+(defun mevedel-pipeline-canonical-path (path)
+  "Return PATH's pre-authorized canonical value for the active handler."
+  (or (cdr (assoc path mevedel-pipeline--canonical-path-map)) path))
 
 
 ;;
@@ -274,12 +294,14 @@ available, falls back to `mevedel-pipeline--truncate-result'."
   (require 'mevedel-resource)
   (if-let* ((dir (mevedel-pipeline--tool-results-dir session buffer)))
       (let* ((name (mevedel-tool-name tool))
-             (_ (make-directory dir t))
-             (file (make-temp-file (file-name-concat dir (concat name "-"))
-                                   nil ".txt"))
+             (file (concat
+                    (make-temp-name
+                     (file-name-concat dir (concat name "-")))
+                    ".txt"))
              (preview (mevedel-pipeline--head-tail-preview result)))
-        (let ((coding-system-for-write 'utf-8-unix))
-          (write-region result nil file nil 'silent))
+        (require 'mevedel-session-persistence)
+        (mevedel-session-persistence-publish-text
+         session file result 'utf-8-unix)
         (if-let* ((address (mevedel-resource-artifact-address file session)))
             (concat "<persisted-output>\n"
                     (format "Output too large (%d chars). Full output saved to: %s\n\n"
@@ -620,16 +642,46 @@ signal handler."
                 (list (mevedel-tool-repair-format-issues tool issues)))
       (funcall next context))))
 
-(defun mevedel-pipeline--normalize-path-value (value)
+(defun mevedel-pipeline--normalize-path-value
+    (value &optional execution-target directory)
   "Return VALUE canonicalized into an absolute filesystem path.
 
 Environment references are substituted before expansion, because
 handlers used to do that themselves after authorization had already
 run against the unsubstituted string.  A malformed substitution leaves
 VALUE untouched; the handler then opens that same literal string, so
-the authorized resource still matches the used one."
-  (require 'mevedel-resource)
-  (mevedel-resource-normalize-file-path value))
+the authorized resource still matches the used one.  When
+EXECUTION-TARGET is non-nil, resolve VALUE and its environment
+references in that target against DIRECTORY."
+  (if (or (not (stringp value)) (string-empty-p value))
+      value
+    (if execution-target
+        (progn
+          (require 'mevedel-execution-target)
+          (mevedel-execution-target-expand-path
+           execution-target value directory))
+      (require 'mevedel-resource)
+      (mevedel-resource-normalize-file-path value directory))))
+
+(defun mevedel-pipeline--canonicalize-path-value
+    (value &optional execution-target)
+  "Resolve VALUE's symlinks without leaving EXECUTION-TARGET.
+
+`file-truename' preserves a nonexistent tail while resolving its
+existing ancestors.  Remote lookups bypass TRAMP's attribute cache so
+authorization observes the target's current link destination."
+  (if (or (not (stringp value)) (string-empty-p value))
+      value
+    (when execution-target
+      (require 'mevedel-execution-target))
+    (let* ((remote-file-name-inhibit-cache t)
+           (canonical (file-truename value)))
+      (if execution-target
+          (concat
+           (mevedel-execution-target-prefix execution-target)
+           (mevedel-execution-target-native-path
+            execution-target canonical))
+        canonical))))
 
 (defun mevedel-pipeline--step-normalize-paths (context next _fail)
   "Canonicalize filesystem path arguments in CONTEXT before authorization.
@@ -639,12 +691,16 @@ the permission step, so the path the decision chain authorizes is
 byte-identical to the one the handler receives.  Handlers must not
 re-resolve these arguments.  Resource-looking `path-or-resource' values stay
 authored addresses and are prepared by the resource step.  FAIL is unused:
-normalization cannot fail, since an unresolvable value is passed through
-verbatim."
+normalization passes an unresolvable value through verbatim, and an invalid
+target path signals for the pipeline runner to handle."
   (require 'mevedel-resource)
   (let* ((tool (plist-get context :tool))
          (args (plist-get context :args))
-         (updated nil))
+         (session (plist-get context :session))
+         (target (and session
+                      (mevedel-session-execution-target session)))
+         (directory (plist-get context :default-directory))
+         updated)
     (when (listp args)
       (dolist (spec (mevedel-tool-args tool))
         (let* ((type (cadr spec))
@@ -654,12 +710,36 @@ verbatim."
                                 (mevedel-resource-address-like-p value))))
           (when (and (memq type '(path path-or-resource))
                      (not resource-p))
-            (let ((normalized (mevedel-pipeline--normalize-path-value value)))
+            (let* ((expanded (mevedel-pipeline--normalize-path-value
+                              value target directory))
+                   (normalized
+                    (if (eq type 'path)
+                        (mevedel-pipeline--canonicalize-path-value
+                         expanded target)
+                      expanded)))
               (unless (equal value normalized)
                 (setq updated
                       (plist-put (or updated (copy-sequence args))
                                  key normalized))))))))
-    (funcall next (if updated (plist-put context :args updated) context))))
+    (let ((normalized-context
+           (if updated (plist-put context :args updated) context)))
+      (when-let* ((getter (mevedel-tool-get-paths tool)))
+        (let ((default-directory (or directory default-directory))
+              path-map)
+          (dolist (path
+                   (let ((mevedel-pipeline--canonical-path-map nil))
+                     (delete-dups
+                      (delq nil (funcall getter
+                                         (plist-get normalized-context
+                                                    :args))))))
+            (push (cons path
+                        (mevedel-pipeline--canonicalize-path-value
+                         path target))
+                  path-map))
+          (setq normalized-context
+                (plist-put normalized-context :canonical-path-map
+                           (nreverse path-map)))))
+      (funcall next normalized-context))))
 
 (defun mevedel-pipeline--resource-operation (tool)
   "Return the resource operation implemented by TOOL, or nil."
@@ -1280,14 +1360,15 @@ existing path extraction behavior."
                  ((mevedel-tool-get-path tool)
                   (list (funcall (mevedel-tool-get-path tool) args)))))
             (error nil)))
-         (attempts (plist-get context :resource-attempts)))
+         (attempts (plist-get context :resource-attempts))
+         (canonical (plist-get context :canonical-path-map)))
     (delete-dups
      (delq nil
            (mapcar
             (lambda (path)
               (if (and (stringp path) (cdr (assoc path attempts)))
                   nil
-                path))
+                (or (cdr (assoc path canonical)) path)))
             paths)))))
 
 (defun mevedel-pipeline--step-permission (context next fail)
@@ -1442,7 +1523,7 @@ Extracts the path from tool args via the tool's get-path function and
 snapshots it.  Only included for tools declaring snapshots.  CONTEXT must
 contain `:tool' and `:args'.  NEXT is called on success.  FAIL is
 unused -- a snapshot failure is best-effort and should never fail the
-pipeline."
+  pipeline."
   (let ((tool (plist-get context :tool))
         (args (plist-get context :args)))
     (dolist (path (mevedel-pipeline--tool-paths tool args context))
@@ -1590,6 +1671,8 @@ buffer."
                    (plist-get context :resource-attempts))
                   (mevedel-tool-patch--prepared-proposal
                    (plist-get context :patch-proposal))
+                  (mevedel-pipeline--canonical-path-map
+                   (plist-get context :canonical-path-map))
                   (mevedel-execution--sandbox-summary-cell
                    (plist-get context :sandbox-summary-cell)))
               (mevedel-tool-repair-mark-executed repair-entry)
@@ -2121,10 +2204,11 @@ the view parser, persistence) keeps seeing the full block."
   (require 'mevedel-tool-media)
   (let ((saved nil))
     (unwind-protect
-        (let ((media-by-index nil)
+        (let* ((media-by-index nil)
+               (session (bound-and-true-p mevedel--session))
               (tool-results-dir
-               (when-let* ((session (bound-and-true-p mevedel--session))
-                           (save-path (mevedel-session-save-path session)))
+               (when-let ((save-path (and session
+                                          (mevedel-session-save-path session))))
                  (file-name-concat save-path "tool-results"))))
           (dolist (tc tool-use)
             (let* ((orig (plist-get tc :result))
@@ -2137,7 +2221,7 @@ the view parser, persistence) keeps seeing the full block."
                          (mevedel-pipeline--strip-non-media-side-channel-blocks
                           orig)))
                       (mevedel-tool-media-prepare-tool-result
-                       backend clean-tc tool-results-dir)))
+                       backend clean-tc tool-results-dir session)))
                    (llm-result (car prepared))
                    (native-media (cdr prepared)))
               (push native-media media-by-index)
@@ -2189,7 +2273,8 @@ control trusted side-channel lookup."
                    (mevedel-tool-media-strip-blocks result-string)
                    tool-results-dir
                    expected-tool-use-id
-                   allow-payload-tool-use-id))
+                   allow-payload-tool-use-id
+                   session))
              nil))
           (let* ((block (car (last blocks)))
                  (visible
@@ -2200,7 +2285,8 @@ control trusted side-channel lookup."
                          (mevedel-tool-media-strip-blocks visible)
                          tool-results-dir
                          expected-tool-use-id
-                         allow-payload-tool-use-id)))
+                         allow-payload-tool-use-id
+                         session)))
                   (caddr block))))))))
 
 (defun mevedel-pipeline--step-attach-render-data (context next _fail)
@@ -2263,7 +2349,8 @@ without changing handler return shapes."
                               (plist-get context :session)
                               (plist-get context :buffer)
                               (plist-get context :request))
-                             (plist-get context :tool-use-id))))
+                             (plist-get context :tool-use-id)
+                             (plist-get context :session))))
       (funcall next context))))
 
 (defun mevedel-pipeline--step-persist (context next _fail)
@@ -2485,6 +2572,7 @@ guard, a sync error escaping a step's NEXT recursion (after the
 recursion already delivered a success result to CALLBACK) would
 double-fire.  Errors from the wrapped invocation are caught and
 logged so a misbehaving CALLBACK cannot strand the pipeline."
+  (require 'mevedel-telemetry)
   (let* ((dispatch-buffer (current-buffer))
          (session (and (boundp 'mevedel--session) mevedel--session))
          (workspace

@@ -172,17 +172,24 @@ store the profile against the complete compound command, preventing one
 segment from inheriting another segment's capability.
 Filesystem entries are exact `(:path PATH :access read-or-write)`
 requirements. `PATH` is either absolute or home-relative with `~`/`~/`; stored
-home-relative paths expand when loaded so project configuration remains
-portable. Entries become effective only while an equally strong direct
-resource grant still exists. Multiple matching profiles are unioned, with write
-dominating read for the same path. Only session, persistent, and defcustom
-rules can contribute a reusable profile. Invocation- and request-scoped
-delegated rules may still authorize ordinary operations but never broaden the
-child sandbox.
+home-relative paths expand in the execution target. Project and session stores
+encode exact paths and absolute path rules without a client-specific TRAMP
+prefix, then qualify them through the currently opened matching target. A
+foreign target prefix invalidates the stored authority instead of being
+reinterpreted. Entries become effective only while an equally strong direct
+resource grant still exists. Multiple matching profiles are unioned, with
+write dominating read for the same path. Only session, persistent, and
+defcustom rules can contribute a reusable profile. Invocation- and
+request-scoped delegated rules may still authorize ordinary operations but
+never broaden the child sandbox.
 
 `mevedel-protected-paths` is an alist from glob to `read-only` or
-`inaccessible`. The default `.git` glob is read-only; the default SSH and GnuPG
-credential globs are inaccessible. String-only entries are invalid by design.
+`inaccessible`. The default `.git` glob is read-only; the default SSH, GnuPG,
+AWS, Azure, Google Cloud, and Kubernetes credential globs are inaccessible. On
+a remote session, leading `~` uses the target user's probed home; a
+client-absolute custom pattern stays in the client path domain and therefore
+does not become a remote protection rule.
+String-only entries are invalid by design.
 
 The three canonical modes are `ask`, `edits`, and `full-auto`:
 
@@ -205,7 +212,11 @@ workspace approval default to remembering the complete selected profile;
 command, network, and individual path toggles can narrow it before approval.
 The current invocation always receives the complete approved request.
 `.mevedel/permissions.el` stores a plist containing both `:rules` and
-`:resource-grants`.
+`:resource-grants`. It lives with the project on its execution target and stores
+target-native paths, so reopening the same workspace through an equivalent
+TRAMP alias reuses its authority. The user-global `permissions.el` remains in
+the client-local `mevedel-user-dir`; it is merged at runtime and is never copied
+to the target or into a portable session.
 
 Global and project stores are validated when a fresh, resumed, or forked
 session initializes. Invalid files contribute no authority and produce one
@@ -223,8 +234,10 @@ the workspace permission file. Neither enters an unrelated session. ApplyPatch
 authority covers reading the same exact path, but read authority does not cover
 writes. These grants do not cover siblings or descendants, add workspace
 roots, or authorize Bash/Eval code. Revoking the grant restores the underlying
-workspace/protected-path restriction. Invocation-only authority is consumed by
-the approved call and is not stored.
+workspace/protected-path restriction. Session-side paths use the same
+target-native codec as workspace authority, while another client's global
+rules are recomputed locally on resume. Invocation-only authority is consumed
+by the approved call and is not stored.
 
 A conversation or worktree session fork copies the source session's permission
 mode, sandbox mode, session permission rules, and resource grants at the fork
@@ -262,12 +275,12 @@ apply to write tools, and are still lower precedence than explicit deny or
 ask rules and protected-path resource checks.
 
 Local slash commands may own deterministic workflows outside the model tool
-pipeline. `/worktree status` and `/worktree create` run argv-safe local
-Git commands directly because the user explicitly typed the command in the
-mevedel UI. That does not grant the model any Bash permission. When the
-model uses the `git-worktree` skill and falls back to creating a worktree
-itself, creation happens through the normal Bash tool and this permission
-chain.
+pipeline. `/worktree status` and `/worktree create` run argv-safe Git commands
+directly on the session execution target because the user explicitly typed the
+command in the mevedel UI. That does not grant the model any Bash permission.
+When the model uses the `git-worktree` skill and falls back to creating a
+worktree itself, creation happens through the normal Bash tool and this
+permission chain.
 
 ## Prompt queues
 
@@ -564,7 +577,9 @@ output are not included. The active permission mode is also excluded: the
 guardian produces mode-independent semantic guidance, and mevedel interprets it
 according to the session mode. Everything in the user message is evidence to
 analyze, never instructions to follow. Confinement informs the recommendation
-and reason but does not reduce the command's risk rating.
+and reason but does not reduce the command's risk rating.  Pending confinement
+facts probe the same execution target and working directory that the eventual
+command launch will use.
 
 ## Eval
 

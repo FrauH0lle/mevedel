@@ -6509,9 +6509,10 @@ view chrome."
   (require 'mevedel-transcript)
   (unless mevedel--data-buffer
     (error "No data buffer"))
-  (mevedel-view-render--preserving-window-state
-   (mevedel-view--call-preserving-input-text
-    (lambda ()
+  (atomic-change-group
+    (mevedel-view-render--preserving-window-state
+     (mevedel-view--call-preserving-input-text
+      (lambda ()
       (let* ((start-time (float-time))
              (data-buf
               (or transcript-buffer
@@ -6569,8 +6570,8 @@ view chrome."
           (mevedel-view--full-rerender-reanchor
            data-buf rendering in-flight-was
            data-turn-start-pos preserved-live-tail)
-          (mevedel-view--full-rerender-finish
-           data-buf live-data-buf rendering historical-p start-time)))))))
+            (mevedel-view--full-rerender-finish
+             data-buf live-data-buf rendering historical-p start-time))))))))
 
 ;;
 ;;; Optimistic user turn rendering

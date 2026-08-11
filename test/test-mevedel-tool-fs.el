@@ -10,6 +10,7 @@
 (require 'mevedel-file-state)
 (require 'mevedel-execution)
 (require 'mevedel-reminders)
+(require 'mevedel-sandbox)
 (require 'mevedel-system)
 (require 'mevedel-tool-registry)
 (require 'mevedel-view)
@@ -28,6 +29,7 @@
 (defvar gptel-backend)
 (defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*")
 (defvar mevedel-session--read-only-mode nil)
+(defvar tramp-remote-path)
 
 
 ;;
@@ -66,6 +68,24 @@
 ;;
 ;;; External helper execution
 
+(mevedel-deftest mevedel-tool-fs--executable-find ()
+  ,test
+  (test)
+  :doc "searches in the path's local or remote execution target"
+  (let (calls)
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name &optional remote)
+                 (push (list name remote) calls)
+                 "/bin/rg")))
+      (should (mevedel-tool-fs--executable-find "rg" "/tmp/project/"))
+      (should
+       (mevedel-tool-fs--executable-find
+        "rg" "/ssh:user@host:/srv/project/")))
+    (should
+     (equal '(("rg" nil) ("rg" "/ssh:user@host:"))
+            (seq-filter (lambda (call) (equal (car call) "rg"))
+                        (nreverse calls))))))
+
 (mevedel-deftest mevedel-tool-fs--call-process-capturing-output ()
   ,test
   (test)
@@ -89,11 +109,72 @@
     (should (eq :owner (nth 6 captured)))
     (should (equal "/root" (nth 7 captured)))))
 
+(mevedel-deftest mevedel-tool-fs--with-local-media-source ()
+  ,test
+  (test)
+  :doc "keeps local converter inputs unchanged"
+  (let ((source (make-temp-file "mevedel-media-local-" nil ".png")))
+    (unwind-protect
+        (should (equal source
+                       (mevedel-tool-fs--with-local-media-source
+                        source #'identity)))
+      (delete-file source)))
+
+  :doc "copies remote converter inputs locally and deletes the copy"
+  (let ((source (make-temp-file "mevedel-media-remote-" nil ".png"
+                                "remote-media"))
+        copied)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("media")
+          (let ((remote (format "/mevedelmock:media:%s" source)))
+            (setq copied
+                  (mevedel-tool-fs--with-local-media-source
+                   remote
+                   (lambda (local)
+                     (should-not (file-remote-p local))
+                     (should (equal "remote-media"
+                                    (with-temp-buffer
+                                      (insert-file-contents local)
+                                      (buffer-string))))
+                     local)))
+            (should-not (file-exists-p copied))))
+      (delete-file source)))
+
+  :doc "rejects oversized remote media before invoking the converter"
+  (let ((source (make-temp-file "mevedel-media-oversized-" nil ".pdf"
+                                "oversized"))
+        (mevedel-tool-fs--remote-media-copy-max-bytes 1)
+        called)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("media")
+          (should-error
+           (mevedel-tool-fs--with-local-media-source
+            (format "/mevedelmock:media:%s" source)
+            (lambda (_local) (setq called t))))
+          (should-not called))
+      (delete-file source))))
+
+(mevedel-deftest mevedel-tool-fs--model-path ()
+  ,test
+  (test)
+  :doc "removes the current session target prefix"
+  (let* ((root "/ssh:builder@example.test:/srv/project/")
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "model-path"
+                     :root root :name "model-path"))
+         (mevedel--session (mevedel-session-create "main" workspace)))
+    (should (equal "/srv/project/src/main.el"
+                   (mevedel-tool-fs--model-path
+                    "/ssh:builder@example.test:/srv/project/src/main.el")))))
+
 (mevedel-deftest mevedel-tools--generate-diff ()
   ,test
   (test)
-  :doc "routes diff through the helper layer with both snapshots read-only"
-  (let ((session (mevedel-session--create))
+  :doc "runs local snapshot diffing locally despite an ambient remote session"
+  (let* ((target
+          (mevedel-execution-target-create
+           "/ssh:builder@example.test:/srv/project/"))
+         (session (mevedel-session--create :execution-target target))
         captured)
     (cl-letf (((symbol-function 'mevedel-execution-run-helper)
                (lambda (&rest args)
@@ -105,7 +186,7 @@
                         "old" "new" "file.el")))))
     (should (equal "diff" (car (nth 1 captured))))
     (should (= 2 (length (nth 2 captured))))
-    (should (eq session (nth 5 captured)))
+    (should-not (nth 5 captured))
     (should (eq :owner (nth 6 captured)))
     (should (equal "/root" (nth 7 captured))))
   :doc "preserves a trailing blank context line in unified output"
@@ -283,6 +364,22 @@
     (should (and (proper-list-p result)
                  (plist-member result :result)))
     (plist-get result :result)))
+
+(defun test-mevedel-tool-fs--target-rg-wrapper (root)
+  "Create a target-only `rg' wrapper under ROOT.
+Return (BIN-DIRECTORY . MARKER-PATH)."
+  (let* ((rg (or (executable-find "rg")
+                 (ert-skip "rg is required")))
+         (bin (file-name-concat root "target-bin"))
+         (marker (file-name-concat root "target-rg-ran"))
+         (wrapper (file-name-concat bin "rg")))
+    (make-directory bin)
+    (with-temp-file wrapper
+      (insert "#!/bin/sh\n"
+              "touch " (shell-quote-argument marker) "\n"
+              "exec " (shell-quote-argument rg) " \"$@\"\n"))
+    (set-file-modes wrapper #o755)
+    (cons bin marker)))
 
 (mevedel-deftest mevedel-tool-fs--memory-resource-search
   (:doc "searches every configured memory root and rewrites paths with root identities")
@@ -549,6 +646,127 @@
     (should (equal 12 (plist-get normalized :limit)))
     (should (equal 900 (plist-get normalized :max_height)))
     (should (equal 2000 (plist-get normalized :max_tokens)))))
+
+(mevedel-deftest mevedel-tool-fs--read-media-file ()
+  ,test
+  (test)
+  :doc "remote image conversion uses temporary local input and output paths"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-remote-media-root-" t)))
+        converter-input converter-output)
+    (unwind-protect
+        (progn
+          (test-mevedel-tool-fs--write-bytes
+           (file-name-concat root "image.png")
+           test-mevedel-tool-fs--png-bytes)
+          (mevedel-test--with-local-shell-tramp '("media")
+            (let* ((remote-root (format "/mevedelmock:media:%s" root))
+                   (remote-path (file-name-concat remote-root "image.png"))
+                   (workspace (mevedel-workspace--create
+                               :type 'project :id "remote-media"
+                               :root remote-root :name "remote-media"))
+                   (session (mevedel-session-create "main" workspace))
+                   (mevedel--session session))
+              (cl-letf
+                  (((symbol-function 'gptel--model-capable-p)
+                    (lambda (cap &optional _model) (eq cap 'media)))
+                   ((symbol-function 'gptel--model-mime-capable-p)
+                    (lambda (mime &optional _model)
+                      (equal mime "image/png")))
+                   ((symbol-function 'mevedel-tool-fs--native-media-backend-p)
+                    (lambda () t))
+                   ((symbol-function 'mevedel-tool-fs--imagemagick-command)
+                    (lambda () "magick"))
+                   ((symbol-function 'mevedel-execution-run-helper)
+                    (lambda (_name command _read-paths _writable-roots
+                                   &rest keys)
+                      (setq converter-input (nth 1 command)
+                            converter-output (car (last command)))
+                      (should-not (file-remote-p converter-input))
+                      (should-not (file-remote-p converter-output))
+                      (should-not (plist-get keys :session))
+                      (test-mevedel-tool-fs--write-bytes
+                       converter-output test-mevedel-tool-fs--png-bytes)
+                      '(:exit-code 0 :output ""))))
+                (let* ((result (mevedel-tool-fs--read-media-file
+                                remote-path '(:max_width 64)))
+                       (body (plist-get result :result))
+                       (media (car (plist-get result :media))))
+                  (should (string-match-p
+                           (regexp-quote
+                            (file-name-concat root "image.png"))
+                           body))
+                  (should-not (string-match-p "/mevedelmock:" body))
+                  (should-not (string-match-p "mevedel-media-" body))
+                  (should (equal (file-name-concat root "image.png")
+                                 (plist-get media :path)))))))
+          (should-not (file-exists-p converter-input))
+          (should-not (file-exists-p converter-output)))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-fs--read-pdf-pages ()
+  ,test
+  (test)
+  :doc "remote PDF conversion uses local Poppler input and removes artifacts"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-remote-pdf-root-" t)))
+        transient-paths)
+    (unwind-protect
+        (progn
+          (write-region "%PDF-1.4\n" nil
+                        (file-name-concat root "document.pdf") nil 'silent)
+          (mevedel-test--with-local-shell-tramp '("pdf")
+            (let* ((remote-root (format "/mevedelmock:pdf:%s" root))
+                   (remote-path
+                    (file-name-concat remote-root "document.pdf"))
+                   (workspace (mevedel-workspace--create
+                               :type 'project :id "remote-pdf"
+                               :root remote-root :name "remote-pdf"))
+                   (session (mevedel-session-create "main" workspace))
+                   (mevedel--session session))
+              (cl-letf
+                  (((symbol-function 'executable-find)
+                    (lambda (name &optional _remote)
+                      (and (member name '("pdfinfo" "pdftoppm")) name)))
+                   ((symbol-function 'gptel--model-capable-p)
+                    (lambda (cap &optional _model) (eq cap 'media)))
+                   ((symbol-function 'gptel--model-mime-capable-p)
+                    (lambda (mime &optional _model)
+                      (equal mime "image/png")))
+                   ((symbol-function 'mevedel-tool-fs--native-media-backend-p)
+                    (lambda () t))
+                   ((symbol-function 'mevedel-execution-run-helper)
+                    (lambda (_name command _read-paths _writable-roots
+                                   &rest keys)
+                      (should-not (plist-get keys :session))
+                      (pcase (car command)
+                        ("pdfinfo"
+                         (push (nth 1 command) transient-paths)
+                         '(:exit-code 0 :output "Pages: 1\n"))
+                        ("pdftoppm"
+                         (let ((input (nth 7 command))
+                               (output (concat (car (last command)) ".png")))
+                           (should-not (file-remote-p input))
+                           (push input transient-paths)
+                           (push output transient-paths)
+                           (test-mevedel-tool-fs--write-bytes
+                            output test-mevedel-tool-fs--png-bytes)
+                           '(:exit-code 0 :output "")))
+                        (_ '(:exit-code 1 :output "unexpected"))))))
+                (let* ((result (mevedel-tool-fs--read-pdf-pages
+                                remote-path "1" nil))
+                       (body (plist-get result :result))
+                       (media (car (plist-get result :media))))
+                  (should (string-match-p
+                           (regexp-quote
+                            (file-name-concat root "document.pdf"))
+                           body))
+                  (should-not (string-match-p "/mevedelmock:" body))
+                  (should (equal (file-name-concat root "document.pdf")
+                                 (plist-get media :path)))))))
+          (dolist (path transient-paths)
+            (should-not (file-exists-p path))))
+      (delete-directory root t))))
 
 
 ;;
@@ -1060,6 +1278,30 @@
             (should (string-match-p "Read output truncated" result))
             (should (string-match-p "offset=4" result))))
       (delete-file tmp)))
+  :doc "remote continuation guidance uses the target-native path"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-remote-read-root-" t))))
+    (unwind-protect
+        (progn
+          (write-region "one\ntwo\nthree\n" nil
+                        (file-name-concat root "notes.txt") nil 'silent)
+          (mevedel-test--with-local-shell-tramp '("read")
+            (let* ((remote-root (format "/mevedelmock:read:%s" root))
+                   (remote-path (file-name-concat remote-root "notes.txt"))
+                   (workspace (mevedel-workspace--create
+                               :type 'project :id "remote-read"
+                               :root remote-root :name "remote-read"
+                               :file-cache (mevedel-test-file-cache-create)))
+                   (mevedel--session
+                    (mevedel-session-create "main" workspace))
+                   (mevedel-tool-fs--read-default-limit 2)
+                   (result (mevedel-tool-fs--read-file
+                            (list :file_path remote-path))))
+              (should (string-match-p
+                       (regexp-quote (file-name-concat root "notes.txt"))
+                       result))
+              (should-not (string-match-p "/mevedelmock:" result)))))
+      (delete-directory root t)))
   :doc "caps aggregate text read output with continuation guidance"
   (let ((tmp (make-temp-file "mevedel-test-")))
     (unwind-protect
@@ -1107,6 +1349,16 @@
             (should (string-match-p "real content" result))))
       (delete-file tmp)
       (when (file-exists-p link) (delete-file link))))
+  :doc "does not re-resolve a path already canonicalized by the pipeline"
+  (let ((tmp (make-temp-file "mevedel-test-" nil ".txt" "content\n")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'file-truename)
+                   (lambda (&rest _)
+                     (error "Read handler re-resolved its authorized path"))))
+          (should (string-match-p
+                   "content"
+                   (mevedel-tool-fs--read-file (list :file_path tmp)))))
+      (delete-file tmp)))
   :doc "records session interaction and workspace cache entry"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "hello world\n"))
          (ws (mevedel-workspace--create
@@ -1258,7 +1510,88 @@
                          (list :file_path tmp :offset 4 :limit 2))))
             (should (string-match-p "4\td" second))
             (should-not (string-match-p "unchanged since last read" second))))
-      (delete-file tmp))))
+      (delete-file tmp)))
+  :doc "remote session artifacts ignore poisoned fixed caches and file-state dedup"
+  (let* ((host "read-artifact")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-read-artifact-" t)))
+         (remote-root (format "/mevedelmock:%s:%s/" host local-root))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "read-artifact"
+                     :root remote-root :name "read-artifact"))
+         (session (mevedel-session-create "main" workspace))
+         (save-path (file-name-concat remote-root ".mevedel" "sessions"
+                                     "session"))
+         (logical "plans/current.md")
+         (fixed (file-name-concat save-path logical))
+         (published (file-name-concat
+                     save-path ".publications" "generation" "000001.data"))
+         (committed "committed plan\nsecond line\n")
+         dedup-called)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (make-directory (file-name-directory fixed) t)
+          (write-region "poisoned fixed cache\n" nil fixed nil 'silent)
+          (make-directory (file-name-directory published) t)
+          (write-region committed nil published nil 'silent)
+          (setf (mevedel-session-save-path session)
+                (file-name-as-directory save-path)
+                (mevedel-session-publication session)
+                (list :head ".publications/generation/manifest.el"
+                      :sidecar published
+                      :artifacts
+                      (list (list logical
+                                  :published published
+                                  :sha256 (secure-hash 'sha256 committed)))))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (cl-letf (((symbol-function 'mevedel-session-read-is-duplicate-p)
+                       (lambda (&rest _)
+                         (setq dedup-called t)))
+                      ((symbol-function 'mevedel-session-record-file-access)
+                       (lambda (&rest _)
+                         (setq dedup-called t))))
+              (let ((result
+                     (mevedel-tool-fs--read-file
+                      (list :file_path fixed :offset 2 :limit 1))))
+                (should (string-match-p "2\tsecond line" result))
+                (should-not (string-match-p "poisoned" result))
+                (should-not dedup-called)))
+            (delete-file fixed)
+            (should (string-match-p
+                     "1\tcommitted plan"
+                     (mevedel-tool-fs--read-file
+                      (list :file_path fixed :offset 1 :limit 1))))))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+  :doc "remote session artifacts never fall back when the manifest omits them"
+  (let* ((host "read-unpublished-artifact")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-read-unpublished-" t)))
+         (remote-root (format "/mevedelmock:%s:%s/" host local-root))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "read-unpublished-artifact"
+                     :root remote-root :name "read-unpublished-artifact"))
+         (session (mevedel-session-create "main" workspace))
+         (save-path (file-name-concat remote-root ".mevedel" "sessions"
+                                     "session"))
+         (fixed (file-name-concat save-path "tool-results" "result.txt")))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (make-directory (file-name-directory fixed) t)
+          (write-region "fixed cache only\n" nil fixed nil 'silent)
+          (setf (mevedel-session-save-path session)
+                (file-name-as-directory save-path)
+                (mevedel-session-publication session)
+                (list :head ".publications/generation/manifest.el"
+                      :sidecar nil :artifacts nil))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (should-error
+             (mevedel-tool-fs--read-file (list :file_path fixed))
+             :type 'error)))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t)))))
 
 
 ;;
@@ -1527,6 +1860,35 @@
 (mevedel-deftest mevedel-tool-fs--glob ()
   ,test
   (test)
+  :doc "runs ripgrep in a remote target and returns target-native paths"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-remote-glob-" t)))
+         (match (file-name-concat root "found.el"))
+         (wrapper (test-mevedel-tool-fs--target-rg-wrapper root))
+         (bin (car wrapper))
+         (marker (cdr wrapper)))
+    (unwind-protect
+        (progn
+          (with-temp-file match (insert "content\n"))
+          (mevedel-test--with-local-shell-tramp '("glob")
+            (let* ((remote-root (format "/mevedelmock:glob:%s" root))
+                   (workspace
+                    (mevedel-workspace--create
+                     :type 'project :id "remote-glob"
+                     :root remote-root :name "remote-glob"))
+                   (session (mevedel-session-create "main" workspace)))
+              (setf (mevedel-session-sandbox-mode session) 'off)
+              (let ((default-directory remote-root)
+                    (mevedel--session session)
+                    (tramp-remote-path (cons bin tramp-remote-path)))
+                (let ((result
+                       (test-mevedel-tool-fs--await-callback
+                        #'mevedel-tool-fs--glob
+                        (list :pattern "*.el" :path remote-root))))
+                  (should (string-match-p (regexp-quote match) result))
+                  (should-not (string-match-p "/mevedelmock:" result))
+                  (should (file-exists-p marker)))))))
+      (delete-directory root t)))
   :doc "runs ripgrep through the helper layer with the search path read-only"
   (let ((session (mevedel-session--create))
         (tmp-dir (make-temp-file "mevedel-test-" t))
@@ -1680,6 +2042,36 @@
 (mevedel-deftest mevedel-tool-fs--grep ()
   ,test
   (test)
+  :doc "runs ripgrep in a remote target and returns target-native paths"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-remote-grep-" t)))
+         (match (file-name-concat root "match.el"))
+         (wrapper (test-mevedel-tool-fs--target-rg-wrapper root))
+         (bin (car wrapper))
+         (marker (cdr wrapper)))
+    (unwind-protect
+        (progn
+          (with-temp-file match (insert "remote needle\n"))
+          (mevedel-test--with-local-shell-tramp '("grep")
+            (let* ((remote-root (format "/mevedelmock:grep:%s" root))
+                   (workspace
+                    (mevedel-workspace--create
+                     :type 'project :id "remote-grep"
+                     :root remote-root :name "remote-grep"))
+                   (session (mevedel-session-create "main" workspace)))
+              (setf (mevedel-session-sandbox-mode session) 'off)
+              (let ((default-directory remote-root)
+                    (mevedel--session session)
+                    (tramp-remote-path (cons bin tramp-remote-path)))
+                (let ((result
+                       (test-mevedel-tool-fs--await-callback
+                        #'mevedel-tool-fs--grep
+                        (list :pattern "remote needle"
+                              :path remote-root))))
+                  (should (string-match-p (regexp-quote match) result))
+                  (should-not (string-match-p "/mevedelmock:" result))
+                  (should (file-exists-p marker)))))))
+      (delete-directory root t)))
   :doc "runs ripgrep through the helper layer with the search path read-only"
   (let ((session (mevedel-session--create))
         (tmp (make-temp-file "mevedel-test-"))

@@ -4,13 +4,20 @@
 
 ;;; Code:
 
+(require 'mevedel)
 (require 'mevedel-structs)
+(require 'mevedel-execution-target)
+(require 'mevedel-permissions)
 (require 'mevedel-permission-queue)
 (require 'mevedel-plan-mode)
 (require 'mevedel-goal)
 (require 'mevedel-agents)
 (require 'mevedel-reminders)
 (require 'mevedel-sandbox)
+(require 'mevedel-session-durability)
+(require 'mevedel-session-persistence)
+(require 'mevedel-telemetry)
+(require 'mevedel-workspace-identity)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -388,7 +395,38 @@
     (should (null (mevedel-session-deferred-pending session)))
     (should (null (mevedel-session-deferred-injected session)))
     (should (eq 'ask (mevedel-session-permission-mode session)))
-    (should (eq 'best-effort (mevedel-session-sandbox-mode session))))
+    (should (eq 'best-effort (mevedel-session-sandbox-mode session)))
+    (should-not
+     (mevedel-execution-target-remote-p
+      (mevedel-session-execution-target session))))
+
+  :doc "binds one immutable target and qualifies its working directory"
+  (let* ((ws (mevedel-workspace--create
+              :type 'project
+              :id "/ssh:user@host:/srv/project/"
+              :root "/ssh:user@host:/srv/project/"
+              :name "remote"))
+         (session (mevedel-session-create
+                   "main" ws "/srv/project/lib/"))
+         (target (mevedel-session-execution-target session)))
+    (should (equal "/ssh:user@host:/srv/project/lib/"
+                   (mevedel-session-working-directory session)))
+    (should (equal "/ssh:user@host:"
+                   (mevedel-execution-target-prefix target)))
+    (should-error
+     (setf (mevedel-session-execution-target session)
+           (mevedel-execution-target-create "/tmp/"))))
+
+  :doc "rejects a working directory on another target"
+  (let ((ws (mevedel-workspace--create
+             :type 'project
+             :id "/ssh:user@host:/srv/project/"
+             :root "/ssh:user@host:/srv/project/"
+             :name "remote")))
+    (should-error
+     (mevedel-session-create
+      "main" ws "/ssh:user@other:/srv/project/")
+     :type 'mevedel-execution-target-error))
 
   :doc "two sessions share same workspace by reference"
   (let* ((ws (mevedel-workspace-get-or-create
@@ -688,7 +726,337 @@
       (should (null (mevedel-session-permission-queue session)))
       (should (null (mevedel-session-pending-plan-approval session)))
       (should (equal '((plan . aborted) (permission . aborted))
-                     outcomes)))))
+                     outcomes))))
+
+  :doc "probes an unprobed remote target before admitting the request"
+  (with-temp-buffer
+    (let* ((target (mevedel-execution-target-create
+                    "/ssh:user@host:/srv/project/"))
+           (workspace (mevedel-workspace--create
+                       :type 'project :id "remote"
+                       :root "/ssh:user@host:/srv/project/" :name "remote"))
+           (session (mevedel-session--create
+                     :name "main" :workspace workspace
+                     :execution-target target
+                     :working-directory "/ssh:user@host:/srv/project/"))
+           (probe-count 0))
+      (cl-letf (((symbol-function 'mevedel-execution-target-probe)
+                 (lambda (probed &optional _refresh _sandbox-mode)
+                   (cl-incf probe-count)
+                   (setf (mevedel-execution-target-readiness probed)
+                         '(:status ready))))
+                ((symbol-function
+                  'mevedel-session-persistence-assert-mutation-authority)
+                 (lambda (&rest _) t)))
+        (should (mevedel-request-p (mevedel-request-begin session))))
+      (should (= 1 probe-count))))
+
+  :doc "rechecks a cached remote target and revokes grants after replacement"
+  (with-temp-buffer
+    (let* ((target (mevedel-execution-target-create
+                    "/docker:dev:/workspace/"))
+           (workspace (mevedel-workspace--create
+                       :type 'project :id "remote"
+                       :root "/docker:dev:/workspace/" :name "remote"))
+           (session (mevedel-session--create
+                     :name "main" :workspace workspace
+                     :execution-target target
+                     :working-directory "/docker:dev:/workspace/"))
+           calls)
+      (setf (mevedel-execution-target-readiness target) '(:status ready)
+            (mevedel-execution-target-incarnation target) "old-incarnation"
+            (mevedel-execution-target-observed-incarnation target)
+            "new-incarnation"
+            (mevedel-execution-target-incarnation-changed-p target) t)
+      (cl-letf (((symbol-function 'mevedel-execution-target-probe)
+                 (lambda (&rest _args) (push 'probe calls)))
+                ((symbol-function
+                  'mevedel-session-persistence-assert-mutation-authority)
+                 (lambda (&rest _) (push 'lease calls) t))
+                ((symbol-function
+                  'mevedel-permission-invalidate-target-grants)
+                 (lambda (_session) (push 'invalidate calls) t))
+                ((symbol-function
+                  'mevedel-session-persistence-publish-sidecar-state)
+                 (lambda (_session _root-buffer) (push 'publish calls) t)))
+        (should (mevedel-request-p (mevedel-request-begin session))))
+      (should (equal '(probe lease invalidate publish) (nreverse calls)))
+      (should (equal "new-incarnation"
+                     (mevedel-execution-target-incarnation target)))
+      (should-not
+       (mevedel-execution-target-observed-incarnation target))
+      (should-not
+       (mevedel-execution-target-incarnation-changed-p target))))
+
+  :doc "commits a replacement incarnation only with revoked exact grants"
+  (let* ((local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-incarnation-ack-" t)))
+         (host "incarnation-ack")
+         (remote-root
+          (format "/mevedelmock:%s:%s" host local-root))
+         (mevedel-session-durability--client-id (make-string 64 ?9))
+         (mevedel-session-durability--disclosed-targets
+          (make-hash-table :test #'equal))
+         session
+         buffer)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (let* ((workspace
+                  (mevedel-workspace-get-or-create
+                   'project remote-root remote-root "incarnation-ack"))
+                 (_identity
+                  (mevedel-workspace-identity-ensure remote-root))
+                 (grant-path (file-name-concat remote-root "granted.el"))
+                 (session-id "main-incarnation-ack")
+                 (session-dir
+                  (file-name-as-directory
+                   (file-name-concat
+                    remote-root ".mevedel" "sessions" session-id)))
+                 (segment
+                  (file-name-concat session-dir "segment-0001.chat.org")))
+            (setq session
+                  (mevedel-session-create "main" workspace remote-root)
+                  buffer
+                  (generate-new-buffer " *incarnation-ack-root*"))
+            (let ((target (mevedel-session-execution-target session))
+                  (replacement-incarnation
+                   (secure-hash 'sha256 "Linux\n")))
+              (mevedel-execution-target-seed-incarnation
+               target "old-incarnation")
+              (setf (mevedel-execution-target-support-tier target) 'supported
+                    (mevedel-session-sandbox-mode session) 'off
+                    (mevedel-session-resource-grants session)
+                    (list (list :path grant-path :access 'read))
+                    (mevedel-session-session-id session) session-id
+                    (mevedel-session-save-path session) session-dir
+                    (mevedel-session-created-at session) "created"
+                    (mevedel-session-updated-at session) "updated"
+                    (mevedel-session-current-segment session) 1)
+              (puthash
+               (mevedel-execution-target-identity target)
+               t mevedel-session-durability--disclosed-targets)
+              (with-current-buffer buffer
+                (org-mode)
+                (setq-local mevedel--session session)
+                (setq buffer-file-name segment)
+                (insert "Published transcript\n")
+                (set-buffer-modified-p nil))
+              (make-directory session-dir t)
+              (should
+               (mevedel-session-durability-lease-acquire
+                session-dir (buffer-name buffer) session))
+              (should
+               (mevedel-session-durability-publish
+                session
+                (list
+                 (list :path segment :content "Published transcript\n")
+                 (list
+                  :path
+                  (file-name-concat session-dir "session.meta.el")
+                  :content
+                  (let ((print-length nil)
+                        (print-level nil)
+                        (print-circle t)
+                        (print-quoted t))
+                    (prin1-to-string
+                     (mevedel-session-persistence-serialize session)))
+                  :commit-marker t))))
+              (cl-letf (((symbol-function 'executable-find)
+                         (lambda (name &optional _remote)
+                           (concat "/usr/bin/" name)))
+                        ((symbol-function 'process-file)
+                         (lambda (program _in destination _display
+                                          &rest _args)
+                           (with-current-buffer destination
+                             (insert (if (equal program "env")
+                                         (concat "HOME=" local-root "\0")
+                                       "Linux\n")))
+                           0)))
+                (let ((readiness
+                       (mevedel-execution-target-probe target t 'off)))
+                  (should (eq 'ready (plist-get readiness :status)))))
+              ;; Anything persisting reentrantly after the probe still sees
+              ;; the old baseline paired with the old exact grant.
+              (let ((pre-ack
+                     (mevedel-session-persistence-serialize session)))
+                (should
+                 (equal "old-incarnation"
+                        (plist-get pre-ack :target-incarnation)))
+                (should
+                 (equal
+                  (list
+                   (list :path (file-name-concat local-root "granted.el")
+                         :access 'read))
+                  (plist-get pre-ack :resource-grants))))
+              (should (equal "old-incarnation"
+                             (mevedel-execution-target-incarnation target)))
+              (should (equal replacement-incarnation
+                             (mevedel-execution-target-observed-incarnation
+                              target)))
+              (with-current-buffer buffer
+                (should (mevedel-request-p
+                         (mevedel-request-begin session))))
+              (let* ((sidecar-text
+                      (mevedel-session-persistence-read-artifact
+                       session "session.meta.el" t))
+                     (sidecar
+                      (with-temp-buffer
+                        (insert sidecar-text)
+                        (goto-char (point-min))
+                        (read (current-buffer))))
+                     (reloaded
+                      (plist-get
+                       (mevedel-session-persistence-deserialize
+                        sidecar workspace)
+                       :session)))
+                (should
+                 (equal replacement-incarnation
+                        (plist-get sidecar :target-incarnation)))
+                (should-not (plist-get sidecar :resource-grants))
+                (should
+                 (equal replacement-incarnation
+                        (mevedel-execution-target-incarnation
+                         (mevedel-session-execution-target reloaded))))
+                (should-not
+                 (mevedel-session-resource-grants reloaded)))
+              (should-not
+               (mevedel-execution-target-incarnation-changed-p target))
+              (should-not
+               (mevedel-execution-target-observed-incarnation target)))))
+      (when (and session (mevedel-session-save-path session))
+        (ignore-errors
+          (mevedel-session-durability-lease-release
+           (mevedel-session-save-path session) session)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
+  :doc "keeps a failed replacement marker pending and retryable"
+  (with-temp-buffer
+    (let* ((target (mevedel-execution-target-create
+                    "/docker:dev:/workspace/"))
+           (workspace (mevedel-workspace--create
+                       :type 'project :id "remote"
+                       :root "/docker:dev:/workspace/" :name "remote"))
+           (session (mevedel-session--create
+                     :name "main" :workspace workspace
+                     :execution-target target
+                     :working-directory "/docker:dev:/workspace/"
+                     :resource-grants
+                     '((:path "/docker:dev:/outside.el" :access read))))
+           (fail-publication t))
+      (setq-local mevedel--session session)
+      (setf (mevedel-execution-target-readiness target) '(:status ready)
+            (mevedel-execution-target-incarnation target) "old-incarnation"
+            (mevedel-execution-target-observed-incarnation target)
+            "new-incarnation"
+            (mevedel-execution-target-incarnation-changed-p target) t)
+      (cl-letf
+          (((symbol-function 'mevedel-execution-target-probe) #'ignore)
+           ((symbol-function
+             'mevedel-session-persistence-assert-mutation-authority)
+            (lambda (checked &optional _buffer)
+              (when (mevedel-session-pending-publication checked)
+                (user-error "Session has pending publication"))
+              t))
+           ((symbol-function 'mevedel-permission-invalidate-target-grants)
+            (lambda (checked)
+              (setf (mevedel-session-resource-grants checked) nil)
+              t))
+           ((symbol-function
+             'mevedel-session-persistence-publish-sidecar-state)
+            (lambda (checked _root-buffer)
+              (if fail-publication
+                  (progn
+                    (setf (mevedel-session-pending-publication checked)
+                          '(:batches (staged-incarnation-marker)))
+                    (user-error "Injected publication failure"))
+                t))))
+        (should-error (mevedel-request-begin session) :type 'user-error)
+        (should
+         (mevedel-execution-target-incarnation-changed-p target))
+        (should (equal "new-incarnation"
+                       (mevedel-execution-target-incarnation target)))
+        (should (equal "new-incarnation"
+                       (mevedel-execution-target-observed-incarnation target)))
+        (should-not (mevedel-session-resource-grants session))
+        (should (mevedel-session-pending-publication session))
+        (should-error (mevedel-request-begin session) :type 'user-error)
+        (setf (mevedel-session-pending-publication session) nil
+              fail-publication nil)
+        (should (mevedel-request-p (mevedel-request-begin session)))
+        (should-not
+         (mevedel-execution-target-incarnation-changed-p target))
+        (should-not
+         (mevedel-execution-target-observed-incarnation target)))))
+
+  :doc "keeps replacement unacknowledged when grant invalidation fails"
+  (with-temp-buffer
+    (let* ((target (mevedel-execution-target-create
+                    "/docker:dev:/workspace/"))
+           (workspace (mevedel-workspace--create
+                       :type 'project :id "remote"
+                       :root "/docker:dev:/workspace/" :name "remote"))
+           (session (mevedel-session--create
+                     :name "main" :workspace workspace
+                     :execution-target target
+                     :working-directory "/docker:dev:/workspace/")))
+      (setf (mevedel-execution-target-readiness target) '(:status ready)
+            (mevedel-execution-target-incarnation target) "old-incarnation"
+            (mevedel-execution-target-observed-incarnation target)
+            "new-incarnation"
+            (mevedel-execution-target-incarnation-changed-p target) t)
+      (cl-letf (((symbol-function 'mevedel-execution-target-probe)
+                 #'ignore)
+                ((symbol-function
+                  'mevedel-session-persistence-assert-mutation-authority)
+                 (lambda (&rest _) t))
+                ((symbol-function
+                  'mevedel-permission-invalidate-target-grants)
+                 (lambda (_session) (user-error "Publication failed"))))
+        (should-error (mevedel-request-begin session) :type 'user-error))
+      (should
+       (mevedel-execution-target-incarnation-changed-p target))
+      (should (equal "old-incarnation"
+                     (mevedel-execution-target-incarnation target)))
+      (should (equal "new-incarnation"
+                     (mevedel-execution-target-observed-incarnation target)))
+      (should-not mevedel--current-request)))
+
+  :doc "blocks a remote request with one aggregated readiness error"
+  (with-temp-buffer
+    (let* ((target (mevedel-execution-target-create
+                    "/ssh:user@host:/srv/project/"))
+           (workspace (mevedel-workspace--create
+                       :type 'project :id "remote"
+                       :root "/ssh:user@host:/srv/project/" :name "remote"))
+           (session (mevedel-session--create
+                     :name "main" :workspace workspace
+                     :execution-target target
+                     :working-directory "/ssh:user@host:/srv/project/")))
+      (setf (mevedel-execution-target-readiness target)
+            '(:status blocked :reason missing-dependencies
+              :missing-dependencies (rg bash)))
+      (let ((message
+             (condition-case err
+                 (progn (mevedel-request-begin session) nil)
+               (user-error (error-message-string err)))))
+        (should (string-match-p "rg, bash" message))
+        (should-not mevedel--current-request))))
+
+  :doc "does not impose remote readiness probing on a local request"
+  (with-temp-buffer
+    (let* ((workspace (mevedel-workspace-get-or-create
+                       'project "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" workspace)))
+      (cl-letf (((symbol-function 'mevedel-execution-target-probe)
+                 (lambda (&rest _)
+                   (ert-fail "local request unexpectedly probed"))))
+        (should (mevedel-request-p (mevedel-request-begin session)))))))
 
 (mevedel-deftest mevedel-request-end
   (:before-each (mevedel-workspace-clear-registry)

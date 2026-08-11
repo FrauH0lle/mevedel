@@ -9,11 +9,33 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-execution-target)
+(require 'mevedel-session-persistence)
 (require 'mevedel-view)
 (require 'mevedel-view-markdown)
 (require 'mevedel-view-render)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
+
+(mevedel-deftest mevedel-view--resolve-path
+  (:doc "`mevedel-view--resolve-path' resolves paths in the session target")
+  ,test
+  (test)
+  :doc "remote target-native absolute and relative paths are re-qualified"
+  (let* ((root "/ssh:builder@example.test:/srv/project/")
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "remote-link-root"
+                     :root root :name "remote-link-root"))
+         (session (mevedel-session-create "main" workspace)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (should (equal "/ssh:builder@example.test:/srv/project/src/main.el"
+                     (mevedel-view--resolve-path "/srv/project/src/main.el")))
+      (should (equal "/ssh:builder@example.test:/srv/project/test/main.el"
+                     (mevedel-view--resolve-path "test/main.el")))
+      (should-not
+       (mevedel-view--resolve-path
+        "/ssh:other@example.test:/srv/project/src/main.el")))))
 
 (mevedel-deftest mevedel-view--decorate-code-blocks-in-range
   (:doc "`mevedel-view--decorate-code-blocks-in-range' adds copy buttons to fenced blocks")
@@ -312,6 +334,96 @@
           (search-forward "missing-file.el")
           (should-not (button-at (match-beginning 0))))
       (delete-directory root t)))
+
+  :doc "remote session artifact opens committed bytes through its logical path"
+  (let* ((host "view-artifact")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-view-artifact-" t)))
+         (remote-root (format "/mevedelmock:%s:%s" host local-root))
+         (save-path (concat remote-root "session/"))
+         (logical "tool-results/result.txt")
+         (fixed (file-name-concat save-path logical))
+         (native-fixed (file-name-concat local-root "session" logical))
+         (published (file-name-concat
+                     save-path ".publications" "generation" "000001.data"))
+         (content "committed\nsecond\nthird\n")
+         (target (mevedel-execution-target-create remote-root))
+         (session (mevedel-session--create
+                   :name "remote-view" :execution-target target
+                   :save-path save-path))
+         opened)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (make-directory (file-name-directory fixed) t)
+          (write-region "poisoned fixed cache" nil fixed nil 'silent)
+          (make-directory (file-name-directory published) t)
+          (write-region content nil published nil 'silent)
+          (setf (mevedel-session-publication session)
+                (list :head ".publications/generation/manifest.el"
+                      :sidecar nil
+                      :artifacts
+                      (list (list logical :published published
+                                  :sha256 (secure-hash 'sha256 content)))))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "Read " native-fixed ":2\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward (concat native-fixed ":2"))
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal logical
+                             (button-get
+                              button 'mevedel-view-session-artifact)))
+              (cl-letf (((symbol-function 'pop-to-buffer)
+                         (lambda (buffer &rest _)
+                           (setq opened buffer)
+                           buffer)))
+                (button-activate button))))
+          (should (buffer-live-p opened))
+          (with-current-buffer opened
+            (should (equal buffer-file-name fixed))
+            (should (equal content (buffer-string)))
+            (should (= 2 (line-number-at-pos)))
+            (should (looking-at "second"))
+            (should buffer-read-only)))
+      (when (buffer-live-p opened)
+        (with-current-buffer opened
+          (setq buffer-read-only nil)
+          (set-buffer-modified-p nil))
+        (kill-buffer opened))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
+  :doc "unpublished remote session cache stays plain text"
+  (let* ((host "view-unpublished-artifact")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-view-unpublished-" t)))
+         (remote-root (format "/mevedelmock:%s:%s" host local-root))
+         (save-path (concat remote-root "session/"))
+         (logical "tool-results/result.txt")
+         (fixed (file-name-concat save-path logical))
+         (native-fixed (file-name-concat local-root "session" logical))
+         (target (mevedel-execution-target-create remote-root))
+         (session (mevedel-session--create
+                   :name "remote-view" :execution-target target
+                   :save-path save-path)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (make-directory (file-name-directory fixed) t)
+          (write-region "unpublished fixed cache" nil fixed nil 'silent)
+          (setf (mevedel-session-publication session)
+                (list :head ".publications/generation/manifest.el"
+                      :sidecar nil :artifacts nil))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "Read " native-fixed "\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward native-fixed)
+            (should-not (button-at (match-beginning 0)))))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))))
 
   :doc "slash-containing relative path is still buttonized"
   (let* ((root (make-temp-file "mevedel-view-linkify-rel-" t))

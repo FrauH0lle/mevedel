@@ -10,9 +10,11 @@
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
 (require 'mevedel-hooks)
+(require 'mevedel-prompt-submission)
 (require 'mevedel-structs)
 (require 'mevedel-tool-exec)
 (require 'mevedel-view)
+(require 'mevedel-view-render)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -27,6 +29,44 @@
 (defvar mevedel-bash-dangerous-commands)
 (defvar mevedel-plugin-extra-roots)
 (defvar mevedel-session--read-only-mode)
+
+
+(mevedel-deftest mevedel-review--repo-root ()
+  ,test
+  (test)
+  :doc "requalifies the target-native Git root through the current target"
+  (progn
+    (skip-unless (executable-find "git"))
+    (let* ((tmp-dir (file-name-as-directory
+                     (make-temp-file "mevedel-review-remote-" t)))
+           (child (file-name-concat tmp-dir "nested"))
+           (remote-child (format "/mevedelmock:review:%s/" child)))
+      (unwind-protect
+          (progn
+            (make-directory child t)
+            (let ((default-directory tmp-dir))
+              (should (zerop (process-file "git" nil nil nil
+                                           "init" "--quiet"))))
+            (mevedel-test--with-local-shell-tramp '("review")
+              (should
+               (equal (format "/mevedelmock:review:%s" tmp-dir)
+                      (mevedel-review--repo-root remote-child)))))
+        (delete-directory tmp-dir t)))))
+
+(mevedel-deftest mevedel-review--target-native-path ()
+  ,test
+  (test)
+  :doc "removes the transport prefix from model-facing review paths"
+  (should
+   (equal "/srv/project/.mevedel/review-packages/review.md"
+          (mevedel-review--target-native-path
+           "/ssh:user@host:/srv/project/"
+           "/ssh:user@host:/srv/project/.mevedel/review-packages/review.md")))
+  :doc "preserves local review paths"
+  (should
+   (equal "/tmp/project/review.md"
+          (mevedel-review--target-native-path
+           "/tmp/project/" "/tmp/project/review.md"))))
 
 
 (mevedel-deftest mevedel-review--target-prompt-and-hint ()

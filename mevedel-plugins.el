@@ -23,6 +23,8 @@
 (declare-function dired "dired" (dirname &optional switches))
 
 ;; `mevedel-cockpit'
+(declare-function mevedel-cockpit-context-session
+                  "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-context-workspace
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context
@@ -53,6 +55,11 @@
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
 (declare-function mevedel-menu-open "mevedel-menu" (area))
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-publish-text
+                  "mevedel-session-persistence"
+                  (session path content &optional coding))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills-rescan "mevedel-skills-core" ())
@@ -425,30 +432,73 @@ Items include usable plugin manifests and visible metadata errors."
               (and (listp state) state))))
       (error nil))))
 
+(defun mevedel-plugins--state-session (workspace)
+  "Return the live session authorized to mutate WORKSPACE plugin state."
+  (let ((session
+         (or (and (boundp 'mevedel--session) mevedel--session)
+             (ignore-errors
+               (mevedel-cockpit-context-session
+                (mevedel-cockpit-current-context))))))
+    (and session
+         (eq workspace (mevedel-session-workspace session))
+         session)))
+
+(defun mevedel-plugins--state-text (state)
+  "Return the durable plugin STATE file contents."
+  (with-temp-buffer
+    (insert ";; Mevedel plugin state\n")
+    (insert ";; Auto-generated, safe to edit\n\n")
+    (pp state (current-buffer))
+    (buffer-string)))
+
 (defun mevedel-plugins--write-state (state &optional workspace)
   "Persist plugin STATE for WORKSPACE."
-  (let ((file (or (mevedel-plugins-state-file workspace)
-                  (error "No workspace for plugin state"))))
-    (make-directory (file-name-directory file) t)
-    (with-temp-file file
-      (insert ";; Mevedel plugin state\n")
-      (insert ";; Auto-generated, safe to edit\n\n")
-      (pp state (current-buffer)))))
+  (let* ((file (or (mevedel-plugins-state-file workspace)
+                   (error "No workspace for plugin state")))
+         (content (mevedel-plugins--state-text state)))
+    (if (file-remote-p file)
+        (let ((session (or (mevedel-plugins--state-session workspace)
+                           (user-error
+                            "Remote plugin state requires its live session"))))
+          (require 'mevedel-session-persistence)
+          (mevedel-session-persistence-publish-text
+           session file content 'utf-8-unix))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file
+        (insert content)))))
 
 (defun mevedel-plugins--state-plist (name &optional workspace)
   "Return persisted state plist for plugin NAME in WORKSPACE."
   (cdr (assoc name (mevedel-plugins--read-state workspace))))
 
-(defun mevedel-plugins--source-root (root)
-  "Return persisted source-root form for ROOT."
-  (and root
-       (file-name-as-directory (expand-file-name root))))
+(defun mevedel-plugins--source-root (root &optional workspace)
+  "Return the durable source identity for ROOT in WORKSPACE.
+Project sources use workspace-relative paths; other sources stay absolute."
+  (when root
+    (let* ((root (file-name-as-directory (expand-file-name root)))
+           (workspace-root
+            (and workspace
+                 (file-name-as-directory
+                  (expand-file-name (mevedel-workspace-root workspace)))))
+           (relative
+            (and workspace-root
+                 (equal (file-remote-p root)
+                        (file-remote-p workspace-root))
+                 (file-relative-name root workspace-root))))
+      (if (and relative
+               (not (file-name-absolute-p relative))
+               (not (equal relative ".."))
+               (not (string-prefix-p "../" relative)))
+          relative
+        root))))
 
-(defun mevedel-plugins--same-root-p (a b)
-  "Return non-nil when source roots A and B identify the same directory."
-  (and a b
-       (equal (mevedel-plugins--source-root a)
-              (mevedel-plugins--source-root b))))
+(defun mevedel-plugins--same-root-p (a b &optional workspace)
+  "Return non-nil when source roots A and B identify the same directory.
+Relative identities are requalified through the live WORKSPACE root."
+  (when (and a b)
+    (let ((base (and workspace (mevedel-workspace-root workspace))))
+      (equal (file-name-as-directory (expand-file-name a base))
+             (file-name-as-directory (expand-file-name b base))))))
 
 (defun mevedel-plugins--hook-rules-from-file (file)
   "Return normalized hook rules from FILE."
@@ -465,12 +515,12 @@ Items include usable plugin manifests and visible metadata errors."
               (append rules
                       (mevedel-plugins--hook-rules-from-file file)))))))
 
-(defun mevedel-plugins--hook-surface-from-hooks (hooks)
-  "Return the hook consent surface declared by HOOKS."
+(defun mevedel-plugins--hook-surface-from-hooks (hooks &optional workspace)
+  "Return the hook consent surface declared by HOOKS in WORKSPACE."
   (let (items)
     (dolist (entry hooks)
       (when-let* ((file (plist-get entry :file)))
-        (let ((source (mevedel-plugins--source-root file)))
+        (let ((source (mevedel-plugins--source-root file workspace)))
           (push (list source) items)
           (dolist (rule (mevedel-plugins--hook-rules-from-file file))
             (let ((event (symbol-name (car rule))))
@@ -491,15 +541,18 @@ Items include usable plugin manifests and visible metadata errors."
             (string< (prin1-to-string a)
                      (prin1-to-string b))))))
 
-(defun mevedel-plugins--hook-fingerprint-from-hooks (hooks)
-  "Return a consent fingerprint for normalized plugin HOOKS."
-  (when-let* ((surface (mevedel-plugins--hook-surface-from-hooks hooks)))
+(defun mevedel-plugins--hook-fingerprint-from-hooks
+    (hooks &optional workspace)
+  "Return a consent fingerprint for normalized plugin HOOKS in WORKSPACE."
+  (when-let* ((surface (mevedel-plugins--hook-surface-from-hooks
+                        hooks workspace)))
     (secure-hash 'sha256 (prin1-to-string surface))))
 
-(defun mevedel-plugins--hook-fingerprint (plugin)
-  "Return the current hook consent fingerprint for PLUGIN."
+(defun mevedel-plugins--hook-fingerprint (plugin &optional workspace)
+  "Return the current hook consent fingerprint for PLUGIN in WORKSPACE."
   (mevedel-plugins--hook-fingerprint-from-hooks
-   (mevedel-plugin-hooks plugin)))
+   (mevedel-plugin-hooks plugin)
+   workspace))
 
 (defun mevedel-plugins--state-enabled-p (name &optional workspace root)
   "Return non-nil when plugin NAME from ROOT is enabled in WORKSPACE."
@@ -507,13 +560,15 @@ Items include usable plugin manifests and visible metadata errors."
     (and (plist-get state :enabled)
          (mevedel-plugins--same-root-p
           root
-          (plist-get state :source-root)))))
+          (plist-get state :source-root)
+          workspace))))
 
 (defun mevedel-plugins--state-hooks-enabled-p
     (name &optional workspace root hooks)
   "Return non-nil when plugin NAME from ROOT has hooks enabled in WORKSPACE."
   (let* ((state (mevedel-plugins--state-plist name workspace))
-         (fingerprint (mevedel-plugins--hook-fingerprint-from-hooks hooks)))
+         (fingerprint (mevedel-plugins--hook-fingerprint-from-hooks
+                       hooks workspace)))
     (and fingerprint
          (plist-get state :hooks-enabled)
          (mevedel-plugins--state-enabled-p name workspace root)
@@ -552,7 +607,8 @@ Items include usable plugin manifests and visible metadata errors."
               (entry (assoc name state))
               ((mevedel-plugins--same-root-p
                 root
-                (plist-get (cdr entry) :source-root))))
+                (plist-get (cdr entry) :source-root)
+                workspace)))
     (mevedel-plugins--write-state
      (cl-remove name (copy-tree state)
                 :key #'car
@@ -597,7 +653,8 @@ Only plugins enabled in WORKSPACE are returned."
           (plist-put state
                      :source-root
                      (mevedel-plugins--source-root
-                      (mevedel-plugin-root plugin))))
+                      (mevedel-plugin-root plugin)
+                      workspace)))
     state))
 
 (defun mevedel-plugins--hook-rules (plugin)
@@ -659,7 +716,7 @@ Only plugins enabled in WORKSPACE are returned."
 
 (defun mevedel-plugins--ensure-hook-consent (plugin &optional workspace)
   "Return non-nil when PLUGIN hooks may be enabled in WORKSPACE."
-  (let* ((fingerprint (mevedel-plugins--hook-fingerprint plugin))
+  (let* ((fingerprint (mevedel-plugins--hook-fingerprint plugin workspace))
          (state (mevedel-plugins--state-plist
                  (mevedel-plugin-name plugin) workspace)))
     (or (not fingerprint)
@@ -676,7 +733,7 @@ Only plugins enabled in WORKSPACE are returned."
          (source-root (plist-get state :source-root)))
     (or (not (plist-get state :enabled))
         (mevedel-plugins--same-root-p
-         (mevedel-plugin-root plugin) source-root)
+         (mevedel-plugin-root plugin) source-root workspace)
         (yes-or-no-p
          (format "Switch plugin %s activation from %s to %s? "
                  (mevedel-plugin-name plugin)
@@ -686,13 +743,14 @@ Only plugins enabled in WORKSPACE are returned."
 (defun mevedel-plugins--write-enabled-state
     (plugin hooks-enabled &optional workspace)
   "Persist PLUGIN as enabled, with HOOKS-ENABLED in WORKSPACE."
-  (let ((fingerprint (mevedel-plugins--hook-fingerprint plugin)))
+  (let ((fingerprint (mevedel-plugins--hook-fingerprint plugin workspace)))
     (mevedel-plugins--write-state-entry
      (mevedel-plugin-name plugin)
      (list :enabled t
            :hooks-enabled (and hooks-enabled fingerprint t)
            :source-root (mevedel-plugins--source-root
-                         (mevedel-plugin-root plugin))
+                         (mevedel-plugin-root plugin)
+                         workspace)
            :hooks-fingerprint (and hooks-enabled fingerprint))
      workspace)))
 
@@ -719,7 +777,8 @@ Only plugins enabled in WORKSPACE are returned."
            :hooks-enabled nil
            :source-root (and plugin
                              (mevedel-plugins--source-root
-                              (mevedel-plugin-root plugin)))
+                              (mevedel-plugin-root plugin)
+                              workspace))
            :hooks-fingerprint nil)
      workspace)))
 
@@ -744,7 +803,8 @@ Only plugins enabled in WORKSPACE are returned."
             (plist-put state
                        :source-root
                        (mevedel-plugins--source-root
-                        (mevedel-plugin-root plugin)))))
+                        (mevedel-plugin-root plugin)
+                        workspace))))
     (setq state (plist-put state :hooks-enabled nil))
     (mevedel-plugins--write-state-entry plugin-name state workspace)))
 
@@ -973,12 +1033,13 @@ Workspace runtime data is retained."
   "Return non-nil when PLUGIN hook consent is stale in WORKSPACE."
   (let* ((state (mevedel-plugins--state-plist
                  (mevedel-plugin-name plugin) workspace))
-         (fingerprint (mevedel-plugins--hook-fingerprint plugin)))
+         (fingerprint (mevedel-plugins--hook-fingerprint plugin workspace)))
     (and fingerprint
          (plist-get state :hooks-enabled)
          (mevedel-plugins--same-root-p
           (mevedel-plugin-root plugin)
-          (plist-get state :source-root))
+          (plist-get state :source-root)
+          workspace)
          (not (equal fingerprint
                      (plist-get state :hooks-fingerprint))))))
 
@@ -1019,12 +1080,14 @@ Workspace runtime data is retained."
     (and (plist-get state :enabled)
          (not (mevedel-plugins--same-root-p
                (mevedel-plugin-root plugin)
-               (plist-get state :source-root)))
+               (plist-get state :source-root)
+               workspace))
          (cl-find-if
           (lambda (shadow)
             (mevedel-plugins--same-root-p
              (mevedel-plugin-root shadow)
-             (plist-get state :source-root)))
+             (plist-get state :source-root)
+             workspace))
           (mevedel-plugin-shadowed plugin)))))
 
 (defun mevedel-plugins--plugin-source-label (plugin)
@@ -1358,6 +1421,42 @@ Workspace runtime data is retained."
   (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-details))
 
+(defconst mevedel-plugins-list--surface
+  `(:buffer-name ,mevedel-plugins-list-buffer-name
+    :label "plugin cockpit"
+    :row-label "plugin"
+    :mode mevedel-plugins-list-mode
+    :format [("State" 5 nil)
+             ("Name" 24 t)
+             ("Version" 12 t)
+             ("Enabled" 8 t)
+             ("Hooks" 14 t)
+             ("Skills" 7 t)
+             ("Source" 0 t)]
+    :sort-key ("Name" . nil)
+    :collect mevedel-plugins-list--collect
+    :entry mevedel-plugins-list--entry
+    :header mevedel-plugins-list--header-line
+    :details mevedel-plugins-list--details-text
+    :details-buffer "*mevedel plugin details*"
+    :help-buffer ,mevedel-plugins-help-buffer-name
+    :help-function mevedel-plugins-list--help-text
+    :keys (("e" "Enable or disable selected plugin"
+            mevedel-plugins-list-toggle-enabled)
+           ("h" "Toggle hooks for selected plugin"
+            mevedel-plugins-list-toggle-hooks)
+           ("+" "Install GitHub plugin by OWNER/REPO"
+            mevedel-plugins-list-install)
+           ("u" "Update selected plugin"
+            mevedel-plugins-list-update)
+           ("r" "Reload plugin-visible session skills"
+            mevedel-plugins-list-reload)
+           ("x" "Remove selected managed plugin"
+            mevedel-plugins-list-remove)
+           ("o" "Open selected plugin source in Dired"
+            mevedel-plugins-list-open-source)))
+  "Cockpit surface spec for the plugin list.")
+
 (defun mevedel-plugins-list--help-text (&optional _context)
   "Return help text for the plugin cockpit."
   (string-join
@@ -1396,42 +1495,6 @@ Workspace runtime data is retained."
        (mevedel-plugins-list--error-detail-text item)
      (mevedel-plugins-list--detail-text item context))
    "\n"))
-
-(defconst mevedel-plugins-list--surface
-  `(:buffer-name ,mevedel-plugins-list-buffer-name
-    :label "plugin cockpit"
-    :row-label "plugin"
-    :mode mevedel-plugins-list-mode
-    :format [("State" 5 nil)
-             ("Name" 24 t)
-             ("Version" 12 t)
-             ("Enabled" 8 t)
-             ("Hooks" 14 t)
-             ("Skills" 7 t)
-             ("Source" 0 t)]
-    :sort-key ("Name" . nil)
-    :collect mevedel-plugins-list--collect
-    :entry mevedel-plugins-list--entry
-    :header mevedel-plugins-list--header-line
-    :details mevedel-plugins-list--details-text
-    :details-buffer "*mevedel plugin details*"
-    :help-buffer ,mevedel-plugins-help-buffer-name
-    :help-function mevedel-plugins-list--help-text
-    :keys (("e" "Enable or disable selected plugin"
-            mevedel-plugins-list-toggle-enabled)
-           ("h" "Toggle hooks for selected plugin"
-            mevedel-plugins-list-toggle-hooks)
-           ("+" "Install GitHub plugin by OWNER/REPO"
-            mevedel-plugins-list-install)
-           ("u" "Update selected plugin"
-            mevedel-plugins-list-update)
-           ("r" "Reload plugin-visible session skills"
-            mevedel-plugins-list-reload)
-           ("x" "Remove selected managed plugin"
-            mevedel-plugins-list-remove)
-           ("o" "Open selected plugin source in Dired"
-            mevedel-plugins-list-open-source)))
-  "Cockpit surface spec for the plugin list.")
 
 (define-derived-mode mevedel-plugins-list-mode tabulated-list-mode
   "mevedel-plugins"

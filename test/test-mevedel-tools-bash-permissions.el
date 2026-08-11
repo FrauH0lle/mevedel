@@ -14,6 +14,7 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-exec)
 (require 'mevedel-execution)
+(require 'mevedel-execution-target)
 (require 'mevedel-models)
 (require 'mevedel-pipeline)
 (require 'mevedel-plan)
@@ -255,6 +256,37 @@ additive authority normalizes exact read and write paths"
          (:file_system (:read [,read-path] :write (,write-path)))
          :justification "Inspect and update the protected files?")
        'bash))))
+  :doc "remote filesystem request:
+target-native absolute and home paths qualify through the session target"
+  (let* ((root (make-temp-file "mevedel-bash-remote-grant-" t))
+         (native-path (file-name-concat root "resource"))
+         (remote-root (format "/mevedelmock:grant:%s/" root)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("grant")
+          (let* ((target (mevedel-execution-target-create remote-root))
+                 (session
+                  (mevedel-session--create
+                   :execution-target target
+                   :working-directory remote-root))
+                 (_ (setf (mevedel-execution-target-environment target)
+                          '(("HOME" . "/home/dev"))))
+                 (request
+                  (mevedel-tool-exec--sandbox-request
+                   `(:sandbox_permissions "with_additional_permissions"
+                     :additional_permissions
+                     (:file_system (:read [,native-path "~/.config/token"]))
+                     :justification "Read the target file?")
+                   'bash nil `(:session ,session))))
+            (should
+             (equal (list (concat (file-remote-p remote-root) native-path)
+                          (concat (file-remote-p remote-root)
+                                  "/home/dev/.config/token"))
+                    (mapcar
+                     (lambda (grant) (plist-get grant :path))
+                     (plist-get
+                      (plist-get request :additional-permissions)
+                      :file-system))))))
+      (delete-directory root t)))
   :doc "write subsumes read:
 duplicate exact paths normalize to the stronger access level"
   (let ((path (expand-file-name "resource" temporary-file-directory)))
@@ -2032,6 +2064,26 @@ for effects despite reusable authority"
          (mevedel-tools--check-bash-permission
          "cat .git/config"
           :permission-context '(:mode full-auto :buckets nil)))))
+  :doc "protected symlink:
+\`mevedel-tools--check-bash-permission' checks the resolved resource"
+  (let* ((root (make-temp-file "mevedel-bash-protected-link-" t))
+         (git-dir (file-name-concat root ".git"))
+         (config (file-name-concat git-dir "config"))
+         (link (file-name-concat root "innocent"))
+         (default-directory (file-name-as-directory root))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths '(("**/.git/**" . read-only))))
+    (unwind-protect
+        (progn
+          (make-directory git-dir)
+          (write-region "secret" nil config nil 'silent)
+          (make-symbolic-link config link)
+          (should
+           (eq 'ask
+               (mevedel-tools--check-bash-permission
+                (format "cat %s" link)
+                :permission-context '(:mode full-auto :buckets nil)))))
+      (delete-directory root t)))
   :doc "continued protected path:
 \`mevedel-tools--check-bash-permission' checks Bash line continuations"
   (let ((mevedel-permission-rules nil)
@@ -2159,15 +2211,20 @@ for effects despite reusable authority"
   (let ((facts '(:sandbox bubblewrap
                  :filesystem workspace-write
                  :network isolated))
+        (session
+         (mevedel-session--create
+          :working-directory "/ssh:builder@host:/srv/project/"))
         captured-request)
     (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
-               (lambda (additional sandbox mode)
-                 (setq captured-request (list additional sandbox mode))
+               (lambda (additional sandbox mode workdir)
+                 (setq captured-request
+                       (list additional sandbox mode workdir))
                  facts)))
       (let ((context
              (mevedel-tool-exec--bash-guardian-context
               "rm /tmp/file"
-              '(:sandbox-request
+              `(:session ,session
+                :sandbox-request
                 (:additional-permissions (:network nil)
                  :sandbox-permissions use-default)))))
         (should (eq 'dangerous (plist-get context :class)))
@@ -2181,7 +2238,8 @@ for effects despite reusable authority"
                 (plist-get context :additional-permissions)))
         (should (eq facts (plist-get context :sandbox-facts)))
         (should
-         (equal '((:network nil) use-default best-effort)
+         (equal '((:network nil) use-default best-effort
+                  "/ssh:builder@host:/srv/project/")
                 captured-request)))))
   :doc "includes only explicit allow patterns that match the command"
   (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
@@ -2479,6 +2537,78 @@ for effects despite reusable authority"
             `(:level additive
               :additional-permissions
               (:file-system ((:path ,parent-path :access read)))))))
+      (delete-directory parent t)))
+  :doc "resolves symlinks before allowed-root and exact-grant checks"
+  (let* ((parent (make-temp-file "mevedel-bash-resource-link-" t))
+         (root (file-name-concat parent "workspace"))
+         (secret (file-name-concat parent "secret"))
+         (link (file-name-concat root "innocent"))
+         (default-directory (file-name-as-directory root))
+         (context `(:allowed-roots (,root) :resource-grants nil)))
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (write-region "secret" nil secret nil 'silent)
+          (make-symbolic-link secret link)
+          (should
+           (equal (list secret)
+                  (mevedel-tool-exec--bash-missing-resource-paths
+                   (format "cat %s" link)
+                   context '(:level use-default))))
+          (should
+           (equal (list secret)
+                  (mevedel-tool-exec--bash-missing-resource-paths
+                   (format "cat %s" link)
+                   context
+                   `(:level additive
+                     :additional-permissions
+                     (:file-system ((:path ,link :access read)))))))
+          (should-not
+           (mevedel-tool-exec--bash-missing-resource-paths
+            (format "cat %s" link)
+            context
+            `(:level additive
+              :additional-permissions
+              (:file-system ((:path ,secret :access read)))))))
+      (delete-directory parent t)))
+  :doc "remote resources stay target-native after symlink resolution"
+  (let* ((parent (make-temp-file "mevedel-bash-remote-resource-" t))
+         (root (file-name-concat parent "workspace"))
+         (outside (file-name-concat parent "outside"))
+         (link (file-name-concat root "linked"))
+         (native-resource (file-name-concat link "missing" "file"))
+         (canonical-resource (file-name-concat outside "missing" "file"))
+         (remote-root (format "/mevedelmock:resource:%s/" root)))
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (make-directory outside)
+          (make-symbolic-link outside link)
+          (mevedel-test--with-local-shell-tramp '("resource")
+            (let* ((target (mevedel-execution-target-create remote-root))
+                   (session
+                    (mevedel-session--create
+                     :execution-target target
+                     :working-directory remote-root))
+                   (context `(:session ,session
+                              :allowed-roots (,remote-root)
+                              :resource-grants nil)))
+              (should
+               (equal (list canonical-resource)
+                      (mevedel-tool-exec--bash-missing-resource-paths
+                       (format "rg TODO %s" native-resource)
+                       context '(:level use-default))))
+              (should-not
+               (mevedel-tool-exec--bash-missing-resource-paths
+                "diff /dev/null ." context '(:level use-default)))
+              (let ((default-directory remote-root))
+                (should
+                 (equal (list canonical-resource)
+                        (mevedel-tool-exec--bash-missing-resource-paths
+                         (format "rg TODO %s" native-resource)
+                         `(:allowed-roots (,remote-root)
+                           :resource-grants nil)
+                         '(:level use-default))))))))
       (delete-directory parent t))))
 
 (mevedel-deftest mevedel-tool-exec--check-permission-async ()
@@ -2511,6 +2641,29 @@ default Bash requests exact additive read authority before parent traversal"
           (should (eq 'deny (car-safe outcome)))
           (should (string-match-p "additional_permissions.file_system.read"
                                   (cdr outcome))))
+      (delete-directory parent t)))
+  :doc "inside-root symlink:
+default Bash authorizes the resolved outside resource"
+  (let* ((parent (make-temp-file "mevedel-bash-boundary-link-" t))
+         (root (file-name-concat parent "workspace"))
+         (secret (file-name-concat parent "secret"))
+         (link (file-name-concat root "innocent"))
+         (default-directory (file-name-as-directory root))
+         (mevedel-permission-rules nil)
+         outcome)
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (write-region "secret" nil secret nil 'silent)
+          (make-symbolic-link secret link)
+          (mevedel-tool-exec--check-permission-async
+           nil
+           `(:command ,(format "cat %s" link)
+             :permission-context
+             (:mode full-auto :allowed-roots (,root) :resource-grants nil))
+           (lambda (result) (setq outcome result)))
+          (should (eq 'deny (car-safe outcome)))
+          (should (string-match-p (regexp-quote secret) (cdr outcome))))
       (delete-directory parent t)))
   :doc "inside-root resource:
 default Bash keeps bare dot inspection automatic"
@@ -3086,11 +3239,22 @@ default Bash keeps bare dot inspection automatic"
   ,test
   (test)
   :doc "places execution artifacts below the session tool-results directory"
-  (cl-letf (((symbol-function 'mevedel-pipeline--tool-results-dir)
-             (lambda (_session _buffer) "/tmp/tool-results")))
-    (should (equal "/tmp/tool-results/executions"
-                   (mevedel-tool-exec--execution-artifact-directory
-                    'session))))
+  (let* ((target (mevedel-execution-target-create default-directory))
+         (session (mevedel-session--create :execution-target target)))
+    (cl-letf (((symbol-function 'mevedel-pipeline--tool-results-dir)
+               (lambda (_session _buffer) "/tmp/tool-results")))
+      (should (equal "/tmp/tool-results/executions"
+                     (mevedel-tool-exec--execution-artifact-directory
+                      session)))))
+  :doc "remote sessions use the execution module's local temporary spool"
+  (let* ((target (mevedel-execution-target-create
+                  "/ssh:user@host:/srv/project/"))
+         (session (mevedel-session--create :execution-target target)))
+    (cl-letf (((symbol-function 'mevedel-pipeline--tool-results-dir)
+               (lambda (&rest _)
+                 (ert-fail "Remote spool consulted the target store"))))
+      (should-not
+       (mevedel-tool-exec--execution-artifact-directory session))))
   :doc "ephemeral Bash requests do not materialize retained artifacts"
   (let* ((root (make-temp-file "mevedel-ephemeral-bash-" t))
          (workspace (mevedel-workspace--create
@@ -3732,7 +3896,24 @@ default Bash keeps bare dot inspection automatic"
               roots))
     (should (member (file-name-as-directory
                      (expand-file-name temporary-file-directory))
-                    roots))))
+                    roots)))
+  :doc "uses the target temporary directory for remote confinement"
+  (let* ((workdir "/ssh:user@host:/srv/project/")
+         (target (mevedel-execution-target-create workdir))
+         (workspace (mevedel-workspace--create :root workdir))
+         (session (mevedel-session--create
+                   :workspace workspace
+                   :execution-target target
+                   :working-directory workdir))
+         (temporary-file-directory "/client/private/tmp/"))
+    (setf (mevedel-execution-target-environment target)
+          '(("HOME" . "/home/user") ("TMPDIR" . "/var/tmp/mevedel")))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (let ((roots (mevedel-tool-exec--sandbox-writable-roots workdir)))
+        (should (member "/ssh:user@host:/var/tmp/mevedel/" roots))
+        (should-not (member "/client/private/tmp/" roots))
+        (should (cl-every #'file-remote-p roots))))))
 
 (mevedel-deftest mevedel-tool-exec--sandbox-disclosure ()
   ,test
@@ -3926,6 +4107,29 @@ the execution boundary owns the session's single unavailable warning"
     (should (consp outcome))
     (should (eq 'deny (car outcome)))
     (should (string-match-p "Unknown Eval mode" (cdr outcome))))
+  :doc "refuses remote Batch Eval before prompting"
+  (let* ((target (mevedel-execution-target-create
+                  "/ssh:user@host:/srv/project/"))
+         (session (mevedel-session--create
+                   :name "remote-eval"
+                   :execution-target target
+                   :working-directory "/ssh:user@host:/srv/project/"))
+         outcome
+         enqueued)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _)
+                 (setq enqueued t))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil
+       `(:expression "(+ 1 2)"
+         :mode "batch"
+         :permission-context (:session ,session))
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'deny (car outcome)))
+    (should
+     (string-match-p "Batch Eval is unavailable for remote sessions"
+                     (cdr outcome))))
   :doc "returns deny when user denies"
   (let (outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)

@@ -12,6 +12,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
+(require 'mevedel-workspace-identity)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -28,9 +29,8 @@
                 (make-temp-file "mevedel-agent-transcript-" t)))
          (name (file-name-nondirectory (directory-file-name root))))
     (mevedel-workspace-clear-registry)
-    (cons (mevedel-workspace-get-or-create
-           'project name root name)
-          root)))
+    (mevedel-workspace-identity-ensure root)
+    (cons (mevedel-workspace-get-or-create 'project name root name) root)))
 
 (defun test-mevedel-agent-transcript--release (buffer session root)
   "Release SESSION, kill BUFFER, and delete ROOT."
@@ -97,7 +97,7 @@
                   (mevedel-session-persistence-serialize session))
                  (restored
                   (plist-get
-                   (mevedel-session-persistence-deserialize sidecar)
+                   (mevedel-session-persistence-deserialize sidecar workspace)
                    :session)))
             (should
              (equal (list entry)
@@ -178,7 +178,7 @@
           (let* ((sidecar (mevedel-session-persistence-serialize session))
                  (restored
                   (plist-get
-                   (mevedel-session-persistence-deserialize sidecar)
+                   (mevedel-session-persistence-deserialize sidecar workspace)
                    :session)))
             (let ((actual (mevedel-session-messages restored)))
               (should (= 2 (length actual)))

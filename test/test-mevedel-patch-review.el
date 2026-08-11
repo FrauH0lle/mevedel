@@ -32,9 +32,7 @@
            (workspace (mevedel-workspace--create
                        :type 'test :id root :root root :name "review"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "review" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
+           (session (mevedel-session-create "review" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Update File: one.txt"
@@ -130,9 +128,7 @@
            (workspace (mevedel-workspace--create
                        :type 'test :id root :root root :name "feedback"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "feedback" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
+           (session (mevedel-session-create "feedback" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Update File: one.txt"
@@ -278,9 +274,7 @@
            (workspace (mevedel-workspace--create
                        :type 'test :id root :root root :name "whole"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "whole" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
+           (session (mevedel-session-create "whole" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Add File: new.txt"
@@ -346,9 +340,7 @@
            (workspace (mevedel-workspace--create
                        :type 'test :id root :root root :name "filewide"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "filewide" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
+           (session (mevedel-session-create "filewide" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Update File: one.txt"
@@ -411,9 +403,7 @@
            (workspace (mevedel-workspace--create
                        :type 'test :id root :root root :name "edit"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "edit" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
+           (session (mevedel-session-create "edit" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Update File: one.txt"
@@ -473,9 +463,7 @@
            (workspace (mevedel-workspace--create
                        :type 'test :id root :root root :name "stale"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "stale" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
+           (session (mevedel-session-create "stale" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Update File: one.txt"
@@ -528,9 +516,7 @@
            (workspace (mevedel-workspace--create
                        :type 'test :id root :root root :name "submit-key"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "submit-key" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
+           (session (mevedel-session-create "submit-key" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Update File: test.el"
@@ -575,9 +561,7 @@
            (workspace (mevedel-workspace--create
                        :type 'test :id root :root root :name "parent-race"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "parent-race" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
+           (session (mevedel-session-create "parent-race" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Update File: one.txt"
@@ -640,9 +624,7 @@
            (workspace (mevedel-workspace--create
                        :type 'test :id root :root root :name "reject"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "reject" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
+           (session (mevedel-session-create "reject" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Update File: one.txt"
@@ -689,9 +671,7 @@
            (workspace (mevedel-workspace--create
                        :type 'test :id root :root root :name "visit"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "visit" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
+           (session (mevedel-session-create "visit" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Update File: one.txt"
@@ -796,9 +776,7 @@
            (workspace (mevedel-workspace--create
                        :type 'test :id root :root root :name "rows"
                        :file-cache (mevedel-test-file-cache-create)))
-           (session (mevedel-session--create
-                     :name "rows" :workspace workspace
-                     :working-directory root :permission-mode 'ask))
+           (session (mevedel-session-create "rows" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Update File: one.txt"
