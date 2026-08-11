@@ -9,6 +9,7 @@
 
 (require 'cl-lib)
 (require 'gptel-request)
+(require 'mevedel-execution-target)
 (require 'mevedel-structs)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-tool-registry)
@@ -292,6 +293,28 @@
     (should (string-match-p "Emacs version:" prompt))
     (should (string-match-p (regexp-quote emacs-version) prompt))
     (should (string-match-p "<env>" prompt)))
+
+  :doc "renders a remote session's cached readiness facts without reprobe"
+  (let* ((remote-root (format "/ssh:user@host:%s" root-dir))
+         (ws (mevedel-workspace--create
+              :type 'project :id remote-root :root remote-root :name "remote"))
+         (session (mevedel-session-create "main" ws))
+         (target (mevedel-session-execution-target session)))
+    (setf (mevedel-execution-target-readiness target)
+          '(:status ready
+            :operating-system "Linux"
+            :operating-system-version "6.8.0-cached"))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (&rest _args) (error "Unexpected executable lookup")))
+              ((symbol-function 'process-file)
+               (lambda (&rest _args) (error "Unexpected target process"))))
+      (let ((prompt
+             (mevedel-system-build-prompt
+              '(:workspace-aware nil :components (environment))
+              :workspace ws :session session)))
+        (should (string-match-p "Working directory: .*mevedel-sys-" prompt))
+        (should (string-match-p "Platform: linux" prompt))
+        (should (string-match-p "OS Version: 6.8.0-cached" prompt)))))
 
   :doc "includes AGENTS.md content when present"
   (let* ((agents-md (file-name-concat root-dir "AGENTS.md"))

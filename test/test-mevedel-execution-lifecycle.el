@@ -144,6 +144,66 @@
           (should (plist-get (plist-get sibling :facts) :execution-id))
           (should owned-id))
       (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
+  :doc "proves delayed remote KILL settlement before clearing mutation state"
+  (let* ((root (make-temp-file "mevedel-remote-owner-lifetime-" t))
+         (remote-root
+          (format "/mevedelmock:%s:%s/" (system-name) root))
+         (original-signal-process (symbol-function 'signal-process))
+         (mevedel-sandbox-mode 'off)
+         (mevedel-execution--child-kill-delay 0.05)
+         session execution-id kill-delivered-p kill-timer)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (setq session (test-mevedel-execution--session remote-root))
+          (cl-letf
+              (((symbol-function 'signal-process)
+                (lambda (&rest args)
+                  (if (and (integerp (car args))
+                           (< (car args) 0)
+                           (eq (cadr args) 'KILL)
+                           (equal remote-root (nth 2 args)))
+                      (progn
+                        (setq kill-timer
+                              (run-at-time
+                               0.02 nil
+                               (lambda ()
+                                 (unwind-protect
+                                     (apply original-signal-process args)
+                                   (setq kill-delivered-p t)))))
+                        0)
+                    (apply original-signal-process args)))))
+            (setq execution-id
+                  (plist-get
+                   (plist-get
+                    (test-mevedel-execution--start-managed
+                     session remote-root '("sh" "-c" "sleep 30")
+                     :owner "agent-a")
+                    :facts)
+                   :execution-id))
+            (should
+             (mevedel-session-durability-unsettled-mutation-p session))
+            (should (= 1 (mevedel-execution-stop-owner session "agent-a")))
+            (should-not
+             (mevedel-execution-owner-live-p session "agent-a"))
+            (test-mevedel-execution--wait
+             (lambda ()
+               (and kill-delivered-p
+                    (not
+                     (gethash
+                      execution-id
+                      (mevedel-execution--state-records
+                       (mevedel-session-execution-state session)))))))
+            (should-not
+             (mevedel-session-durability-unsettled-mutation-p session))
+            (should-not (mevedel-execution-unknown-outcome session))))
+      (when (timerp kill-timer)
+        (cancel-timer kill-timer))
+      (when session
+        (mevedel-execution-teardown-session session)
+        (when (mevedel-session-save-path session)
+          (mevedel-session-durability-lease-release
+           (mevedel-session-save-path session) session)))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution-teardown-session ()

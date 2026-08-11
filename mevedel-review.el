@@ -328,7 +328,9 @@
   "Run git ARGS in CWD and return output lines, or nil on failure."
   (condition-case nil
       (with-temp-buffer
-        (let ((default-directory cwd))
+        (let ((default-directory cwd)
+              (process-environment
+               (unless (file-remote-p cwd) process-environment)))
           (when (zerop (apply #'process-file "git" nil t nil args))
             (split-string (string-trim (buffer-string)) "\n" t))))
     (error nil)))
@@ -337,7 +339,9 @@
   "Run git ARGS in CWD and return trimmed output, or nil on failure."
   (condition-case nil
       (with-temp-buffer
-        (let ((default-directory cwd))
+        (let ((default-directory cwd)
+              (process-environment
+               (unless (file-remote-p cwd) process-environment)))
           (when (zerop (apply #'process-file "git" nil t nil args))
             (let ((out (string-trim (buffer-string))))
               (unless (string-empty-p out) out)))))
@@ -530,7 +534,9 @@ CWD is used for git merge-base resolution."
   "Run git ARGS in CWD and return raw output, or nil on failure."
   (condition-case nil
       (with-temp-buffer
-        (let ((default-directory cwd))
+        (let ((default-directory cwd)
+              (process-environment
+               (unless (file-remote-p cwd) process-environment)))
           (when (zerop (apply #'process-file "git" nil t nil args))
             (buffer-string))))
     (error nil)))

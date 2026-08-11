@@ -190,6 +190,23 @@ sessions need no disclosure."
   (and (mevedel-session-durability--valid-relative-path-p path)
        (string-prefix-p ".publications/" path)))
 
+(defun mevedel-session-durability--publication-path (session-dir relative)
+  "Return RELATIVE below SESSION-DIR's physical publication root."
+  (let* ((session-root
+          (file-name-as-directory (file-truename session-dir)))
+         (root
+          (file-name-as-directory
+           (file-truename
+            (file-name-concat session-dir ".publications"))))
+         (path (file-name-concat session-dir relative)))
+    (unless (and (not (equal (directory-file-name root)
+                             (directory-file-name session-root)))
+                 (file-in-directory-p root session-root))
+      (error "Session publication root escapes session storage: %s" root))
+    (unless (file-in-directory-p (file-truename path) root)
+      (error "Session publication path escapes immutable storage: %s" path))
+    path))
+
 (defun mevedel-session-durability--artifact-for-session (session artifact)
   "Return normalized publication ARTIFACT for SESSION.
 
@@ -277,7 +294,8 @@ elsewhere on the same execution target receive nil."
     (when head
       (unless (mevedel-session-durability--valid-publication-head-p head)
         (error "Invalid session publication head: %s" head))
-      (let* ((path (file-name-concat session-dir head))
+      (let* ((path (mevedel-session-durability--publication-path
+                    session-dir head))
              (manifest (mevedel-session-durability--read-plist path)))
         (unless manifest
           (error "Missing session publication manifest: %s" path))
@@ -296,9 +314,8 @@ elsewhere on the same execution target receive nil."
              (lambda (entry)
                (let ((copy (copy-tree entry)))
                  (setf (plist-get (cdr copy) :published)
-                       (file-name-concat
-                        session-dir
-                        (plist-get (cdr entry) :published)))
+                       (mevedel-session-durability--publication-path
+                        session-dir (plist-get (cdr entry) :published)))
                  copy))
              (plist-get publication :artifacts)))
            (sidecar (cdr (assoc "session.meta.el" artifacts))))
@@ -333,8 +350,9 @@ when they read those artifacts."
     (session-dir publication)
   "Verify every immutable artifact in raw PUBLICATION below SESSION-DIR."
   (dolist (entry (plist-get publication :artifacts))
-    (let ((path (file-name-concat
-                 session-dir (plist-get (cdr entry) :published))))
+    (let ((path
+           (mevedel-session-durability--publication-path
+            session-dir (plist-get (cdr entry) :published))))
       (unless (and (file-regular-p path)
                    (equal (plist-get (cdr entry) :sha256)
                           (mevedel-session-durability--file-sha256 path)))
@@ -376,13 +394,16 @@ publication-head commit."
     captured))
 
 (defun mevedel-session-durability--lease-record
-    (buffer-name generation &optional status publication-head)
+    (buffer-name generation &optional status publication-head
+                 unsettled-mutation)
   "Return a fresh lease record for BUFFER-NAME and GENERATION.
-STATUS defaults to `active'.  PUBLICATION-HEAD is an immutable manifest path."
+STATUS defaults to `active'.  PUBLICATION-HEAD is an immutable manifest path.
+UNSETTLED-MUTATION records target mutation whose outcome is not yet proved."
   (let ((now (float-time)))
     (list :generation generation
           :status (or status 'active)
           :publication-head publication-head
+          :unsettled-mutation (and unsettled-mutation t)
           :client-id mevedel-session-durability--client-id
           :renewed-at now
           :expires-at (+ now mevedel-session-lease-seconds)
@@ -508,6 +529,8 @@ STATUS defaults to `active'.  PUBLICATION-HEAD is an immutable manifest path."
        (numberp (plist-get lease :renewed-at))
        (numberp (plist-get lease :expires-at))
        (plist-member lease :publication-head)
+       (plist-member lease :unsettled-mutation)
+       (booleanp (plist-get lease :unsettled-mutation))
        (or (null (plist-get lease :publication-head))
            (mevedel-session-durability--valid-publication-head-p
             (plist-get lease :publication-head)))))
@@ -527,25 +550,37 @@ otherwise mutate the session lease."
      (t
       (error "Invalid remote session lease: %s" directory)))))
 
-(defun mevedel-session-durability--claim-next (directory expected buffer-name)
+(defun mevedel-session-durability--claim-next
+    (directory expected buffer-name
+               &optional status unsettled-mutation-p unsettled-mutation)
   "Claim DIRECTORY's next generation after EXPECTED for BUFFER-NAME.
 
 The candidate fences older writers as soon as its exclusive generation file
 appears.  It becomes active only if EXPECTED remained byte-for-byte unchanged;
-otherwise it is marked aborted and removed best-effort."
-  (let* ((generation
+otherwise it is marked aborted and removed best-effort.  STATUS defaults to
+`active'.  When UNSETTLED-MUTATION-P is non-nil, the successor records
+UNSETTLED-MUTATION instead of preserving EXPECTED's value."
+  (let* ((status (or status 'active))
+         (generation
           (1+ (mevedel-session-durability--maximum-generation directory)))
          (candidate
-          (mevedel-session-durability--lease-record
-           buffer-name generation 'claiming
-           (plist-get expected :publication-head))))
+          (let ((mevedel-session-lease-seconds
+                 (if (eq status 'publishing)
+                     mevedel-session-publication-lease-seconds
+                   mevedel-session-lease-seconds)))
+            (mevedel-session-durability--lease-record
+             buffer-name generation 'claiming
+             (plist-get expected :publication-head)
+             (if unsettled-mutation-p
+                 unsettled-mutation
+               (plist-get expected :unsettled-mutation))))))
     (when (mevedel-session-durability--create-generation directory candidate)
       (let ((predecessor
              (mevedel-session-durability--lease-head-before
               directory generation)))
         (if (equal expected predecessor)
             (progn
-              (setq candidate (plist-put candidate :status 'active))
+              (setq candidate (plist-put candidate :status status))
               (mevedel-session-durability--write-generation
                directory candidate)
               (mevedel-session-durability--prune-generations-before
@@ -559,6 +594,14 @@ otherwise it is marked aborted and removed best-effort."
                 directory generation))
             (file-error nil))
           nil)))))
+
+(defun mevedel-session-durability--owned-lease-record-p (lease)
+  "Return non-nil when LEASE is live authority owned by this client."
+  (and (mevedel-session-durability--valid-lease-p lease)
+       (memq (plist-get lease :status) '(active publishing))
+       (equal mevedel-session-durability--client-id
+              (plist-get lease :client-id))
+       (> (plist-get lease :expires-at) (float-time))))
 
 (defun mevedel-session-durability-lease-acquire
     (session-dir buffer-name &optional session)
@@ -585,7 +628,8 @@ When SESSION is non-nil, record the resulting lease state on it."
             (let ((record
                    (mevedel-session-durability--lease-record
                     buffer-name (plist-get existing :generation) 'active
-                    (plist-get existing :publication-head))))
+                    (plist-get existing :publication-head)
+                    (plist-get existing :unsettled-mutation))))
               (mevedel-session-durability--write-generation directory record)
               (and (mevedel-session-durability--same-generation-p
                     record
@@ -649,11 +693,13 @@ When SESSION is non-nil, record the resulting lease state on it."
 (defun mevedel-session-durability--update-owned-lease
     (session accepted-status status seconds
              &optional publication-head expected-publication-head-p
-             expected-publication-head)
+             expected-publication-head unsettled-mutation-p
+             unsettled-mutation)
   "Update SESSION's owned lease from ACCEPTED-STATUS to STATUS for SECONDS.
 Replace its preserved head with non-nil PUBLICATION-HEAD.  When
 EXPECTED-PUBLICATION-HEAD-P is non-nil, require the current head to equal
-EXPECTED-PUBLICATION-HEAD."
+EXPECTED-PUBLICATION-HEAD.  When UNSETTLED-MUTATION-P is non-nil, replace the
+preserved unsettled-mutation flag with UNSETTLED-MUTATION."
   (when-let ((session-dir (mevedel-session-save-path session)))
     (let* ((remote-file-name-inhibit-cache t)
            (directory (mevedel-session-durability--lease-path session-dir))
@@ -685,7 +731,10 @@ EXPECTED-PUBLICATION-HEAD."
                     (plist-get existing :generation)
                     status
                     (or publication-head
-                        (plist-get existing :publication-head))))))
+                        (plist-get existing :publication-head))
+                    (if unsettled-mutation-p
+                        unsettled-mutation
+                      (plist-get existing :unsettled-mutation))))))
             (mevedel-session-durability--write-generation directory record)
             (if (equal record
                        (mevedel-session-durability--lease-head directory))
@@ -693,14 +742,64 @@ EXPECTED-PUBLICATION-HEAD."
                   (mevedel-session-durability--bind-lease
                    session record 'owned)
                   t)
+              (let ((latest
+                     (mevedel-session-durability--lease-head directory)))
+                (mevedel-session-durability--bind-lease
+                 session latest
+                 (if (mevedel-session-durability--owned-lease-record-p latest)
+                     'owned
+                   'lost)))
+              nil))
+        (let ((latest (or head existing)))
+          (mevedel-session-durability--bind-lease
+           session latest
+           (if (mevedel-session-durability--owned-lease-record-p latest)
+               'owned
+             'lost)))
+        nil))))
+
+(defun mevedel-session-durability-set-unsettled-mutation (session value)
+  "Set SESSION's durable unsettled-mutation latch to boolean VALUE.
+Return non-nil only when the current owned lease generation commits VALUE."
+  (unless (booleanp value)
+    (error "Unsettled mutation latch must be boolean"))
+  (when-let ((session-dir (mevedel-session-save-path session)))
+    (let* ((remote-file-name-inhibit-cache t)
+           (directory (mevedel-session-durability--lease-path session-dir))
+           (bound (mevedel-session-lease session))
+           (existing
+            (condition-case nil
+                (when-let ((generation (plist-get bound :generation)))
+                  (mevedel-session-durability--read-plist
+                   (mevedel-session-durability--generation-path
+                    directory generation)))
+              (error nil)))
+           (head (mevedel-session-durability--lease-head directory))
+           (status (plist-get existing :status)))
+      (if (and (equal existing head)
+               (mevedel-session-durability--owned-lease-record-p existing))
+          (if-let ((successor
+                    (mevedel-session-durability--claim-next
+                     directory existing (plist-get existing :buffer)
+                     status t value)))
+              (progn
+                (mevedel-session-durability--bind-lease
+                 session successor 'owned)
+                t)
+            (let ((latest (mevedel-session-durability--lease-head directory)))
               (mevedel-session-durability--bind-lease
-               session
-               (mevedel-session-durability--lease-head directory)
-               'lost)
+               session latest
+               (if (mevedel-session-durability--owned-lease-record-p latest)
+                   'owned
+                 'lost))
               nil))
         (mevedel-session-durability--bind-lease
          session (or head existing) 'lost)
         nil))))
+
+(defun mevedel-session-durability-unsettled-mutation-p (session)
+  "Return non-nil when SESSION's bound lease records unsettled mutation."
+  (and (plist-get (mevedel-session-lease session) :unsettled-mutation) t))
 
 (defun mevedel-session-durability-commit-publication-head (session head)
   "Commit immutable session-relative HEAD while SESSION is the current owner.
@@ -776,7 +875,8 @@ its lease state."
       (when session
         (mevedel-session-durability--cancel-renewal session)
         (setf (mevedel-session-lease session) nil)
-        (mevedel-session-durability--clear-transient-publication session)))))
+        (unless (mevedel-session-pending-publication session)
+          (mevedel-session-durability--clear-transient-publication session))))))
 
 
 ;;
@@ -1015,6 +1115,17 @@ local `:source' files."
     (setf (mevedel-session-pending-publication session) nil
           (mevedel-session-publication-uncommitted-batches session) nil
           (mevedel-session-publication-queue session) nil)))
+
+(defun mevedel-session-durability-forget-removed-session (session)
+  "Clear local durability state after SESSION's owned directory was removed.
+
+The caller removes the target directory while its lease is still held.  This
+function performs no target I/O and must run only after that removal."
+  (mevedel-session-durability--cancel-renewal session)
+  (setf (mevedel-session-lease session) nil
+        (mevedel-session-publication session) nil
+        (mevedel-session-publication-active-p session) nil)
+  (mevedel-session-durability--clear-transient-publication session))
 
 (defun mevedel-session-durability--batch-live-p (batch)
   "Return non-nil when BATCH still owns a staged source."

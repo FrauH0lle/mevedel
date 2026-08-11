@@ -164,8 +164,16 @@
                  "/ssh:user@host:/srv/project/")))
     (should-error
      (mevedel-execution-target-native-path
-      target "/ssh:user@other:/srv/project/a.el")
+     target "/ssh:user@other:/srv/project/a.el")
      :type 'mevedel-execution-target-error))
+
+  :doc "rejects explicit local quoting from a remote target"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@host:/srv/project/")))
+    (dolist (path '("/:/etc/passwd" "/::/etc/passwd"))
+      (should-error
+       (mevedel-execution-target-native-path target path)
+       :type 'mevedel-execution-target-error)))
 
   :doc "rejects explicit remote authority from a local session"
   (let ((target (mevedel-execution-target-create "/srv/project/")))
@@ -266,14 +274,19 @@
                  (unless (equal name "bwrap")
                    (concat "/usr/bin/" name))))
               ((symbol-function 'process-file)
-               (lambda (program _in destination _display &rest _args)
+               (lambda (program _in destination _display &rest args)
                  (with-current-buffer destination
-                   (insert (if (equal program "env")
-                               "HOME=/home/user\0PROJECT_ROOT=/srv/project\0"
-                             "Linux\n")))
+                   (insert
+                    (cond
+                     ((equal program "env")
+                      "HOME=/home/user\0PROJECT_ROOT=/srv/project\0")
+                     ((equal args '("-r")) "6.8.0-target\n")
+                     (t "Linux\n"))))
                  0)))
       (let ((readiness (mevedel-execution-target-probe target)))
         (should (eq 'ready (plist-get readiness :status)))
+        (should (equal "6.8.0-target"
+                       (plist-get readiness :operating-system-version)))
         (should (equal "/home/user"
                        (cdr (assoc "HOME"
                                    (mevedel-execution-target-environment
@@ -642,7 +655,7 @@
       (should (eq 'ready
                   (plist-get (mevedel-execution-target-probe target)
                              :status)))
-      (should (= 3 probes))))
+      (should (= 4 probes))))
 
 (mevedel-deftest mevedel-execution-target-seed-incarnation ()
   ,test

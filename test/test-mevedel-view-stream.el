@@ -3769,7 +3769,72 @@
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Full hidden prompt" text))
-          (should (string-match-p "Assistant answer" text)))))))
+          (should (string-match-p "Assistant answer" text))))))
+
+  :doc "target-native response link opens only through its session target"
+  (let* ((host "view-link-target")
+         (other-host "view-link-other")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-view-link-target-" t)))
+         (remote-root (format "/mevedelmock:%s:%s" host local-root))
+         (native-file (file-name-concat local-root "src" "main.el"))
+         (remote-file (concat (file-remote-p remote-root)
+                              native-file))
+         (client-file (make-temp-file
+                       "mevedel-view-link-client-" nil ".el" "client\n"))
+         (client-path (concat "/:" client-file))
+         (other-path (format "/mevedelmock:%s:%s" other-host client-file))
+         opened)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host other-host)
+          (make-directory (file-name-directory remote-file) t)
+          (write-region "target\n" nil remote-file nil 'silent)
+          (let* ((workspace
+                  (mevedel-workspace--create
+                   :type 'project :id "view-link-target"
+                   :root remote-root :name "view-link-target"))
+                 (session (mevedel-session-create "main" workspace)))
+            (mevedel-view-stream-test--with-buffers
+              (dolist (buffer (list data-buf view-buf))
+                (with-current-buffer buffer
+                  (setq-local mevedel--session session)))
+              (mevedel-view-stream-test--insert-data
+               data-buf "*** Show paths\n" nil)
+              (mevedel-view-stream-test--insert-data
+               data-buf
+               (format "Open %s\nIgnore %s\nIgnore %s\n"
+                       native-file other-path client-path)
+               'response)
+              (with-current-buffer data-buf
+                (mevedel-view-stream-render-response
+                 (point-min) (point-max)))
+              (with-current-buffer view-buf
+                (goto-char (point-min))
+                (search-forward native-file)
+                (let ((button (button-at (match-beginning 0))))
+                  (should button)
+                  (should (equal remote-file
+                                 (button-get button 'mevedel-view-path)))
+                  (cl-letf (((symbol-function 'find-file-other-window)
+                             (lambda (path)
+                               (setq opened (find-file-noselect path)))))
+                    (button-activate button)))
+                (goto-char (point-min))
+                (search-forward other-path)
+                (should-not (button-at (1- (point))))
+                (search-forward client-path)
+                (should-not (button-at (1- (point)))))))
+          (should (buffer-live-p opened))
+          (with-current-buffer opened
+            (should (equal remote-file buffer-file-name))
+            (should (equal "target\n" (buffer-string)))))
+      (when (buffer-live-p opened)
+        (set-buffer-modified-p nil)
+        (kill-buffer opened))
+      (when (file-exists-p client-file)
+        (delete-file client-file))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t)))))
 
 (provide 'test-mevedel-view-stream)
 ;;; test-mevedel-view-stream.el ends here

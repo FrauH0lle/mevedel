@@ -19,7 +19,16 @@
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-create
+                  "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-environment
+                  "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-expand-path
+                  "mevedel-execution-target" (target path &optional directory))
+
 ;; `mevedel-structs'
+(declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-get-or-create "mevedel-structs"
                   (type id root name))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -232,16 +241,40 @@ state can still be tracked."
   "Get all allowed roots for BUFFER's workspace.
 
 Returns a list containing the workspace root, configured memory roots,
-the system temporary directory, and any additional roots configured via
+the execution target's temporary directory, and any additional roots via
 `mevedel-workspace-additional-roots'."
-  (let* ((workspace-root (mevedel-workspace-root (mevedel-workspace buffer)))
+  (let* ((buffer (or buffer (current-buffer)))
+         (workspace-root (mevedel-workspace-root (mevedel-workspace buffer)))
+         (session
+          (with-current-buffer buffer
+            (or (and (boundp 'mevedel--session) mevedel--session)
+                (and (boundp 'mevedel--data-buffer)
+                     (buffer-live-p mevedel--data-buffer)
+                     (buffer-local-value
+                      'mevedel--session mevedel--data-buffer)))))
+         (target
+          (when (file-remote-p workspace-root)
+            (require 'mevedel-execution-target)
+            (or (and session (mevedel-session-execution-target session))
+                (mevedel-execution-target-create workspace-root))))
+         (temporary-root
+          (if target
+              (let ((target-tmpdir
+                     (cdr (assoc "TMPDIR"
+                                 (mevedel-execution-target-environment
+                                  target)))))
+                (mevedel-execution-target-expand-path
+                 target
+                 (if (and target-tmpdir (not (equal target-tmpdir "")))
+                     target-tmpdir
+                   "/tmp")
+                 workspace-root))
+            (with-current-buffer buffer temporary-file-directory)))
          (memory-dirs (if (boundp 'mevedel-memory-dirs)
                           mevedel-memory-dirs
                         '(".mevedel/memory/" ".agents/memory/")))
          (roots (append
-                 (list workspace-root
-                       (with-current-buffer (or buffer (current-buffer))
-                         temporary-file-directory))
+                 (list workspace-root temporary-root)
                  (mapcar
                   (lambda (dir)
                     (expand-file-name

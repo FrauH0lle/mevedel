@@ -62,7 +62,15 @@
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
 
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-set-unsettled-mutation
+                  "mevedel-session-durability" (session value))
+(declare-function mevedel-session-durability-unsettled-mutation-p
+                  "mevedel-session-durability" (session))
+
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-assert-mutation-authority
+                  "mevedel-session-persistence" (session &optional buffer))
 (declare-function mevedel-session-persistence-publish-text
                   "mevedel-session-persistence"
                   (session path content &optional coding))
@@ -72,6 +80,7 @@
                   "mevedel-structs" (request canceller))
 (declare-function mevedel-session--set-execution-state
                   "mevedel-structs" (session state))
+(declare-function mevedel-session-audit-target "mevedel-structs" (session))
 (declare-function mevedel-session-execution-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
@@ -207,9 +216,12 @@ Values below 0.25 are clamped so the UI receives at most four per second."
   group-marker-buffer
   group-start-time
   last-byte-newline-p
+  launch-attempted-p
   marker
   marker-buffer
   marker-seen-p
+  mutating-p
+  mutation-armed-p
   newline-count
   observer
   observer-timer
@@ -353,6 +365,69 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
         (setq mevedel-execution--orphan-state
               (mevedel-execution--new-state)))))
 
+(defun mevedel-execution--mutation-target (session)
+  "Return SESSION's durable mutation-authority target."
+  (and session (mevedel-session-audit-target session)))
+
+(defun mevedel-execution--mutation-records (session)
+  "Return every process record sharing SESSION's mutation authority."
+  (let ((target (mevedel-execution--mutation-target session))
+        records)
+    (maphash
+     (lambda (candidate _present)
+       (when (eq target (mevedel-execution--mutation-target candidate))
+         (when-let* ((state (mevedel-session-execution-state candidate)))
+           (maphash
+            (lambda (_key record) (push record records))
+            (mevedel-execution--state-records state)))))
+     mevedel-execution--sessions)
+    records))
+
+(defun mevedel-execution--armed-mutation-records (session)
+  "Return SESSION's transient records backed by the durable mutation latch."
+  (cl-remove-if-not #'mevedel-execution--record-mutation-armed-p
+                    (mevedel-execution--mutation-records session)))
+
+(defun mevedel-execution--durable-mutation-latch-p (session)
+  "Return non-nil when SESSION's remote authority has its mutation latch set."
+  (let* ((authority (mevedel-execution--mutation-target session))
+         (target (and authority
+                      (mevedel-session-execution-target authority))))
+    (when (and target (mevedel-execution-target-remote-p target))
+      (require 'mevedel-session-durability)
+      (mevedel-session-durability-unsettled-mutation-p authority))))
+
+(defun mevedel-execution--assert-mutation-authority (record)
+  "Assert RECORD's durable remote mutation authority."
+  (let* ((origin (mevedel-execution--record-origin record))
+         (authority
+          (mevedel-execution--mutation-target
+           (mevedel-execution--origin-session origin)))
+         (data-buffer (mevedel-execution--origin-data-buffer origin)))
+    (require 'mevedel-session-persistence)
+    (if (buffer-live-p data-buffer)
+        (mevedel-session-persistence-assert-mutation-authority
+         authority data-buffer)
+      (with-temp-buffer
+        (mevedel-session-persistence-assert-mutation-authority
+         authority (current-buffer))))))
+
+(defun mevedel-execution--arm-mutation (record)
+  "Durably arm mutating remote RECORD before its child can start."
+  (when (mevedel-execution--record-mutating-p record)
+    (let* ((origin (mevedel-execution--record-origin record))
+           (session (mevedel-execution--origin-session origin))
+           (authority (mevedel-execution--mutation-target session))
+           (target (mevedel-session-execution-target authority)))
+      (when (mevedel-execution-target-remote-p target)
+        (mevedel-execution--assert-mutation-authority record)
+        (require 'mevedel-session-durability)
+        (unless
+            (mevedel-session-durability-set-unsettled-mutation authority t)
+          (signal 'mevedel-execution-error
+                  (list "Could not arm remote mutation authority")))
+        (setf (mevedel-execution--record-mutation-armed-p record) t)))))
+
 (defun mevedel-execution--mark-direct-fallback (session facts)
   "Mark and warn for SESSION's first direct fallback in FACTS."
   (let ((state (mevedel-execution--state-for-session session)))
@@ -381,10 +456,42 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
           (mevedel-execution--state-unknown-outcome state) outcome)
     outcome))
 
+(defun mevedel-execution--settle-mutation (record)
+  "Clear RECORD's durable latch after every armed mutation is proved settled."
+  (when (and (mevedel-execution--record-mutation-armed-p record)
+             (not (eq 'unknown
+                      (mevedel-execution--record-termination record))))
+    (let* ((origin (mevedel-execution--record-origin record))
+           (session (mevedel-execution--origin-session origin))
+           (authority (mevedel-execution--mutation-target session)))
+      (setf (mevedel-execution--record-mutation-armed-p record) nil)
+      (unless (mevedel-execution--armed-mutation-records session)
+        (condition-case err
+            (progn
+              (require 'mevedel-session-durability)
+              (unless
+                  (mevedel-session-durability-set-unsettled-mutation
+                   authority nil)
+                (error "Remote mutation authority changed before settlement")))
+          (error
+           (setf (mevedel-execution--record-mutation-armed-p record) t)
+           (mevedel-execution--mark-unknown record err)))))))
+
 (defun mevedel-execution-unknown-outcome (session)
   "Return SESSION's unproved target process outcome, if any."
-  (mevedel-execution--state-unknown-outcome
-   (mevedel-execution--state-for-session session)))
+  (or (mevedel-execution--state-unknown-outcome
+       (mevedel-execution--state-for-session session))
+      (when (mevedel-execution--durable-mutation-latch-p session)
+        (let ((armed (mevedel-execution--armed-mutation-records session)))
+          (when (or (null armed)
+                    (cl-some #'mevedel-execution--record-finished-p armed))
+            '(:durable-unsettled-mutation t))))))
+
+(defun mevedel-execution-unsettled-mutation-p (session)
+  "Return non-nil while SESSION has live or unproved remote mutation."
+  (or (mevedel-execution--state-unknown-outcome
+       (mevedel-execution--state-for-session session))
+      (mevedel-execution--durable-mutation-latch-p session)))
 
 (defun mevedel-execution-mutation-blocked-p (session)
   "Return non-nil when SESSION must not start mutating execution."
@@ -392,9 +499,33 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
 
 (defun mevedel-execution-acknowledge-unknown (session)
   "Acknowledge and clear SESSION's unproved target process outcome."
-  (setf (mevedel-execution--state-unknown-outcome
-         (mevedel-execution--state-for-session session))
-        nil))
+  (let* ((authority (mevedel-execution--mutation-target session))
+         (target (and authority
+                      (mevedel-session-execution-target authority)))
+         (records (mevedel-execution--armed-mutation-records session)))
+    (when (cl-some (lambda (record)
+                     (not (mevedel-execution--record-finished-p record)))
+                   records)
+      (signal 'mevedel-execution-error
+              (list "Cannot acknowledge while mutating execution is live")))
+    (when (and target (mevedel-execution-target-remote-p target))
+      (require 'mevedel-session-persistence)
+      (mevedel-session-persistence-assert-mutation-authority
+       authority (current-buffer))
+      (require 'mevedel-session-durability)
+      (unless
+          (mevedel-session-durability-set-unsettled-mutation authority nil)
+        (signal 'mevedel-execution-error
+                (list "Could not clear remote mutation authority"))))
+    (dolist (record records)
+      (setf (mevedel-execution--record-mutation-armed-p record) nil))
+    (maphash
+     (lambda (candidate _present)
+       (when (eq authority (mevedel-execution--mutation-target candidate))
+         (when-let* ((state (mevedel-session-execution-state candidate)))
+           (setf (mevedel-execution--state-unknown-outcome state) nil))))
+     mevedel-execution--sessions)
+    nil))
 
 (defun mevedel-execution--process-environment (&optional remote)
   "Return a child environment with stable execution defaults.
@@ -869,6 +1000,7 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
                        (executable-find executable remote)
                      (executable-find executable)))
         (signal 'file-missing (list "Executable not found" executable)))
+      (setf (mevedel-execution--record-launch-attempted-p record) t)
       (setf (mevedel-execution--record-process record)
             (make-process
              :name name :buffer nil :command command
@@ -1722,6 +1854,7 @@ it briefly so repeated owner polls return the same result."
         (when preparation
           (mevedel-sandbox-cleanup preparation))
         (setf (mevedel-execution--record-finished-p record) t)
+        (mevedel-execution--settle-mutation record)
         (let* ((facts (mevedel-execution--record-sandbox-facts record))
                (refused-p (plist-get facts :refused))
                (started-p
@@ -1834,6 +1967,7 @@ process-filter appends use the published path."
   "Launch managed RECORD with raw COMMAND."
   (condition-case err
       (progn
+        (setf (mevedel-execution--record-launch-attempted-p record) nil)
         (mevedel-execution--launch-record
          record "mevedel-bash" command
          (mevedel-execution--record-workdir record)
@@ -1844,9 +1978,12 @@ process-filter appends use the published path."
                  (mevedel-execution--telemetry-facts
                   (mevedel-execution--record-sandbox-facts record)))))
     (error
-     (setf (mevedel-execution--record-error-data record) err
-           (mevedel-execution--record-exit-code record) -1
-           (mevedel-execution--record-termination record) 'spawn-failed)
+     (if (and (mevedel-execution--record-mutation-armed-p record)
+              (mevedel-execution--record-launch-attempted-p record))
+         (mevedel-execution--mark-unknown record err)
+       (setf (mevedel-execution--record-error-data record) err
+             (mevedel-execution--record-termination record) 'spawn-failed))
+     (setf (mevedel-execution--record-exit-code record) -1)
      (mevedel-execution--finish-managed record))))
 
 (defun mevedel-execution--start-admitted (record preparation)
@@ -1895,6 +2032,7 @@ process-filter appends use the published path."
            (plist-get preparation :facts)
            (mevedel-execution--record-sandbox-preparation record)
            preparation)
+     (mevedel-execution--arm-mutation record)
      (mevedel-execution--launch-managed
       record (plist-get preparation :command))
      (unless (mevedel-execution--record-finished-p record)
@@ -1961,7 +2099,7 @@ terminal settlement."
             (list "PTY execution is unavailable on Windows")))
   (let* ((state (mevedel-execution--state-for-session session)))
     (when (and (not read-only-p)
-               (mevedel-execution--state-unknown-outcome state))
+               (mevedel-execution-mutation-blocked-p session))
       (signal
        'mevedel-execution-error
        (list "Mutating execution is blocked by an unknown remote outcome")))
@@ -1998,6 +2136,7 @@ terminal settlement."
               :tool-args tool-args
               :tool-use-id tool-use-id)
              :outcome-function outcome-function
+             :mutating-p (not read-only-p)
              :output-chars 0 :output-head "" :output-tail ""
              :read-offset 0
              :resource-report-path (plist-get resource-capture :report)
@@ -2065,10 +2204,10 @@ terminal settlement."
                  (mevedel-execution--owner-admissible-p owner-context)
                  (or read-only-p
                      (null
-                      (mevedel-execution--state-unknown-outcome state)))))
+                      (mevedel-execution-mutation-blocked-p session)))))
               (lambda (rejected-lease)
                 (if (and (not read-only-p)
-                         (mevedel-execution--state-unknown-outcome state))
+                         (mevedel-execution-mutation-blocked-p session))
                     (progn
                       (setf
                        (mevedel-execution--record-scheduler-lease record)
@@ -2309,9 +2448,41 @@ after WAIT-MS while the process remains live."
            (setq live-p t)))
       live-p)))
 
+(defun mevedel-execution--finalize-discarded-record
+    (record managed-live-p)
+  "Finish and remove discarded RECORD.
+MANAGED-LIVE-P records whether RECORD was user-visible before teardown."
+  (setf (mevedel-execution--record-settle-timer record) nil)
+  (unless (mevedel-execution--record-finished-p record)
+    (when (and (mevedel-execution--record-mutation-armed-p record)
+               (not (eq 'unknown
+                        (mevedel-execution--record-termination record)))
+               (file-remote-p
+                (or (mevedel-execution--record-workdir record) ""))
+               (mevedel-execution--group-live-p record))
+      (mevedel-execution--mark-unknown
+       record
+       '(mevedel-execution-error
+         "Remote process group remained live during lifecycle teardown")))
+    (if managed-live-p
+        (mevedel-execution--finish-managed record)
+      (setf (mevedel-execution--record-finished-p record) t)
+      (when-let* ((preparation
+                   (mevedel-execution--record-sandbox-preparation record)))
+        (mevedel-sandbox-cleanup preparation))))
+  (mevedel-execution--release-scheduler record)
+  (mevedel-execution--cleanup-record record)
+  (when-let* ((function
+               (mevedel-execution--record-teardown-function record)))
+    (setf (mevedel-execution--record-teardown-function record) nil)
+    (ignore-errors (funcall function)))
+  (when managed-live-p
+    (mevedel-execution--notify-state-change record)))
+
 (defun mevedel-execution--discard-record (record reason)
-  "Immediately kill and forget RECORD because of lifecycle REASON."
-  (let ((managed-live-p (mevedel-execution--managed-live-p record)))
+  "Kill and forget RECORD because of lifecycle REASON."
+  (let ((managed-live-p (mevedel-execution--managed-live-p record))
+        defer-p)
     (unless (mevedel-execution--record-finished-p record)
       (setf (mevedel-execution--record-stop-p record) t
             (mevedel-execution--record-termination record) reason)
@@ -2326,20 +2497,27 @@ after WAIT-MS while the process remains live."
                    (mevedel-execution--record-scheduler-lease record)))
         (mevedel-execution-scheduler-cancel lease))
       (mevedel-execution--signal-record record 'KILL)
-      (if managed-live-p
-          (mevedel-execution--finish-managed record)
-        (setf (mevedel-execution--record-finished-p record) t)
-        (when-let* ((preparation
-                    (mevedel-execution--record-sandbox-preparation record)))
-          (mevedel-sandbox-cleanup preparation))))
-    (mevedel-execution--release-scheduler record)
-    (mevedel-execution--cleanup-record record)
-    (when-let* ((function
-                (mevedel-execution--record-teardown-function record)))
-      (setf (mevedel-execution--record-teardown-function record) nil)
-      (ignore-errors (funcall function)))
-    (when managed-live-p
-      (mevedel-execution--notify-state-change record))))
+      (if (and managed-live-p
+               (mevedel-execution--record-mutation-armed-p record)
+               (file-remote-p
+                (or (mevedel-execution--record-workdir record) "")))
+          (progn
+            (setq defer-p t)
+            (when-let* ((timer
+                         (mevedel-execution--record-settle-timer record)))
+              (cancel-timer timer))
+            (setf (mevedel-execution--record-settle-timer record)
+                  (run-at-time
+                   mevedel-execution--child-kill-delay nil
+                   #'mevedel-execution--finalize-discarded-record
+                   record managed-live-p))
+            (while (timerp
+                    (mevedel-execution--record-settle-timer record))
+              (accept-process-output nil 0.01)))
+        (setq defer-p nil)))
+    (unless defer-p
+      (mevedel-execution--finalize-discarded-record
+       record managed-live-p))))
 
 (defun mevedel-execution-stop-owner (session owner)
   "Discard every execution record belonging to OWNER in SESSION.
@@ -2357,7 +2535,8 @@ Return the number of executions selected."
     (length records)))
 
 (defun mevedel-execution-teardown-session (session)
-  "Synchronously discard all child records owned by SESSION.
+  "Discard all child records owned by SESSION.
+Remote armed mutations wait through their bounded KILL proof.
 Return the number selected, including queued one-shot helpers."
   (let ((state (and session (mevedel-session-execution-state session)))
         records)

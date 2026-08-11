@@ -378,25 +378,54 @@
       (with-current-buffer data-buf
         (setq-local mevedel--session nil))))
 
-  :doc "publication status preserves a multiline leading-> composer draft"
+  :doc "target, readiness, lease, and publication refreshes preserve a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers
-    (let* ((workspace (mevedel-workspace--create
-                       :type 'project :id "pending"
-                       :root temporary-file-directory :name "pending"))
+    (let* ((target (mevedel-execution-target-create
+                    "/ssh:user@host:/srv/project/"))
+           (workspace (mevedel-workspace--create
+                       :type 'project :id "remote-status"
+                       :root "/ssh:user@host:/srv/project/"
+                       :name "remote-status"))
            (session (mevedel-session--create
-                     :name "pending" :workspace workspace
+                     :name "remote-status" :workspace workspace
+                     :working-directory "/ssh:user@host:/srv/project/"
+                     :execution-target target
                      :permission-mode 'ask))
-           (draft "> quoted\nsecond line"))
-      (setf (mevedel-session-pending-publication session)
-            '(:reason "remote write failed"))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (goto-char (mevedel-view--input-start))
-        (insert draft)
-        (let ((line (mevedel-view--status-strip)))
-          (should (string-match-p "publication pending" line))
-          (should (string= draft (mevedel-view--input-text)))))))
+           (draft "> quoted\nsecond line")
+           (point-offset 4))
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (mevedel-view-test--insert-composer-draft draft point-offset)
+              (should (string-match-p "ssh:user@host"
+                                      (mevedel-view--status-strip))))
+            (setf (mevedel-session-lease session)
+                  '(:state lost :unsettled-mutation nil)
+                  (mevedel-session-pending-publication session)
+                  '(:reason "remote write failed")
+                  (mevedel-execution-target-readiness target)
+                  '(:status ready
+                    :sandbox-mode best-effort
+                    :sandbox-status bubblewrap))
+            (mevedel-session-durability--refresh-session-buffers session)
+            (with-current-buffer view-buf
+              (force-mode-line-update t)
+              (let ((line (mevedel-view--status-strip))
+                    (header (mevedel-menu--header)))
+                (should (string-match-p "ssh:user@host" line))
+                (should (string-match-p "lease lost" line))
+                (should (string-match-p "publication pending" line))
+                (should (string-match-p "ready" header))
+                (should (string-match-p "sandbox bubblewrap" header))
+                (should (string= draft (mevedel-view--input-text)))
+                (should (= (point)
+                           (+ (mevedel-view--input-start) point-offset))))))
+        (setf (mevedel-session-pending-publication session) nil)
+        (when (buffer-live-p data-buf)
+          (with-current-buffer data-buf
+            (setq-local mevedel--session nil))))))
 
   :doc "status strip reuses unchanged output and rebuilds after state changes"
   (mevedel-view-test--with-buffers
@@ -854,6 +883,125 @@
                          outcomes)))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+
+(mevedel-deftest mevedel-view--allow-session-close-p ()
+  ,test
+  (test)
+  :doc "pending publication blocks closing the data buffer"
+  (let ((data-buf (generate-new-buffer " *test-pending-data*"))
+        (view-buf (generate-new-buffer " *test-pending-data-view*"))
+        (session (mevedel-session-create
+                  "main"
+                  (mevedel-workspace--create
+                   :type 'project :id "/tmp/pending-data/"
+                   :root "/tmp/pending-data/" :name "pending-data"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup view-buf data-buf)
+          (setf (mevedel-session-pending-publication session)
+                '(:reason "target unavailable"))
+          (should-not (kill-buffer data-buf))
+          (should (buffer-live-p data-buf))
+          (should (buffer-live-p view-buf))
+          (setf (mevedel-session-pending-publication session) nil)
+          (should (kill-buffer data-buf))
+          (should-not (buffer-live-p view-buf)))
+      (setf (mevedel-session-pending-publication session) nil)
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+
+  :doc "pending publication blocks closing the paired view"
+  (let ((data-buf (generate-new-buffer " *test-pending-view-data*"))
+        (view-buf (generate-new-buffer " *test-pending-view*"))
+        (session (mevedel-session-create
+                  "main"
+                  (mevedel-workspace--create
+                   :type 'project :id "/tmp/pending-view/"
+                   :root "/tmp/pending-view/" :name "pending-view"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup view-buf data-buf)
+          (setf (mevedel-session-pending-publication session)
+                '(:reason "target unavailable"))
+          (should-not (kill-buffer view-buf))
+          (should (buffer-live-p view-buf))
+          (should (buffer-live-p data-buf))
+          (setf (mevedel-session-pending-publication session) nil)
+          (should (kill-buffer view-buf))
+          (should-not (buffer-live-p data-buf)))
+      (setf (mevedel-session-pending-publication session) nil)
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+
+  :doc "an unsettled remote mutation blocks close until acknowledgement"
+  (let ((data-buf (generate-new-buffer " *test-unsettled-data*"))
+        (view-buf (generate-new-buffer " *test-unsettled-view*"))
+        (session (mevedel-session-create
+                  "main"
+                  (mevedel-workspace--create
+                   :type 'project :id "/tmp/unsettled/"
+                   :root "/tmp/unsettled/"
+                   :name "unsettled"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup view-buf data-buf)
+          (setf (mevedel-session-lease session)
+                '(:state owned :unsettled-mutation t))
+          (cl-letf (((symbol-function
+                      'mevedel-execution-unsettled-mutation-p)
+                     (lambda (_session) t)))
+            (should-not (kill-buffer data-buf)))
+          (should (buffer-live-p data-buf))
+          (should (buffer-live-p view-buf))
+          (setf (mevedel-session-lease session)
+                '(:state owned :unsettled-mutation nil))
+          (should (kill-buffer data-buf))
+          (should-not (buffer-live-p view-buf)))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+
+  :doc "a foreign read-only inspector can close with a durable mutation latch"
+  (let* ((root "/tmp/foreign-close/")
+         (data-buf (generate-new-buffer " *test-foreign-close-data*"))
+         (view-buf (generate-new-buffer " *test-foreign-close-view*"))
+         (session
+          (mevedel-session-create
+           "main"
+           (mevedel-workspace--create
+            :type 'project :id root :root root :name "foreign-close"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup view-buf data-buf)
+          (setf (mevedel-session-lease session)
+                '(:state foreign :unsettled-mutation t))
+          (with-current-buffer data-buf
+            (setq-local mevedel-session--read-only-mode t)
+            (setq buffer-read-only t))
+          (cl-letf (((symbol-function
+                      'mevedel-execution-unsettled-mutation-p)
+                     (lambda (_session) t)))
+            (should (kill-buffer data-buf)))
+          (should-not (buffer-live-p view-buf))
+          (should
+           (plist-get (mevedel-session-lease session)
+                      :unsettled-mutation)))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf)
+        (with-current-buffer data-buf
+          (setq buffer-read-only nil))
+        (kill-buffer data-buf)))))
 
 ;;
 ;;; View command wiring

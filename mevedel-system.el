@@ -40,6 +40,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-deferred-pending "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-p "mevedel-structs" (cl-x))
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
@@ -58,7 +59,7 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--environment-info-string "mevedel-utilities"
-                  (&optional workspace working-directory))
+                  (&optional workspace working-directory execution-target))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -476,11 +477,13 @@ present."
                (mevedel-system-context-workspace context)))
          (mevedel-system-context-working-directory context))))
 
-(defun mevedel-system--environment-prompt (workspace &optional working-directory)
-  "Return dynamic environment prompt for WORKSPACE and WORKING-DIRECTORY."
+(defun mevedel-system--environment-prompt
+    (workspace &optional working-directory execution-target)
+  "Return prompt for WORKSPACE, WORKING-DIRECTORY, and EXECUTION-TARGET."
   (concat "## Environment\n\n"
           "Here is useful information about the environment you are running in:\n<env>\n"
-          (mevedel--environment-info-string workspace working-directory)
+          (mevedel--environment-info-string
+           workspace working-directory execution-target)
           "\n</env>"))
 
 (defun mevedel-system--session-matches-context-p (session context)
@@ -618,9 +621,12 @@ present."
 
 (mevedel-define-prompt-component environment
   :producer (lambda (context)
-              (mevedel-system--environment-prompt
-               (mevedel-system-context-workspace context)
-               (mevedel-system-context-working-directory context))))
+              (let ((session (mevedel-system--context-session context)))
+                (mevedel-system--environment-prompt
+                 (mevedel-system-context-workspace context)
+                 (mevedel-system-context-working-directory context)
+                 (and session
+                      (mevedel-session-execution-target session))))))
 
 (mevedel-define-prompt-component skills
   :producer #'mevedel-system--skills-prompt)

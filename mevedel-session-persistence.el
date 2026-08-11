@@ -130,6 +130,8 @@
 		  (session))
 (declare-function mevedel-execution-teardown-all "mevedel-execution"
 		  nil)
+(declare-function mevedel-execution-unsettled-mutation-p
+		  "mevedel-execution" (session))
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
@@ -205,6 +207,8 @@
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-disclose
                   "mevedel-session-durability" (session))
+(declare-function mevedel-session-durability-forget-removed-session
+                  "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-lease-acquire
                   "mevedel-session-durability"
                   (session-dir buffer-name &optional session))
@@ -272,6 +276,8 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-input-p
 		  "mevedel-structs" (session))
+(declare-function mevedel-session-pending-publication
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-log-pending
 		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs"
@@ -2037,6 +2043,23 @@ transcript buffers and return nil."
        ((mevedel-session-persistence--root-data-buffer-p buffer)
         buffer)))))
 
+(defun mevedel-session-persistence--root-buffer-for-session
+    (session &optional buffer)
+  "Return SESSION's live root data buffer, preferring BUFFER."
+  (let ((candidate
+         (mevedel-session-persistence--authoritative-buffer buffer)))
+    (or (and candidate
+             (eq session
+                 (buffer-local-value 'mevedel--session candidate))
+             candidate)
+        (cl-find-if
+         (lambda (current)
+           (and (mevedel-session-persistence--root-data-buffer-p current)
+                (local-variable-p 'mevedel--session current)
+                (eq session
+                    (buffer-local-value 'mevedel--session current))))
+         (buffer-list)))))
+
 
 ;;
 ;;; Lazy materialization
@@ -2123,22 +2146,26 @@ Returns SESSION's `save-path' (allocated or existing)."
 
 Pending critical publication blocks every session.  A remote session also
 materializes its target-side directory when necessary and must own its live
-portable lease."
+portable lease.  Shallow materialization always uses SESSION's root buffer."
   (when (mevedel-session-pending-publication session)
     (user-error "Session has pending publication; retry or abandon it first"))
   (let ((target (mevedel-session-execution-target session)))
     (when (and target (mevedel-execution-target-remote-p target))
-      (let ((buffer (or buffer (current-buffer))))
+      (let* ((buffer (or buffer (current-buffer)))
+             (root-buffer
+              (mevedel-session-persistence--root-buffer-for-session
+               session buffer)))
         (require 'mevedel-session-durability)
         (mevedel-session-durability-disclose session)
         (unless (or (mevedel-session-save-path session)
-                    (mevedel-session-persistence--shallow-ensure-files
-                     session buffer))
+                    (and root-buffer
+                         (mevedel-session-persistence--shallow-ensure-files
+                          session root-buffer)))
           (user-error "Could not materialize remote session state"))
         (unless (or (mevedel-session-durability-lease-owned-p session)
                     (mevedel-session-persistence-lock-acquire
                      (mevedel-session-save-path session)
-                     (buffer-name buffer)
+                     (buffer-name (or root-buffer buffer))
                      session))
           (user-error "Remote session is leased by another client")))))
   t)
@@ -4975,7 +5002,9 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
       (require 'mevedel-execution-target)
       (let* ((target (mevedel-execution-target-create directory))
              (default-directory (file-name-as-directory directory))
-             (remote (file-remote-p default-directory)))
+             (remote (file-remote-p default-directory))
+             (process-environment
+              (unless remote process-environment)))
         (and (executable-find "git" remote)
              (= 1
                 (process-file
@@ -6240,6 +6269,7 @@ caches never become fork authority."
                  (lambda ()
                    (rename-file (directory-file-name staging-path)
                                 (directory-file-name new-save-path))
+                   (setq published t)
                    ;; Reservation finalization must address the moved lease.
                    (setf (mevedel-session-save-path child) new-save-path)))
                 (setf
@@ -6261,9 +6291,6 @@ caches never become fork authority."
                 committed t)
           child-buffer)
       (unless committed
-        (ignore-errors
-          (mevedel-session-persistence-lock-release
-           (mevedel-session-save-path child) child))
         (when-let* ((failed-buffer
                      (or child-buffer
                          (mevedel-session-persistence--find-live-buffer
@@ -6271,19 +6298,37 @@ caches never become fork authority."
                           (mevedel-session-buffer-name
                            (mevedel-session-name child)
                            (mevedel-session-workspace child))))))
+          (with-current-buffer failed-buffer
+            (set-buffer-modified-p nil)
+            (setq-local kill-buffer-hook nil
+                        kill-buffer-query-functions nil))
           (when-let* ((view
                        (buffer-local-value
                         'mevedel--view-buffer failed-buffer))
                       ((buffer-live-p view)))
+            (with-current-buffer view
+              (setq-local kill-buffer-hook nil
+                          kill-buffer-query-functions nil))
             (kill-buffer view))
           (when (buffer-live-p failed-buffer)
-            (with-current-buffer failed-buffer
-              (set-buffer-modified-p nil))
             (kill-buffer failed-buffer)))
         (when published
           (ignore-errors (delete-directory new-save-path t)))
         (when (file-directory-p staging-path)
-          (ignore-errors (delete-directory staging-path t))))
+          (ignore-errors (delete-directory staging-path t)))
+        (let ((remaining
+               (cond
+                ((and published
+                      (ignore-errors (file-directory-p new-save-path)))
+                 new-save-path)
+                ((ignore-errors (file-directory-p staging-path))
+                 staging-path))))
+          (if remaining
+              (ignore-errors
+                (mevedel-session-persistence-lock-release remaining child))
+            (when remote-p
+              (ignore-errors
+                (mevedel-session-durability-forget-removed-session child))))))
       (when (buffer-live-p staging-buffer)
         (with-current-buffer staging-buffer
           (set-buffer-modified-p nil)
@@ -7786,6 +7831,46 @@ the workspace store is remote or the throttle has already fired."
 ;; turn-count bump, and runs before `mevedel-request-end' clears the
 ;; request struct (so `mevedel-request-file-snapshots' is still live).
 
+(defun mevedel-session-persistence--allow-emacs-exit-p ()
+  "Return non-nil when every live session may exit safely."
+  (require 'mevedel-execution)
+  (let ((blocker
+         (cl-some
+          (lambda (buffer)
+            (and (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (when (and (boundp 'mevedel--session)
+                              mevedel--session)
+                     (cond
+                      ((mevedel-session-pending-publication
+                        mevedel--session)
+                       'publication)
+                      ((and
+                        (not
+                         (eq 'foreign
+                             (plist-get
+                              (mevedel-session-lease mevedel--session)
+                              :state)))
+                        (mevedel-execution-unsettled-mutation-p
+                         mevedel--session))
+                       'mutation))))))
+          (buffer-list))))
+    (pcase blocker
+      ('publication
+       (message
+        (concat
+         "mevedel: session publication is pending; run "
+         "mevedel-session-durability-retry-publication or "
+         "mevedel-session-durability-abandon-publication first"))
+       nil)
+      ('mutation
+       (message
+        (concat
+         "mevedel: remote mutation is unsettled; stop live executions or run "
+         "mevedel-retry-target-readiness to acknowledge it first"))
+       nil)
+      (_ t))))
+
 (defun mevedel-session-persistence--kill-emacs-hook ()
   "Save sessions, clean expired state, and release locks on Emacs exit.
 
@@ -7823,6 +7908,8 @@ bad buffer can't block exit."
 ;; Install at file-load time so exit persistence runs even when the user
 ;; never called `mevedel-install' this Emacs (e.g. running `mevedel-resume'
 ;; is the only command invoked).  Duplicate adds are no-ops by `add-hook'.
+(add-hook 'kill-emacs-query-functions
+          #'mevedel-session-persistence--allow-emacs-exit-p)
 (add-hook 'kill-emacs-hook #'mevedel-session-persistence--kill-emacs-hook)
 
 
