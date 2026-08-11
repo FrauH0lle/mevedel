@@ -487,14 +487,14 @@ persisted in the accepted turn's durable disclosure.
 
 `PreCompact` runs after the compaction range and prompt have been prepared
 but before the compaction request is sent.  A blocking decision stops the
-compaction.  `:additional-context` is appended to the compaction system
-prompt, so hooks can give the summarizer local policy or retention hints.
+compaction.  `:additional-context` is supplied as labelled untrusted evidence
+beneath the fixed context-summary system contract, so hooks can provide local
+retention hints without changing summary purpose, authority, or structure.
 Its hook audit surface belongs on the compaction event/summary, not a
 user turn, because the summarizer request is the model call it changes.
 For automatic compaction, a block is treated as compaction failure and the
 pending user request is not sent. Each provider retry reruns `PreCompact` with
-a fresh decision and system prompt rather than reusing the previous attempt's
-hook result.
+a fresh decision rather than reusing the previous attempt's hook result.
 
 `PostCompact` runs after a successful summary has been applied. It receives
 the summary and before/after token estimates. Decisions are currently logged

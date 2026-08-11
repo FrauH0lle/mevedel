@@ -1338,7 +1338,7 @@
           (mevedel-agent-record--create
            :id "default--parent" :path "/root/parent" :activity 'running))
          summary-callback summary-cancelled captured-source captured-focus
-         (summary-calls 0) outcome cancel)
+         provider-callbacks (summary-calls 0) outcome cancel)
     (setf (mevedel-agent-invocation-agent-id parent-invocation)
           "default--parent"
           (mevedel-agent-invocation-path parent-invocation) "/root/parent"
@@ -1371,7 +1371,9 @@
                         summary-callback callback)
                   (lambda () (setq summary-cancelled t))))
                ((symbol-function 'mevedel-agent-exec-run)
-                (lambda (&rest _) 'provider-request)))
+                (lambda (callback &rest _)
+                  (push callback provider-callbacks)
+                  'provider-request)))
             (setq cancel
                   (mevedel-agent-control-spawn
                    session "summarized" "Original task"
@@ -1416,6 +1418,45 @@
             (should (equal '(:backend "test-backend" :model test-model
                              :effort high)
                            (plist-get outcome :summary-metadata)))
+            (let* ((record (plist-get outcome :record))
+                   (initial (mevedel-agent-record-invocation record))
+                   (child-buffer (mevedel-agent-invocation-buffer initial))
+                   followup)
+              (with-current-buffer child-buffer
+                (goto-char (point-max))
+                (let ((start (point)))
+                  (insert "Initial result.\n")
+                  (put-text-property start (point) 'gptel 'response)))
+              (funcall (car provider-callbacks) "Initial result.")
+              (setq followup
+                    (mevedel-agent-record-invocation
+                     (mevedel-agent-control-followup
+                      session "/root/parent/summarized" "Follow-up task")))
+              (with-current-buffer child-buffer
+                (should (= 1 (how-many "<task-background>"
+                                       (point-min) (point-max))))
+                (should (string-match-p "Follow-up task" (buffer-string)))
+                (goto-char (point-max))
+                (let ((start (point)))
+                  (insert "Follow-up result.\n")
+                  (put-text-property start (point) 'gptel 'response)))
+              (funcall (car provider-callbacks) "Follow-up result.")
+              (with-current-buffer child-buffer
+                (basic-save-buffer)
+                (let ((target
+                       (mevedel--compact-agent-target followup)))
+                  (should (string-match-p
+                           "task-background"
+                           (plist-get
+                            (mevedel--compact-evidence-selection
+                             target (point-max) t)
+                            :content)))
+                  (mevedel--compact-agent-apply
+                   target "Child continuation summary." nil nil nil)
+                  (should-not (string-match-p "<task-background>"
+                                              (buffer-string)))
+                  (should (string-match-p "Child continuation summary"
+                                          (buffer-string))))))
             (funcall cancel)
             (should-not summary-cancelled)))
       (put 'mevedel-agent-control-spawn 'test-context nil)
@@ -1497,7 +1538,51 @@
                                     (plist-get outcome :error)))
             (should-not dispatched)
             (should-not (mevedel-session-agent-reservations session))))
-      (when (buffer-live-p parent) (kill-buffer parent)))))
+      (when (buffer-live-p parent) (kill-buffer parent))))
+
+  :doc "reserves parallel summaries per tree without a global lock"
+  (let* ((first (mevedel-agent-control-test--session))
+         (second (mevedel-agent-control-test--session))
+         (first-buffer (generate-new-buffer " *summary-capacity-first*"))
+         (second-buffer (generate-new-buffer " *summary-capacity-second*"))
+         callbacks cancels)
+    (setf (mevedel-session-agent-turn-capacity first) 1
+          (mevedel-session-agent-turn-capacity second) 1)
+    (unwind-protect
+        (progn
+          (require 'mevedel-context-summary)
+          (cl-letf
+            (((symbol-function 'mevedel-compact-summary-context-evidence)
+              (lambda (_) "Frozen evidence"))
+             ((symbol-function 'mevedel-agent-runtime-prepare-task)
+              (lambda (_agent _description _message _path callback &rest _)
+                (funcall callback
+                         '(:outcome success :turn (:prompt "Final task")))))
+             ((symbol-function 'mevedel-context-summary-generate)
+              (lambda (_source _purpose callback &rest _)
+                (push callback callbacks)
+                #'ignore)))
+          (with-current-buffer first-buffer
+            (setq-local mevedel--session first)
+            (push (mevedel-agent-control-spawn
+                   first "one" "Task" #'ignore :context "summary")
+                  cancels)
+            (should-error
+             (mevedel-agent-control-spawn
+              first "two" "Task" #'ignore :context "summary")
+             :type 'user-error))
+          (with-current-buffer second-buffer
+            (setq-local mevedel--session second)
+            (push (mevedel-agent-control-spawn
+                   second "one" "Task" #'ignore :context "summary")
+                  cancels))
+          (should (= 2 (length callbacks)))
+          (should (= 1 (length (mevedel-session-agent-reservations first))))
+          (should (= 1 (length
+                        (mevedel-session-agent-reservations second))))))
+      (mapc #'funcall cancels)
+      (kill-buffer first-buffer)
+      (kill-buffer second-buffer))))
 
 (mevedel-deftest mevedel-agent-control-send-message ()
   ,test

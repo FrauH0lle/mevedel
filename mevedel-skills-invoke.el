@@ -1409,6 +1409,11 @@ sanitized `UserPromptExpansion' hook decision."
            :args arguments
            :role role
            :origin origin
+           :agent-path
+           (and session
+                (if (fboundp 'mevedel-agent-control-current-path)
+                    (mevedel-agent-control-current-path session)
+                  "/root"))
            :turn (and session (mevedel-session-turn-count session))
            :source-path (mevedel-skill-source-file skill)
            :prepared-body expanded))

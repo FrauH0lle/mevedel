@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'gptel-request)
+(require 'mevedel-context-summary)
 (require 'mevedel-plan)
 (require 'mevedel-plan-handoff)
 (require 'mevedel-plan-mode)
@@ -478,15 +479,14 @@
                        (cl-incf compact-runs)
                        (should (plist-get args :aggressive))
                        (should (string-match-p
-                                "Do not reproduce the accepted plan"
-                                (plist-get args :instructions)))
+                                (regexp-quote body)
+                                (plist-get args :focus)))
                        (let* ((prepared (plist-get args :prepared-summary))
                               (summary
                                (or prepared
                                    (progn
                                      (cl-incf summary-runs)
-                                     (concat
-                                      "# Handoff\n\nDiscovery.\n\n" body))))
+                                     "# Handoff\n\nDiscovery.")))
                               (summary
                                (funcall (plist-get args :summary-ready)
                                         summary))
@@ -770,25 +770,25 @@
                ((symbol-function 'mevedel--compact-main-target)
                 (lambda ()
                   (list :apply (lambda (&rest _) (ert-fail "Source mutated"))
-                        :begin-context-epoch t :warn-on-completion t)))
-               ((symbol-function 'mevedel--compact-run)
-                (lambda (&rest args)
-                  (should (plist-get args :aggressive))
-                  (should-not
-                   (plist-get (plist-get args :target) :begin-context-epoch))
-                  (let* ((prepared (plist-get args :prepared-summary))
-                         (summary
-                          (or prepared
-                              (progn
-                                (cl-incf summary-runs)
-                                (format "# Handoff\n\nInspect %ssrc/api.el."
-                                        source-directory))))
-                         (summary
-                          (funcall (plist-get args :summary-ready) summary))
-                         (target (plist-get args :target)))
-                    (funcall (plist-get target :apply)
-                             target summary nil nil nil nil 0)
-                    (funcall (plist-get args :callback) nil))))
+                        :begin-context-epoch t :eligible-p t
+                        :warn-on-completion t)))
+               ((symbol-function 'mevedel--compact-find-boundary)
+                (lambda () (point-max)))
+               ((symbol-function 'mevedel--compact-evidence-selection)
+                (lambda (&rest _) (list :content source-text)))
+               ((symbol-function 'mevedel-context-summary-generate)
+                (lambda (source purpose callback &rest args)
+                  (should (equal source-text source))
+                  (should (eq 'handoff purpose))
+                  (should (string-match-p
+                           (regexp-quote body) (plist-get args :focus)))
+                  (cl-incf summary-runs)
+                  (funcall callback
+                           (list :outcome 'success
+                                 :summary
+                                 (format "# Handoff\n\nInspect %ssrc/api.el."
+                                         source-directory)))
+                  #'ignore))
                ((symbol-function 'mevedel-worktree-create-session)
                 (lambda (branch _purpose clean-arg)
                   (cl-incf creates)

@@ -1,4 +1,4 @@
-;;; mevedel-context-summary.el --- Model-generated context summaries -*- lexical-binding: t; -*-
+;;; mevedel-context-summary.el -- Model-generated context summaries -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -13,7 +13,6 @@
   (require 'gptel))
 
 ;; `gptel'
-(declare-function gptel-abort "ext:gptel-request" (buf))
 (declare-function gptel-backend-name "ext:gptel" (backend))
 (defvar gptel--request-params)
 (defvar gptel-backend)
@@ -27,6 +26,7 @@
 ;; `gptel-request'
 (declare-function gptel--merge-plists "ext:gptel-request" (&rest plists))
 (declare-function gptel--model-request-params "ext:gptel-request" (model))
+(declare-function gptel-abort "ext:gptel-request" (buf))
 (declare-function gptel-backend-request-params "ext:gptel-request" (backend))
 (declare-function gptel-request "ext:gptel-request")
 
@@ -38,6 +38,12 @@
 (declare-function mevedel-model-resolve-workload
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-p "mevedel-structs" (object))
+(defvar mevedel--agent-invocation)
+(defvar mevedel--data-buffer)
+(defvar mevedel--session)
 
 ;; `mevedel-system'
 (declare-function mevedel-system-render-prompt-file
@@ -150,7 +156,7 @@ consumer-supplied relevance data."
                 (plist-get params :num_predict))))
         0)))
 
-(defun mevedel-context-summary--usable-tokens (policy)
+(defun mevedel-context-summary-usable-tokens (policy)
   "Return usable input tokens for summarization model POLICY."
   (let* ((model (plist-get policy :model))
          (context
@@ -170,6 +176,22 @@ consumer-supplied relevance data."
 (defun mevedel-context-summary--estimated-tokens (system input)
   "Return a conservative token estimate for exact SYSTEM and INPUT text."
   (/ (+ (length system) (length input) 5) 4))
+
+(defun mevedel-context-summary--policy-buffer (session)
+  "Return SESSION's live root data buffer for workload resolution."
+  (if (not (and session
+                (fboundp 'mevedel-session-p)
+                (mevedel-session-p session)))
+      (current-buffer)
+    (or
+     (cl-find-if
+      (lambda (buffer)
+        (and (buffer-live-p buffer)
+             (eq session (buffer-local-value 'mevedel--session buffer))
+             (not (buffer-local-value 'mevedel--agent-invocation buffer))
+             (not (buffer-local-value 'mevedel--data-buffer buffer))))
+      (buffer-list))
+     (error "Context summary session buffer is unavailable"))))
 
 (cl-defun mevedel-context-summary-generate
     (source purpose callback
@@ -204,8 +226,10 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
   (require 'mevedel-models)
   (let* ((policy
           (or policy
-              (append '(:max-tokens nil :request-params nil)
-                      (mevedel-model-resolve-workload 'summarization))))
+              (with-current-buffer
+                  (mevedel-context-summary--policy-buffer session)
+                (append '(:max-tokens nil :request-params nil)
+                        (mevedel-model-resolve-workload 'summarization)))))
          (system (mevedel-context-summary--prompt purpose))
          (input (mevedel-context-summary--input
                  source purpose previous-summary focus guidance))
@@ -282,7 +306,7 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
     (condition-case err
         (let ((estimate (mevedel-context-summary--estimated-tokens
                          system input))
-              (usable (mevedel-context-summary--usable-tokens policy)))
+              (usable (mevedel-context-summary-usable-tokens policy)))
           (if (> estimate usable)
               (funcall
                settle

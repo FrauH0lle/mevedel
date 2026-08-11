@@ -35,10 +35,7 @@
                   (machine &optional new-state))
 (declare-function gptel--handle-wait "ext:gptel-request" (fsm))
 (declare-function gptel-backend-name "ext:gptel" (backend))
-(declare-function gptel--merge-plists "ext:gptel-request" (&rest plists))
-(declare-function gptel--model-request-params "ext:gptel-request" (model))
 (declare-function gptel--realize-query "ext:gptel-request" (fsm))
-(declare-function gptel-backend-request-params "ext:gptel-request" (backend))
 (declare-function gptel-fsm-info "ext:gptel-request")
 (defvar gptel--request-alist)
 (defvar gptel--request-params)
@@ -55,6 +52,7 @@
                   (invocation item &optional suppress-rerender))
 (declare-function mevedel-agent-conversation-save
                   "mevedel-agent-conversation" (invocation &optional deferred))
+(defvar mevedel--agent-invocation)
 
 ;; `mevedel-agent-exec'
 (declare-function mevedel-agent-exec-request-snapshot
@@ -75,6 +73,10 @@
 ;; `mevedel-chat'
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
+
+;; `mevedel-context-summary'
+(declare-function mevedel-context-summary-usable-tokens
+                  "mevedel-context-summary" (policy))
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
@@ -134,6 +136,8 @@
 (declare-function mevedel-session-touched-files "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-agent-path
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-args
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-name
@@ -350,42 +354,14 @@ thousands of tokens, sometimes as a float."
               (kt (get m :context-window)))
     (round (* kt 1000))))
 
-(defun mevedel--compact-context-limit ()
-  "Return the active model's effective context window in tokens."
-  (or (mevedel--model-context-window)
-      mevedel-compact-context-limit
-      128000))
-
-(defun mevedel--compact-model-max-output-tokens ()
-  "Return the effective configured max-output token count, or 0."
-  (or gptel-max-tokens
-      (when (and (bound-and-true-p gptel-backend)
-                 (fboundp 'gptel--merge-plists)
-                 (fboundp 'gptel-backend-request-params)
-                 (fboundp 'gptel--model-request-params))
-        (let ((params (gptel--merge-plists
-                       gptel--request-params
-                       (gptel-backend-request-params gptel-backend)
-                       (gptel--model-request-params gptel-model))))
-          (or (plist-get params :max_tokens)
-              (plist-get params :maxOutputTokens)
-              (plist-get params :max_output_tokens)
-              (plist-get params :num_predict))))
-      0))
-
 (defun mevedel--compact-usable-tokens ()
   "Return usable context tokens after response reserve."
-  (let* ((context (mevedel--compact-context-limit))
-         ;; A fixed 20k reserve is sensible for large hosted models,
-         ;; but would collapse 8k/16k local models to a one-token
-         ;; threshold.  Cap the reserve to half the context window so
-         ;; fractional thresholds remain meaningful on small models.
-         (reserve-cap (max 1 (/ context 2)))
-         (requested-reserve
-          (max mevedel-compact-reserve-tokens
-               (or (mevedel--compact-model-max-output-tokens) 0)))
-         (effective-reserve (min requested-reserve reserve-cap)))
-    (max 1 (- context effective-reserve))))
+  (require 'mevedel-context-summary)
+  (mevedel-context-summary-usable-tokens
+   (list :backend gptel-backend
+         :model gptel-model
+         :max-tokens gptel-max-tokens
+         :request-params gptel--request-params)))
 
 (defun mevedel--compact-threshold-tokens (&optional usable-tokens)
   "Return the compaction threshold for USABLE-TOKENS."
@@ -414,11 +390,8 @@ thousands of tokens, sometimes as a float."
 
 (defun mevedel--compact-policy-usable-tokens (policy)
   "Return usable input context tokens for model POLICY."
-  (let ((gptel-backend (plist-get policy :backend))
-        (gptel-model (plist-get policy :model))
-        (gptel-max-tokens (plist-get policy :max-tokens))
-        (gptel--request-params (plist-get policy :request-params)))
-    (mevedel--compact-usable-tokens)))
+  (require 'mevedel-context-summary)
+  (mevedel-context-summary-usable-tokens policy))
 
 (defun mevedel--compact-policy-threshold-tokens (policy)
   "Return the compaction threshold for model POLICY."
@@ -977,9 +950,11 @@ When NO-PROPERTIES is non-nil, strip text properties from copied text."
         (setq pos next)))
     (apply #'concat (nreverse parts))))
 
-(defun mevedel--compact-skill-provenance (session preserved-tail-turns)
+(defun mevedel--compact-skill-provenance
+    (session preserved-tail-turns &optional agent-path)
   "Return skill provenance selected for SESSION's compacted prefix.
-PRESERVED-TAIL-TURNS is the number of newest turns excluded from it."
+PRESERVED-TAIL-TURNS is the number of newest turns excluded from it.
+When AGENT-PATH is non-nil, include only invocations from that conversation."
   (if-let* ((session session)
             (records (mevedel-session-invoked-skills session)))
       (let ((cutoff (- (or (mevedel-session-turn-count session) 0)
@@ -997,7 +972,12 @@ PRESERVED-TAIL-TURNS is the number of newest turns excluded from it."
                    (or (mevedel-skill-invocation-record-turn rec) "?")))
          (seq-filter
           (lambda (rec)
-            (<= (or (mevedel-skill-invocation-record-turn rec) 0) cutoff))
+            (and (<= (or (mevedel-skill-invocation-record-turn rec) 0)
+                     cutoff)
+                 (or (null agent-path)
+                     (equal agent-path
+                            (mevedel-skill-invocation-record-agent-path
+                             rec)))))
           records)))
     nil))
 
@@ -1076,7 +1056,13 @@ reconstructed into a child conversation."
 
 (defun mevedel-compact-summary-context-evidence (tool-use-id)
   "Return frozen parent evidence excluding TOOL-USE-ID's tool segment."
-  (let (ranges)
+  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+         (agent-path
+          (if-let* ((invocation (and (boundp 'mevedel--agent-invocation)
+                                     mevedel--agent-invocation)))
+              (mevedel-agent-invocation-require-path invocation)
+            "/root"))
+         ranges)
     (dolist (segment (mevedel-transcript-segments (point-min) (point-max)))
       (unless (and (eq (car segment) 'tool)
                    (or (equal (cadddr segment) tool-use-id)
@@ -1085,7 +1071,14 @@ reconstructed into a child conversation."
         (push (cons (cadr segment) (caddr segment)) ranges)))
     (mevedel-transcript-project-evidence
      (nreverse ranges)
-     :tool-output-max mevedel-compact-body-tool-output-max)))
+     :tool-output-max mevedel-compact-body-tool-output-max
+     :tool-results-dir
+     (and session
+          (mevedel-session-save-path session)
+          (file-name-concat (mevedel-session-save-path session)
+                            "tool-results"))
+     :skill-provenance
+     (mevedel--compact-skill-provenance session 0 agent-path))))
 
 (defun mevedel--compact-directive-ranges ()
   "Return complete directive ranges using current-buffer positions."
@@ -1492,7 +1485,13 @@ current agent buffer's invocation."
                 :anchor-text (buffer-substring task-heading anchor-end)
                 :body-start (or (plist-get summary-bounds :end) anchor-end)
                 :previous-summary previous-summary
-                :prompt-session nil
+                :prompt-session session
+                :skill-agent-path
+                (mevedel-agent-invocation-require-path invocation)
+                :tool-results-dir
+                (and (mevedel-session-save-path session)
+                     (file-name-concat (mevedel-session-save-path session)
+                                       "tool-results"))
                 :eligible-p t
                 :apply #'mevedel--compact-agent-apply
                 :start #'mevedel--compact-agent-start
@@ -1684,6 +1683,12 @@ AUTO is non-nil for automatic compaction."
           :body-start (mevedel--compact-body-start)
           :previous-summary (mevedel--compact-previous-summary)
           :prompt-session session
+          :skill-agent-path "/root"
+          :tool-results-dir
+          (and session
+               (mevedel-session-save-path session)
+               (file-name-concat (mevedel-session-save-path session)
+                                 "tool-results"))
           :eligible-p (mevedel--compact-current-persisted-p)
           :begin-context-epoch t
           :apply #'mevedel--compact-main-apply
@@ -1987,13 +1992,15 @@ AGGRESSIVE selects whether to preserve the ordinary recent-turn tail."
           (mevedel--compact-preserved-tail-turn-count
            tail-start limit aggressive))
          (content
-          (mevedel-transcript-project-evidence
+         (mevedel-transcript-project-evidence
            history-regions
            :tool-output-max mevedel-compact-body-tool-output-max
+           :tool-results-dir (plist-get target :tool-results-dir)
            :skill-provenance
            (mevedel--compact-skill-provenance
             (plist-get target :prompt-session)
-            preserved-tail-turns))))
+            preserved-tail-turns
+            (plist-get target :skill-agent-path)))))
     (list :content content
           :history-regions history-regions
           :preserved-tail-turns preserved-tail-turns
