@@ -166,12 +166,15 @@ permission pipeline, not a model-visible tool.
 
 Agent's required inputs are `task_name` and `message`. Its optional `role`,
 `context`, `model`, and `effort` inputs are validated before reservation:
-context accepts only `all`, `none`, or positive decimal strings; model selectors
-use the shared tier/provider parser; and effort support is delegated to the
-resolved gptel model. A valid request reserves path and capacity while its
-ordinary task hooks prepare the final task asynchronously. The path is not
-published until durable setup and provider dispatch succeed; cancellation or
-failure releases the reservation.
+context accepts `all`, `none`, `summary`, or positive decimal strings; model
+selectors use the shared tier/provider parser; and effort support is delegated
+to the resolved gptel model. `summary` freezes the realized parent evidence,
+omits the triggering Agent tool segment, and makes one handoff-summary request
+focused on the hook-accepted task. A valid request reserves path and capacity
+while its ordinary task hooks and optional summary prepare asynchronously. The
+path is not published until the labelled background, authoritative task,
+durable transcript, and provider dispatch succeed; cancellation or failure
+releases the reservation.
 The same shared resource-grant interface authorizes native filesystem tools and
 additive Bash/batch-Eval mounts; command authorization remains independent.
 When one Bash or batch-Eval invocation is missing both operation authority and

@@ -116,6 +116,8 @@
           (should (eq :optional (nth 2 arg)))))
       (should-not (assq 'fork_turns args))
       (dolist (text '("Defaults to none"
+                      "summary"
+                      "task-focused"
                       "recent dialogue"
                       "complete conversation"
                       "model-visible roles"
@@ -880,6 +882,29 @@
     (should (equal "default--internal"
                    (plist-get rendering :agent-id)))
     (should (eq 'agent-handle (plist-get rendering :vtype))))
+
+  :doc "shows summary preparation before the Agent call completes"
+  (let ((rendering
+         (mevedel-tool-ui--render-agent
+          "Agent" '(:task_name "spec_review" :context "summary")
+          "" nil)))
+    (should (equal "Preparing summary context... spec_review"
+                   (plist-get rendering :header)))
+    (should-not (plist-get rendering :expandable-p)))
+
+  :doc "shows privacy-safe summary metadata without summary content"
+  (let ((rendering
+         (mevedel-tool-ui--render-agent
+          "Agent" '(:task_name "spec_review" :context "summary")
+          "{\"path\":\"/root/spec_review\"}"
+          '(:kind collaboration-event :event started
+            :path "/root/spec_review" :status running
+            :summary-metadata
+            (:backend "openai" :model gpt-5 :effort high)))))
+    (should (equal
+             "Started /root/spec_review · summary openai/gpt-5 (high)"
+             (plist-get rendering :header)))
+    (should-not (string-match-p "Scope" (plist-get rendering :header))))
 
   :doc "Started rows preserve a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers

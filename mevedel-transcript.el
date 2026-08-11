@@ -407,6 +407,9 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
            'hook-context "^<hook-context>[ \t]*$"
            "^</hook-context>[ \t]*\n?" start end)
           (mevedel-transcript--delimited-ranges
+           'task-background "^<task-background>[ \t]*$"
+           "^</task-background>[ \t]*\n?" start end)
+          (mevedel-transcript--delimited-ranges
            'render-data "^<!-- mevedel-render-data -->[ \t]*$"
            "^<!-- /mevedel-render-data -->[ \t]*\\(?:\n\\(?:[ \t\r]*\n\\)*\\)?"
            start end)
@@ -1506,6 +1509,7 @@ invocation descriptions."
                        ('mailbox "agent-message")
                        ('reminder "system-reminder")
                        ('hook-context "hook-context")
+                       ('task-background "task-background")
                        (_ (symbol-name type)))
                      (substring-no-properties text))
                     items)))))))))

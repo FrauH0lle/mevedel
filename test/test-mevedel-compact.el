@@ -3786,6 +3786,30 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should (string-match-p "Earlier work summarized" snapshot))
       (should (string-match-p "Recent prompt" snapshot)))))
 
+(mevedel-deftest mevedel-compact-summary-context-evidence ()
+  ,test
+  (test)
+  :doc "freezes realized parent evidence without the triggering Agent call"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Parent requirement.\n")
+    (let ((start (point)))
+      (insert "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+              "Sibling evidence.\n")
+      (put-text-property start (point) 'gptel '(tool . "call_read")))
+    (let ((start (point)))
+      (insert "(:name \"Agent\" :args (:task_name \"child\"))\n\n"
+              "Triggering tool placeholder.\n")
+      (put-text-property start (point) 'gptel '(tool . "call_agent")))
+    (let ((evidence
+           (mevedel-compact-summary-context-evidence "call_agent")))
+      (erase-buffer)
+      (insert "Later parent text.")
+      (should (string-match-p "Parent requirement" evidence))
+      (should (string-match-p "Sibling evidence" evidence))
+      (should-not (string-match-p "Triggering tool" evidence))
+      (should-not (string-match-p "task_name" evidence)))))
+
 (mevedel-deftest mevedel--compact-tail-start ()
   ,test
   (test)

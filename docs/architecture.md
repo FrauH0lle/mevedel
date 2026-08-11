@@ -358,7 +358,8 @@ artifacts where appropriate.
 `mevedel-transcript.el` owns the canonical transcript grammar. Its primary
 entry point, `mevedel-transcript-segments`, classifies data-buffer spans as
 `(TYPE START END)` where type is `user`, `response`, `tool`, `reasoning`,
-`mailbox`, `reminder`, `hook-context`, `render-data`, `prompt`, or `ignored`.
+`mailbox`, `reminder`, `hook-context`, `task-background`, `render-data`,
+`prompt`, or `ignored`.
 It combines gptel text-property runs with generated
 control ranges, protects literal user examples from structural recognition,
 and repairs known org/gptel boundary damage.
@@ -386,6 +387,9 @@ retain source selection, hooks, retries, persistence, and mutation.
 Plan feeds both Summary locations the same handoff evidence and exact relevance
 focus. Here applies the result through root compaction; Worktree generates once,
 caches it in retry state, and applies path portability before target insertion.
+Agent `context="summary"` projects the frozen realized parent transcript,
+excludes the triggering tool call, and applies one handoff result as a distinct
+child task-background span before the authoritative task.
 
 View rendering, session prompt indexing/rewind, and compaction all read
 these shared spans. They keep their own policies: the view groups and

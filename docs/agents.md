@@ -14,7 +14,11 @@ forms paths such as `/root/implementation/tests`.
 child's sole assigned task and no parent dialogue is copied. Explicit `all`
 copies the complete effective parent conversation, and a positive decimal
 string such as `"3"` copies the anchored summary plus the three most recent
-live turns. The copy retains gptel's user/response/tool span properties,
+live turns. Explicit `summary` freezes the realized parent transcript without
+the triggering Agent tool segment, runs one central handoff-summary request
+focused on the hook-accepted task, and stores the result as a labelled advisory
+`Task background` block before that authoritative task. The copy modes retain
+gptel's user/response/tool span properties,
 including actionable user instructions, and is taken from the current
 post-compaction buffer only. Callers use copied context only when the child
 must inspect parent dialogue and identify that dialogue as background in the
@@ -54,7 +58,9 @@ mailbox, descendants, and future follow-up capability intact.
 Creation validates and freezes its inputs, privately reserves the canonical
 path and a tree-wide capacity slot, runs `SubagentStart` exactly once, then
 runs `UserPromptSubmit` for the initial task. The hook-accepted task is passed
-to dispatch without rerunning either hook. The reservation is absent from
+to dispatch without rerunning either hook. For `summary`, generation starts
+only after that final task exists; the parent row remains in `Preparing summary
+context...` until generation and durable child setup finish. The reservation is absent from
 `ListAgents` and path resolution until a durable transcript and provider FSM
 exist. Failure or parent cancellation releases it synchronously and suppresses
 late preparation callbacks. Every idle-agent follow-up
@@ -143,10 +149,13 @@ the reporting tone, while reviewer relies on its strict output contract.
 ```mermaid
 flowchart TD
     A[Validate Agent request] --> B[Privately reserve path and capacity]
-    B --> C[Freeze context and configuration]
+    B --> C[Freeze parent evidence and configuration]
     C --> D[Run SubagentStart once]
     D --> E[Run UserPromptSubmit once]
-    E --> F[Persist transcript and start provider FSM]
+    E --> S{Summary context?}
+    S -- Yes --> T[Generate one task-focused handoff summary]
+    S -- No --> F[Persist transcript and start provider FSM]
+    T --> F
     F --> G[Publish retained identity and Agent result]
     G --> H[Settle and run SubagentStop exactly once]
     H --> I[Release capacity and persist idle record]
@@ -277,6 +286,9 @@ model-facing address; storage identities never enter collaboration tools.
 The frozen configuration is authoritative for the agent's system prompt, so
 agent transcripts omit gptel's redundant expanded `GPTEL_SYSTEM` property
 while retaining `GPTEL_BOUNDS` and the remaining conversation metadata.
+Generated task background is ordinary persisted conversation context with its
+own structural type. Follow-ups and agent compaction therefore absorb it
+naturally without replaying or regenerating it.
 
 `mevedel-agent-conversation.el` owns conversation creation and hydration,
 frozen request-local installation, activity snapshots, response extraction,

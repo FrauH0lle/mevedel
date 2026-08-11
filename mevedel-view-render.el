@@ -1154,6 +1154,19 @@ real user message."
             (setcar turns turn)))
          (render-data-only-p
           nil)
+         ((eq type 'task-background)
+          (when current-segs
+            (push (list :role current-role
+                        :segments (nreverse current-segs)
+                        :start turn-start
+                        :end (caddr (car current-segs)))
+                  turns))
+          (push (list :role 'user
+                      :segments (list seg)
+                      :start seg-start
+                      :end (caddr seg))
+                turns)
+          (setq current-segs nil current-role nil turn-start nil))
          ((and (eq type 'user)
                (or review-action-p
                    agent-task-p
@@ -2539,6 +2552,7 @@ interaction UI live below that boundary and above the input prompt."
               request-summary
               response
               system-reminder-summary
+              task-background
               thinking-summary
               tool-event
               tool-summary
@@ -3291,7 +3305,24 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
                 (insert-start (point)))
             (pcase role
               ('user
-               (mevedel-view--render-user-turn segments data-buf directive))
+               (if (eq (caar segments) 'task-background)
+                   (let ((text
+                          (with-current-buffer data-buf
+                            (buffer-substring-no-properties
+                             (cadar segments) (caddar segments)))))
+                     (setq text
+                           (replace-regexp-in-string
+                            "\\`<task-background>[ \t]*\n\\|\n?</task-background>[ \t]*\n?\\'"
+                            "" text))
+                     (mevedel-view--insert-rendered-tool
+                      (list :header "Task background"
+                            :body text
+                            :body-mode 'markdown-mode
+                            :vtype 'task-background
+                            :initially-collapsed-p t)
+                      turn-source))
+                 (mevedel-view--render-user-turn
+                  segments data-buf directive)))
               ('assistant
                (mevedel-view--render-assistant-turn
                 segments data-buf

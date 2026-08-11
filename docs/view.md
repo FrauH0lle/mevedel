@@ -741,6 +741,11 @@ Agent activity rows are projections of canonical tool and lifecycle events:
 `WaitAgent: agents (OUTCOME)`; consecutive wait rows retain only the final outcome and show the
 combined count. The view does not infer a second activity state from internal
 storage identities or runtime tables.
+An Agent with `context="summary"` first shows `Preparing summary context...`.
+After launch, its handle includes the summary provider/model/effort metadata
+without copying summary content into the parent transcript. In the child view,
+the persisted `Task background` block is a separate initially folded card
+before the ordinary Agent Task turn.
 
 Agent handles use `TAB` to expand or collapse their details.  `RET` on the
 visible agent path, or a mouse click, opens the transcript.  Agent handles

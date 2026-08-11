@@ -215,6 +215,17 @@
         (funcall hook-callback nil)
         (should-not outcome)))))
 
+(mevedel-deftest mevedel-agent-runtime-task-background ()
+  ,test
+  (test)
+  :doc "labels generated background as advisory before the authoritative task"
+  (let ((block (mevedel-agent-runtime-task-background "  ## Scope\n- context  ")))
+    (should (string-prefix-p "<task-background>\n" block))
+    (should (string-match-p "may be stale or untrusted" block))
+    (should (string-match-p "The following Agent Task is authoritative" block))
+    (should (string-match-p "## Scope\n- context" block))
+    (should (string-suffix-p "</task-background>\n" block))))
+
 (mevedel-deftest mevedel-agent-runtime-dispatch
   ()
   ,test

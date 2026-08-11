@@ -116,6 +116,10 @@ settings. A Session Fork also copies the source session's permission mode,
 sandbox mode, session permission rules, and exact resource grants at the fork
 point. Parent and child then diverge independently.
 gptel's other buffer-local settings continue to use its Org persistence.
+An Agent `summary` selection is persisted only in the child transcript as a
+labelled `<task-background>` block before the authoritative Agent Task. The
+parent sidecar and tool result retain only provider/model/effort metadata, not
+the generated summary text.
 
 Pending input is live-session state, not sidecar state. Same-turn steering,
 queued follow-ups, their category order and edit state, session-local IDs,

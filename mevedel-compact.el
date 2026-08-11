@@ -1074,6 +1074,19 @@ reconstructed into a child conversation."
                (buffer-substring tail-start (point-max)))))
     (_ (error "Invalid normalized agent context: %S" context))))
 
+(defun mevedel-compact-summary-context-evidence (tool-use-id)
+  "Return frozen parent evidence excluding TOOL-USE-ID's tool segment."
+  (let (ranges)
+    (dolist (segment (mevedel-transcript-segments (point-min) (point-max)))
+      (unless (and (eq (car segment) 'tool)
+                   (or (equal (cadddr segment) tool-use-id)
+                       (equal (get-text-property (cadr segment) 'gptel)
+                              (cons 'tool tool-use-id))))
+        (push (cons (cadr segment) (caddr segment)) ranges)))
+    (mevedel-transcript-project-evidence
+     (nreverse ranges)
+     :tool-output-max mevedel-compact-body-tool-output-max)))
+
 (defun mevedel--compact-directive-ranges ()
   "Return complete directive ranges using current-buffer positions."
   (require 'mevedel-transcript-audit)
