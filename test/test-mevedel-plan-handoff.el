@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'gptel-request)
+(require 'mevedel-context-summary)
 (require 'mevedel-plan)
 (require 'mevedel-plan-handoff)
 (require 'mevedel-plan-mode)
@@ -29,6 +30,25 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-compact)
+
+(defconst test-mevedel-plan-handoff--summary
+  "## Scope
+- background
+## Constraints & Preferences
+- constraint
+## Work & Evidence
+- evidence
+## Key Decisions
+- decision
+## Open Questions & Risks
+- risk
+## Critical Context
+- context
+## Relevant Files
+- file.el
+## Skills Invoked
+- (none)"
+  "Valid handoff summary used by Plan handoff tests.")
 
 (mevedel-deftest mevedel-plan-handoff-reserved-goal-id
   (:doc "reserves Here sources and Worktree targets without blocking sources")
@@ -166,16 +186,28 @@
             (list :absolute-path path :hash "wrong"))))
       (delete-file path))))
 
-(mevedel-deftest mevedel-plan-handoff--summary-instructions
-  (:doc "adds portable-path guidance only for Worktree summaries")
+(mevedel-deftest mevedel-plan-handoff--summary-focus
+  (:doc "keeps the exact accepted plan and implementation-only instructions")
   ,test
   (test)
-  (should-not
-   (string-match-p "relative to the repository root"
-           (mevedel-plan-handoff--summary-instructions)))
-  (should (string-match-p
-           "relative to the repository root"
-           (mevedel-plan-handoff--summary-instructions t))))
+  (let ((focus
+         (mevedel-plan-handoff--summary-focus
+          "# Exact plan\nDo it." '(:instructions "Use $tdd exactly."))))
+    (should (string-match-p (regexp-quote "# Exact plan\nDo it.") focus))
+    (should (string-match-p (regexp-quote "Use $tdd exactly.") focus))))
+
+(mevedel-deftest mevedel-plan-handoff--summary-source
+  (:doc "turns prior retained state into evidence and omits the accepted plan")
+  ,test
+  (test)
+  (let ((source
+         (mevedel-plan-handoff--summary-source
+          "Current evidence.\n# Exact plan"
+          "Prior retained state with # Exact plan."
+          "# Exact plan")))
+    (should (string-match-p "Prior retained state" source))
+    (should (string-match-p "accepted-plan omission" source))
+    (should-not (string-match-p "# Exact plan" source))))
 
 (mevedel-deftest mevedel-plan-handoff--implementation-failed
   (:doc "records a retryable failure and clears preparation progress")
@@ -550,7 +582,7 @@
       (delete-file source-path))))
 
 (mevedel-deftest mevedel-plan-handoff--prepare-summary
-  (:doc "caches a plan-free portable summary before redispatch")
+  (:doc "Worktree generates one plan-free portable handoff without compaction")
   ,test
   (test)
   (let* ((root (make-temp-file "mevedel-plan-summary-root-" t))
@@ -559,17 +591,106 @@
           (mevedel-session--create
            :name "source" :working-directory root))
          (buffer (generate-new-buffer " *mevedel-plan-summary-data*"))
-         dispatched)
+         (source-before "Current evidence.\n# Accepted")
+         (calls 0) captured dispatched)
+    (unwind-protect
+        (progn
+          (write-region "# Accepted" nil path nil 'silent)
+          (with-current-buffer buffer (insert source-before))
+          (cl-letf (((symbol-function 'mevedel--compact-main-target)
+                     (lambda ()
+                       (list :eligible-p t :previous-summary "Prior state")))
+                    ((symbol-function 'mevedel--compact-find-boundary)
+                     (lambda () (point-max)))
+                    ((symbol-function 'mevedel--compact-evidence-selection)
+                     (lambda (&rest _)
+                       (list :content source-before)))
+                    ((symbol-function 'mevedel--compact-run)
+                     (lambda (&rest _)
+                       (ert-fail "Worktree summary ran compaction")))
+                    ((symbol-function 'mevedel-context-summary-generate)
+                     (lambda (source purpose callback &rest args)
+                       (cl-incf calls)
+                       (setq captured (list source purpose args))
+                       (funcall callback
+                                (list :outcome 'success
+                                      :summary
+                                      (concat root "/file.el\n"
+                                              test-mevedel-plan-handoff--summary)))
+                       #'ignore))
+                    ((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+                    ((symbol-function 'mevedel-plan-handoff--dispatch-accepted)
+                     (lambda (&rest _) (setq dispatched t))))
+            (mevedel-plan-handoff--prepare-summary
+             session buffer
+             (list :selection
+                   '(:location worktree :context summary
+                     :execution direct :mode ask
+                     :instructions "Use $tdd exactly.")
+                   :accepted
+                   (list :absolute-path path
+                         :hash (mevedel-plan-hash "# Accepted")))))
+          (let* ((retry
+                  (plist-get (mevedel-session-plan-metadata session)
+                             :implementation-retry))
+                 (summary (plist-get retry :summary)))
+            (should dispatched)
+            (should (= calls 1))
+            (should (eq (cadr captured) 'handoff))
+            (should (string-match-p "Prior state" (car captured)))
+            (should (string-match-p "accepted-plan omission" (car captured)))
+            (should-not (string-match-p "# Accepted" (car captured)))
+            (should (string-match-p "# Accepted"
+                                    (plist-get (caddr captured) :focus)))
+            (should (string-match-p "Use \\$tdd exactly"
+                                    (plist-get (caddr captured) :focus)))
+            (should (eq 'prepare-worktree (plist-get retry :step)))
+            (should-not (string-match-p (regexp-quote root) summary))
+            (should-not (string-match-p "# Accepted" summary))
+            (cl-letf (((symbol-function 'mevedel--compact-main-target)
+                       (lambda () '(:previous-summary "Prior state")))
+                      ((symbol-function 'mevedel-context-summary-generate)
+                       (lambda (&rest _)
+                         (ert-fail "Cached summary sent another request")))
+                      ((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+                      ((symbol-function 'mevedel-plan-handoff--dispatch-accepted)
+                       #'ignore))
+              (mevedel-plan-handoff--prepare-summary
+               session buffer
+               (plist-put (copy-tree retry) :step 'prepare-summary)))
+            (should (= calls 1))
+            (with-current-buffer buffer
+              (should (equal source-before (buffer-string))))))
+      (kill-buffer buffer)
+      (delete-file path)
+      (delete-directory root t)))
+
+  :doc "Here uses handoff semantics through aggressive compaction"
+  (let* ((path (make-temp-file "mevedel-plan-summary-plan-"))
+         (session (mevedel-session--create :name "source"))
+         (buffer (generate-new-buffer " *mevedel-plan-summary-here*"))
+         captured-source captured-focus applied dispatched)
     (unwind-protect
         (progn
           (write-region "# Accepted" nil path nil 'silent)
           (cl-letf (((symbol-function 'mevedel--compact-main-target)
-                     (lambda () (list :apply (lambda (&rest _)))))
+                     (lambda ()
+                       (list :previous-summary "Prior state"
+                             :begin-context-epoch t
+                             :apply
+                             (lambda (_target summary &rest _)
+                               (setq applied summary)))))
                     ((symbol-function 'mevedel--compact-run)
                      (lambda (&rest args)
+                       (should (plist-get args :aggressive))
+                       (should (eq 'handoff (plist-get args :purpose)))
+                       (setq captured-focus (plist-get args :focus))
+                       (setq captured-source
+                             (funcall (plist-get args :source-transform)
+                                      "Current evidence.\n# Accepted"))
                        (let* ((summary
                                (funcall (plist-get args :summary-ready)
-                                        (concat root "/file.el\n# Accepted")))
+                                        test-mevedel-plan-handoff--summary))
                               (target (plist-get args :target)))
                          (funcall (plist-get target :apply) target summary)
                          (funcall (plist-get args :callback) nil))))
@@ -579,21 +700,21 @@
             (mevedel-plan-handoff--prepare-summary
              session buffer
              (list :selection
-                   '(:location worktree :context summary
-                     :execution direct :mode ask)
+                   '(:location here :context summary
+                     :execution direct :mode ask
+                     :instructions "Use $tdd exactly.")
                    :accepted
                    (list :absolute-path path
                          :hash (mevedel-plan-hash "# Accepted")))))
-          (let* ((retry
-                  (plist-get (mevedel-session-plan-metadata session)
-                             :implementation-retry))
-                 (summary (plist-get retry :summary)))
-            (should dispatched)
-            (should-not (string-match-p (regexp-quote root) summary))
-            (should-not (string-match-p "# Accepted" summary))))
+          (should dispatched)
+          (should (equal test-mevedel-plan-handoff--summary applied))
+          (should (string-match-p "Prior state" captured-source))
+          (should (string-match-p "accepted-plan omission" captured-source))
+          (should-not (string-match-p "# Accepted" captured-source))
+          (should (string-match-p "# Accepted" captured-focus))
+          (should (string-match-p "Use \\$tdd exactly" captured-focus)))
       (kill-buffer buffer)
-      (delete-file path)
-      (delete-directory root t))))
+      (delete-file path))))
 
 (mevedel-deftest mevedel-retry-plan-implementation
   (:doc "redispatches only when an accepted retry record exists")

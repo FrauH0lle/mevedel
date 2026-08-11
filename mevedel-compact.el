@@ -1703,15 +1703,18 @@ AUTO is non-nil for automatic compaction."
   policy
   prepared-summary
   preserved-tail-turns
+  purpose
   request-cancel
   session
   settled
+  source-transform
   summary-ready
   tail-text
   target
   telemetry-span
   tokens-before
   trigger
+  focus
   workspace
   (attempt 0))
 
@@ -1879,28 +1882,37 @@ the persistent failure counter unchanged."
             sizep)))))))
 
 (defun mevedel--compact-run-send-request (state hook-context hook-audits)
-  "Generate STATE's continuation summary with HOOK-CONTEXT and HOOK-AUDITS."
+  "Generate STATE's summary with HOOK-CONTEXT and HOOK-AUDITS."
   (if-let* ((prepared (mevedel--compact-run-state-prepared-summary state)))
       (mevedel--compact-run-apply-summary state prepared hook-audits)
     (require 'mevedel-context-summary)
-    (let ((cancel
-           (mevedel-context-summary-generate
+    (let* ((source
             (if hook-context
                 (concat
                  (mevedel--compact-run-state-old-content state)
                  "\n\n--- evidence item; provenance: hook-context ---\n"
                  hook-context
                  "\n--- end evidence item ---")
-              (mevedel--compact-run-state-old-content state))
-            'continuation
-            (apply-partially
-             #'mevedel--compact-run-handle-summary state hook-audits)
-            :session (mevedel--compact-run-state-session state)
-            :previous-summary
-            (plist-get (mevedel--compact-run-state-target state)
-                       :previous-summary)
-            :guidance (mevedel--compact-run-state-instructions state)
-            :policy (mevedel--compact-run-state-policy state))))
+              (mevedel--compact-run-state-old-content state)))
+           (source-transform
+            (mevedel--compact-run-state-source-transform state))
+           (source (if source-transform
+                       (funcall source-transform source)
+                     source))
+           (purpose (mevedel--compact-run-state-purpose state))
+           (cancel
+            (mevedel-context-summary-generate
+             source purpose
+             (apply-partially
+              #'mevedel--compact-run-handle-summary state hook-audits)
+             :session (mevedel--compact-run-state-session state)
+             :previous-summary
+             (and (eq purpose 'continuation)
+                  (plist-get (mevedel--compact-run-state-target state)
+                             :previous-summary))
+             :focus (mevedel--compact-run-state-focus state)
+             :guidance (mevedel--compact-run-state-instructions state)
+             :policy (mevedel--compact-run-state-policy state))))
       (unless (mevedel--compact-run-state-settled state)
         (setf (mevedel--compact-run-state-request-cancel state) cancel)))))
 
@@ -1947,13 +1959,10 @@ the persistent failure counter unchanged."
        (mevedel--compact-run-finish state (format "%s" err))
        (signal (car err) (cdr err))))))
 
-(defun mevedel--compact-run-prepare
-    (state limit admission instructions pending-start
-           prepared-summary summary-ready)
-  "Populate compaction STATE from history ending at LIMIT."
-  (let* ((target (mevedel--compact-run-state-target state))
-         (aggressive (mevedel--compact-run-state-aggressive state))
-         (body-start (plist-get target :body-start))
+(defun mevedel--compact-evidence-selection (target limit aggressive)
+  "Return TARGET's projected evidence selection ending at LIMIT.
+AGGRESSIVE selects whether to preserve the ordinary recent-turn tail."
+  (let* ((body-start (plist-get target :body-start))
          (tail-start
           (mevedel--compact-tail-start limit aggressive body-start))
          (compact-end (max body-start tail-start))
@@ -1964,14 +1973,7 @@ the persistent failure counter unchanged."
          (preserved-tail-turns
           (mevedel--compact-preserved-tail-turn-count
            tail-start limit aggressive))
-         (archived-tool-use-ids
-          (delete-dups
-           (mapcan
-            (lambda (range)
-              (mevedel--compact-archived-tool-use-ids
-               (car range) (cdr range)))
-            history-regions)))
-         (old-content
+         (content
           (mevedel-transcript-project-evidence
            history-regions
            :tool-output-max mevedel-compact-body-tool-output-max
@@ -1979,13 +1981,38 @@ the persistent failure counter unchanged."
            (mevedel--compact-skill-provenance
             (plist-get target :prompt-session)
             preserved-tail-turns))))
+    (list :content content
+          :history-regions history-regions
+          :preserved-tail-turns preserved-tail-turns
+          :tail-start tail-start)))
+
+(defun mevedel--compact-run-prepare
+    (state limit admission instructions pending-start
+           prepared-summary summary-ready)
+  "Populate compaction STATE from history ending at LIMIT."
+  (let* ((target (mevedel--compact-run-state-target state))
+         (aggressive (mevedel--compact-run-state-aggressive state))
+         (selection
+          (mevedel--compact-evidence-selection target limit aggressive))
+         (history-regions (plist-get selection :history-regions))
+         (preserved-tail-turns
+          (plist-get selection :preserved-tail-turns))
+         (tail-start (plist-get selection :tail-start))
+         (archived-tool-use-ids
+          (delete-dups
+           (mapcan
+            (lambda (range)
+              (mevedel--compact-archived-tool-use-ids
+               (car range) (cdr range)))
+            history-regions))))
     (setf
      (mevedel--compact-run-state-archived-tool-use-ids state)
      archived-tool-use-ids
      (mevedel--compact-run-state-instructions state) instructions
      (mevedel--compact-run-state-invocation state)
      (plist-get target :invocation)
-     (mevedel--compact-run-state-old-content state) old-content
+     (mevedel--compact-run-state-old-content state)
+     (plist-get selection :content)
      (mevedel--compact-run-state-pending-text state)
      (and pending-start
           (buffer-substring pending-start (point-max)))
@@ -2005,7 +2032,8 @@ the persistent failure counter unchanged."
 
 (cl-defun mevedel--compact-run
     (&key aggressive instructions pending-start callback auto
-          admission target prepared-summary summary-ready)
+          admission target prepared-summary summary-ready
+          purpose focus source-transform)
   "Run compaction in the current chat buffer.
 AGGRESSIVE drops the preserved tail.  INSTRUCTIONS are manual summary
 instructions.  PENDING-START marks an inserted-but-unsent prompt region.
@@ -2015,7 +2043,9 @@ policy and whether the active model crossed its own threshold.  TARGET
 is the private adapter for a persisted agent transcript; nil selects
 the active main-session segment.  PREPARED-SUMMARY skips the model
 request.  SUMMARY-READY may persist or normalize a completed summary
-before it is applied."
+before it is applied.  PURPOSE defaults to `continuation'.  FOCUS is
+task-relevance data for a handoff summary.  SOURCE-TRANSFORM filters the
+complete projected evidence immediately before generation."
   (let* ((chat-buffer (current-buffer))
          (target (or target (mevedel--compact-main-target)))
          (session (plist-get target :session))
@@ -2038,7 +2068,10 @@ before it is applied."
            :auto auto
            :callback callback
            :chat-buffer chat-buffer
+           :focus focus
+           :purpose (or purpose 'continuation)
            :session session
+           :source-transform source-transform
            :target target
            :telemetry-span telemetry-span
            :tokens-before tokens-before

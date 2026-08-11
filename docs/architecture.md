@@ -383,6 +383,9 @@ content, and replacing native media with textual metadata. The stateless
 generator owns the isolated non-streaming request, `summarization` workload,
 preflight, heading validation, cancellation, and request telemetry; consumers
 retain source selection, hooks, retries, persistence, and mutation.
+Plan feeds both Summary locations the same handoff evidence and exact relevance
+focus. Here applies the result through root compaction; Worktree generates once,
+caches it in retry state, and applies path portability before target insertion.
 
 View rendering, session prompt indexing/rewind, and compaction all read
 these shared spans. They keep their own policies: the view groups and

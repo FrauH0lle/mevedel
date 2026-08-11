@@ -170,8 +170,21 @@ implementation target and retry.
 Acceptance archives the plan immutably, clears the interaction, exits Plan,
 and shows `Preparing implementation...`. Here/Current keeps the planning
 transcript. Fresh starts a new context with setup material and the accepted
-plan. Summary first produces a compact handoff. Worktree variants create a
-clean target session and install the accepted artifact there.
+plan. Both Summary locations project the same effective source history and
+generate the shared eight-section handoff background. The accepted proposal is
+replaced in that evidence by an omission marker; the exact immutable plan and
+implementation-only instructions are supplied separately as relevance focus
+and remain authoritative. Worktree variants create a clean target session and
+install the accepted artifact there.
+
+Here/Summary applies that background through aggressive root compaction, with
+no verbatim tail, and therefore retains `PreCompact`/`PostCompact`, bounded
+request retries, segment rotation, persistence, and the new compact context
+epoch. Worktree/Summary makes one summary request without compaction hooks,
+source mutation, segment rotation, or a context epoch. Before target insertion
+it rewrites source-checkout absolute paths relative to the repository root.
+The successful result is cached in the durable retry record, so a later
+artifact, worktree, or implementation-start failure does not regenerate it.
 
 After any valid location/context preparation, Direct submits its ordinary
 one-turn instruction. Goal instead constructs a phase-free Goal in the prepared

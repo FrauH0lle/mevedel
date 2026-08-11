@@ -2661,7 +2661,29 @@ missing or zero prompt-side usage cannot become the active baseline"
                  (lambda (_state summary _audits)
                    (setq applied summary))))
         (mevedel--compact-run-send-request state "system" nil))
-      (should (equal applied "prepared")))))
+      (should (equal applied "prepared"))))
+
+  :doc "passes handoff focus and transformed evidence without previous authority"
+  (let* ((target '(:previous-summary "retained"))
+         (state
+          (mevedel--compact-run-state-create
+           :chat-buffer (current-buffer)
+           :focus "exact task"
+           :old-content "evidence"
+           :policy 'policy
+           :purpose 'handoff
+           :source-transform (lambda (source) (concat "filtered " source))
+           :target target))
+         captured)
+    (cl-letf (((symbol-function 'mevedel-context-summary-generate)
+               (lambda (source purpose _callback &rest args)
+                 (setq captured (list source purpose args))
+                 #'ignore)))
+      (mevedel--compact-run-send-request state nil nil))
+    (should (equal "filtered evidence" (car captured)))
+    (should (eq 'handoff (cadr captured)))
+    (should (equal "exact task" (plist-get (caddr captured) :focus)))
+    (should-not (plist-get (caddr captured) :previous-summary))))
 
 (mevedel-deftest mevedel--compact-run-begin-attempt ()
   ,test
@@ -2688,6 +2710,30 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should started)
       (should-not sent-context)
       (should (= (mevedel--compact-run-state-attempt state) 1)))))
+
+(mevedel-deftest mevedel--compact-evidence-selection
+  (:doc "projects the same aggressive source selection for external consumers")
+  ,test
+  (test)
+  (with-temp-buffer
+    (insert "Inherited context.\n")
+    (let ((prefix-end (point)))
+      (insert "Stable anchor.\n")
+      (let ((body-start (point)))
+        (insert "Current body.\n")
+        (let ((selection
+               (mevedel--compact-evidence-selection
+                (list :body-start body-start
+                      :history-prefix-regions
+                      (list (cons (point-min) prefix-end)))
+                (point-max) t)))
+          (should (string-match-p "Inherited context"
+                                  (plist-get selection :content)))
+          (should (string-match-p "Current body"
+                                  (plist-get selection :content)))
+          (should-not (string-match-p "Stable anchor"
+                                      (plist-get selection :content)))
+          (should (= 0 (plist-get selection :preserved-tail-turns))))))))
 
 (mevedel-deftest mevedel--compact-run-prepare ()
   ,test
