@@ -12,19 +12,54 @@
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-plan-read-only
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-require-path
                   "mevedel-agents" (invocation))
 (defvar mevedel--agent-invocation)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-acknowledge-incarnation
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-create
+                  "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-expand-path
+                  "mevedel-execution-target" (target path &optional directory))
+(declare-function mevedel-execution-target-incarnation-changed-p
+                  "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-prepare-incarnation-acknowledgement
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-probe
+                  "mevedel-execution-target"
+                  (target &optional refresh sandbox-mode))
+(declare-function mevedel-execution-target-readiness
+                  "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-readiness-message
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-ready-p
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-request
                   "mevedel-permission-queue"
                   (request-id &optional session no-render))
 
+;; `mevedel-permissions'
+(declare-function mevedel-permission-invalidate-target-grants
+                  "mevedel-permissions" (session))
+
 ;; `mevedel-sandbox'
 (defvar mevedel-sandbox-mode)
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-assert-mutation-authority
+                  "mevedel-session-persistence" (session &optional buffer))
+(declare-function mevedel-session-persistence-publish-sidecar-state
+                  "mevedel-session-persistence" (session root-buffer))
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record
@@ -320,6 +355,7 @@ Each chat buffer has exactly one session. Multiple sessions can share a
 workspace."
   name              ; string: "main", "refactor", "tutor", etc.
   workspace         ; mevedel-workspace struct (shared by reference)
+  (execution-target nil :read-only t) ; immutable filesystem/process authority
   working-directory ; absolute directory used for relative tools/prompts
   tasks             ; list of mevedel-task structs
   task-status-notes ; alist: owner -> plist with :note/:updated-turn/:updated-at
@@ -365,12 +401,21 @@ workspace."
   skills            ; list of mevedel-skill structs available to this session
   hook-rules         ; transient session-scoped declarative hook rules
   hook-log           ; transient per-session hook execution log
+  hook-log-pending   ; transient hook diagnostics awaiting persistence
   repair-log         ; transient bounded tool-input repair telemetry
+  repair-log-pending ; transient repair diagnostics awaiting persistence
   permission-log-pending ; transient diagnostics awaiting materialization
   telemetry-pending  ; transient lifecycle telemetry awaiting materialization
   hook-context-pending ; transient hook context injected into the next prompt
   execution-state   ; transient opaque state owned by `mevedel-execution'
   audit-session     ; transient durable target for sanitized audit events
+  pending-publication ; transient local recovery record blocking mutation
+  publication       ; transient captured immutable publication plist
+  publication-queue ; transient FIFO of durability publication batches
+  publication-uncommitted-batches ; transient staged session-local writes
+  publication-active-p ; non-nil while this session publishes target state
+  lease             ; transient portable lease record and live ownership state
+  lease-renewal-timer ; transient timer renewing remote mutation authority
   ;; Persistence -- nil until lazy materialization.
   save-path         ; absolute path to the session directory under .mevedel/sessions/
   session-id        ; string: stable session identifier (matches save-path basename)
@@ -543,27 +588,35 @@ Format: *mevedel:SESSION@WORKSPACE*"
 Returns the session struct.  Does not create the buffer -- the caller is
 responsible for buffer setup.  WORKING-DIRECTORY defaults to the
 workspace root and is kept stable for the lifetime of the session."
-  (mevedel-session--create
-   :name name
-   :workspace workspace
-   :working-directory (file-name-as-directory
-                       (expand-file-name
-                        (or working-directory
-                            (mevedel-workspace-root workspace))))
-   :touched-files (make-hash-table :test #'equal)
-   :mentions-shown (make-hash-table :test #'equal)
-   :permission-mode
-   (if (boundp 'mevedel-permission-mode)
-       (default-toplevel-value 'mevedel-permission-mode)
-     'ask)
-   :sandbox-mode
-   (if (boundp 'mevedel-sandbox-mode)
-       (default-toplevel-value 'mevedel-sandbox-mode)
-     'best-effort)
-   :last-observed-date (format-time-string "%F")
-   :agent-types-snapshot :uninitialized
-   :skills-snapshot :uninitialized
-   :turn-count 0))
+  (require 'mevedel-execution-target)
+  (let* ((target
+          (mevedel-execution-target-create
+           (mevedel-workspace-root workspace)))
+         (directory
+          (file-name-as-directory
+           (mevedel-execution-target-expand-path
+            target
+            (or working-directory
+                (mevedel-workspace-root workspace))))))
+    (mevedel-session--create
+     :name name
+     :workspace workspace
+     :execution-target target
+     :working-directory directory
+     :touched-files (make-hash-table :test #'equal)
+     :mentions-shown (make-hash-table :test #'equal)
+     :permission-mode
+     (if (boundp 'mevedel-permission-mode)
+         (default-toplevel-value 'mevedel-permission-mode)
+       'ask)
+     :sandbox-mode
+     (if (boundp 'mevedel-sandbox-mode)
+         (default-toplevel-value 'mevedel-sandbox-mode)
+       'best-effort)
+     :last-observed-date (format-time-string "%F")
+     :agent-types-snapshot :uninitialized
+     :skills-snapshot :uninitialized
+     :turn-count 0)))
 
 (defun mevedel-session-pending-inputs (session category)
   "Return SESSION pending inputs in CATEGORY."
@@ -881,12 +934,42 @@ only call sites that may invoke cancellers."
           (mevedel-request-untracked-effects request)))
   (mevedel-request-untracked-effects request))
 
+(defun mevedel-request-assert-target-ready (session)
+  "Signal a user error when SESSION's remote execution target is not ready."
+  (when-let* ((session)
+              (target (mevedel-session-execution-target session)))
+    (require 'mevedel-execution-target)
+    (when (mevedel-execution-target-remote-p target)
+      (mevedel-execution-target-probe
+       target nil (mevedel-session-sandbox-mode session))
+      (unless (mevedel-execution-target-ready-p target)
+        (user-error "Execution target is not ready: %s"
+                    (mevedel-execution-target-readiness-message target)))))
+  t)
+
 (defun mevedel-request-begin (session &optional directive-uuid)
   "Create a new request for SESSION, guarding against stale requests.
 
 If `mevedel--current-request' is already set, log a warning and replace
 it.  Optional DIRECTIVE-UUID sets the directive being processed.  Returns
 the new request struct."
+  (mevedel-request-assert-target-ready session)
+  (require 'mevedel-session-persistence)
+  (mevedel-session-persistence-assert-mutation-authority
+   session (current-buffer))
+  (when-let* ((target (mevedel-session-execution-target session))
+              ((mevedel-execution-target-incarnation-changed-p target)))
+    (require 'mevedel-permissions)
+    (mevedel-permission-invalidate-target-grants session)
+    (mevedel-execution-target-prepare-incarnation-acknowledgement target)
+    (mevedel-session-persistence-publish-sidecar-state
+     session
+     (or (and (boundp 'mevedel--agent-invocation)
+              mevedel--agent-invocation
+              (mevedel-agent-invocation-parent-data-buffer
+               mevedel--agent-invocation))
+         (current-buffer)))
+    (mevedel-execution-target-acknowledge-incarnation target))
   (when mevedel--current-request
     (message "mevedel: stale request found, replacing")
     (mevedel-request-end t))

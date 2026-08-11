@@ -18,28 +18,46 @@
 (require 'mevedel-structs)
 (require 'mevedel-utilities)
 
+;; `mevedel'
 (declare-function mevedel-version "mevedel" (&optional here message))
-(declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
+
+;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-hook-rules
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-identity
+                  "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
+;; `mevedel-plugins'
 (declare-function mevedel-plugin-hooks "mevedel-plugins" (cl-x) t)
 (declare-function mevedel-plugin-hooks-file "mevedel-plugins" (cl-x) t)
 (declare-function mevedel-plugin-name "mevedel-plugins" (cl-x) t)
 (declare-function mevedel-plugin-root "mevedel-plugins" (cl-x) t)
-(declare-function mevedel-plugins-enabled "mevedel-plugins"
-                  (&optional workspace))
 (declare-function mevedel-plugins--hooks-enabled-p "mevedel-plugins"
                   (plugin &optional workspace))
+(declare-function mevedel-plugins-enabled "mevedel-plugins"
+                  (&optional workspace))
 (declare-function mevedel-plugins-plugin-data-dir "mevedel-plugins"
                   (plugin-name &optional workspace))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-queue-turn-event
                   "mevedel-reminders" (buffer key body &optional commit))
+
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-append-diagnostic
+                  "mevedel-session-durability" (session path content))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
@@ -50,6 +68,9 @@
                   "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--claim-spinner-status
@@ -573,8 +594,9 @@ treated as `SubagentStop'."
   "Append normalized hook rule LAYER to RULES."
   (append rules (mevedel-hooks-normalize-rules layer)))
 
-(defun mevedel-hooks--annotate-rules-source (rules source)
-  "Return RULES with every handler annotated with SOURCE."
+(defun mevedel-hooks-annotate-rules-source
+    (rules source &optional source-file source-root)
+  "Annotate RULES with SOURCE, SOURCE-FILE, and SOURCE-ROOT provenance."
   (mapcar
    (lambda (entry)
      (cons
@@ -588,7 +610,15 @@ treated as `SubagentStop'."
                     copy :hooks
                     (mapcar
                      (lambda (handler)
-                       (plist-put (copy-sequence handler) :source source))
+                       (let ((handler (copy-sequence handler)))
+                         (setq handler (plist-put handler :source source))
+                         (when source-file
+                           (setq handler
+                                 (plist-put handler :source-file source-file)))
+                         (when source-root
+                           (setq handler
+                                 (plist-put handler :source-root source-root)))
+                         handler))
                      hooks))))
            copy))
        (cdr entry))))
@@ -638,8 +668,10 @@ Plugin runtime data is scoped to WORKSPACE when provided."
              rules
              (cond
               ((plist-get entry :file)
-               (mevedel-hooks--read-config-file
-                (plist-get entry :file)))))))))
+               (let ((file (plist-get entry :file)))
+                 (mevedel-hooks-annotate-rules-source
+                  (mevedel-hooks--read-config-file file)
+                  'plugin file (mevedel-plugin-root plugin))))))))))
 
 (defun mevedel-hooks--plugin-config-rules (&optional workspace)
   "Return normalized hook rules from plugins with enabled hooks in WORKSPACE."
@@ -664,21 +696,26 @@ Plugin runtime data is scoped to WORKSPACE when provided."
     (let* ((workspace (or workspace
                           (and session (mevedel-session-workspace session))))
            rules)
-      (setq rules (mevedel-hooks--append-rule-layer
-                   rules mevedel-hook-rules))
+      (setq rules
+            (append rules
+                    (mevedel-hooks-annotate-rules-source
+                     (mevedel-hooks-normalize-rules mevedel-hook-rules)
+                     'user nil user-emacs-directory)))
       (dolist (file (mevedel-hooks--user-config-files))
         (setq rules
               (append rules
-                      (mevedel-hooks--annotate-rules-source
+                      (mevedel-hooks-annotate-rules-source
                        (mevedel-hooks--read-config-file file)
-                       'user-file))))
+                       'user-file file (file-name-directory file)))))
       (setq rules (append rules (mevedel-hooks--plugin-config-rules workspace)))
       (dolist (file (mevedel-hooks--project-config-files workspace))
         (setq rules
               (append rules
-                      (mevedel-hooks--annotate-rules-source
+                      (mevedel-hooks-annotate-rules-source
                        (mevedel-hooks--read-config-file file)
-                       'project-file))))
+                       'project-file file
+                       (file-name-as-directory
+                        (mevedel-workspace-root workspace))))))
       (when session
         (setq rules (mevedel-hooks--append-rule-layer
                      rules (mevedel-session-hook-rules session))))
@@ -1153,35 +1190,87 @@ EVENT labels each generated hook event block."
     (vconcat (mapcar #'mevedel-hooks--printable-value
                      (append value nil))))
    (t
-    (format "%S" value))))
+   (format "%S" value))))
 
-(defun mevedel-hooks--persist-log-entry (session entry)
-  "Append sanitized hook log ENTRY to SESSION's persistent hook log."
+(defun mevedel-hooks--log-entry-text (entry)
+  "Return sanitized hook log ENTRY in its durable line format."
+  (let ((print-length nil)
+        (print-level nil)
+        (print-quoted t))
+    (concat (prin1-to-string (mevedel-hooks--printable-value entry)) "\n")))
+
+(defun mevedel-hooks--persist-log-content (session content)
+  "Append serialized hook log CONTENT for SESSION."
   (when-let* ((file (and mevedel-hooks-persist-log
                          (mevedel-hooks-log-path session))))
     (condition-case err
-        (let ((print-length nil)
-              (print-level nil)
-              (print-quoted t))
-          (make-directory (file-name-directory file) t)
-          (with-temp-buffer
-            (prin1 (mevedel-hooks--printable-value entry) (current-buffer))
-            (insert "\n")
-            (write-region (point-min) (point-max) file t 'silent)))
+        (let ((target (mevedel-session-execution-target session)))
+          (if (and target
+                   (progn
+                     (require 'mevedel-execution-target)
+                     (mevedel-execution-target-remote-p target)))
+              (progn
+                (require 'mevedel-session-durability)
+                (mevedel-session-durability-append-diagnostic
+                 session file content))
+            (make-directory (file-name-directory file) t)
+            (write-region content nil file t 'silent)
+            t))
       (error
-       (message "mevedel: hook log persistence failed: %s"
-                (error-message-string err))))))
+       (display-warning
+        'mevedel
+        (format "Hook log persistence failed: %s"
+                (error-message-string err))
+        :warning)
+       nil))))
+
+(defun mevedel-hooks--persist-log-entry (session entry)
+  "Append sanitized hook log ENTRY to SESSION's persistent hook log."
+  (mevedel-hooks--persist-log-content
+   session (mevedel-hooks--log-entry-text entry)))
+
+(defun mevedel-hooks-flush-log (session)
+  "Persist SESSION's queued hook diagnostics, retaining failures."
+  (when session
+    (let* ((pending (mevedel-session-hook-log-pending session))
+           (target (mevedel-session-execution-target session))
+           (remote-p
+            (and target
+                 (progn
+                   (require 'mevedel-execution-target)
+                   (mevedel-execution-target-remote-p target)))))
+      (if (and pending remote-p)
+          (when (mevedel-hooks--persist-log-content
+                 session (mapconcat #'mevedel-hooks--log-entry-text
+                                    pending ""))
+            (setf (mevedel-session-hook-log-pending session) nil))
+        (while (and pending
+                    (mevedel-hooks--persist-log-entry session (car pending)))
+          (setq pending (cdr pending)))
+        (setf (mevedel-session-hook-log-pending session) pending)))))
 
 (defun mevedel-hooks--log (session entry)
   "Append hook log ENTRY to SESSION."
   (when session
+    (require 'mevedel-telemetry)
     (let ((log (append (mevedel-session-hook-log session)
                        (list entry))))
       (when (and mevedel-hooks-log-limit
                  (> (length log) mevedel-hooks-log-limit))
         (setq log (last log mevedel-hooks-log-limit)))
       (setf (mevedel-session-hook-log session) log))
-    (mevedel-hooks--persist-log-entry session entry)
+    (when mevedel-hooks-persist-log
+      (let* ((pending (mevedel-session-hook-log-pending session))
+             (target (mevedel-session-execution-target session))
+             (remote-p
+              (and target
+                   (progn
+                     (require 'mevedel-execution-target)
+                     (mevedel-execution-target-remote-p target)))))
+        (when (or pending remote-p
+                  (not (mevedel-hooks--persist-log-entry session entry)))
+          (setf (mevedel-session-hook-log-pending session)
+                (append pending (list entry))))))
     (let ((handler (plist-get entry :handler)))
       (require 'mevedel-telemetry)
       (mevedel-telemetry-record-audit
@@ -1430,38 +1519,121 @@ record only that context was added, without duplicating the body."
                        (plist-get decision :updated-result))))
     payload))
 
-(defun mevedel-hooks--command-process-environment (handler)
-  "Return process environment for command HANDLER."
-  (if (not (eq (plist-get handler :source) 'plugin))
-      process-environment
-    (let ((root (plist-get handler :plugin-root))
-          (data (plist-get handler :plugin-data)))
+(defun mevedel-hooks--command-process-environment (handler session)
+  "Return process environment for command HANDLER in SESSION."
+  (let* ((source (plist-get handler :source))
+         (root (and (eq source 'plugin)
+                    (plist-get handler :plugin-root)))
+         (data (and (eq source 'plugin)
+                    (plist-get handler :plugin-data)))
+         (target (and session
+                      (mevedel-session-execution-target session)))
+         (target-command-p
+          (and target
+               (progn
+                 (require 'mevedel-execution-target)
+                 (mevedel-execution-target-remote-p target))
+               (or (eq source 'project-file)
+                   (and (eq source 'plugin)
+                        (stringp root)
+                        (file-remote-p root)))))
+         (base-environment (unless target-command-p process-environment)))
+    (if (not (eq source 'plugin))
+        base-environment
       (if (and (stringp root) (stringp data))
-          (progn
-            (make-directory data t)
+          (let ((env-root root)
+                (env-data data))
+            (cond
+             ((file-remote-p root)
+              (require 'mevedel-execution-target)
+              (unless (and target (file-remote-p data))
+                (signal 'mevedel-execution-target-error
+                        (list "Target plugin data is not on the plugin target")))
+              (setq env-root
+                    (mevedel-execution-target-native-path target root)
+                    env-data
+                    (mevedel-execution-target-native-path target data)))
+             ((file-remote-p data)
+              ;; A client-local command cannot consume a TRAMP file name.
+              ;; Structured hook input still carries the target workspace.
+              (setq env-data nil)))
+            (when env-data
+              (make-directory data t))
             (append
-             (list (concat "PLUGIN_ROOT=" root)
-                   (concat "CLAUDE_PLUGIN_ROOT=" root)
-                   (concat "PLUGIN_DATA=" data)
-                   (concat "CLAUDE_PLUGIN_DATA=" data)
-                   (concat "MEVEDEL_PLUGIN_ROOT=" root)
-                   (concat "MEVEDEL_PLUGIN_DATA=" data))
-             process-environment))
-        process-environment))))
+             (list (concat "PLUGIN_ROOT=" env-root)
+                   (concat "CLAUDE_PLUGIN_ROOT=" env-root)
+                   (concat "MEVEDEL_PLUGIN_ROOT=" env-root))
+             (when env-data
+               (list (concat "PLUGIN_DATA=" env-data)
+                     (concat "CLAUDE_PLUGIN_DATA=" env-data)
+                     (concat "MEVEDEL_PLUGIN_DATA=" env-data)))
+             base-environment))
+        base-environment))))
+
+(defun mevedel-hooks--command-default-directory
+    (handler event-plist session)
+  "Return HANDLER's execution directory for EVENT-PLIST and SESSION."
+  (let* ((source (plist-get handler :source))
+         (directory
+          (file-name-as-directory
+           (or (pcase source
+                 ('project-file (plist-get event-plist :workspace-root))
+                 ('user (plist-get handler :source-root))
+                 ('user-file (plist-get handler :source-root))
+                 ('plugin (or (plist-get handler :plugin-root)
+                              (plist-get handler :source-root))))
+               (plist-get event-plist :cwd)
+               (plist-get event-plist :workspace-root)
+               default-directory)))
+         (target (and session (mevedel-session-execution-target session))))
+    (when target
+      (require 'mevedel-execution-target)
+      (cond
+       ((file-remote-p directory)
+        (mevedel-execution-target-native-path target directory))
+       ((and (eq source 'project-file)
+             (mevedel-execution-target-remote-p target))
+        (signal 'mevedel-execution-target-error
+                (list (format "Project hook is not on the session execution target: %s"
+                              directory))))))
+    directory))
+
+(defun mevedel-hooks--command-event-plist (event-plist session)
+  "Return EVENT-PLIST in SESSION's target-native command-hook domain."
+  (if-let* ((target (and session
+                         (mevedel-session-execution-target session))))
+      (progn
+        (require 'mevedel-execution-target)
+        (let ((payload (copy-sequence event-plist)))
+          (dolist (key '(:cwd :workspace-root :transcript-path))
+            (when-let* ((path (plist-get payload key)))
+              (setq payload
+                    (plist-put
+                     payload key
+                     (mevedel-execution-target-native-path target path)))))
+          (plist-put payload :execution-target
+                     (mevedel-execution-target-identity target))))
+    event-plist))
+
+(defun mevedel-hooks--command-process-command (command remote)
+  "Return the shell argv for hook COMMAND, accounting for REMOTE transport."
+  (if remote
+      (list "bash" "-c"
+            (concat "IFS= read -r mevedel_hook_input; "
+                    "printf '%s\\n' \"$mevedel_hook_input\" | "
+                    "bash -c \"$1\"")
+            "mevedel-hook" command)
+    (list shell-file-name shell-command-switch command)))
 
 (defun mevedel-hooks--run-command-handler
     (event handler event-plist session request callback)
   "Run command HANDLER for EVENT and call CALLBACK with decision."
   (let* ((command (plist-get handler :command))
          (timeout (mevedel-hooks--command-timeout handler))
-         (default-directory (file-name-as-directory
-                             (or (and (eq (plist-get handler :source)
-                                          'project-file)
-                                      (plist-get event-plist
-                                                 :workspace-root))
-                                 (plist-get event-plist :cwd)
-                                 (plist-get event-plist :workspace-root)
-                                 default-directory)))
+         (default-directory
+          (mevedel-hooks--command-default-directory
+           handler event-plist session))
+         (remote (file-remote-p default-directory))
          (stdout-buffer (generate-new-buffer " *mevedel-hook-stdout*"))
          (stderr-buffer (generate-new-buffer " *mevedel-hook-stderr*"))
          (start-time (float-time))
@@ -1576,22 +1748,19 @@ record only that context was added, without duplicating the body."
         (mevedel-request-push-canceller request #'cancel))
       (condition-case err
           (let ((process-environment
-                 (mevedel-hooks--command-process-environment handler)))
-            (setq stderr-process
-                  (make-pipe-process
-                   :name "mevedel-hook-stderr"
-                   :noquery t
-                   :filter (lambda (_proc chunk)
-                             (append-buffer-output stderr-buffer chunk 'stderr))))
+                 (mevedel-hooks--command-process-environment
+                  handler session)))
             (setq process
                   (make-process
                    :name "mevedel-hook"
                    :buffer stdout-buffer
                    :filter (lambda (_proc chunk)
                              (append-buffer-output stdout-buffer chunk 'stdout))
-                   :stderr stderr-process
-                   :command (list shell-file-name shell-command-switch command)
+                   :stderr stderr-buffer
+                   :command
+                   (mevedel-hooks--command-process-command command remote)
                    :connection-type 'pipe
+                   :file-handler t
                    :noquery t
                    :sentinel
                    (lambda (proc _event)
@@ -1603,10 +1772,24 @@ record only that context was added, without duplicating the body."
                           (t (finish 'error
                                      (format "Hook exited with status %s"
                                              code)))))))))
+            (setq stderr-process (get-buffer-process stderr-buffer))
+            (when stderr-process
+              (set-process-filter
+               stderr-process
+               (lambda (_proc chunk)
+                 (append-buffer-output stderr-buffer chunk 'stderr))))
+            (when (buffer-live-p stderr-buffer)
+              (let ((initial-stderr
+                     (with-current-buffer stderr-buffer (buffer-string))))
+                (with-current-buffer stderr-buffer (erase-buffer))
+                (append-buffer-output stderr-buffer initial-stderr 'stderr)))
             (process-send-string process
-                                 (concat (mevedel-hooks--event-json event-plist)
+                                 (concat (mevedel-hooks--event-json
+                                          (mevedel-hooks--command-event-plist
+                                           event-plist session))
                                          "\n"))
-            (process-send-eof process)
+            (unless remote
+              (process-send-eof process))
             (when timeout
               (setq timer
                     (run-at-time
@@ -1733,8 +1916,16 @@ stable public event payload."
               (mevedel-hooks--run-elisp-handler
                event handler event-plist session)))
             ('command
-             (mevedel-hooks--run-command-handler
-              event handler event-plist session request #'advance))
+             (condition-case err
+                 (mevedel-hooks--run-command-handler
+                  event handler event-plist session request #'advance)
+               (mevedel-execution-target-error
+                (let ((reason (error-message-string err)))
+                  (mevedel-hooks--log
+                   session
+                   (mevedel-hooks--log-entry
+                    event event-plist handler 'error :error reason))
+                  (advance (mevedel-hooks--block-decision event reason))))))
             (_ (advance nil))))))))
 
 (defun mevedel-hooks-run-event

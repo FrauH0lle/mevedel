@@ -19,6 +19,7 @@
 (require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 (require 'mevedel-view-stream)
+(require 'mevedel-execution-target)
 (require 'mevedel-transcript)
 (require 'mevedel-structs)
 (require 'mevedel-pipeline)
@@ -3192,6 +3193,48 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (while (< pos end)
             (should-not (get-text-property pos 'gptel))
             (setq pos (1+ pos)))))))
+
+  :doc "rejects an unready target before mutating the transcript or turn UI"
+  (mevedel-view-test--with-buffers
+    (let* ((target (mevedel-execution-target-create
+                    "/ssh:user@host:/srv/project/"))
+           (workspace
+            (mevedel-workspace--create
+             :type 'project :id "remote"
+             :root "/ssh:user@host:/srv/project/" :name "remote"))
+           (session
+            (mevedel-session--create
+             :name "main" :workspace workspace :execution-target target
+             :working-directory "/ssh:user@host:/srv/project/"))
+           (before (with-current-buffer data-buf (buffer-string)))
+           sent)
+      (setf (mevedel-execution-target-readiness target)
+            '(:status blocked :reason missing-dependencies
+              :missing-dependencies (rg)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (goto-char (mevedel-view--input-start))
+        (insert "Install rg"))
+      (cl-letf (((symbol-function 'mevedel-execution-target-probe) #'ignore)
+                ((symbol-function 'gptel-send)
+                 (lambda (&optional _arg)
+                   (setq sent t)
+                   (mevedel-request-begin session))))
+        (with-current-buffer view-buf
+          (should-error
+           (mevedel-view--forward-input-now "Install rg")
+           :type 'user-error)
+          (should (equal "Install rg" (mevedel-view--input-text)))
+          (should-not mevedel-view--spinner-status)
+          (should-not mevedel-view--in-flight-turn-start)))
+      (should-not sent)
+      (with-current-buffer data-buf
+        (should (equal before (buffer-string)))
+        (setq-local mevedel--session nil))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session nil))))
 
   :doc "attaches pending SessionStart hook context to the submitted prompt"
   (mevedel-view-test--with-buffers

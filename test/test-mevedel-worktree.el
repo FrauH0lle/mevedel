@@ -46,6 +46,8 @@
   "Return a base mocked Git response for ROOT and ARGS."
   (let ((git-dir (file-name-concat root ".git")))
     (cond
+     ((equal args '("rev-parse" "--is-inside-work-tree"))
+      (mevedel-worktree-test--git-result "true"))
      ((equal args '("rev-parse" "--show-toplevel"))
       (mevedel-worktree-test--git-result root))
      ((equal args '("rev-parse" "--git-dir"))
@@ -201,6 +203,45 @@
 ;;
 ;;; Git helpers
 
+(mevedel-deftest mevedel-worktree--git-result ()
+  ,test
+  (test)
+
+  :doc "rejects a Git path argument naming another execution target"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-target-" t)))
+         (source (format "/mevedelmock:first:%s" root))
+         (other (format "/mevedelmock:second:%sother" root)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("first" "second")
+          (should-error
+           (mevedel-worktree--git-result
+            source "worktree" "add" other "HEAD")
+           :type 'mevedel-execution-target-error))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-worktree--ensure-worktree ()
+  ,test
+  (test)
+
+  :doc "reports missing target Git worktree support directly"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-worktree-unsupported-" t)))
+        calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                   (lambda (_directory &rest args)
+                     (push args calls)
+                     (mevedel-worktree-test--git-result
+                      "git: 'worktree' is not a git command" 129))))
+          (let ((err (should-error
+                      (mevedel-worktree--ensure-worktree root)
+                      :type 'user-error)))
+            (should (string-match-p "Git worktree support is required"
+                                    (error-message-string err)))
+            (should (equal '(("worktree" "list" "--porcelain")) calls))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-worktree--parse-worktree-list ()
   ,test
   (test)
@@ -251,6 +292,26 @@
                (mevedel-worktree-test--git-ok root "rev-parse" "HEAD")
                :output)
               (plist-get context :base-commit)))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+  :doc "reports a missing target Git before repository inspection"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-no-git-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                   (lambda (_directory &rest args)
+                     (push args calls)
+                     (mevedel-worktree-test--git-result
+                      "git: command not found" 127))))
+          (let ((err (should-error
+                      (mevedel-worktree-fork-preflight session)
+                      :type 'user-error)))
+            (should (string-match-p "Git is required.*execution target"
+                                    (error-message-string err)))
+            (should (equal '(("--version")) calls))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
 
@@ -317,6 +378,81 @@
 (mevedel-deftest mevedel-worktree-fork-create ()
   ,test
   (test)
+  :doc "checks Git before creating the reserved directory"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-create-no-git-" t)))
+         (directory (file-name-as-directory
+                     (file-name-concat root ".worktrees" "fork")))
+         (reservation (list :source-directory root
+                            :directory directory
+                            :branch "worktree/fork"
+                            :base-commit "deadbeef"
+                            :common-git-dir
+                            (file-name-concat root ".git"))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                   (lambda (_directory &rest _args)
+                     (mevedel-worktree-test--git-result
+                      "git: command not found" 127))))
+          (should-error (mevedel-worktree-fork-create reservation)
+                        :type 'user-error)
+          (should-not (file-exists-p
+                       (file-name-directory
+                        (directory-file-name directory)))))
+      (delete-directory root t)))
+  :doc "checks Git worktree support before creating the reserved directory"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-create-unsupported-" t)))
+         (directory (file-name-as-directory
+                     (file-name-concat root ".worktrees" "fork")))
+         (git-dir (file-name-concat root ".git"))
+         (reservation (list :source-directory root
+                            :directory directory
+                            :branch "worktree/fork"
+                            :base-commit "deadbeef"
+                            :common-git-dir git-dir)))
+    (unwind-protect
+        (progn
+          (make-directory git-dir t)
+          (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                     (lambda (_directory &rest args)
+                       (if (equal args '("worktree" "list" "--porcelain"))
+                           (mevedel-worktree-test--git-result
+                            "git: 'worktree' is not a git command" 129)
+                         (mevedel-worktree-test--git-result "")))))
+            (should-error (mevedel-worktree-fork-create reservation)
+                          :type 'user-error)
+            (should-not (file-exists-p
+                         (file-name-directory
+                          (directory-file-name directory))))))
+      (delete-directory root t)))
+  :doc "rejects a foreign target before commands or directory creation"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-create-target-" t)))
+         (source (format "/mevedelmock:source:%s" root))
+         (directory
+          (file-name-as-directory
+           (format "/mevedelmock:foreign:%s"
+                   (file-name-concat root "foreign" "fork"))))
+         (reservation (list :source-directory source
+                            :directory directory
+                            :branch "worktree/fork"
+                            :base-commit "deadbeef"
+                            :common-git-dir
+                            (file-name-concat source ".git")))
+         calls)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("source" "foreign")
+          (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                     (lambda (_directory &rest args)
+                       (push args calls)
+                       (mevedel-worktree-test--git-result ""))))
+            (should-error (mevedel-worktree-fork-create reservation)
+                          :type 'mevedel-execution-target-error)
+            (should-not calls)
+            (should-not (file-exists-p
+                         (file-name-concat root "foreign")))))
+      (delete-directory root t)))
   :doc "creates a linked worktree and branch at the reserved base commit"
   (let ((root (file-name-as-directory
                (make-temp-file "mevedel-worktree-fork-create-" t))))
@@ -389,7 +525,82 @@
                 target "rev-parse" "HEAD")
                :output)))))
       (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+  :doc "creates the linked worktree with target Git and native path arguments"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-remote-" t)))
+         (remote-root (format "/mevedelmock:worktree:%s" root)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("worktree")
+          (let* ((workspace (mevedel-worktree-test--workspace remote-root))
+                 (session (mevedel-session-create
+                           "remote" workspace remote-root)))
+            (mevedel-worktree-test--init-repo remote-root)
+            (let* ((reservation
+                    (mevedel-worktree-fork-reservation session))
+                   (directory (plist-get reservation :directory)))
+              (should (equal remote-root
+                             (plist-get reservation :source-root)))
+              (should (file-remote-p directory))
+              (should-not
+               (string-match-p "/mevedelmock:"
+                               (plist-get reservation :cleanup-command)))
+              (mevedel-worktree-fork-create reservation)
+              (should (file-directory-p directory))
+              (should
+               (equal
+                (plist-get reservation :branch)
+                (plist-get
+                 (mevedel-worktree-test--git-ok
+                  directory "branch" "--show-current")
+                 :output))))))
+      (delete-directory root t)
       (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-worktree--validate-branch-name ()
+  ,test
+  (test)
+
+  :doc "checks target Git before validating a Plan Worktree branch"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-plan-worktree-no-git-" t)))
+        calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                   (lambda (_directory &rest args)
+                     (push args calls)
+                     (mevedel-worktree-test--git-result
+                      "git: command not found" 127))))
+          (let ((err
+                 (should-error
+                  (mevedel-worktree--validate-branch-name
+                   "worktree/accepted-plan" root)
+                  :type 'user-error)))
+            (should (string-match-p "Git is required.*execution target"
+                                    (error-message-string err)))
+            (should (equal '(("--version")) calls))))
+      (delete-directory root t)))
+
+  :doc "checks worktree support before accepting a Plan Worktree branch"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-plan-worktree-unsupported-" t)))
+        calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                   (lambda (_directory &rest args)
+                     (push args calls)
+                     (if (equal args '("worktree" "list" "--porcelain"))
+                         (mevedel-worktree-test--git-result
+                          "git: 'worktree' is not a git command" 129)
+                       (mevedel-worktree-test--git-result "")))))
+          (should-error
+           (mevedel-worktree--validate-branch-name
+            "worktree/accepted-plan" root)
+           :type 'user-error)
+          (should-not (member '("check-ref-format" "--branch"
+                                "worktree/accepted-plan")
+                              calls)))
+      (delete-directory root t))))
 
 
 ;;
@@ -478,6 +689,32 @@
                      "Isolation: not a Git repository"
                      (mevedel-worktree--format-status
                       (mevedel-worktree--collect-status))))))
+      (delete-directory root t)))
+
+  :doc "renders remote worktree paths in the target-native domain"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-status-remote-" t)))
+         (remote-root (format "/mevedelmock:status:%s" root))
+         (remote-child (file-name-concat
+                        remote-root ".worktrees" "topic")))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("status")
+          (let ((out
+                 (mevedel-worktree--format-status
+                  (list :directory remote-root
+                        :repo-root remote-root
+                        :isolation 'normal-checkout
+                        :branch "main"
+                        :ignore-state 'ignored
+                        :worktrees
+                        (list (list :path remote-child
+                                    :branch "topic"))))))
+            (should (string-match-p (regexp-quote root) out))
+            (should (string-match-p
+                     (regexp-quote
+                      (file-name-concat root ".worktrees" "topic"))
+                     out))
+            (should-not (string-match-p "/mevedelmock:" out))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-worktree--collect-status ()
@@ -1434,6 +1671,93 @@
   ,test
   (test)
 
+  :doc "fails Git preflight before creating Plan Worktree state"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-plan-worktree-no-git-" t)))
+        opened)
+    (unwind-protect
+        (mevedel-worktree-test--with-session root
+          (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                     (lambda (_directory &rest _args)
+                       (mevedel-worktree-test--git-result
+                        "git: command not found" 127)))
+                    ((symbol-function 'mevedel-worktree--open-session)
+                     (lambda (&rest _args) (setq opened t))))
+            (should-error
+             (mevedel-worktree-create-session
+              "worktree/accepted-plan" "Accepted Plan implementation" t)
+             :type 'user-error)
+            (should-not opened)
+            (should-not (file-exists-p
+                         (file-name-concat root ".worktrees")))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+  :doc "fails worktree capability preflight before creating Plan state"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-plan-worktree-unsupported-" t)))
+        opened)
+    (unwind-protect
+        (mevedel-worktree-test--with-session root
+          (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                     (lambda (_directory &rest args)
+                       (if (equal args '("worktree" "list" "--porcelain"))
+                           (mevedel-worktree-test--git-result
+                            "git: 'worktree' is not a git command" 129)
+                         (mevedel-worktree-test--base-response root args))))
+                    ((symbol-function 'mevedel-worktree--open-session)
+                     (lambda (&rest _args) (setq opened t))))
+            (let ((err
+                   (should-error
+                    (mevedel-worktree-create-session
+                     "worktree/accepted-plan"
+                     "Accepted Plan implementation" t)
+                    :type 'user-error)))
+              (should (string-match-p "Git worktree support is required"
+                                      (error-message-string err))))
+            (should-not opened)
+            (should-not (file-exists-p
+                         (file-name-concat root ".worktrees")))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+  :doc "creates Plan Worktree with target Git on the source target"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-plan-worktree-remote-" t)))
+         (remote-root (format "/mevedelmock:plan:%s" root))
+         (new-buffer (generate-new-buffer
+                      " *mevedel-plan-worktree-remote*"))
+         opened-directory)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("plan")
+          (mevedel-worktree-test--init-repo remote-root)
+          (let* ((workspace (mevedel-worktree-test--workspace remote-root))
+                 (session (mevedel-session-create
+                           "remote" workspace remote-root)))
+            (with-temp-buffer
+              (setq-local mevedel--session session)
+              (setq-local default-directory remote-root)
+              (cl-letf (((symbol-function 'mevedel-worktree--open-session)
+                         (lambda (_workspace directory)
+                           (setq opened-directory directory)
+                           new-buffer)))
+                (let ((result
+                       (mevedel-worktree-create-session
+                        "worktree/accepted-plan"
+                        "Accepted Plan implementation" t)))
+                  (should (equal opened-directory
+                                 (plist-get result :directory)))
+                  (should (equal (file-remote-p remote-root)
+                                 (file-remote-p opened-directory)))
+                  (should
+                   (equal
+                    "worktree/accepted-plan"
+                    (plist-get
+                     (mevedel-worktree-test--git-ok
+                      opened-directory "branch" "--show-current")
+                     :output))))))))
+      (when (buffer-live-p new-buffer)
+        (kill-buffer new-buffer))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
   :doc "returns a clean worktree session created with the source-session default"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-worktree-interface-" t)))
@@ -1569,6 +1893,32 @@
 
 ;;
 ;;; Setup stub
+
+(mevedel-deftest mevedel-worktree--format-stub ()
+  ,test
+  (test)
+
+  :doc "renders remote setup context with target-native paths"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-stub-remote-" t)))
+         (source (format "/mevedelmock:stub:%s" root))
+         (worktree (file-name-concat source ".worktrees" "topic")))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("stub")
+          (let ((out (mevedel-worktree--format-stub
+                      "main" source worktree "worktree/topic" nil nil)))
+            (should (string-match-p
+                     (regexp-quote
+                      (format "Source directory: %s" root))
+                     out))
+            (should (string-match-p
+                     (regexp-quote
+                      (format "Worktree directory: %s"
+                              (file-name-concat
+                               root ".worktrees" "topic")))
+                     out))
+            (should-not (string-match-p "/mevedelmock:" out))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-cmd--worktree/setup-stub ()
   ,test

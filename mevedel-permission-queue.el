@@ -147,6 +147,7 @@ SESSION defaults to the current session."
 
 (defun mevedel-permission-queue--log (event entry &optional session &rest props)
   "Log permission queue EVENT for ENTRY in SESSION with PROPS."
+  (require 'mevedel-telemetry)
   (when-let* ((sess (or session
                         (plist-get entry :session)
                         (mevedel-permission-queue--current-session))))

@@ -43,7 +43,6 @@
           (list :step 'prepare-context :selection selection
                 :accepted
                 (list :path "local/plans/accepted-20260813-120000.md"
-                      :absolute-path accepted-path
                       :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
@@ -131,7 +130,6 @@
                         :execution direct :mode edits
                         :model-provider "Test:test-model")
             :accepted (:path "local/plans/accepted-20260813-120000.md"
-                       :absolute-path "/tmp/accepted.md"
                        :hash "hash")))
          (session
           (mevedel-session--create
@@ -163,10 +161,13 @@
                       :goal-token-budget 7000))
          (record
           (list :step 'submit :selection selection :goal-id "reserved-goal"
+                :accepted
+                (list :path "local/plans/accepted-20260813-120000.md"
+                      :hash (mevedel-plan-hash body))
                 :target-save-path target-save :target-session-id "target"
                 :target-directory default-directory
                 :target-accepted
-                (list :path "local/plans/accepted-20260813-120000.md" :absolute-path target-path
+                (list :path "local/plans/accepted-20260813-120000.md"
                       :hash (mevedel-plan-hash body))))
          (source-session
           (mevedel-session--create
@@ -239,7 +240,6 @@
                               :model-provider "Test:test-model")
                 :accepted
                 (list :path "local/plans/accepted-20260813-120000.md"
-                      :absolute-path accepted-path
                       :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
@@ -299,7 +299,6 @@
                               :model-provider "Test:test-model")
                 :accepted
                 (list :path "local/plans/accepted-20260813-120000.md"
-                      :absolute-path accepted-path
                       :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
@@ -355,7 +354,6 @@
                               :model-provider "Test:test-model")
                 :accepted
                 (list :path "local/plans/accepted-20260813-120000.md"
-                      :absolute-path accepted-path
                       :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
@@ -435,7 +433,6 @@
           (list :step 'prepare-summary :selection selection
                 :accepted
                 (list :path "local/plans/accepted-20260813-120000.md"
-                      :absolute-path accepted-path
                       :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
@@ -584,7 +581,6 @@
           (list :step 'prepare-worktree :selection selection
                 :accepted
                 (list :path "local/plans/accepted-20260813-120000.md"
-                      :absolute-path source-path
                       :hash (mevedel-plan-hash body))))
          (source-session
           (mevedel-session--create
@@ -666,15 +662,17 @@
                     (plist-get
                      (mevedel-session-plan-metadata source-session)
                      :implementation-retry))
+                   (target-artifact (plist-get retry :target-accepted))
                    (target-path
-                    (plist-get (plist-get retry :target-accepted)
-                               :absolute-path)))
+                    (mevedel-plan-artifact-path
+                     target-session target-artifact)))
               (setq target-address
                     (mevedel-plan-resource-address
-                     (plist-get (plist-get retry :target-accepted) :path)))
+                     (plist-get target-artifact :path)))
               (should (= 1 creates))
               (should (= 1 archives))
               (should (eq 'submit (plist-get retry :step)))
+              (should-not (plist-member target-artifact :absolute-path))
               (should (file-exists-p source-path))
               (should (equal
                        (with-temp-buffer
@@ -731,7 +729,6 @@
           (list :step 'prepare-summary :selection selection
                 :accepted
                 (list :path "local/plans/accepted-20260813-120000.md"
-                      :absolute-path source-path
                       :hash (mevedel-plan-hash body))))
          (source-session
           (mevedel-session--create

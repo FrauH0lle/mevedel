@@ -299,7 +299,6 @@ files are renamed to `.bad', warned about once, and ignored."
       (with-current-buffer buf
         (when-let* (((not (bound-and-true-p
                            mevedel-view--agent-transcript-p)))
-                    ((not mevedel-view-history--save-failed))
                     ((not (mevedel-view-history--read-only-p)))
                     (session (mevedel-view-history--session))
                     (path (mevedel-view-history--path session)))
@@ -319,7 +318,8 @@ files are renamed to `.bad', warned about once, and ignored."
                   (mevedel-session-persistence-write
                    path
                    (list :version 2 :entries merged))
-                  (mevedel-view-history--set-entries merged)))
+                  (mevedel-view-history--set-entries merged)
+                  (setq mevedel-view-history--save-failed nil)))
             (error
              (setq mevedel-view-history--save-failed t)
              (display-warning

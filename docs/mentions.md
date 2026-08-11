@@ -119,7 +119,10 @@ schema, send-time binding, and dispatch branches.
   (`rg --files --hidden --follow --sort path`) capped at
   `mevedel-file-mention-directory-max-entries` (default 1000). Text
   contents read via `mevedel-tool-fs--slurp-file-contents` (512 KB cap,
-  line numbers).
+  line numbers). An exact path inside an active remote session store resolves
+  only through that session's artifact resolver: fixed-path cache files do
+  not establish presence or content. Resolved media bytes are staged in a
+  local temporary file for gptel and removed when the request ends.
   Supported media file types from the Read tool (`png`, `jpg`, `jpeg`,
   `gif`, `webp`, `pdf`) are attached through gptel context when the
   active model advertises compatible media support; otherwise the mention

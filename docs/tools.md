@@ -49,7 +49,9 @@ provider's native payload shape. `mevedel-pipeline.el` supplies the session's
 tool-results directory and calls that boundary from the attach, hook, render,
 and gptel parse steps; it does not construct provider-specific media blocks.
 The transcript reference contains only an opaque record id and its owning tool
-use id. Replay never rereads the original filesystem path.
+use id. Replay never rereads the original filesystem path. Remote records are
+published and replayed through the session artifact manifest; a fixed-path
+cache is never an authority fallback.
 
 Important tool metadata:
 
@@ -118,6 +120,13 @@ resource addresses use a separate path-or-resource contract, so a recognized
 their current behavior. Wrapped tools can use `:repair-input` when their
 source schema cannot express either semantic type.
 
+Code-navigation tools keep filesystem access in Emacs buffers, so Imenu and
+Tree-sitter operate on remote files through the active file handler. Remote
+Xref is capability-scoped: Emacs Lisp reference search is the currently
+tested TRAMP-aware path, while definition lookup and other backends return a
+direct unsupported-backend diagnostic instead of invoking client-side
+programs. Location results are rendered as target-native paths.
+
 Committed repairs proceed without a retry and add one corrective note to the
 final tool result, including error results. If a multi-step candidate still
 fails validation, its repair audit is marked abandoned and the handler is not
@@ -134,7 +143,9 @@ prompts, schemas, validation messages, and results are excluded. The in-memory
 `mevedel-tool-repair-persist-log` is non-nil, materialized sessions also append
 events to `<session>/repair-log.el`; bounded events recorded before first
 materialization are backfilled when the session directory is created.
-Telemetry failures never block tool execution.
+Remote callback entries wait for session settlement and publish through an
+atomic replacement. Failed appends warn, remain queued, and retry after the
+next successful session save. Telemetry failures never block tool execution.
 `mevedel-tool-input-repair-enabled` disables mutation while retaining
 validation and telemetry.
 
@@ -478,6 +489,10 @@ or `convert`. Their sandbox facts stay out of successful model-visible results.
 Materially non-default facts are aggregated per owning tool invocation and
 persisted in its hidden render-data as a durable warning; additional read-only
 mounts stay silent.
+Helpers that consume target files stage scratch on that target.  Unified diff
+presentation is deliberately local because it compares two already-local
+content snapshots; an ambient remote session never sends its local temporary
+files to the target's `diff` process.
 Native filesystem permission checks remain the authorization boundary; helper
 confinement limits effects after that authorization.
 
@@ -512,7 +527,15 @@ Bash waits up to `yield_time_ms` (10 seconds by default, clamped to
 250-30000ms; malformed values fall back to the default). A command
 that finishes first returns normally and discards its temporary spool when all
 output fits inline. A command still running at the boundary returns its unread
-output, an opaque owner-scoped execution ID, and a retained session artifact.
+output and an opaque owner-scoped execution ID. Local sessions retain a session
+artifact when output does not fit inline. Remote execution spools client-locally
+while live and never exposes that client path to the model. When an observation
+omits output, mevedel stages a complete session artifact at that tool-call
+boundary and returns its target-native logical path; terminal settlement
+updates it with the final bytes. If another session publication is already
+active, the session artifact resolver serves the queued local staging bytes
+until its manifest commit. The local remote spool is removed at terminal-record
+retirement or session teardown.
 The 64 MiB output cap continues running after yield. Pipe-mode stdin is closed
 from spawn. Explicit `tty=true` instead allocates a PTY and retains writable
 stdin without changing the captured owner, workdir, confinement, or resource
@@ -641,6 +664,30 @@ directories when normal callbacks are suppressed. Ordinary yielded completion
 still uses the captured owner context and never launches an unsolicited model
 request. Bash, Eval, and filesystem helpers all resolve that owner through the
 same request-first execution-context resolver.
+
+### Real transport acceptance
+
+`test/test-mevedel-execution-remote.el` has opt-in cases for each supported
+transport. Set any combination of `MEVEDEL_TEST_SSH_ROOT`,
+`MEVEDEL_TEST_DOCKER_ROOT`, and `MEVEDEL_TEST_PODMAN_ROOT` to existing writable
+TRAMP directories; authentication and target/container startup remain external
+to the suite. Unset transports skip independently. Once configured, each
+transport must also pass `required` Bubblewrap readiness and its exact-grant
+case; unavailable confinement fails that release gate.
+
+```bash
+MEVEDEL_TEST_SSH_ROOT=/ssh:user@host:/srv/project/ \
+MEVEDEL_TEST_DOCKER_ROOT=/docker:container:/workspace/ \
+MEVEDEL_TEST_PODMAN_ROOT=/podman:container:/workspace/ \
+npx @emacs-eask/cli test ert test/test-mevedel-execution-remote.el
+```
+
+The suite never provisions, starts, or stops a target.  Its loss cases start a
+bounded target process, discard that target's client-side TRAMP processes and
+reconnect attempts, and require an unknown outcome plus the mutating-execution
+block.  They then restore connectivity and identity-check the bounded
+descendant before cleaning its process group.  This exercises real transport
+loss without requiring network or container lifecycle authority.
 
 ## Eval execution scope
 

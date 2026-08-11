@@ -100,6 +100,9 @@
 		  "mevedel-mentions" (text &optional session))
 (defvar mevedel-mentions--agent-enabled-p)
 
+;; `mevedel-menu'
+(declare-function mevedel-menu "mevedel-menu" nil)
+
 ;; `mevedel-overlays'
 (declare-function mevedel--directive-action-context
                   "mevedel-overlays" (record workspace))
@@ -109,9 +112,6 @@
                   "mevedel-overlays" (buffer))
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction type))
-
-;; `mevedel-menu'
-(declare-function mevedel-menu "mevedel-menu" nil)
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-mode-effective
@@ -167,9 +167,6 @@
 		  (skill))
 (declare-function mevedel-review-transform-outcome "mevedel-review"
 		  (skill-name outcome))
-
-;; `seq'
-(declare-function seq-take "seq" (sequence n))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--assert-stable-source
@@ -241,6 +238,8 @@
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-assert-target-ready
+                  "mevedel-structs" (session))
 (declare-function mevedel-request-begin "mevedel-structs"
 		  (session &optional directive-uuid))
 (declare-function mevedel-request-end "mevedel-structs" nil)
@@ -250,10 +249,10 @@
                   "mevedel-structs" (session paths))
 (declare-function mevedel-session--set-dropped-file-grants
                   "mevedel-structs" (session paths))
-(declare-function mevedel-session-active-dropped-file-grants
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-activate-dropped-file-grants
 		  "mevedel-structs" (session paths))
+(declare-function mevedel-session-active-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-add-dropped-file-grant
 		  "mevedel-structs" (session path))
 (declare-function mevedel-session-clear-dropped-file-grants
@@ -410,6 +409,9 @@
 
 ;; `select'
 (declare-function gui-get-selection "select" (selection-symbol target-type))
+
+;; `seq'
+(declare-function seq-take "seq" (sequence n))
 
 
 ;;
@@ -2816,8 +2818,10 @@ replaces INPUT only in the temporary request prompt."
          (data-buffer mevedel--data-buffer)
          (session (mevedel-view--session))
          (dropped-file-grants
-          (mevedel-view--pop-dropped-file-grants-for-input
-           input session)))
+          (progn
+            (mevedel-request-assert-target-ready session)
+            (mevedel-view--pop-dropped-file-grants-for-input
+             input session))))
     (let (data-turn-start
           hook-audits-with-source
           prompt-summary-source)

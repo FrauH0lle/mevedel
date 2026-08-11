@@ -20,6 +20,12 @@
 ;; `gptel'
 (defvar gptel-display-buffer-action)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-create
+                  "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-expand-path
+                  "mevedel-execution-target" (target path &optional directory))
+
 ;; `mevedel-structs'
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
@@ -31,8 +37,7 @@
 
 (defcustom mevedel-hints-file ".mevedel/hints.md"
   "Path to the hints file, relative to workspace root.
-When set to a relative path, it is resolved relative to the workspace root.
-When set to an absolute path, it is used as-is."
+Relative and absolute paths are resolved in the workspace execution target."
   :type 'string
   :group 'mevedel)
 
@@ -58,9 +63,12 @@ Newest hints are at the front.")
   "Return absolute path to the hints file for the current workspace.
 Creates the .mevedel/ directory if it doesn't exist."
   (let* ((workspace-root (mevedel-workspace-root (mevedel-workspace)))
-         (hints-path (if (file-name-absolute-p mevedel-hints-file)
-                         mevedel-hints-file
-                       (file-name-concat workspace-root mevedel-hints-file)))
+         (target (progn
+                   (require 'mevedel-execution-target)
+                   (mevedel-execution-target-create workspace-root)))
+         (hints-path
+          (mevedel-execution-target-expand-path
+           target mevedel-hints-file workspace-root))
          (parent-dir (file-name-directory hints-path)))
     ;; Create parent directory if needed
     (unless (file-exists-p parent-dir)

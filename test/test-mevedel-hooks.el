@@ -15,11 +15,16 @@
 (require 'mevedel-hooks)
 (require 'mevedel-plugins)
 (require 'mevedel-agent-control)
+(require 'mevedel-execution-target)
+(require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
+(require 'mevedel-telemetry)
 (require 'mevedel-view)
 (require 'mevedel-view-stream)
+(require 'tramp)
 
 (defvar mevedel--agent-invocation)
+(defvar mevedel-hooks-test--elisp-origin nil)
 
 
 ;;
@@ -82,6 +87,12 @@
   "Return updated input for hook cases."
   '(:updated-input (:command "echo rewritten")))
 
+(defun mevedel-hooks-test--capture-elisp-origin (event)
+  "Capture EVENT and local `default-directory' for origin tests."
+  (setq mevedel-hooks-test--elisp-origin
+        (list :event event :default-directory default-directory))
+  nil)
+
 (mevedel-deftest mevedel-hooks--telemetry-handler-id
   (:doc "is stable for one handler and changes with its executable identity")
   (let ((handler '(:type command :source project :command "one")))
@@ -92,8 +103,67 @@
             (mevedel-hooks--telemetry-handler-id
              '(:type command :source project :command "two"))))))
 
+(mevedel-deftest mevedel-hooks--command-event-plist
+  (:doc "converts every command-hook filesystem fact to target-native paths")
+  (let* ((target
+          (mevedel-execution-target-create "/ssh:hook-target:/workspace/"))
+         (session
+          (mevedel-session--create :name "main" :execution-target target))
+         (payload
+          (mevedel-hooks--command-event-plist
+           '(:cwd "/ssh:hook-target:/workspace/src/"
+             :workspace-root "/ssh:hook-target:/workspace/"
+             :transcript-path
+             "/ssh:hook-target:/workspace/.mevedel/sessions/main/")
+           session)))
+    (should (equal "/workspace/src/" (plist-get payload :cwd)))
+    (should (equal "/workspace/" (plist-get payload :workspace-root)))
+    (should
+     (equal "/workspace/.mevedel/sessions/main/"
+            (plist-get payload :transcript-path)))
+    (should-not (string-match-p "/ssh:" (prin1-to-string payload)))))
+
+(mevedel-deftest mevedel-hooks--command-process-environment
+  (:doc "keeps client variables local while adding deliberate target plugin variables")
+  (let* ((process-environment '("MEVEDEL_CLIENT_ONLY=secret" "PATH=/client"))
+         (target
+          (mevedel-execution-target-create "/ssh:hook-target:/workspace/"))
+         (session
+          (mevedel-session--create :name "main" :execution-target target))
+         made-directory)
+    (should-not
+     (mevedel-hooks--command-process-environment
+      '(:type command :source project-file) session))
+    (should
+     (eq process-environment
+         (mevedel-hooks--command-process-environment
+          '(:type command :source user-file) session)))
+    (cl-letf (((symbol-function 'make-directory)
+               (lambda (directory &optional _parents)
+                 (setq made-directory directory))))
+      (let ((environment
+             (mevedel-hooks--command-process-environment
+              '(:type command
+                :source plugin
+                :plugin-root "/ssh:hook-target:/workspace/plugin/"
+                :plugin-data "/ssh:hook-target:/workspace/.mevedel/plugin-data/demo/")
+              session)))
+        (should-not (member "MEVEDEL_CLIENT_ONLY=secret" environment))
+        (should (member "MEVEDEL_PLUGIN_ROOT=/workspace/plugin/" environment))
+        (should
+         (member
+          "MEVEDEL_PLUGIN_DATA=/workspace/.mevedel/plugin-data/demo/"
+          environment))
+        (should
+         (equal "/ssh:hook-target:/workspace/.mevedel/plugin-data/demo/"
+                made-directory))))))
+
 (mevedel-deftest mevedel-hooks--log
-  (:doc "keeps detailed side logs transient and forwards value-free audit")
+  ()
+  ,test
+  (test)
+
+  :doc "keeps detailed side logs transient and forwards value-free audit"
   (let* ((parent (mevedel-session--create :name "parent"))
          (side (mevedel-session--create
                 :name "side" :audit-session parent))
@@ -116,7 +186,75 @@
       (should-not
        (string-match-p
         (regexp-opt '("private-command" "private-output" "private-reason"))
-        (prin1-to-string props))))))
+        (prin1-to-string props)))))
+  :doc "defers a materialized remote append until session settlement"
+  (let* ((root (make-temp-file "mevedel-hook-log-remote-" t))
+         (target
+          (mevedel-execution-target-create "/ssh:hook-host:/workspace/"))
+         (session
+          (mevedel-session--create
+           :name "main" :execution-target target :save-path root))
+         (entry '(:event Stop :status completed))
+         (later-entry '(:event SessionEnd :status completed))
+         (mevedel-hooks-persist-log t)
+         calls)
+    (unwind-protect
+        (progn
+          (cl-letf
+              (((symbol-function
+                 'mevedel-session-durability-append-diagnostic)
+                (lambda (_session path content)
+                  (push (list path content) calls)
+                  t)))
+            (mevedel-hooks--log session entry)
+            (mevedel-hooks--log session later-entry)
+            (should (equal (list entry later-entry)
+                           (mevedel-session-hook-log-pending session)))
+            (should-not calls)
+            (should-not (file-exists-p (mevedel-hooks-log-path session)))
+            (mevedel-hooks-flush-log session))
+          (should-not (mevedel-session-hook-log-pending session))
+          (pcase-let ((`((,path ,content)) calls))
+            (should (equal (mevedel-hooks-log-path session) path))
+            (with-temp-buffer
+              (insert content)
+              (goto-char (point-min))
+              (should (equal entry (read (current-buffer))))
+              (should (equal later-entry (read (current-buffer)))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-flush-log
+  (:doc "retains a failed append and persists it on a later flush")
+  (let* ((root (make-temp-file "mevedel-hook-log-retry-" t))
+         (blocked (file-name-concat root "blocked"))
+         (restored (file-name-concat root "restored"))
+         (session (mevedel-session--create :name "main"))
+         (entry '(:event Stop :status completed))
+         (later-entry '(:event SessionEnd :status completed))
+         (mevedel-hooks-persist-log t)
+         warning)
+    (unwind-protect
+        (progn
+          (write-region "not a directory" nil blocked nil 'silent)
+          (setf (mevedel-session-save-path session) blocked)
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (_type message &rest _)
+                       (setq warning message))))
+            (mevedel-hooks--log session entry))
+          (should warning)
+          (should (equal (list entry)
+                         (mevedel-session-hook-log-pending session)))
+          (setf (mevedel-session-save-path session) restored)
+          (mevedel-hooks--log session later-entry)
+          (should (equal (list entry later-entry)
+                         (mevedel-session-hook-log-pending session)))
+          (mevedel-hooks-flush-log session)
+          (should-not (mevedel-session-hook-log-pending session))
+          (with-temp-buffer
+            (insert-file-contents (mevedel-hooks-log-path session))
+            (should (equal entry (read (current-buffer))))
+            (should (equal later-entry (read (current-buffer))))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks--run-handlers
   (:doc "emits a paired handler lifecycle span with context size")
@@ -337,11 +475,36 @@
 			  (assq 'PermissionRequest
 				(mevedel-hooks-effective-rules session workspace)))
 			 (mevedel-hooks-trust-project workspace)
-			 (let ((rules (mevedel-hooks-effective-rules session workspace)))
+			 (let* ((rules (mevedel-hooks-effective-rules session workspace))
+				(defcustom-handler
+				 (car (mevedel-hooks--matching-handlers
+				       'PreToolUse '(:tool-name "Read") rules)))
+				(user-handler
+				 (car (mevedel-hooks--matching-handlers
+				       'PostToolUse '(:tool-name "Bash") rules)))
+				(project-handler
+				 (car (mevedel-hooks--matching-handlers
+				       'PermissionDenied '(:tool-name "Bash") rules))))
 			   (should (assq 'PreToolUse rules))
 			   (should (assq 'PostToolUse rules))
 			   (should (assq 'PermissionRequest rules))
-			   (should (assq 'PermissionDenied rules)))
+			   (should (assq 'PermissionDenied rules))
+			   (should (eq 'user
+				       (plist-get defcustom-handler :source)))
+			   (should (equal (file-name-as-directory user-emacs-directory)
+					  (plist-get defcustom-handler :source-root)))
+			   (should
+			    (equal (file-name-concat user-dir "hooks.json")
+				   (plist-get user-handler :source-file)))
+			   (should
+			    (equal (file-name-as-directory user-dir)
+				   (plist-get user-handler :source-root)))
+			   (should
+			    (equal (file-name-concat root ".mevedel" "hooks.json")
+				   (plist-get project-handler :source-file)))
+			   (should
+			    (equal (file-name-as-directory root)
+				   (plist-get project-handler :source-root))))
 			 (with-temp-file (file-name-concat root ".mevedel" "hooks.el")
 			   (prin1
 			    '((SessionStart
@@ -534,6 +697,11 @@
                            (plist-get plugin-handler :plugin-name)))
             (should (equal plugin-root
                            (plist-get plugin-handler :plugin-root)))
+            (should
+             (equal (file-name-concat plugin-root "hooks" "hooks.json")
+                    (plist-get plugin-handler :source-file)))
+            (should (equal plugin-root
+                           (plist-get plugin-handler :source-root)))
             (should (equal (file-name-concat root ".mevedel"
                                              "plugin-data" "demo")
                            (plist-get plugin-handler :plugin-data)))
@@ -989,7 +1157,8 @@
   (:doc "attributes merged context to handlers in execution order")
   (let* ((root (make-temp-file "mevedel-hooks-context-audit" t))
          (session (mevedel-hooks-test--session root))
-         (mevedel-hook-rules
+         (mevedel-hook-rules nil))
+    (setf (mevedel-session-hook-rules session)
           '((SubagentStart
              ((:matcher "explorer"
                :hooks ((:type elisp
@@ -999,7 +1168,7 @@
                        (:type elisp
                         :function mevedel-hooks-test--second-context-fn
                         :source project-file
-                        :description "Inject project conventions"))))))))
+                        :description "Inject project conventions")))))))
     (unwind-protect
         (let* ((decision
                 (mevedel-hooks-test--await
@@ -1401,15 +1570,7 @@
 			(subdir (file-name-as-directory
 				 (file-name-concat root "subdir")))
 			session
-			(mevedel-hook-rules
-			 `((PreToolUse
-			    ((:matcher "Bash"
-				       :hooks ((:type command
-						      :command
-						      ,(mevedel-hooks-test--emacs-command
-							"(princ default-directory)")
-						      :source project-file
-						      :timeout 5))))))))
+			(mevedel-hook-rules nil))
 		   (unwind-protect
 		       (progn
 			 (make-directory subdir t)
@@ -1418,6 +1579,17 @@
 				"hooks-test"
 				(mevedel-hooks-test--workspace root)
 				subdir))
+			 (setf
+			  (mevedel-session-hook-rules session)
+			  `((PreToolUse
+			     ((:matcher "Bash"
+				:hooks ((:type command
+					 :command
+					 ,(mevedel-hooks-test--emacs-command
+					   "(princ default-directory)")
+					 :source project-file
+					 :source-root ,root
+					 :timeout 5)))))))
 			 (mevedel-hooks-test--await
 			  (lambda (cb)
 			    (mevedel-hooks-run-event
@@ -1436,6 +1608,205 @@
 					:stdout-preview)))
 			   (directory-file-name root))))
 			     (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/remote-command-origin
+  (:doc "dispatches remote project and local user/plugin commands by origin")
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-hooks-remote-origin" t)))
+         (subdir (file-name-as-directory (file-name-concat root "subdir")))
+         (remote-root (format "/mevedelmock:%s:%s"
+                              (system-name) root))
+         (remote-subdir (concat remote-root "subdir/"))
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-hooks-local-user" t)))
+         (plugin-root (file-name-as-directory
+                       (file-name-concat user-dir ".agents" "plugins" "repo")))
+         (project-plugin-local-root
+          (file-name-as-directory
+           (file-name-concat root ".mevedel" "plugins" "target")))
+         (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
+         (mevedel-hook-rules nil)
+         (mevedel-hooks-persist-log nil)
+         (mevedel-hooks-require-project-trust nil)
+         (process-environment (copy-sequence process-environment))
+         workspace session)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (make-directory subdir t)
+          (make-directory (file-name-concat root ".mevedel") t)
+          (make-directory (file-name-concat plugin-root "hooks") t)
+          (make-directory (file-name-concat project-plugin-local-root "hooks") t)
+          (with-temp-file (file-name-concat user-dir "hooks.json")
+            (insert
+             (format
+              "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":%s}]}]}}"
+              (json-encode-string
+               "pwd > user-pwd; cat > user-input.json"))))
+          (with-temp-file (file-name-concat root ".mevedel" "hooks.json")
+            (insert
+             (format
+              "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":%s},{\"type\":\"elisp\",\"function\":\"mevedel-hooks-test--capture-elisp-origin\"}]}]}}"
+              (json-encode-string
+               (concat "pwd > project-pwd; cat > project-input.json; "
+                       "printf remote-stderr >&2")))))
+          (with-temp-file (file-name-concat plugin-root "hooks" "hooks.json")
+            (insert
+             (format
+              "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":%s}]}]}}"
+              (json-encode-string
+               (concat
+                "pwd > plugin-pwd; "
+                "printf '%s|%s' \"$MEVEDEL_PLUGIN_ROOT\" "
+                "\"${MEVEDEL_PLUGIN_DATA-unset}\" > plugin-env; "
+                "cat > plugin-input.json")))))
+          (with-temp-file
+              (file-name-concat project-plugin-local-root "hooks" "hooks.json")
+            (insert
+             (format
+              "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":%s}]}]}}"
+              (json-encode-string
+               (concat
+                "pwd > project-plugin-pwd; "
+                "printf '%s|%s' \"$MEVEDEL_PLUGIN_ROOT\" "
+                "\"$MEVEDEL_PLUGIN_DATA\" > project-plugin-env; "
+                "cat > project-plugin-input.json")))))
+          (mevedel-hooks-test--write-plugin-manifest
+           plugin-root
+           "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
+          (mevedel-hooks-test--write-plugin-manifest
+           project-plugin-local-root
+           "{\"name\":\"target-demo\",\"hooks\":\"hooks/hooks.json\"}")
+          (setq workspace (mevedel-hooks-test--workspace remote-root)
+                session (mevedel-session-create
+                         "remote-hooks" workspace remote-subdir)
+                mevedel-hooks-test--elisp-origin nil)
+          (let ((mevedel--session session))
+            (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
+              (mevedel-plugins-enable "demo" workspace)
+              (mevedel-plugins-enable "target-demo" workspace)))
+          (mevedel-hooks-test--await
+           (lambda (cb)
+             (mevedel-hooks-run-event
+              'PreToolUse
+              (mevedel-hooks-event-plist
+               'PreToolUse session workspace
+               :tool-name "Bash"
+               :tool-input '(:command "echo hi"))
+              cb session workspace)))
+          (cl-labels
+              ((file-text (file)
+                 (string-trim
+                  (with-temp-buffer
+                    (insert-file-contents file)
+                    (buffer-string))))
+               (read-input (file)
+                 (with-temp-buffer
+                   (insert-file-contents file)
+                   (json-parse-buffer :object-type 'alist))))
+            (should (file-equal-p root
+                                  (file-text
+                                   (file-name-concat root "project-pwd"))))
+            (should (file-equal-p user-dir
+                                  (file-text
+                                   (file-name-concat user-dir "user-pwd"))))
+            (should (file-equal-p plugin-root
+                                  (file-text
+                                   (file-name-concat plugin-root "plugin-pwd"))))
+            (should
+             (equal (concat plugin-root "|unset")
+                    (file-text
+                     (file-name-concat plugin-root "plugin-env"))))
+            (should
+             (file-equal-p
+              project-plugin-local-root
+              (file-text
+               (file-name-concat project-plugin-local-root
+                                 "project-plugin-pwd"))))
+            (should
+             (equal
+              (concat project-plugin-local-root "|"
+                      (file-name-concat root ".mevedel" "plugin-data"
+                                        "target-demo"))
+              (file-text
+               (file-name-concat project-plugin-local-root
+                                 "project-plugin-env"))))
+            (dolist (input (list (read-input
+                                  (file-name-concat root "project-input.json"))
+                                 (read-input
+                                  (file-name-concat user-dir "user-input.json"))
+                                 (read-input
+                                  (file-name-concat plugin-root
+                                                    "plugin-input.json"))
+                                 (read-input
+                                  (file-name-concat
+                                   project-plugin-local-root
+                                   "project-plugin-input.json"))))
+              (should (equal subdir (alist-get 'cwd input)))
+              (should (equal root (alist-get 'workspace_root input)))
+              (let ((target (alist-get 'execution_target input)))
+                (should (equal "mevedelmock" (alist-get 'method target)))
+                (should (equal (system-name) (alist-get 'host target)))))
+            (should
+             (equal remote-subdir
+                    (plist-get
+                     (plist-get mevedel-hooks-test--elisp-origin :event)
+                     :cwd)))
+            (should-not
+             (file-remote-p
+              (plist-get mevedel-hooks-test--elisp-origin
+                         :default-directory)))
+            (let ((entry
+                   (cl-find-if
+                    (lambda (item)
+                      (eq 'project-file
+                          (plist-get (plist-get item :handler) :source)))
+                    (mevedel-session-hook-log session))))
+              (should (equal "remote-stderr"
+                             (plist-get entry :stderr-preview))))))
+      (delete-directory root t)
+      (delete-directory user-dir t))))
+
+(mevedel-deftest mevedel-hooks-run-event/foreign-command-target
+  (:doc "refuses a plugin command rooted on another remote target")
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-hooks-foreign" t)))
+         (remote-root (format "/mevedelmock:%s:%s"
+                              (system-name) root))
+         (foreign-root (format "/mevedelmock:foreign:%s" root))
+         (marker (file-name-concat root "foreign-ran"))
+         session)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("foreign")
+          (setq session
+                (mevedel-session-create
+                 "remote-hooks"
+                 (mevedel-hooks-test--workspace remote-root)
+                 remote-root))
+          (setf
+           (mevedel-session-hook-rules session)
+           `((PreToolUse
+              ((:matcher "Bash"
+                :hooks ((:type command
+                         :source plugin
+                         :plugin-root ,foreign-root
+                         :plugin-data ,(file-name-concat foreign-root "data")
+                         :command ,(format "touch %s; cat >/dev/null"
+                                           (shell-quote-argument marker)))))))))
+          (let ((decision
+                 (mevedel-hooks-test--await
+                  (lambda (cb)
+                    (mevedel-hooks-run-event
+                     'PreToolUse
+                     '(:tool-name "Bash" :tool-input (:command "echo hi"))
+                     cb session)))))
+            (should (eq 'deny (plist-get decision :permission-decision)))
+            (should (string-match-p
+                     "another execution target"
+                     (plist-get decision :permission-reason)))
+            (should-not (file-exists-p marker))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/plugin-command-env
   (:doc "runs plugin command hooks with compatibility env and creates data dir")

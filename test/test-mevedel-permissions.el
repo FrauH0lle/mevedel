@@ -5,6 +5,8 @@
 ;;; Code:
 
 (require 'mevedel-permissions)
+(require 'mevedel-execution-target)
+(require 'mevedel-session-durability)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (require 'mevedel-agents)
@@ -81,6 +83,22 @@
   :doc "tilde expansion in pattern"
   (should (mevedel-permission--match-path-pattern
            (expand-file-name "~/.ssh/id_rsa") "~/.ssh/*"))
+  :doc "tilde expansion uses the remote target home"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@host:/srv/project/")))
+    (setf (mevedel-execution-target-environment target)
+          '(("HOME" . "/home/user")))
+    (should (mevedel-permission--match-path-pattern
+             "/ssh:user@host:/home/user/.ssh/id_rsa"
+             "~/.ssh/*" target)))
+  :doc "client absolute patterns stay client-only on remote targets"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@host:/srv/project/")))
+    (setf (mevedel-execution-target-environment target)
+          '(("HOME" . "/home/user")))
+    (should-not (mevedel-permission--match-path-pattern
+                 "/ssh:user@host:/home/roland/private/key"
+                 "/home/roland/private/**" target)))
   :doc "question mark matches single character"
   (should (mevedel-permission--match-path-pattern
            "/home/user/file.el" "/home/user/fil?.el"))
@@ -216,6 +234,26 @@
   (let ((mevedel-protected-paths '(("~/.ssh/*" . inaccessible))))
     (should (mevedel-permission--path-protected-p
              (expand-file-name "~/.ssh/id_rsa"))))
+  :doc "remote ssh directory is protected from the target home"
+  (let ((mevedel-protected-paths '(("~/.ssh/*" . inaccessible)))
+        (target (mevedel-execution-target-create
+                 "/ssh:user@host:/srv/project/")))
+    (setf (mevedel-execution-target-environment target)
+          '(("HOME" . "/home/user")))
+    (should (mevedel-permission--path-protected-p
+             "/ssh:user@host:/home/user/.ssh/id_rsa" target)))
+  :doc "default cloud credentials are protected from the target home"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@host:/srv/project/")))
+    (setf (mevedel-execution-target-environment target)
+          '(("HOME" . "/home/user")))
+    (dolist (path '(".aws/credentials"
+                    ".azure/accessTokens.json"
+                    ".config/gcloud/credentials.db"
+                    ".kube/config"))
+      (should
+       (mevedel-permission--path-protected-p
+        (concat "/ssh:user@host:/home/user/" path) target))))
   :doc "normal path is not protected"
   (let ((mevedel-protected-paths
          '(("**/.git/**" . read-only) ("~/.ssh/*" . inaccessible))))
@@ -333,7 +371,22 @@
       (should (eq 'deny
                   (mevedel-permission-decision-raw-outcome decision)))
       (should (eq 'deny-rule (plist-get decision :via)))
-      (should (eq :session (plist-get decision :bucket))))))
+      (should (eq :session (plist-get decision :bucket)))))
+
+  :doc "derives protected target-home facts from the owning session"
+  (let* ((target (mevedel-execution-target-create
+                  "/ssh:user@host:/srv/project/"))
+         (session (mevedel-session--create
+                   :name "remote" :execution-target target))
+         (mevedel-protected-paths '(("~/.ssh/**" . inaccessible))))
+    (setf (mevedel-execution-target-environment target)
+          '(("HOME" . "/home/user")))
+    (should
+     (plist-get
+      (mevedel-permission--preflight
+       "Read" :path "/ssh:user@host:/home/user/.ssh/id_rsa"
+       :session session :mode 'full-auto)
+      :protected-path-p))))
 
 (mevedel-deftest mevedel-check-permission-async-with-metadata ()
   ,test
@@ -974,6 +1027,122 @@
 ;;
 ;;; Persistent rule storage
 
+(mevedel-deftest mevedel-permission-serialize-authority ()
+  ,test
+  (test)
+  :doc "stores remote rule and grant paths in the target-native domain"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@alias-a:/srv/project/")))
+    (should
+     (equal
+      '(:rules
+        (("Read" :path "/srv/private/**" :action allow)
+         ("Bash" :pattern "make cache"
+          :file-system ((:path "/var/cache/build" :access write))
+          :action allow))
+        :resource-grants ((:path "/srv/private/key" :access read)))
+      (mevedel-permission-serialize-authority
+       '(("Read" :path "/ssh:user@alias-a:/srv/private/**" :action allow)
+         ("Bash" :pattern "make cache"
+          :file-system
+          ((:path "/ssh:user@alias-a:/var/cache/build" :access write))
+          :action allow))
+       '((:path "/ssh:user@alias-a:/srv/private/key" :access read))
+       target))))
+
+  :doc "rejects authority naming another execution target"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@alias-a:/srv/project/")))
+    (should-not
+     (mevedel-permission-serialize-authority
+      '(("Read" :path "/ssh:user@alias-b:/srv/private/**" :action allow))
+      nil target)))
+
+  :doc "does not reinterpret a client absolute path as remote authority"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@alias-a:/srv/project/")))
+    (should-not
+     (mevedel-permission-serialize-authority
+      nil '((:path "/home/client/.ssh/id" :access read)) target)))
+
+  :doc "resolves remote home syntax before persistence"
+  (let ((target (mevedel-execution-target-create
+                 "/docker:dev:/workspace/")))
+    (setf (mevedel-execution-target-environment target)
+          '(("HOME" . "/home/dev")))
+    (should
+     (equal
+      '(:rules
+        (("Bash" :pattern "npm test"
+          :file-system ((:path "/home/dev/.npm" :access write))
+          :action allow))
+        :resource-grants ((:path "/home/dev/.npm" :access write)))
+      (mevedel-permission-serialize-authority
+       '(("Bash" :pattern "npm test"
+          :file-system ((:path "~/.npm" :access write))
+          :action allow))
+       '((:path "~/.npm" :access write)) target)))))
+
+(mevedel-deftest mevedel-permission-deserialize-authority ()
+  ,test
+  (test)
+  :doc "requalifies target-native authority through the current alias"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@alias-b:/srv/project/")))
+    (should
+     (equal
+      '(:rules
+        (("Read" :path "/ssh:user@alias-b:/srv/private/**" :action allow)
+         ("Bash" :pattern "make cache"
+          :file-system
+          ((:path "/ssh:user@alias-b:/var/cache/build" :access write))
+          :action allow))
+        :resource-grants
+        ((:path "/ssh:user@alias-b:/srv/private/key" :access read)))
+      (mevedel-permission-deserialize-authority
+       '(("Read" :path "/srv/private/**" :action allow)
+         ("Bash" :pattern "make cache"
+          :file-system ((:path "/var/cache/build" :access write))
+          :action allow))
+       '((:path "/srv/private/key" :access read)) target))))
+
+  :doc "expands home-relative authority from the target environment"
+  (let ((target (mevedel-execution-target-create
+                 "/docker:dev:/workspace/")))
+    (setf (mevedel-execution-target-environment target)
+          '(("HOME" . "/home/dev")))
+    (should
+     (equal
+      '(:rules
+        (("Bash" :pattern "npm test"
+          :file-system ((:path "/docker:dev:/home/dev/.npm" :access write))
+          :action allow))
+        :resource-grants
+        ((:path "/docker:dev:/home/dev/.npm" :access write)))
+      (mevedel-permission-deserialize-authority
+       '(("Bash" :pattern "npm test"
+          :file-system ((:path "~/.npm" :access write))
+          :action allow))
+       '((:path "~/.npm" :access write)) target))))
+
+  :doc "rejects durable authority containing a client-specific TRAMP prefix"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@alias-b:/srv/project/")))
+    (should-not
+     (mevedel-permission-deserialize-authority
+      nil '((:path "/ssh:user@alias-a:/srv/private/key" :access read))
+      target)))
+
+  :doc "round-trips ordinary absolute paths for a local target"
+  (let ((target (mevedel-execution-target-create "/srv/project/")))
+    (should
+     (equal
+      '(:rules (("Read" :path "/srv/private/**" :action allow))
+        :resource-grants ((:path "/srv/private/key" :access read)))
+      (mevedel-permission-deserialize-authority
+       '(("Read" :path "/srv/private/**" :action allow))
+       '((:path "/srv/private/key" :access read)) target)))))
+
 (mevedel-deftest mevedel-permission--save-and-load-persistent-rules ()
   ,test
   (test)
@@ -1049,6 +1218,45 @@
             (should (equal (nth 0 rules) '("Read" :action allow)))
             (should (equal (nth 1 rules) '("*" :path "/tmp/*" :action allow)))
             (should (equal (nth 2 rules) '("Edit" :path "~/proj/*" :action allow)))))
+      (delete-directory tmp-dir t)))
+  :doc "rebinds project paths through the live target but keeps global paths local"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (global-dir (file-name-concat tmp-dir "global/"))
+         (project-dir (file-name-concat tmp-dir "project/"))
+         (mevedel-user-dir global-dir))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("alias-a" "alias-b")
+          (make-directory (file-name-concat project-dir ".mevedel") t)
+          (make-directory global-dir t)
+          (with-temp-file (file-name-concat global-dir "permissions.el")
+            (pp '(:rules (("Read" :path "/home/client/private/**"
+                           :action allow))
+                  :resource-grants nil)
+                (current-buffer)))
+          (with-temp-file
+              (file-name-concat project-dir ".mevedel/permissions.el")
+            (pp '(:rules (("Read" :path "/srv/shared/**" :action allow))
+                  :resource-grants nil)
+                (current-buffer)))
+          (let* ((root (format "/mevedelmock:alias-b:%s/" project-dir))
+                 (workspace (mevedel-workspace--create
+                             :type 'project :id "test" :root root
+                             :name "test" :file-cache nil))
+                 (target (mevedel-execution-target-create root))
+                 (session (mevedel-session--create
+                           :name "test" :workspace workspace
+                           :execution-target target)))
+            (setf (mevedel-execution-target-environment target)
+                  '(("HOME" . "/home/dev")))
+            (with-temp-buffer
+              (setq-local mevedel--session session)
+              (should
+               (equal
+                `(("Read" :path "/home/client/private/**" :action allow)
+                  ("Read" :path
+                   ,(format "/mevedelmock:alias-b:/srv/shared/**")
+                   :action allow))
+                (mevedel-permission--load-persistent-rules workspace))))))
       (delete-directory tmp-dir t)))
   :doc "deduplicates exact persistent rules"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
@@ -1214,6 +1422,52 @@
                         ws)))))
       (delete-directory tmp-dir t))))
 
+(mevedel-deftest mevedel-permission-invalidate-target-grants ()
+  ,test
+  (test)
+  :doc "revokes exact session, frozen, dropped, and workspace grants only"
+  (let* ((tmp-dir (file-name-as-directory
+                   (make-temp-file "mevedel-test-" t)))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+         (path (file-name-concat tmp-dir "outside.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "test" :root tmp-dir
+                     :name "test" :file-cache nil))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session
+                      mevedel-permission--context-frozen-p t
+                      mevedel-permission--frozen-resource-grants
+                      `((:path ,path :access read)))
+          (setf (mevedel-session-permission-rules session)
+                '(("Bash" :pattern "git status:*" :action allow))
+                (mevedel-session-resource-grants session)
+                `((:path ,path :access read))
+                (mevedel-session-dropped-file-grants session)
+                (list path)
+                (mevedel-session-active-dropped-file-grants session)
+                (list path))
+          (mevedel-permission--save-persistent-rule
+           workspace "Read" 'allow)
+          (mevedel-permission--save-persistent-resource-grant
+           workspace path 'read)
+          (should (mevedel-permission-invalidate-target-grants session))
+          (should-not (mevedel-session-resource-grants session))
+          (should-not (mevedel-session-dropped-file-grants session))
+          (should-not
+           (mevedel-session-active-dropped-file-grants session))
+          (should-not mevedel-permission--frozen-resource-grants)
+          (should
+           (equal '(("Bash" :pattern "git status:*" :action allow))
+                  (mevedel-session-permission-rules session)))
+          (should-not
+           (mevedel-permission--load-persistent-resource-grants workspace))
+          (should (equal '(("Read" :action allow))
+                         (mevedel-permission--load-persistent-rules
+                          workspace))))
+      (delete-directory tmp-dir t))))
+
 (mevedel-deftest mevedel-permission--load-persistent-resource-grants ()
   ,test
   (test)
@@ -1323,6 +1577,54 @@
           (should
            (equal `((:path ,path :access write))
                   (mevedel-permission--load-persistent-resource-grants ws))))
+      (delete-directory tmp-dir t)))
+
+  :doc "writes target-native paths and reloads them through the live alias"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (project-dir (file-name-concat tmp-dir "project"))
+         (root (format "/mevedelmock:alias-a:%s/" project-dir))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "test" :root root
+                     :name "test" :file-cache nil))
+         (target (mevedel-execution-target-create root))
+         (session (mevedel-session--create
+                   :name "test" :workspace workspace
+                   :execution-target target
+                   :save-path (file-name-concat root ".mevedel/sessions/test")))
+         (mevedel-session-durability--client-id (make-string 64 ?a))
+         (qualified "/mevedelmock:alias-a:/srv/shared/key")
+         (local-file (file-name-concat project-dir
+                                      ".mevedel/permissions.el")))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("alias-a")
+          (make-directory (mevedel-session-save-path session) t)
+          (puthash (mevedel-execution-target-identity target) t
+                   mevedel-session-durability--disclosed-targets)
+          (should
+           (mevedel-session-durability-lease-acquire
+            (mevedel-session-save-path session) "test" session))
+          (unwind-protect
+              (with-temp-buffer
+                (setq-local mevedel--session session)
+                (mevedel-permission--save-persistent-resource-grant
+                 workspace qualified 'read)
+                (should
+                 (equal `((:path ,qualified :access read))
+                        (mevedel-permission--load-persistent-resource-grants
+                         workspace))))
+            (mevedel-session-durability-lease-release
+             (mevedel-session-save-path session) session))
+          (let ((raw (with-temp-buffer
+                       (insert-file-contents local-file)
+                       (read (current-buffer)))))
+            (should
+             (equal '((:path "/srv/shared/key" :access read))
+                    (plist-get raw :resource-grants)))
+            (should-not (string-match-p
+                         "mevedelmock"
+                         (with-temp-buffer
+                           (insert-file-contents local-file)
+                           (buffer-string))))))
       (delete-directory tmp-dir t))))
 
 

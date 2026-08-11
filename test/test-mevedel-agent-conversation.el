@@ -556,8 +556,8 @@
 			(transcript-dir (file-name-as-directory
 					 (make-temp-file
 					  "mevedel-agent-transcript-" t)))
-			(transcript (expand-file-name "agent.chat.org"
-						 transcript-dir))
+			(relative "agents/agent.chat.org")
+			(transcript (expand-file-name relative transcript-dir))
 			(agent (mevedel-agent--create :name "worker"))
 			(invocation
 			 (mevedel-agent-invocation--create
@@ -573,19 +573,33 @@
 			buffer)
 		   (unwind-protect
 		       (progn
+			 (make-directory (file-name-directory transcript) t)
 			 (write-region
 			  ":PROPERTIES:\n:GPTEL_SYSTEM: Expanded stale prompt\n:END:\nConversation\n"
 			  nil transcript nil 'silent)
 			 (with-current-buffer parent-buffer
 			   (setq-local mevedel--session session)
 			   (setq-local mevedel--workspace workspace))
+			 (setf (mevedel-session-save-path session) transcript-dir)
 			 (mevedel-session-persistence--install-gptel-save-state-advice)
-			 (setq buffer
-			       (mevedel-agent-conversation-hydrate
-				invocation parent-buffer transcript))
+			 (let ((original
+				(symbol-function
+				 'mevedel-session-persistence-find-artifact-noselect))
+			       seen)
+			   (cl-letf
+			       (((symbol-function
+				  'mevedel-session-persistence-find-artifact-noselect)
+				 (lambda (seen-session logical &optional inspection)
+				   (setq seen (list seen-session logical inspection))
+				   (funcall original seen-session logical inspection))))
+			     (setq buffer
+				   (mevedel-agent-conversation-hydrate
+				    invocation parent-buffer relative)))
+			   (should (equal (list session relative nil) seen)))
 			 (with-current-buffer buffer
 			   (should (equal "Frozen worker prompt" gptel-system-prompt))
 			   (should (equal root default-directory))
+			   (should (equal transcript buffer-file-name))
 			   (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
 			   (should-not (buffer-modified-p))
 			   (should (string-match-p

@@ -79,12 +79,12 @@
                    (mevedel-plan-handoff-reserved-goal-id target)))))
 
 (mevedel-deftest mevedel-plan-handoff--implementation-prompt
-  (:doc "includes the immutable artifact, plan body, and implementation order")
+  (:doc "derives the logical artifact path and includes the plan body")
   ,test
   (test)
   (let ((prompt
          (mevedel-plan-handoff--implementation-prompt
-          '(:path "local/plans/accepted-20260813-120000.md"
+          nil '(:path "local/plans/accepted-20260813-120000.md"
             :absolute-path "/tmp/accepted.md") "# Accepted")))
     (should (string-match-p "local://plans/accepted-20260813-120000.md"
                             prompt))
@@ -99,10 +99,12 @@
      '(:kind skill :token "$beta"
        :source-file "/tmp/beta/SKILL.md")
      instructions)
-    (let* ((prompt
+    (let* ((session
+            (mevedel-session--create :name "main" :save-path "/tmp/session/"))
+           (prompt
             (mevedel-plan-handoff--implementation-prompt
-             '(:path "local/plans/accepted-20260813-120000.md"
-               :absolute-path "/tmp/accepted.md") "# Accepted"
+             nil '(:path "local/plans/accepted-20260813-120000.md"
+                  :absolute-path "/tmp/accepted.md") "# Accepted"
              (list
               :skills
               '((:name "alpha"
@@ -126,7 +128,7 @@
   (let* ((artifact '(:path "local/plans/accepted-20260813-120000.md"
                      :absolute-path "/tmp/accepted.md"))
          (body "Free-form plan")
-         (prompt (mevedel-plan-handoff--goal-kickoff-prompt artifact body)))
+         (prompt (mevedel-plan-handoff--goal-kickoff-prompt nil artifact body)))
     (should (< (string-search "local://plans/accepted-20260813-120000.md"
                               prompt)
                (string-search body prompt)
@@ -142,8 +144,8 @@
   (:doc "chooses the first unfinished preparation step")
   ,test
   (test)
-  (let ((accepted '(:path "accepted.md" :absolute-path "/tmp/accepted.md"
-                    :hash "h")))
+  (let ((accepted '(:path "accepted.md" :hash "h"
+                    :absolute-path "/tmp/must-not-persist.md")))
     (should (eq 'submit
                 (plist-get
                  (mevedel-plan-handoff--implementation-record
@@ -163,11 +165,17 @@
                 (plist-get
                  (mevedel-plan-handoff--implementation-record
                   '(:location worktree :context summary) accepted)
-                 :step))))
+                 :step)))
+    (should-not
+     (plist-member
+      (plist-get
+       (mevedel-plan-handoff--implementation-record
+        '(:location here :context current) accepted)
+       :accepted)
+      :absolute-path)))
 
   :doc "reserves an identity only for Goal execution"
-  (let* ((accepted '(:path "accepted.md" :absolute-path "/tmp/accepted.md"
-                     :hash "h"))
+  (let* ((accepted '(:path "accepted.md" :hash "h"))
          (goal-record
           (mevedel-plan-handoff--implementation-record
            '(:location here :context current :execution goal) accepted))
@@ -178,22 +186,22 @@
     (should-not (plist-member direct-record :goal-id))))
 
 (mevedel-deftest mevedel-plan-handoff--accepted-body
-  (:doc "reads a matching immutable artifact and rejects a bad hash")
+  (:doc "delegates accepted-plan reads to the verified Plan resolver")
   ,test
   (test)
-  (let ((path (make-temp-file "mevedel-plan-accepted-")))
-    (unwind-protect
-        (progn
-          (write-region "# Accepted" nil path nil 'silent)
-          (should (equal "# Accepted"
-                         (mevedel-plan-handoff--accepted-body
-                          (list :absolute-path path
-                                :hash
-                                (mevedel-plan-hash "# Accepted")))))
-          (should-error
-           (mevedel-plan-handoff--accepted-body
-            (list :absolute-path path :hash "wrong"))))
-      (delete-file path))))
+  (let* ((session
+          (mevedel-session--create
+           :name "main" :save-path "/tmp/plan-submit-session/"))
+         (artifact '(:path "plans/accepted.md" :hash "h"))
+         seen)
+    (cl-letf (((symbol-function 'mevedel-plan-read-artifact)
+               (lambda (seen-session seen-artifact)
+                 (setq seen (list seen-session seen-artifact))
+                 "# Accepted")))
+      (should (equal "# Accepted"
+                     (mevedel-plan-handoff--accepted-body
+                      session artifact))))
+    (should (equal (list session artifact) seen))))
 
   :doc "resolves the accepted artifact from its relative path after a rename"
   (let* ((old-dir (make-temp-file "mevedel-plan-old-save-" t))
@@ -531,6 +539,8 @@
           (cl-letf (((symbol-function
                       'mevedel-plan-handoff--worktree-target-buffer)
                      (lambda (_) target-buffer))
+                    ((symbol-function 'mevedel-plan-handoff--accepted-body)
+                     (lambda (_session _artifact) "# Accepted"))
                     ((symbol-function 'mevedel-plan-archive-accepted)
                      (lambda (&rest args)
                        (setq archive-arity (length args))
@@ -557,7 +567,7 @@
                      source-session source-buffer record)))
               (should (eq 'submit (plist-get prepared :step)))
               (should (eq 'full-auto mode))
-              (should (= 2 archive-arity))
+              (should (= 4 archive-arity))
               (should (equal "local/plans/accepted-20260813-120000.md"
                              (plist-get
                               (plist-get prepared :target-accepted) :path)))
@@ -571,10 +581,14 @@
                        (plist-get
                         (mevedel-session-plan-metadata target-session)
                         :implementation-goal-id)))
-              (should (equal "/tmp/target-accepted.md"
+              (should (equal "plans/accepted.md"
                              (plist-get
                               (plist-get prepared :target-accepted)
-                              :absolute-path))))))
+                              :path)))
+              (should-not
+               (plist-member
+                (mevedel-session-plan-metadata target-session)
+                :accepted-absolute-path)))))
       (kill-buffer target-buffer)
       (kill-buffer source-buffer)
       (delete-directory source-save t)
@@ -618,6 +632,8 @@
           (cl-letf (((symbol-function
                       'mevedel-plan-handoff--worktree-target-buffer)
                      (lambda (_) target-buffer))
+                    ((symbol-function 'mevedel-plan-handoff--accepted-body)
+                     (lambda (_session _artifact) body))
                     ((symbol-function 'mevedel-plan-archive-accepted)
                      (lambda (&rest _)
                        (cl-incf archives)
@@ -857,11 +873,34 @@
                     :reasoning-effort "high")))
     (should-not (mevedel-plan-handoff-selection-valid-p selection))))
 
+(mevedel-deftest mevedel-plan-handoff--validate-record
+  (:doc "accepts only relative durable plan artifacts with hashes")
+  ,test
+  (test)
+  (let ((record
+         '(:step submit
+           :selection (:location here :context current :execution direct
+                       :mode ask :model-provider "OpenAI:gpt-5")
+           :accepted (:path "plans/accepted.md" :hash "h"))))
+    (should (equal (plist-get record :selection)
+                   (mevedel-plan-handoff--validate-record record)))
+    (setf (plist-get (plist-get record :accepted) :absolute-path)
+          "/tmp/old-shape.md")
+    (should-error (mevedel-plan-handoff--validate-record record)))
+  (should-error
+   (mevedel-plan-handoff--validate-record
+    '(:step submit
+      :selection (:location here :context current :execution direct
+                  :mode ask :model-provider "OpenAI:gpt-5")
+      :accepted (:path "../escape.md" :hash "h")))))
+
 (mevedel-deftest mevedel-plan-handoff--submit
   (:doc "routes the generated handoff through planned skill submission")
   ,test
   (test)
-  (let* ((session (mevedel-session--create :name "main"))
+  (let* ((session
+          (mevedel-session--create
+           :name "main" :save-path "/tmp/plan-submit-session/"))
          (data-buffer (generate-new-buffer " *plan-submit-data*"))
          (view-buffer (generate-new-buffer " *plan-submit-view*"))
          (selection
@@ -879,7 +918,7 @@
             (setq-local mevedel--session session))
           (cl-letf
               (((symbol-function 'mevedel-plan-handoff--accepted-body)
-                (lambda (&rest _) "# Accepted"))
+                (lambda (_session _artifact) "# Accepted"))
                ((symbol-function 'mevedel-view--interaction-target-buffer)
                 (lambda (_) view-buffer))
                ((symbol-function 'mevedel-plan-handoff--apply-model-policy)

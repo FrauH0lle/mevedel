@@ -60,6 +60,12 @@
                   "mevedel-agents" (specs))
 (declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-at
                   "mevedel-mention-bindings" (text start end kind token))
@@ -505,6 +511,25 @@ When AUTHOR-ONLY-P is non-nil, skip matches that overlap non-author text."
          (funcall replacement-fn))))
     (buffer-string)))
 
+(defun mevedel-skills--target-native-source-dir (skill session)
+  "Return SKILL's source directory in SESSION's model-facing path domain."
+  (let* ((dir (and skill (mevedel-skill-source-dir skill)))
+         (source (and skill (mevedel-skill-source skill)))
+         (target (and session (mevedel-session-execution-target session))))
+    (if (and dir target
+             (progn
+               (require 'mevedel-execution-target)
+               (mevedel-execution-target-remote-p target))
+             (or (eq source 'project)
+                 (and (eq source 'plugin) (file-remote-p dir))))
+        (progn
+          (unless (file-remote-p dir)
+            (signal 'mevedel-execution-target-error
+                    (list (format "Project skill is not on the session execution target: %s"
+                                  dir))))
+          (mevedel-execution-target-native-path target dir))
+      dir)))
+
 (defun mevedel-skills--substitute-vars (text arguments session skill)
   "Return TEXT with skill placeholders expanded.
 
@@ -534,7 +559,9 @@ shadow `$0'/`$1' shorthand."
   (let* ((session-id (or (and session (mevedel-session-session-id session))
                          (and session (mevedel-session-name session))
                          ""))
-         (skill-dir (or (and skill (mevedel-skill-source-dir skill)) ""))
+         (skill-dir (or (mevedel-skills--target-native-source-dir
+                         skill session)
+                        ""))
          (effort (or (and skill
                           (mevedel-skill-effort skill)
                           (format "%s" (mevedel-skill-effort skill)))
@@ -604,6 +631,30 @@ shadow `$0'/`$1' shorthand."
        (or (string-prefix-p "Error:" result)
            (string-prefix-p "Command failed with exit code" result)
            (string-prefix-p "Failed to start process:" result))))
+
+(defun mevedel-skills--shell-resource-error (skill session)
+  "Return why SKILL shell injection cannot run in remote SESSION, or nil."
+  (when-let* ((target (and session
+                           (mevedel-session-execution-target session))))
+    (require 'mevedel-execution-target)
+    (when (mevedel-execution-target-remote-p target)
+      (let ((source (and skill (mevedel-skill-source skill)))
+            (dir (and skill (mevedel-skill-source-dir skill))))
+        (cond
+         ((not (memq source '(project plugin)))
+          (format "Shell body injections from local %s skill %s cannot run in a remote session; the session stays on one execution target"
+                  (or source 'unknown)
+                  (or (and skill (mevedel-skill-name skill)) "resource")))
+         ((not (file-remote-p dir))
+          (format "Shell body injections from local %s skill %s cannot run in a remote session; the session stays on one execution target"
+                  source (mevedel-skill-name skill)))
+         (t
+          (condition-case err
+              (progn
+                (mevedel-execution-target-native-path target dir)
+                nil)
+            (mevedel-execution-target-error
+             (error-message-string err)))))))))
 
 (defun mevedel-skills--run-shell-command-async (command marker callback)
   "Run COMMAND through the Bash tool pipeline, then call CALLBACK.
@@ -961,7 +1012,8 @@ The return value is a plist with :start, :end, :command, and
                    (< (plist-get a :start)
                       (plist-get b :start))))))))
 
-(defun mevedel-skills--run-body-injections-async (text callback)
+(defun mevedel-skills--run-body-injections-async
+    (text callback &optional skill session)
   "Replace skill body injection markers in TEXT, then call CALLBACK.
 
 CALLBACK receives either \\=(:status ok :body STRING) or
@@ -976,7 +1028,7 @@ Supported markers:
 Each command/expression goes through its normal tool pipeline with
 `:trust-literal-p t', so permission checking, execution, and
 oversized-result persistence stay aligned with normal tool
-execution."
+execution.  SKILL and SESSION identify the invoking skill and target."
   (if-let* ((match (mevedel-skills--injection-match text)))
       (let ((start (plist-get match :start))
             (end (plist-get match :end))
@@ -985,31 +1037,37 @@ execution."
             (prefix (or (plist-get match :prefix) ""))
             (suffix (or (plist-get match :suffix) ""))
             (origin-buffer (current-buffer)))
-        (funcall
-         (pcase kind
-           ('shell #'mevedel-skills--run-shell-command-async)
-           ('elisp #'mevedel-skills--run-elisp-expression-async))
-         (or (plist-get match :command)
-             (plist-get match :expression))
-         marker
-         (lambda (outcome)
-           (if (not (buffer-live-p origin-buffer))
-               (funcall callback
-                        `(:status error :reason aborted
-                                  :message "Skill buffer was killed during body injection expansion."))
-             (with-current-buffer origin-buffer
-               (pcase (plist-get outcome :status)
-                 ('ok
-                  (mevedel-skills--run-body-injections-async
-                   (concat (substring text 0 start)
-                           prefix
-                           (mevedel-skills--mark-non-author-text
-                            (plist-get outcome :output))
-                           suffix
-                           (substring text end))
-                   callback))
-                 (_
-                  (funcall callback outcome))))))))
+        (if-let* ((message (and (eq kind 'shell)
+                                (mevedel-skills--shell-resource-error
+                                 skill session))))
+            (funcall callback
+                     `(:status error :reason resource-target
+                               :message ,message))
+          (funcall
+           (pcase kind
+             ('shell #'mevedel-skills--run-shell-command-async)
+             ('elisp #'mevedel-skills--run-elisp-expression-async))
+           (or (plist-get match :command)
+               (plist-get match :expression))
+           marker
+           (lambda (outcome)
+             (if (not (buffer-live-p origin-buffer))
+                 (funcall callback
+                          `(:status error :reason aborted
+                                    :message "Skill buffer was killed during body injection expansion."))
+               (with-current-buffer origin-buffer
+                 (pcase (plist-get outcome :status)
+                   ('ok
+                    (mevedel-skills--run-body-injections-async
+                     (concat (substring text 0 start)
+                             prefix
+                             (mevedel-skills--mark-non-author-text
+                              (plist-get outcome :output))
+                             suffix
+                             (substring text end))
+                     callback skill session))
+                   (_
+                    (funcall callback outcome)))))))))
     (funcall callback `(:status ok :body ,(substring-no-properties text)))))
 
 
@@ -1483,7 +1541,15 @@ Allowed-tool rules apply only to the temporary preparation request."
                  (or (mevedel-skill-source-file skill) "unknown source"))
          callback display-callback))
        (t
-        (let* ((command-p (eq role 'command))
+        (let* ((substitution-error nil)
+               (substituted
+                (condition-case err
+                    (mevedel-skills--substitute-vars
+                     body arguments session skill)
+                  (mevedel-execution-target-error
+                   (setq substitution-error (error-message-string err))
+                   nil)))
+               (command-p (eq role 'command))
                (rules (mevedel-skill-allowed-tool-rules skill))
                (hooks (and command-p (mevedel-skill-hooks skill)))
                (metadata
@@ -1494,11 +1560,13 @@ Allowed-tool rules apply only to the temporary preparation request."
                       :effort (plist-get policy :effort)
                       :ignored-policy-fields
                       (plist-get policy :ignored-fields)))
-               (substituted
-                (mevedel-skills--substitute-vars body arguments session skill))
                (finish (mevedel-skills--preparation-settler
                         session rules hooks callback)))
-          (cl-labels
+          (if substitution-error
+              (mevedel-skills--invoke-error
+               skill 'resource-target substitution-error
+               finish display-callback)
+            (cl-labels
               ((fail (reason message)
                  (mevedel-skills--display-event
                   display-callback
@@ -1533,7 +1601,8 @@ Allowed-tool rules apply only to the temporary preparation request."
                       (complete (plist-get injection-outcome :body)
                                 expanded decision)))
                  (fail (plist-get injection-outcome :reason)
-                       (plist-get injection-outcome :message))))))))))))
+                       (plist-get injection-outcome :message))))
+             skill session)))))))))
 
 (defun mevedel-skills--build-parent-inherited-agent (skill)
   "Build a synthetic `mevedel-agent' for SKILL with no `agent' field.

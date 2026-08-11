@@ -413,6 +413,32 @@
                  (lambda (_group _signal) 0)))
         (should (mevedel-execution--group-live-p record))))))
 
+(mevedel-deftest mevedel-execution--settle-after-kill ()
+  ,test
+  (test)
+  :doc "marks a remote outcome unknown when the group survives KILL"
+  (let ((record
+         (mevedel-execution--record-create
+          :execution-id "exec-1"
+          :termination 'stopped
+          :workdir "/ssh:user@host:/srv/project/"))
+        marked
+        finished)
+    (cl-letf (((symbol-function 'mevedel-execution--group-live-p)
+               (lambda (_record) t))
+              ((symbol-function 'mevedel-execution--mark-unknown)
+               (lambda (_record error-data)
+                 (setq marked error-data)
+                 (setf (mevedel-execution--record-termination record)
+                       'unknown)))
+              ((symbol-function 'mevedel-execution--finish-managed)
+               (lambda (_record) (setq finished t))))
+      (mevedel-execution--settle-after-kill record))
+    (should marked)
+    (should finished)
+    (should (eq 'unknown
+                (mevedel-execution--record-termination record)))))
+
 (mevedel-deftest mevedel-execution--signal-record ()
   ,test
   (test)
@@ -911,6 +937,55 @@
       (setq-default mevedel-protected-paths original-policy)
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
+
+  :doc "rejects a queued mutation when an earlier remote outcome becomes unknown"
+  (let* ((root (make-temp-file "mevedel-managed-queued-unknown-" t))
+         (session (test-mevedel-execution--session root))
+         (state (mevedel-execution--state-for-session session))
+         admissible reject result)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-execution-scheduler-submit)
+              (lambda (_scheduler _mode _start &optional admit-p rejection)
+                (setq admissible admit-p
+                      reject rejection)
+                nil)))
+          (mevedel-execution-start-bash
+           (lambda (value) (setq result value))
+           :session session :owner "main" :owner-context session
+           :command '("sh" "-c" "printf blocked")
+           :workdir root :writable-roots (list root)
+           :artifact-directory root :yield-time-ms nil)
+          (should (funcall admissible))
+          (setf (mevedel-execution--state-unknown-outcome state)
+                '(:group-id 42 :workdir "/ssh:host:/project/"))
+          (should-not (funcall admissible))
+          (funcall reject nil)
+          (should (eq 'unknown
+                      (plist-get (plist-get result :facts) :termination))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
+
+  :doc "blocks mutating execution until an unknown remote outcome is acknowledged"
+  (let* ((root (make-temp-file "mevedel-managed-unknown-" t))
+         (session (test-mevedel-execution--session root))
+         (state (mevedel-execution--state-for-session session)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-execution--state-unknown-outcome state)
+                '(:group-id 42 :workdir "/ssh:host:/project/"))
+          (should (mevedel-execution-mutation-blocked-p session))
+          (should-error
+           (mevedel-execution-start-bash
+            #'ignore :session session :owner "main"
+            :command '("sh" "-c" "printf blocked")
+            :workdir root :writable-roots (list root)
+            :artifact-directory root :yield-time-ms nil)
+           :type 'mevedel-execution-error)
+          (mevedel-execution-acknowledge-unknown session)
+          (should-not (mevedel-execution-mutation-blocked-p session)))
       (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 

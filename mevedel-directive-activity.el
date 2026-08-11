@@ -107,7 +107,8 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session--create "mevedel-structs" (&rest args))
+(declare-function mevedel-session-create
+                  "mevedel-structs" (name workspace &optional directory))
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
@@ -272,6 +273,7 @@
   "Build and return the shared-renderer transcript for DIRECTIVE ENTRIES."
   (mevedel-directive-activity--kill-transcript)
   (let ((buffer (generate-new-buffer " *mevedel-directive-inspector-data*"))
+        (workspace mevedel-directive-activity--workspace)
         (id (mevedel-directive-id directive)))
     (with-current-buffer buffer
       (org-mode)
@@ -279,9 +281,7 @@
       (setq-local gptel-response-separator "\n\n"
                   gptel-prompt-prefix-alist '((org-mode . "*** "))
                   mevedel--session
-                  (mevedel-session--create
-                   :name "directive-inspector"
-                   :workspace mevedel-directive-activity--workspace))
+                  (mevedel-session-create "directive-inspector" workspace))
       (dolist (item entries)
         (let* ((kind (plist-get item :kind))
                (entry (plist-get item :entry))

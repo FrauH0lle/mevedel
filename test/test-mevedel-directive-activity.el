@@ -133,6 +133,8 @@
             (should (string-match-p "PLAN.+On" (buffer-string)))
             (should (buffer-live-p
                      mevedel-directive-activity--transcript-buffer))
+            (with-current-buffer mevedel-directive-activity--transcript-buffer
+              (should (mevedel-session-execution-target mevedel--session)))
             (goto-char (point-min))
             (search-forward "◆ ")
             (mevedel-view-toggle-section)

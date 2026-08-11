@@ -89,6 +89,21 @@
                   "mevedel-directive-plan"
                   (directive action prompt-fn callback))
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-acknowledge-unknown
+                  "mevedel-execution" (session))
+(declare-function mevedel-execution-unknown-outcome
+                  "mevedel-execution" (session))
+
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-probe
+                  "mevedel-execution-target"
+                  (target &optional refresh sandbox-mode))
+(declare-function mevedel-execution-target-readiness-message
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
 		  (event &optional session workspace &rest extra))
@@ -288,6 +303,8 @@
 		  (name workspace &optional working-directory))
 (declare-function mevedel-session-enqueue-pending-reminder "mevedel-structs"
                   (session body))
+(declare-function mevedel-session-execution-target
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-reminders "mevedel-structs"
                   (cl-x) t)
@@ -519,6 +536,61 @@ workspace."
 (defvar-local mevedel--session-start-hooks-pending nil
   "Non-nil while asynchronous SessionStart hooks are still running.")
 
+(defun mevedel--probe-session-target (session &optional refresh)
+  "Probe SESSION's remote execution target.
+
+When REFRESH is non-nil, discard the live readiness cache first.  Local
+sessions keep their existing startup behavior and return nil."
+  (let ((target (mevedel-session-execution-target session)))
+    (when (and target
+               (progn
+                 (require 'mevedel-execution-target)
+                 (mevedel-execution-target-remote-p target)))
+      (mevedel-execution-target-probe
+       target refresh (mevedel-session-sandbox-mode session)))))
+
+;;;###autoload
+(defun mevedel-retry-target-readiness ()
+  "Force a fresh readiness probe for the current remote session."
+  (interactive)
+  (let* ((data-buffer
+          (cond
+           ((bound-and-true-p mevedel--session) (current-buffer))
+           ((and (boundp 'mevedel--data-buffer)
+                 (buffer-live-p mevedel--data-buffer))
+            mevedel--data-buffer)
+           (t (mevedel--active-chat-buffer))))
+         (session (and (buffer-live-p data-buffer)
+                       (buffer-local-value 'mevedel--session data-buffer)))
+         (target (and session (mevedel-session-execution-target session))))
+    (unless session
+      (user-error "No mevedel session here"))
+    (unless (and target
+                 (progn
+                   (require 'mevedel-execution-target)
+                   (mevedel-execution-target-remote-p target)))
+      (user-error "Current mevedel session is local"))
+    (let ((readiness (mevedel--probe-session-target session t)))
+      (when (eq 'ready (plist-get readiness :status))
+        (require 'mevedel-execution)
+        (when (mevedel-execution-unknown-outcome session)
+          (unless
+              (yes-or-no-p
+               (concat
+                "The target is reachable, but a previous remote process "
+                "may still be running. Acknowledge that outcome and allow "
+                "new mutating execution? "))
+            (user-error "Unknown remote execution remains unacknowledged"))
+          (mevedel-execution-acknowledge-unknown session)))
+      (when-let* ((view-buffer
+                   (buffer-local-value 'mevedel--view-buffer data-buffer))
+                  ((buffer-live-p view-buffer)))
+        (with-current-buffer view-buffer
+          (force-mode-line-update t)))
+      (message "mevedel: execution target %s"
+               (mevedel-execution-target-readiness-message target))
+      readiness)))
+
 (defun mevedel--run-session-start-hooks (source)
   "Run session-start hooks for the current buffer with SOURCE."
   (when (bound-and-true-p mevedel--session)
@@ -579,7 +651,8 @@ workspace."
     (unless (member body (mevedel-session-pending-reminders session))
       (mevedel-session-enqueue-pending-reminder session body))))
 
-(defun mevedel--chat-buffer-init-common (buf workspace source)
+(defun mevedel--chat-buffer-init-common (buf workspace source
+                                             &optional inspection-p)
   "Set up BUF for WORKSPACE and start its lifecycle with SOURCE.
 
 Caller must already have set BUF's buffer-local `mevedel--session'.
@@ -589,7 +662,9 @@ view buffer.
 
 Both `mevedel--chat-buffer-setup' (fresh path) and restore paths
 \(`mevedel-session-persistence-restore') call this after planting the
-session struct. SOURCE is \"startup\", \"resume\", or \"fork\"."
+session struct. SOURCE is \"startup\", \"resume\", or \"fork\".  When
+INSPECTION-P is non-nil, skip lifecycle hooks because the client has no
+mutation lease."
   (with-current-buffer buf
     (when (derived-mode-p 'org-mode)
       (mevedel--chat-buffer-disable-org-element-cache))
@@ -624,6 +699,7 @@ session struct. SOURCE is \"startup\", \"resume\", or \"fork\"."
     (setq-local default-directory
                 (or (mevedel-session-working-directory mevedel--session)
                     (mevedel-workspace-root workspace)))
+    (mevedel--probe-session-target mevedel--session)
     (require 'mevedel-permissions)
     (mevedel-permission-validate-persistent-stores workspace)
     ;; Make workspace-additional-roots buffer-local for session-specific
@@ -645,8 +721,9 @@ session struct. SOURCE is \"startup\", \"resume\", or \"fork\"."
     ;; Release the session lock when the chat buffer is killed.
     (add-hook 'kill-buffer-hook
               #'mevedel-session-persistence--release-on-kill nil t)
-    (add-hook 'kill-buffer-hook
-              #'mevedel--run-session-end-hooks nil t)
+    (unless inspection-p
+      (add-hook 'kill-buffer-hook
+                #'mevedel--run-session-end-hooks nil t))
     (mevedel-chat-install-request-hooks)
     (add-hook 'gptel-post-response-functions
               #'mevedel-plan-mode--post-response t t)
@@ -671,7 +748,8 @@ session struct. SOURCE is \"startup\", \"resume\", or \"fork\"."
       (mevedel-plan-mode-restore-pending-approval mevedel--session buf))
     (when (fboundp 'mevedel-directive-plan-restore-pending)
       (mevedel-directive-plan-restore-pending mevedel--session buf))
-    (mevedel--run-session-start-hooks source)))
+    (unless inspection-p
+      (mevedel--run-session-start-hooks source))))
 
 (defun mevedel--chat-buffer-setup (buf workspace session-name &optional working-directory)
   "Set up chat buffer BUF in WORKSPACE with SESSION-NAME and WORKING-DIRECTORY."
@@ -1960,7 +2038,9 @@ BUF defaults to the current buffer if not specified."
         (when (bound-and-true-p mevedel--current-request)
           (mevedel-request-end))
         (when (and (bound-and-true-p mevedel--session)
-                   (mevedel-session-workspace mevedel--session))
+                   (mevedel-session-workspace mevedel--session)
+                   (not (bound-and-true-p
+                         mevedel-session--read-only-mode)))
           (require 'mevedel-session-persistence)
           (condition-case err
               (mevedel-session-persistence-save mevedel--session chat-buffer)

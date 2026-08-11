@@ -290,7 +290,7 @@ Binds `data-buf' and `view-buf'."
 
 (mevedel-deftest mevedel-view-history--persistence
   (:doc "round-trips visible input and its exact mixed mention bindings"
-   :doc "a write failure retains the live bound entry and disables later saves")
+   :doc "a write failure retains the live bound entry and retries later saves")
   (mevedel-view-history-test--with-temp-dir workspace-dir
     (mevedel-view-history-test--with-temp-dir session-dir
       (let* ((session (mevedel-view-history-test--session
@@ -436,7 +436,11 @@ Binds `data-buf' and `view-buf'."
           (should-not (mevedel-view-history-save (current-buffer))))
         (should mevedel-view-history--save-failed)
         (should (equal-including-properties
-                 bound-input (car (mevedel-view-history--entries))))))))
+                 bound-input (car (mevedel-view-history--entries))))
+        (mevedel-view-history-save (current-buffer))
+        (should-not mevedel-view-history--save-failed)
+        (should (file-exists-p
+                 (mevedel-view-history-test--path workspace-dir)))))))
 
 (mevedel-deftest mevedel-view-history--persistence-merge
   (:doc "saving one view merges existing workspace history from other views"

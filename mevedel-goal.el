@@ -28,11 +28,17 @@
                                           prompt-submission))
 
 ;; `mevedel-plan'
-(declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
+(declare-function mevedel-plan-artifact-path-p "mevedel-plan" (path))
+(declare-function mevedel-plan-read-artifact "mevedel-plan"
+                  (session artifact))
 (declare-function mevedel-plan-resource-address "mevedel-plan"
                   (relative-path))
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-artifact-present-p
+                  "mevedel-session-persistence" (session logical))
+(declare-function mevedel-session-persistence-assert-mutation-authority
+                  "mevedel-session-persistence" (session &optional buffer))
 (declare-function mevedel-session-persistence-save
                   "mevedel-session-persistence" (session buffer))
 
@@ -91,6 +97,13 @@
 ;;
 ;;; Durable record
 
+(defun mevedel-goal--assert-mutation-authority (session &optional buffer)
+  "Require SESSION mutation authority before changing Goal state.
+BUFFER defaults to the current buffer."
+  (require 'mevedel-session-persistence)
+  (mevedel-session-persistence-assert-mutation-authority
+   session (or buffer (current-buffer))))
+
 (defun mevedel-goal-new-id ()
   "Return a fresh versioned Goal identifier."
   (format "%s-%06x" (format-time-string "%Y%m%d-%H%M%S")
@@ -105,13 +118,9 @@
 (defun mevedel-goal--valid-plan-reference-p (reference)
   "Return non-nil when REFERENCE is a normalized relative path."
   (or (null reference)
-      (and (stringp reference)
-           (not (string-empty-p reference))
-           (not (file-name-absolute-p reference))
-           (equal reference
-                  (file-relative-name (expand-file-name reference "/") "/"))
-           (not (string-prefix-p "../" reference))
-           (not (equal reference "..")))))
+      (progn
+        (require 'mevedel-plan)
+        (mevedel-plan-artifact-path-p reference))))
 
 (defun mevedel-goal-create (objective &optional session plan-reference id)
   "Create and persist a lifecycle-neutral Goal for OBJECTIVE.
@@ -127,6 +136,7 @@ session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
                    (and (integerp mevedel-goal-token-budget)
                         (> mevedel-goal-token-budget 0))))
     (error "Goal token budget must be a positive integer or nil"))
+  (mevedel-goal--assert-mutation-authority session)
   (let* ((now (format-time-string "%FT%T%z"))
          (goal (mevedel-goal--create
                 :id (or id (mevedel-goal-new-id))
@@ -150,6 +160,7 @@ session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
   "Return the durable Goal identified by ID and PLAN-REFERENCE in SESSION.
 Create it for OBJECTIVE when absent.  A matching Goal restored as paused is
 reactivated without scheduling because its caller owns the prepared kickoff."
+  (mevedel-goal--assert-mutation-authority session)
   (let ((current (mevedel-session-goal session)))
     (cond
      ((and current
@@ -228,23 +239,26 @@ never discloses session storage paths."
     (unless (mevedel-goal--valid-plan-reference-p reference)
       (mevedel-goal--pause-for-integrity
        goal session "Accepted-plan reference is invalid"))
-    (let* ((save-path (mevedel-session-save-path session))
-           (metadata (mevedel-session-plan-metadata session))
+    (let* ((metadata (mevedel-session-plan-metadata session))
            (accepted (plist-get metadata :accepted-path))
            (expected-hash (plist-get metadata :accepted-hash))
-           (path (and save-path (expand-file-name reference save-path))))
-      (unless (and save-path
-                   (equal reference accepted)
-                   (stringp expected-hash)
-                   path
-                   (file-in-directory-p path save-path)
-                   (file-regular-p path))
+           (artifact (list :path reference :hash expected-hash)))
+      (unless (and (equal reference accepted)
+                   (stringp expected-hash))
         (mevedel-goal--pause-for-integrity
          goal session
          "Accepted-plan artifact is missing or no longer owned by this session"))
-      (with-temp-buffer
-        (insert-file-contents path)
-        (unless (equal expected-hash (mevedel-plan-hash (buffer-string)))
+      (require 'mevedel-session-persistence)
+      (unless (mevedel-session-persistence-artifact-present-p
+               session reference)
+        (mevedel-goal--pause-for-integrity
+         goal session
+         "Accepted-plan artifact is missing or no longer owned by this session"))
+      (condition-case nil
+          (progn
+            (require 'mevedel-plan)
+            (mevedel-plan-read-artifact session artifact))
+        (error
           (mevedel-goal--pause-for-integrity
            goal session
            "Accepted-plan artifact no longer matches its accepted hash")))
@@ -363,6 +377,7 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
   "Pause the current Goal without interrupting an in-flight request."
   (interactive)
   (let ((goal (mevedel-goal--current)))
+    (mevedel-goal--assert-mutation-authority mevedel--session)
     (unless (eq (mevedel-goal-status goal) 'active)
       (user-error "Goal is not active"))
     (setf (mevedel-goal-status goal) 'paused
@@ -375,6 +390,7 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
   "Resume the current Goal, optionally with ordinary STEERING text."
   (interactive)
   (let ((goal (mevedel-goal--current)))
+    (mevedel-goal--assert-mutation-authority mevedel--session)
     (when (eq (mevedel-goal-status goal) 'complete)
       (user-error "Completed Goal cannot be resumed"))
     (when (eq (mevedel-goal-status goal) 'budget-limited)
@@ -415,6 +431,7 @@ The string `none' removes the limit."
          (old (mevedel-goal-token-budget goal))
          (used (mevedel-goal-tokens-used goal))
          reactivated)
+    (mevedel-goal--assert-mutation-authority mevedel--session)
     (setf (mevedel-goal-token-budget goal) budget)
     (cond
      ((and budget (>= used budget)
@@ -444,6 +461,7 @@ The string `none' removes the limit."
   "Clear the current Goal while retaining transcript and artifacts."
   (interactive)
   (mevedel-goal--current)
+  (mevedel-goal--assert-mutation-authority mevedel--session)
   (setf (mevedel-session-goal mevedel--session) nil)
   (setq mevedel-goal--transient-retries 0)
   (mevedel-goal--persist mevedel--session (current-buffer))
@@ -455,6 +473,7 @@ The string `none' removes the limit."
   (setq objective (mevedel-goal--validate-objective objective))
   (let* ((session mevedel--session)
          (goal (mevedel-goal--current)))
+    (mevedel-goal--assert-mutation-authority session)
     (setf (mevedel-goal-id goal) (mevedel-goal-new-id)
           (mevedel-goal-objective goal) objective)
     (mevedel-goal--touch goal)

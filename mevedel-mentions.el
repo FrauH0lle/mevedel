@@ -42,6 +42,10 @@
 (declare-function mevedel-agent-name "mevedel-agents" (agent))
 (defvar mevedel-agent--registry)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-file-state'
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind &optional offset limit))
@@ -78,8 +82,24 @@
 (declare-function mevedel--restore-file-instructions
                   "mevedel-persistence" (file &optional message))
 
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-logical-path-p
+                  "mevedel-session-durability" (path))
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-artifact-present-p
+                  "mevedel-session-persistence" (session logical))
+(declare-function mevedel-session-persistence-read-artifact
+                  "mevedel-session-persistence"
+                  (session logical &optional committed-only))
+
 ;; `mevedel-structs'
+(declare-function mevedel-request-p "mevedel-structs" (cl-x))
+(declare-function mevedel-request-push-canceller
+                  "mevedel-structs" (request canceller))
+(declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-mentions-shown "mevedel-structs" (session))
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (session))
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (session))
@@ -96,8 +116,11 @@
 (declare-function mevedel-tool-fs--media-mime-type
                   "mevedel-tool-fs" (filename))
 (declare-function mevedel-tool-fs--pdf-media-p "mevedel-tool-fs" (filename))
+(declare-function mevedel-tool-fs--read-session-artifact
+                  "mevedel-tool-fs" (session logical path offset limit))
 (declare-function mevedel-tool-fs--slurp-file-contents
-                  "mevedel-tool-fs" (path &optional offset limit))
+                  "mevedel-tool-fs"
+                  (path &optional offset limit display-path))
 (defvar mevedel-tool-fs--media-max-bytes)
 
 ;; `mevedel-tool-registry'
@@ -309,7 +332,7 @@ Each handler is called with a plist containing:
 Handlers return a plist with these keys:
   :placeholder  inline replacement text for the raw mention
   :reminder     content to emit as a <system-reminder> block, or nil
-  :media-context (PATH MIME) context attachment for gptel media, or nil
+  :media-context (PATH MIME &optional BYTES) gptel media attachment, or nil
   :key          (KIND . KEY) identifier used for deduplication
   :hash         content hash used for deduplication, or nil
   :warning      nonblocking user-facing warning text, or nil
@@ -578,11 +601,51 @@ boundary checks."
          (and (gptel--model-capable-p 'media)
               (gptel--model-mime-capable-p mime)))))
 
-(defun mevedel-mentions--add-media-context (path mime)
-  "Add PATH with MIME to this prompt buffer's gptel media context."
-  (unless (local-variable-p 'gptel-context)
-    (setq-local gptel-context (copy-sequence gptel-context)))
-  (cl-pushnew (list path :mime mime) gptel-context :test #'equal)
+(defun mevedel-mentions--add-media-context (path mime &optional bytes)
+  "Add PATH with MIME to this prompt buffer's gptel media context.
+When BYTES is non-nil, stage those verified bytes locally until request
+teardown instead of letting gptel read PATH."
+  (if (not bytes)
+      (progn
+        (unless (local-variable-p 'gptel-context)
+          (setq-local gptel-context (copy-sequence gptel-context)))
+        (cl-pushnew (list path :mime mime) gptel-context :test #'equal))
+    (let ((request (bound-and-true-p mevedel--current-request)))
+      (require 'mevedel-structs)
+      (unless (and request (mevedel-request-p request))
+        (error "Cannot stage session media without an active request"))
+      (let* ((owner (current-buffer))
+             (suffix (when-let ((extension (file-name-extension path)))
+                       (concat "." extension)))
+             (temporary
+              (make-temp-file "mevedel-mention-media-" nil suffix))
+             (entry (list temporary :mime mime))
+             registered)
+        (unwind-protect
+            (progn
+              (with-temp-buffer
+                (set-buffer-multibyte nil)
+                (insert bytes)
+                (let ((coding-system-for-write 'no-conversion))
+                  (write-region (point-min) (point-max)
+                                temporary nil 'silent)))
+              (unless (local-variable-p 'gptel-context)
+                (setq-local gptel-context (copy-sequence gptel-context)))
+              (cl-pushnew entry gptel-context :test #'equal)
+              (mevedel-request-push-canceller
+               request
+               (lambda ()
+                 (unwind-protect
+                     (when (buffer-live-p owner)
+                       (with-current-buffer owner
+                         (setq gptel-context (delq entry gptel-context))))
+                   (when (file-exists-p temporary)
+                     (delete-file temporary)))))
+              (setq registered t))
+          (unless registered
+            (setq gptel-context (delq entry gptel-context))
+            (when (file-exists-p temporary)
+              (delete-file temporary)))))))
   (unless gptel-use-context
     (setq-local gptel-use-context 'system)))
 
@@ -623,6 +686,24 @@ optional strings from the `#L<start>[-<end>]' suffix."
          (expanded (mevedel-resource-normalize-file-path
                     (or bound-path path)))
          (session (plist-get info :session))
+         (artifact-logical
+          (when-let* ((target (and session
+                                   (mevedel-session-execution-target session)))
+                      ((mevedel-execution-target-remote-p target))
+                      (save-path (mevedel-session-save-path session)))
+            (let ((root (file-name-as-directory
+                         (expand-file-name save-path))))
+              (when (string-prefix-p root expanded)
+                (substring expanded (length root))))))
+         (artifact-present
+          (when artifact-logical
+            (require 'mevedel-session-durability)
+            (and (mevedel-session-durability-logical-path-p
+                  artifact-logical)
+                 (progn
+                   (require 'mevedel-session-persistence)
+                   (mevedel-session-persistence-artifact-present-p
+                    session artifact-logical)))))
          (workspace-root (plist-get info :workspace-root))
          (chat-buffer (or (plist-get info :chat-buffer) (current-buffer)))
          (permission-context
@@ -663,16 +744,20 @@ to the user."
                        (format "file @file:%s is unavailable: %s"
                                display-path msg))))))
     (cond
-     ((not (file-exists-p expanded))
+     ((if artifact-logical
+          (not artifact-present)
+        (not (file-exists-p expanded)))
       (funcall deny-placeholder "does not exist"))
-     ((not (file-readable-p expanded))
+     ((and (not artifact-logical)
+           (not (file-readable-p expanded)))
       (funcall deny-placeholder "unreadable"))
      ((not (eq 'allow
                (mevedel-check-permission
                 "Read"
                 :normalized-context permission-context)))
       (funcall deny-placeholder "permission denied"))
-     ((file-directory-p expanded)
+     ((and (not artifact-logical)
+           (file-directory-p expanded))
       (condition-case err
           (let* ((listing (mevedel-tool-fs--list-directory
                            expanded
@@ -704,36 +789,53 @@ gitignore-filtered):\n\n```\n%s\n```%s"
         (error
          (funcall deny-placeholder (error-message-string err)))))
      ((mevedel-tool-fs--media-mime-type expanded)
-      (let ((mime (mevedel-tool-fs--media-mime-type expanded)))
+      (let ((mime (mevedel-tool-fs--media-mime-type expanded))
+            artifact-bytes)
         (cond
          ((or offset limit)
           (funcall deny-placeholder "line ranges are not supported for media"))
          ((not (mevedel-mentions--media-supported-p mime))
           (funcall deny-placeholder
                    (format "model does not support %s media" mime)))
-         ((> (file-attribute-size (file-attributes expanded))
+         ((> (if artifact-logical
+                 (string-bytes
+                  (setq artifact-bytes
+                        (mevedel-session-persistence-read-artifact
+                         session artifact-logical)))
+               (file-attribute-size (file-attributes expanded)))
              mevedel-tool-fs--media-max-bytes)
           (funcall deny-placeholder
                    "media file is too large"
-                   (when (mevedel-tool-fs--pdf-media-p expanded)
+                   (when (and (not artifact-logical)
+                              (mevedel-tool-fs--pdf-media-p expanded))
                      (mevedel-tool-fs--format-large-pdf-reminder
                       expanded))))
          (t
           (let ((reminder
-                 (and (mevedel-tool-fs--pdf-media-p expanded)
+                 (and (not artifact-logical)
+                      (mevedel-tool-fs--pdf-media-p expanded)
                       (mevedel-tool-fs--large-pdf-p expanded)
                       (mevedel-tool-fs--format-large-pdf-reminder
                        expanded))))
             (list :placeholder
                   (format "[file:%s -- media attached]" display-path)
                   :reminder reminder
-                  :media-context (list expanded mime)
+                  :media-context
+                  (if artifact-logical
+                      (list expanded mime artifact-bytes)
+                    (list expanded mime))
                   :key dedup-key
-                  :hash (mevedel-mentions--file-content-hash expanded)))))))
+                  :hash (if artifact-logical
+                            (secure-hash 'sha1 artifact-bytes)
+                          (mevedel-mentions--file-content-hash expanded))))))))
      (t
       (condition-case err
-          (let* ((content (mevedel-tool-fs--slurp-file-contents
-                           expanded offset limit))
+          (let* ((content
+                  (if artifact-logical
+                      (mevedel-tool-fs--read-session-artifact
+                       session artifact-logical expanded offset limit)
+                    (mevedel-tool-fs--slurp-file-contents
+                     expanded offset limit)))
                  (hash (secure-hash 'sha1 content))
                  (range-phrase
                   (cond ((and start-line end-line)
@@ -925,9 +1027,14 @@ must explicitly commit the result after accepting every media context."
     (let ((expansion
            (mevedel-mentions--expand-buffer
             session chat-buffer
-            (mevedel-transcript-prompt-transform-start))))
-      (dolist (context (plist-get expansion :media-contexts))
-        (apply #'mevedel-mentions--add-media-context context))
+            (mevedel-transcript-prompt-transform-start)))
+          (request (and chat-buffer
+                        (buffer-live-p chat-buffer)
+                        (buffer-local-value
+                         'mevedel--current-request chat-buffer))))
+      (let ((mevedel--current-request request))
+        (dolist (context (plist-get expansion :media-contexts))
+          (apply #'mevedel-mentions--add-media-context context)))
       (mevedel-mentions--commit-expansion session expansion))))
 
 

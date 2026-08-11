@@ -43,6 +43,8 @@ Key features:
   scanned from user / project / bundled directories.
 - Persistent sessions per workspace with resume, true in-place Rewind,
   Conversation and Worktree Forks, and workspace input history.
+- SSH, Docker, and Podman project workspaces through Emacs TRAMP, with tools,
+  processes, hooks, sandboxing, and session state kept on one execution target.
 - Interactive inline diff previews with approve/reject/edit workflow directly in
   the chat view.
 - Unified permission system covering Bash, file paths, web domains, and
@@ -71,6 +73,11 @@ Key features:
 - Optional: Poppler (`pdftoppm`) for rendering selected PDF pages with `Read`
 - Optional: ImageMagick (`magick` or `convert`) for image/PDF resize and
   compression options in `Read`
+
+Remote Linux targets require `rg`, `bash`, and `setsid`.  Git is required only
+for Git-backed workflows, Bubblewrap follows the configured sandbox mode, and
+media converters remain optional.  Mevedel probes these capabilities but does
+not install target dependencies.
 
 ## Installation and configuration
 
@@ -125,6 +132,7 @@ inspection.
 1. Configure a gptel backend.
 2. Install the package and run `M-x mevedel-install`.
 3. Open a project and run `M-x mevedel` to create or resume a chat session.
+   For remote work: visit remote/container directory → `M-x mevedel`.
 4. Type in the composer at the bottom of the view; use `/help` for local slash
    commands.
 5. Run `/init` or `M-x mevedel-init` to bootstrap or improve project guidance.
@@ -703,7 +711,8 @@ commands, web fetches, sub-agent spawns. Permission rules live on the unified
 Precedence: specifier rules outrank generic; within a group `deny > ask >
 allow`. `mevedel-protected-paths` maps globs to `read-only` or `inaccessible`.
 The defaults keep `.git/` readable but immutable and hide `~/.ssh/` and
-`~/.gnupg/`; exact resource authority is still required even when the
+`~/.gnupg/` plus common AWS, Azure, Google Cloud, and Kubernetes credential
+directories; exact resource authority is still required even when the
 permission mode would otherwise allow an operation.
 
 **Permission modes** (`mevedel-permission-mode`):

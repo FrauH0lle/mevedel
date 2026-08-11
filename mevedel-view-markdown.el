@@ -10,7 +10,26 @@
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-expand-path
+                  "mevedel-execution-target" (target path &optional directory))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-logical-path-p
+                  "mevedel-session-durability" (path))
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-artifact-present-p
+                  "mevedel-session-persistence" (session logical))
+(declare-function mevedel-session-persistence-find-artifact-noselect
+                  "mevedel-session-persistence"
+                  (session logical &optional inspection))
+
 ;; `mevedel-structs'
+(declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
@@ -60,29 +79,70 @@ extension.  Guards against matching URLs."
 
 (defun mevedel-view--resolve-path (raw)
   "Return an absolute path for RAW, or nil when no sensible anchor exists.
-Absolute RAW is returned untouched.  Relative RAW is resolved against the
-workspace root of the session tied to the current data buffer."
-  (cond
-   ((not (stringp raw)) nil)
-   ((file-name-absolute-p raw) raw)
-   (t (when-let* ((session (and (boundp 'mevedel--session) mevedel--session))
-                  (workspace (ignore-errors
-                               (mevedel-session-workspace session)))
-                  (root (ignore-errors (mevedel-workspace-root workspace))))
-        (expand-file-name raw root)))))
+Resolve RAW in the execution target of the session tied to the current data
+buffer."
+  (when (stringp raw)
+    (if-let* ((session (and (boundp 'mevedel--session) mevedel--session))
+              (target (ignore-errors
+                        (mevedel-session-execution-target session))))
+        (ignore-errors (mevedel-execution-target-expand-path target raw))
+      (if (file-name-absolute-p raw)
+          raw
+        (when-let* ((session (and (boundp 'mevedel--session)
+                                  mevedel--session))
+                    (workspace (ignore-errors
+                                 (mevedel-session-workspace session)))
+                    (root (ignore-errors
+                            (mevedel-workspace-root workspace))))
+          (expand-file-name raw root))))))
+
+(defun mevedel-view--path-target (path)
+  "Return PATH's link target, or nil when it is not available.
+
+An ordinary existing file returns t.  An artifact in the active remote
+session returns `(SESSION . LOGICAL)' only when that logical path is staged
+or committed; fixed session-cache existence is ignored."
+  (when (stringp path)
+    (let* ((session (bound-and-true-p mevedel--session))
+           (target (and session
+                        (mevedel-session-execution-target session)))
+           (save-path (and session
+                           target
+                           (mevedel-execution-target-remote-p target)
+                           (mevedel-session-save-path session)))
+           (root (and save-path
+                      (file-name-as-directory
+                       (expand-file-name save-path))))
+           (expanded (expand-file-name path)))
+      (if (and root (string-prefix-p root expanded))
+          (let ((logical (substring expanded (length root))))
+            (require 'mevedel-session-durability)
+            (when (and (mevedel-session-durability-logical-path-p logical)
+                       (mevedel-session-persistence-artifact-present-p
+                        session logical))
+              (cons session logical)))
+        (and (file-exists-p path) t)))))
 
 (defun mevedel-view--linkify-path-action (button)
-  "Open the file referenced by BUTTON via `find-file'."
+  "Open the file or published session artifact referenced by BUTTON."
   (let ((path (button-get button 'mevedel-view-path))
-        (line (button-get button 'mevedel-view-line)))
-    (when (and path (file-exists-p path))
-      (let ((buffer (find-file-other-window path)))
-        (when (and line (integerp line) (> line 0))
-          (with-current-buffer buffer
-            (goto-char (point-min))
-            (forward-line (1- line))
-            (when-let* ((window (get-buffer-window buffer t)))
-              (set-window-point window (point)))))))))
+        (line (button-get button 'mevedel-view-line))
+        (session (button-get button 'mevedel-view-session))
+        (logical (button-get button 'mevedel-view-session-artifact)))
+    (when-let ((buffer
+                (cond
+                 ((and session logical)
+                  (pop-to-buffer
+                   (mevedel-session-persistence-find-artifact-noselect
+                    session logical t)))
+                 ((and path (file-exists-p path))
+                  (find-file-other-window path)))))
+      (when (and line (integerp line) (> line 0))
+        (with-current-buffer buffer
+          (goto-char (point-min))
+          (forward-line (1- line))
+          (when-let* ((window (get-buffer-window buffer t)))
+            (set-window-point window (point))))))))
 
 (defconst mevedel-view--link-action-properties
   '(keymap nil
@@ -143,15 +203,18 @@ workspace root of the session tied to the current data buffer."
 
 (defun mevedel-view--make-file-button (start end path line)
   "Make START..END a button visiting PATH at optional LINE."
-  (make-text-button
-   start end
-   'action #'mevedel-view--linkify-path-action
-   'mevedel-view-path path
-   'mevedel-view-line line
-   'follow-link t
-   'help-echo (if line
-                  (format "Visit %s:%d" path line)
-                (format "Visit %s" path))))
+  (let ((target (mevedel-view--path-target path)))
+    (make-text-button
+     start end
+     'action #'mevedel-view--linkify-path-action
+     'mevedel-view-path path
+     'mevedel-view-line line
+     'mevedel-view-session (car-safe target)
+     'mevedel-view-session-artifact (cdr-safe target)
+     'follow-link t
+     'help-echo (if line
+                    (format "Visit %s:%d" path line)
+                  (format "Visit %s" path)))))
 
 (defun mevedel-view--markdown-code-blocks (start end)
   "Return fenced Markdown code blocks between START and END."
@@ -458,7 +521,7 @@ not treated as delimiters."
                mevedel-view--image-extensions)))
 
 (defun mevedel-view--local-link-target (url)
-  "Resolve URL or path string to an existing local file path."
+  "Resolve URL or path string to an available file path."
   (when (and (stringp url)
              (not (string-empty-p url))
              (not (string-match-p "\\`https?://" url)))
@@ -471,7 +534,7 @@ not treated as delimiters."
                      (substring without-fragment 7))
                   without-fragment))
            (resolved (mevedel-view--resolve-path raw)))
-      (and resolved (file-exists-p resolved) resolved))))
+      (and resolved (mevedel-view--path-target resolved) resolved))))
 
 (defun mevedel-view--local-link-line (url)
   "Return URL's trailing #L line number, or nil."
@@ -573,7 +636,7 @@ not treated as delimiters."
                            (match-string-no-properties 2))))
                (resolved (mevedel-view--resolve-path raw)))
           (push (cons mb me) ranges)
-          (when (and resolved (file-exists-p resolved)
+          (when (and resolved (mevedel-view--path-target resolved)
                      (not (mevedel-view--linkify-exempt-p mb)))
             (mevedel-view--make-file-button mb me resolved line)))))
     (nreverse ranges)))
@@ -672,7 +735,7 @@ file.el#L12."
                               (mevedel-view--path-candidate-p raw)
                               (mevedel-view--path-context-candidate-p mb raw)
                               (mevedel-view--resolve-path raw))))
-          (when (and resolved (file-exists-p resolved))
+          (when (and resolved (mevedel-view--path-target resolved))
             (mevedel-view--linkify-path-reference
              mb me suffix-start suffix-end resolved)))))))
 

@@ -43,6 +43,12 @@
                   "mevedel-execution" (session))
 (defvar mevedel-execution-state-change-hook)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-label
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-native-root
+                  "mevedel-execution-target" (cl-x) t)
+
 ;; `mevedel-executions-list'
 (declare-function mevedel-executions-list-open
                   "mevedel-executions-list" (&optional context))
@@ -67,10 +73,16 @@
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
 
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-status
+                  "mevedel-session-durability" (session))
+
 ;; `mevedel-structs'
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-state-label "mevedel-structs"
                   (&optional buffer))
+(declare-function mevedel-session-execution-target
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
@@ -183,6 +195,9 @@
 
 ;; `org'
 (declare-function org-mode "ext:org" ())
+
+;; `tramp'
+(defvar tramp-current-connection)
 
 
 ;;
@@ -787,11 +802,28 @@ Kills the associated view buffer."
            (session (with-current-buffer data-buffer
                       (and (boundp 'mevedel--session) mevedel--session)))
            (workspace (and session (mevedel-session-workspace session)))
+           (target (and session
+                        (mevedel-session-execution-target session)))
+           (target-label
+            (and target
+                 (progn
+                   (require 'mevedel-execution-target)
+                   (mevedel-execution-target-label target))))
+           (durability
+            (and session workspace
+                 (progn
+                   (require 'mevedel-session-durability)
+                   (mevedel-session-durability-status session))))
+           (pending-publication
+            (plist-get durability :pending-publication))
+           (lease-state (plist-get durability :lease-state))
            (session-name (or (and session (mevedel-session-name session))
                              "unknown"))
            (root (abbreviate-file-name
                   (file-name-as-directory
-                   (or (and workspace (mevedel-workspace-root workspace))
+                   (or (and target
+                            (mevedel-execution-target-native-root target))
+                       (and workspace (mevedel-workspace-root workspace))
                        (with-current-buffer data-buffer default-directory)))))
            (permission-label
             (car (mevedel-view--permission-mode-display
@@ -820,7 +852,8 @@ Kills the associated view buffer."
                           (if (= tool-count 1) "" "s")))
            (width (mevedel-view--status-strip-width))
            (cache-key
-            (list data-buffer session-name root mode scope state phase-model
+            (list data-buffer session-name root target-label
+                  pending-publication lease-state mode scope state phase-model
                   (and goal t) preset-name tools width (display-graphic-p))))
       (if (equal cache-key mevedel-view--status-strip-cache-key)
           mevedel-view--status-strip-cache-value
@@ -829,6 +862,14 @@ Kills the associated view buffer."
                  #'identity
                  (delq nil
                        (list
+                        (and target-label
+                             (mevedel-view--status-strip-button
+                              target-label 'top "Open session cockpit"))
+                        (and pending-publication
+                             (propertize "publication pending" 'face 'error))
+                        (and (memq lease-state '(foreign expired lost))
+                             (propertize (format "lease %s" lease-state)
+                                         'face 'warning))
                         (mevedel-view--status-strip-button
                          mode 'mode "Open mode cockpit")
                         (and scope
@@ -914,21 +955,28 @@ refresh; a full request upgrades a pending incremental refresh."
     (with-current-buffer view-buffer
       (let ((kind mevedel-view--pending-render-kind)
             (data-buffer mevedel-view--pending-render-data-buffer))
-        (setq mevedel-view--render-timer nil
-              mevedel-view--pending-render-kind nil
-              mevedel-view--pending-render-data-buffer nil)
-        (condition-case _
-            (if (mevedel-view-historical-segment-p)
-                (progn
-                  (mevedel-view--render-status data-buffer)
-                  (mevedel-view--interaction-rebuild)
-                  (mevedel-view--ensure-request-progress data-buffer))
-              (pcase kind
-                ('full (mevedel-view--full-rerender))
-                ('incremental
-                 (when (buffer-live-p data-buffer)
-                   (mevedel-view--render-stream-update data-buffer)))))
-          (error nil))))))
+        (if (bound-and-true-p tramp-current-connection)
+            (setq mevedel-view--render-timer
+                  (run-at-time
+                   (max 0.1 mevedel-view-rerender-debounce) nil
+                   #'mevedel-view--flush-scheduled-render view-buffer))
+          (setq mevedel-view--render-timer nil
+                mevedel-view--pending-render-kind nil
+                mevedel-view--pending-render-data-buffer nil)
+          (condition-case err
+              (if (mevedel-view-historical-segment-p)
+                  (progn
+                    (mevedel-view--render-status data-buffer)
+                    (mevedel-view--interaction-rebuild)
+                    (mevedel-view--ensure-request-progress data-buffer))
+                (pcase kind
+                  ('full (mevedel-view--full-rerender))
+                  ('incremental
+                   (when (buffer-live-p data-buffer)
+                     (mevedel-view--render-stream-update data-buffer)))))
+            (error
+             (message "mevedel: view refresh failed: %s"
+                      (error-message-string err)))))))))
 
 (defun mevedel-view--schedule-render (kind data-buffer delay)
   "Coalesce a KIND render of DATA-BUFFER after DELAY seconds.

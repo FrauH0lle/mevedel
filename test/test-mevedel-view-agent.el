@@ -423,6 +423,88 @@
                     (mevedel-view--lookup-transcript-pair
                      "/root/historical")))))))
 
+(mevedel-deftest mevedel-view--resolve-agent-transcript
+  (:doc "uses publication membership instead of a remote fixed cache")
+  ,test
+  (test)
+  (mevedel-view-test--with-buffers
+    (let* ((tempdir (make-temp-file "mevedel-agent-view-resolve-" t))
+           (session (mevedel-view-agent-test--session))
+           (agent-path "/root/historical")
+           (relative "agents/historical.chat.org")
+           (fixed (expand-file-name relative tempdir)))
+      (unwind-protect
+          (progn
+            (setf (mevedel-session-save-path session)
+                  (file-name-as-directory tempdir)
+                  (mevedel-session-agent-transcripts session)
+                  (list (cons "storage-historical"
+                              `(:agent-path ,agent-path :path ,relative
+                                :status completed))))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (cl-letf (((symbol-function
+                          'mevedel-session-persistence-artifact-present-p)
+                         (lambda (seen-session logical)
+                           (and (eq seen-session session)
+                                (equal logical relative)))))
+                (let ((info
+                       (mevedel-view--resolve-agent-transcript agent-path)))
+                  (should (equal relative
+                                 (plist-get info :relative-path)))
+                  (should (equal fixed (plist-get info :logical-path)))
+                  (should-not (plist-member info :absolute-path))))
+              (make-directory (file-name-directory fixed) t)
+              (write-region "poisoned cache" nil fixed nil 'silent)
+              (cl-letf (((symbol-function
+                          'mevedel-session-persistence-artifact-present-p)
+                         (lambda (&rest _) nil)))
+                (should-error
+                 (mevedel-view--resolve-agent-transcript agent-path)
+                 :type 'user-error))))
+        (delete-directory tempdir t)))))
+
+(mevedel-deftest mevedel-view--ensure-agent-transcript-view
+  (:doc "hydrates saved transcript inspection through verified artifacts")
+  ,test
+  (test)
+  (let* ((session (mevedel-session--create :name "main"))
+         (relative "agents/historical.chat.org")
+         (data-buffer (generate-new-buffer " *agent-inspection-data*"))
+         (view-buffer (generate-new-buffer " *agent-inspection-view*"))
+         (parent-view (generate-new-buffer " *agent-inspection-parent*"))
+         seen)
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-session-persistence-find-artifact-noselect)
+                   (lambda (seen-session logical &optional inspection)
+                     (setq seen (list seen-session logical inspection))
+                     (with-current-buffer data-buffer
+                       (setq buffer-file-name
+                             "/tmp/session/agents/historical.chat.org")
+                       (insert "published transcript"))
+                     data-buffer))
+                  ((symbol-function 'mevedel-view--ensure)
+                   (lambda (&rest _) view-buffer))
+                  ((symbol-function 'mevedel-view--full-rerender) #'ignore)
+                  ((symbol-function
+                    'mevedel-transcript-restore-properties)
+                   #'ignore))
+          (should
+           (eq view-buffer
+               (mevedel-view--ensure-agent-transcript-view
+                "/root/historical"
+                (list :session session :relative-path relative)
+                parent-view)))
+          (should (equal (list session relative t) seen))
+          (with-current-buffer data-buffer
+            (should (equal "published transcript" (buffer-string)))
+            (should buffer-read-only)))
+      (dolist (buffer (list data-buffer view-buffer parent-view))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (mevedel-deftest mevedel-view--agent-status-counts
   (:doc "counts active retained records without transcript inference")
   ,test

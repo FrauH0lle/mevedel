@@ -178,6 +178,19 @@
           (should-not (plist-get result :mount-proc)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-sandbox-invalidate-probe-cache ()
+  ,test
+  (test)
+  :doc "clears only the cache belonging to the requested execution target"
+  (let ((mevedel-sandbox--probe-cache
+         '(:available t :target "/ssh:user@host:")))
+    (mevedel-sandbox-invalidate-probe-cache
+     "/ssh:user@other:/srv/project/")
+    (should mevedel-sandbox--probe-cache)
+    (mevedel-sandbox-invalidate-probe-cache
+     "/ssh:user@host:/srv/project/")
+    (should-not mevedel-sandbox--probe-cache)))
+
 (mevedel-deftest mevedel-sandbox--canonical-directories ()
   ,test
   (test)
@@ -517,7 +530,18 @@
     '(:sandbox off :filesystem unrestricted :network unrestricted
       :reason "Confinement disabled by mevedel-sandbox-mode")
     (mevedel-sandbox-pending-facts
-     '(:network t) 'require-escalated 'off))))
+     '(:network t) 'require-escalated 'off)))
+  :doc "probes the pending command's remote execution target"
+  (let (probed-workdir)
+    (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+               (lambda (&optional workdir)
+                 (setq probed-workdir workdir)
+                 '(:available t :executable "/target/bwrap"
+                   :mount-proc t))))
+      (mevedel-sandbox-pending-facts
+       nil nil 'best-effort "/ssh:builder@host:/srv/project/")
+      (should
+       (equal "/ssh:builder@host:/srv/project/" probed-workdir)))))
 
 (mevedel-deftest mevedel-sandbox--confined-preparation ()
   ,test

@@ -22,6 +22,14 @@
 ;; `mevedel-chat'
 (defvar mevedel--session)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-append-diagnostic
+                  "mevedel-session-durability" (session path content))
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-audit-target "mevedel-structs" (session))
 
@@ -222,32 +230,85 @@
   (when-let* ((save-path (and session (mevedel-session-save-path session))))
     (file-name-concat save-path "repair-log.el")))
 
-(defun mevedel-tool-repair--persist-event (session event)
-  "Append redacted telemetry EVENT to SESSION's local log."
+(defun mevedel-tool-repair--event-text (event)
+  "Return redacted telemetry EVENT in its durable line format."
+  (let ((print-length nil)
+        (print-level nil)
+        (print-quoted t))
+    (concat (prin1-to-string event) "\n")))
+
+(defun mevedel-tool-repair--persist-content (session content)
+  "Append serialized repair telemetry CONTENT for SESSION."
   (when-let* ((file (and mevedel-tool-repair-persist-log
                          (mevedel-tool-repair-log-path session))))
     (condition-case nil
-        (let ((print-length nil) (print-level nil) (print-quoted t))
-          (make-directory (file-name-directory file) t)
-          (with-temp-buffer
-            (prin1 event (current-buffer))
-            (insert "\n")
-            (write-region (point-min) (point-max) file t 'silent)))
+        (let ((target (mevedel-session-execution-target session)))
+          (if (and target
+                   (progn
+                     (require 'mevedel-execution-target)
+                     (mevedel-execution-target-remote-p target)))
+              (progn
+                (require 'mevedel-session-durability)
+                (mevedel-session-durability-append-diagnostic
+                 session file content))
+            (make-directory (file-name-directory file) t)
+            (write-region content nil file t 'silent)
+            t))
       (error
        (display-warning 'mevedel "Repair telemetry persistence failed"
-                        :warning)))))
+                        :warning)
+       nil))))
+
+(defun mevedel-tool-repair--persist-event (session event)
+  "Append redacted telemetry EVENT to SESSION's persistent log."
+  (mevedel-tool-repair--persist-content
+   session (mevedel-tool-repair--event-text event)))
+
+(defun mevedel-tool-repair-flush-log (session)
+  "Persist SESSION's queued repair diagnostics, retaining failures."
+  (when session
+    (let* ((pending (mevedel-session-repair-log-pending session))
+           (target (mevedel-session-execution-target session))
+           (remote-p
+            (and target
+                 (progn
+                   (require 'mevedel-execution-target)
+                   (mevedel-execution-target-remote-p target)))))
+      (if (and pending remote-p)
+          (when (mevedel-tool-repair--persist-content
+                 session (mapconcat #'mevedel-tool-repair--event-text
+                                    pending ""))
+            (setf (mevedel-session-repair-log-pending session) nil))
+        (while (and pending
+                    (mevedel-tool-repair--persist-event session (car pending)))
+          (setq pending (cdr pending)))
+        (setf (mevedel-session-repair-log-pending session) pending)))))
 
 (defun mevedel-tool-repair-log-event (session event)
   "Record redacted telemetry EVENT for SESSION without blocking execution."
   (condition-case nil
       (when session
+        (require 'mevedel-telemetry)
         (let* ((event (mevedel-tool-repair--safe-event event))
                (log (append (mevedel-session-repair-log session) (list event)))
                (audit-session (mevedel-session-audit-target session)))
           (when (> (length log) mevedel-tool-repair-log-limit)
             (setq log (last log mevedel-tool-repair-log-limit)))
           (setf (mevedel-session-repair-log session) log)
-          (mevedel-tool-repair--persist-event session event)
+          (when mevedel-tool-repair-persist-log
+            (let* ((pending
+                    (mevedel-session-repair-log-pending session))
+                   (target (mevedel-session-execution-target session))
+                   (remote-p
+                    (and target
+                         (progn
+                           (require 'mevedel-execution-target)
+                           (mevedel-execution-target-remote-p target)))))
+              (when (or pending remote-p
+                        (not
+                         (mevedel-tool-repair--persist-event session event)))
+                (setf (mevedel-session-repair-log-pending session)
+                      (append pending (list event))))))
           (when (or (mevedel-telemetry-detailed-p audit-session)
                     (not (eq (plist-get event :outcome) 'valid))
                     (plist-get event :rules)

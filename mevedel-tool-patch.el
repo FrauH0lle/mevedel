@@ -14,6 +14,12 @@
   (require 'mevedel-tool-registry)
   (require 'subr-x))
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-create
+                  "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-expand-path
+                  "mevedel-execution-target" (target path &optional directory))
+
 (defvar mevedel-tool-patch--prepared-proposal nil)
 
 ;; `mevedel-file-state'
@@ -28,6 +34,8 @@
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-canonical-path
+                  "mevedel-pipeline" (path))
 (defvar mevedel-pipeline--auto-apply-edit-p)
 
 ;; `mevedel-resource'
@@ -49,9 +57,10 @@
                   "mevedel-session-persistence" (session buffer))
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-one-shot-mutations-p
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-ephemeral-p
+(declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -207,13 +216,6 @@ local sessions untouched until permission and plan checks have completed."
             (plist-put operation (car entry) nil)))))
     proposal))
 
-(defun mevedel-tool-patch--parse-path (path root)
-  "Return PATH unchanged when it is a resource address, else expand it."
-  (if (mevedel-tool-patch--resource-address-p path)
-      path
-    (expand-file-name path root)))
-
-
 (defun mevedel-tool-patch--operation-marker-p (line)
   "Return non-nil when LINE begins a patch file operation."
   (or (string-prefix-p mevedel-tool-patch--add line)
@@ -303,7 +305,19 @@ whitespace, one `*** Environment ID:' line after the opening marker is
 tolerated, and content lines are kept raw."
   (unless (stringp patch)
     (error "Parameter patch is required"))
+  (require 'mevedel-execution-target)
   (let* ((root (file-name-as-directory (expand-file-name (or root default-directory))))
+         (target
+          (or (and (boundp 'mevedel--session)
+                   mevedel--session
+                   (mevedel-session-execution-target mevedel--session))
+              (mevedel-execution-target-create root)))
+         (resolve
+          (lambda (path)
+            (if (mevedel-tool-patch--resource-address-p path)
+                path
+              (mevedel-pipeline-canonical-path
+               (mevedel-execution-target-expand-path target path root)))))
          (normalized (replace-regexp-in-string "\r\n?" "\n" patch))
          (lines (split-string (string-trim normalized) "\n" nil))
          (count (length lines))
@@ -342,8 +356,7 @@ tolerated, and content lines are kept raw."
             (unless added
               (error "Invalid patch at line %d: Add File requires content"
                      line-number))
-            (push (list :kind 'add :path (mevedel-tool-patch--parse-path
-                                          rel-path root)
+            (push (list :kind 'add :path (funcall resolve rel-path)
                         :rel-path rel-path
                         :content (concat (string-join (nreverse added) "\n") "\n")
                         :selected t)
@@ -351,16 +364,14 @@ tolerated, and content lines are kept raw."
          ((string-prefix-p mevedel-tool-patch--delete line)
           (let ((rel-path (mevedel-tool-patch--marker-path
                            line mevedel-tool-patch--delete line-number)))
-            (push (list :kind 'delete :path (mevedel-tool-patch--parse-path
-                                             rel-path root)
-                        :rel-path rel-path
-                        :selected t)
+            (push (list :kind 'delete :path (funcall resolve rel-path)
+                        :rel-path rel-path :selected t)
                   operations)
             (setq index (1+ index))))
          ((string-prefix-p mevedel-tool-patch--update line)
           (let* ((rel-path (mevedel-tool-patch--marker-path
                             line mevedel-tool-patch--update line-number))
-                 (path (mevedel-tool-patch--parse-path rel-path root))
+                 (path (funcall resolve rel-path))
                  move-rel payload)
             (setq index (1+ index))
             (when (and (< index (1- count))
@@ -387,9 +398,7 @@ tolerated, and content lines are kept raw."
                        line-number))
               (push (list :kind (if move-rel 'move 'update)
                           :path path :rel-path rel-path
-                          :move-path (and move-rel
-                                          (mevedel-tool-patch--parse-path
-                                           move-rel root))
+                          :move-path (and move-rel (funcall resolve move-rel))
                           :move-rel-path move-rel
                           :hunks (and payload
                                       (mevedel-tool-patch--parse-update-lines

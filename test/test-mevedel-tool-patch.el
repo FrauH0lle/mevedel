@@ -540,7 +540,32 @@
          (hunk (car (plist-get (car (plist-get proposal :operations))
                                :hunks))))
     (should (= 1 (length (plist-get proposal :operations))))
-    (should (member "*** Delete File: b" (plist-get hunk :old-lines)))))
+    (should (member "*** Delete File: b" (plist-get hunk :old-lines))))
+
+  :doc "interprets absolute patch paths in the remote target domain"
+  (let* ((proposal
+          (mevedel-tool-patch--parse
+           (concat "*** Begin Patch\n"
+                   "*** Update File: /etc/app.conf\n"
+                   "*** Move to: /var/lib/app.conf\n"
+                   "@@\n-old\n+new\n"
+                   "*** End Patch")
+           "/ssh:user@host:/srv/project/"))
+         (operation (car (plist-get proposal :operations))))
+    (should (equal "/ssh:user@host:/etc/app.conf"
+                   (plist-get operation :path)))
+    (should (equal "/ssh:user@host:/var/lib/app.conf"
+                   (plist-get operation :move-path))))
+
+  :doc "rejects patch paths that explicitly name another target"
+  (should-error
+   (mevedel-tool-patch--parse
+    (concat "*** Begin Patch\n"
+            "*** Add File: /ssh:user@other:/tmp/a\n"
+            "+x\n"
+            "*** End Patch")
+    "/ssh:user@host:/srv/project/")
+   :type 'mevedel-execution-target-error))
 
 (mevedel-deftest mevedel-tool-patch--read-file
   (:doc "Reads regular files and rejects missing paths") ,test (test)

@@ -7,10 +7,12 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-execution-target)
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-permission-prompt)
 (require 'mevedel-permission-queue)
 (require 'mevedel-permissions)
+(require 'mevedel-side-conversation)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
@@ -137,10 +139,14 @@
 
   :doc "path selection toggles one exact grant"
   (with-temp-buffer
-    (let* ((grant '(:path "/external" :access write))
+    (let* ((root "/ssh:display:/srv/project/")
+           (target (mevedel-execution-target-create root))
+           (session (mevedel-session--create
+                     :execution-target target :working-directory root))
+           (grant '(:path "/ssh:display:/external" :access write))
            (cell (list '(:operation t)))
            (entry
-            `(:session session
+            `(:session ,session
               :remember-authority-cell ,cell
               :missing-additional-permissions
               (:file-system (,grant)))))
@@ -150,7 +156,9 @@
         (overlay-put ov 'mevedel-view-interaction-entry entry)
         (goto-char (point-min))
         (cl-letf (((symbol-function 'completing-read)
-                   (lambda (&rest _) "Write /external"))
+                   (lambda (_prompt choices &rest _)
+                     (should (equal "Write /external" (caar choices)))
+                     (caar choices)))
                   ((symbol-function
                     'mevedel-permission-queue--render-head)
                    #'ignore))
@@ -168,32 +176,44 @@
   ,test
   (test)
   :doc "distinguishes pending, granted, and missing authority"
-  (let ((text
-         (mevedel-permission--format-authority-capabilities
-          '(:show-operation-authority t
-            :operation-pending-p t
-            :requested-additional-permissions
-            (:network t
-             :file-system
-             ((:path "/input" :access read)
-              (:path "/output" :access write)))
-            :missing-additional-permissions
-            (:network t
-             :file-system ((:path "/output" :access write)))))))
+  (let* ((root "/ssh:display:/srv/project/")
+         (target (mevedel-execution-target-create root))
+         (session (mevedel-session--create
+                   :execution-target target :working-directory root))
+         (text
+          (mevedel-permission--format-authority-capabilities
+           `(:session ,session
+             :show-operation-authority t
+             :operation-pending-p t
+             :requested-additional-permissions
+             (:network t
+              :file-system
+              ((:path "/ssh:display:/input" :access read)
+               (:path "/ssh:display:/output" :access write)))
+             :missing-additional-permissions
+             (:network t
+              :file-system
+              ((:path "/ssh:display:/output" :access write)))))))
     (should (string-match-p "\\[ \\] Command" text))
     (should (string-match-p "\\[ \\] Network" text))
     (should (string-match-p "\\[x\\] Read /input" text))
-    (should (string-match-p "\\[ \\] Write /output" text))))
+    (should (string-match-p "\\[ \\] Write /output" text))
+    (should-not (string-match-p "/ssh:" text))))
 
 (mevedel-deftest mevedel-permission--format-remember-authority
   ()
   ,test
   (test)
   :doc "shows independent command, network, and exact-path selections"
-  (let* ((write '(:path "/output" :access write))
+  (let* ((root "/ssh:display:/srv/project/")
+         (target (mevedel-execution-target-create root))
+         (session (mevedel-session--create
+                   :execution-target target :working-directory root))
+         (write '(:path "/ssh:display:/output" :access write))
          (text
           (mevedel-permission--format-remember-authority
-           `(:reusable-operation-p t
+           `(:session ,session
+             :reusable-operation-p t
              :remember-authority-cell
              ((:operation t :file-system (,write)))
              :missing-additional-permissions
@@ -202,7 +222,8 @@
     (should (string-match-p "\\[ \\] Network with command" text))
     (should (string-match-p "\\[x\\] Write /output" text))
     (should (string-match-p "complete selected profile" text))
-    (should (string-match-p "p selects an exact path" text))))
+    (should (string-match-p "p selects an exact path" text))
+    (should-not (string-match-p "/ssh:" text))))
 
 (mevedel-deftest mevedel-permission--prompt-body
   ()
@@ -377,7 +398,10 @@
       (should-not (lookup-key captured-keymap "D")))))
 
 (mevedel-deftest mevedel-permission--prompt-async-attributed
-  (:doc "propagates one-shot prompts to the shared prompt path")
+  ()
+  ,test
+  (test)
+  :doc "propagates one-shot prompts to the shared prompt path"
   (let (captured)
     (cl-letf (((symbol-function
                 'mevedel-permission--prompt-async-with-content)
@@ -385,7 +409,22 @@
       (mevedel-permission--prompt-async-attributed
        "Edit" nil t "main" #'ignore nil '(:once-only t)))
     (should (nth 5 captured))
-    (should (nth 6 captured))))
+    (should (nth 6 captured)))
+
+  :doc "renders a remote resource path in target-native form"
+  (let* ((root "/ssh:display:/srv/project/")
+         (target (mevedel-execution-target-create root))
+         (session (mevedel-session--create
+                   :execution-target target :working-directory root))
+         captured)
+    (cl-letf (((symbol-function
+                'mevedel-permission--prompt-async-with-content)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-permission--prompt-async-attributed
+       "Read" "/ssh:display:/srv/secret" t "main" #'ignore nil
+       `(:session ,session)))
+    (should (string-match-p "Path: /srv/secret" (car captured)))
+    (should-not (string-match-p "/ssh:" (car captured)))))
 
 (mevedel-deftest mevedel-permission--prompt-async-sandbox
   (:doc "renders one combined invocation authority request")

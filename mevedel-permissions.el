@@ -21,6 +21,16 @@
 (declare-function mevedel-plan-read-only-request-p "mevedel-agents" ())
 (defvar mevedel--agent-invocation)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-create
+                  "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-expand-path
+                  "mevedel-execution-target" (target path &optional directory))
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-mode-active-p
                   "mevedel-plan-mode" (&optional session))
@@ -37,6 +47,13 @@
 (declare-function mevedel-reminders-make-full-auto-mode-exit
                   "mevedel-reminders" ())
 
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-assert-mutation-authority
+                  "mevedel-session-persistence" (session &optional buffer))
+(declare-function mevedel-session-persistence-publish-text
+                  "mevedel-session-persistence"
+                  (session path content &optional coding))
+
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills--refresh-view-input-prompt
                   "mevedel-skills-ui" ())
@@ -49,6 +66,10 @@
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-active-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
@@ -161,7 +182,11 @@ Example:
 (defcustom mevedel-protected-paths
   '(("**/.git/**" . read-only)
     ("~/.ssh/**" . inaccessible)
-    ("~/.gnupg/**" . inaccessible))
+    ("~/.gnupg/**" . inaccessible)
+    ("~/.aws/**" . inaccessible)
+    ("~/.azure/**" . inaccessible)
+    ("~/.config/gcloud/**" . inaccessible)
+    ("~/.kube/**" . inaccessible))
   "Protected path globs and their child-confinement access modes.
 
 Even `full-auto' mode prompts when a matching path lacks an exact resource
@@ -310,6 +335,9 @@ Runs mode-specific lifecycle hooks."
     (if (not session)
         (set-default-toplevel-value 'mevedel-permission-mode target)
       (with-current-buffer data-buf
+        (require 'mevedel-session-persistence)
+        (mevedel-session-persistence-assert-mutation-authority
+         session data-buf)
         (when (and (fboundp 'mevedel-plan-mode-active-p)
                    (mevedel-plan-mode-active-p session))
           (mevedel-plan-mode-exit session))
@@ -543,7 +571,7 @@ plists.  Signals `user-error' on the first malformed entry."
 ;;
 ;;; Rule matching
 
-(defun mevedel-permission--match-path-pattern (path pattern)
+(defun mevedel-permission--match-path-pattern (path pattern &optional target)
   "Check if PATH matches glob PATTERN.
 
 PATTERN supports:
@@ -552,12 +580,19 @@ PATTERN supports:
   ?   - matches any single character
   ~   - expanded to home directory at pattern start
 
+When TARGET is non-nil, expand a leading `~' from that target's probed
+environment.  Absolute patterns remain in the client path domain.
 Returns non-nil if PATH matches PATTERN."
   (when (and path pattern)
-    (let* ((expanded (if (or (string-prefix-p "~" pattern)
-                             (file-name-absolute-p pattern))
-                         (expand-file-name pattern)
-                       pattern))
+    (let* ((expanded
+            (cond
+             ((and target (string-prefix-p "~" pattern))
+              (require 'mevedel-execution-target)
+              (mevedel-execution-target-expand-path target pattern))
+             ((or (string-prefix-p "~" pattern)
+                  (file-name-absolute-p pattern))
+              (expand-file-name pattern))
+             (t pattern)))
            (expanded-path (expand-file-name path))
            (directory-glob-root
             (when (string-suffix-p "/**" expanded)
@@ -700,16 +735,18 @@ unqualified rules.  Within each group, deny > ask > allow.  Return
       (error "Invalid protected path entry: %S" entry)))
   mevedel-protected-paths)
 
-(defun mevedel-permission--path-protected-p (path)
+(defun mevedel-permission--path-protected-p (path &optional target)
   "Check if PATH matches any pattern in `mevedel-protected-paths'.
 
+TARGET supplies the path domain for target-home patterns.
 Returns non-nil if the path is protected."
   (when path
     (let ((expanded (expand-file-name path)))
       (cl-loop for (pattern . _mode) in
                (mevedel-permission-protected-path-policy)
                thereis
-               (mevedel-permission--match-path-pattern expanded pattern)))))
+               (mevedel-permission--match-path-pattern
+                expanded pattern target)))))
 
 (defun mevedel-permission--path-in-workspace-p (path workspace-root)
   "Return non-nil when PATH is WORKSPACE-ROOT or is contained by it."
@@ -1187,7 +1224,10 @@ PATCH-LOCAL-ONLY-P is true only for a prepared all-local ApplyPatch proposal."
             :request request
             :patch-local-only-p patch-local-only-p
             :resource-granted-p resource-granted-p
-            :protected-path-p (mevedel-permission--path-protected-p path)
+            :protected-path-p
+            (mevedel-permission--path-protected-p
+             path (and session
+                       (mevedel-session-execution-target session)))
             :workspace-boundary-p
             (and path
                  (not (mevedel-permission--path-in-allowed-roots-p
@@ -1468,6 +1508,8 @@ mode, and native-resource tail."
 
 (defun mevedel-permission-add-session-resource-grant (session path access)
   "Grant SESSION exact PATH access at READ or WRITE level."
+  (require 'mevedel-session-persistence)
+  (mevedel-session-persistence-assert-mutation-authority session)
   (let ((grant (mevedel-permission--resource-grant path access)))
     (setf (mevedel-session-resource-grants session)
           (mevedel-permission--merge-resource-grant
@@ -1477,6 +1519,8 @@ mode, and native-resource tail."
 (defun mevedel-permission-remove-session-resource-grant
     (session path access)
   "Revoke SESSION's exact PATH ACCESS resource grant."
+  (require 'mevedel-session-persistence)
+  (mevedel-session-persistence-assert-mutation-authority session)
   (let ((grant (mevedel-permission--resource-grant path access)))
     (setf (mevedel-session-resource-grants session)
           (cl-remove grant (mevedel-session-resource-grants session)
@@ -1484,6 +1528,8 @@ mode, and native-resource tail."
 
 (defun mevedel-permission-remove-session-rule (session rule)
   "Revoke exact permission RULE from SESSION."
+  (require 'mevedel-session-persistence)
+  (mevedel-session-persistence-assert-mutation-authority session)
   (setf (mevedel-session-permission-rules session)
         (cl-remove rule (mevedel-session-permission-rules session)
                    :test #'equal)))
@@ -1530,6 +1576,8 @@ rule recorded inside any sub-agent's permission prompt, such as
 \"allow-session\" or \"deny-session\", immediately applies to the parent
 and to every other live sub-agent sharing the same session struct.  This
 is a deliberate contract, not an accident of the buffer-local plumbing."
+  (require 'mevedel-session-persistence)
+  (mevedel-session-persistence-assert-mutation-authority session)
   (let* ((key (or spec-key (and path :path)))
          (value (or spec-value path))
          (rule (mevedel-permission--build-rule
@@ -1572,17 +1620,24 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
            (string-prefix-p "~/" path))
        (expand-file-name path)))
 
-(defun mevedel-permission--normalize-resource-grant (grant)
-  "Return normalized exact resource GRANT, or nil when invalid."
+(defun mevedel-permission--normalize-resource-grant
+    (grant &optional path-normalizer)
+  "Return normalized exact resource GRANT, or nil when invalid.
+PATH-NORMALIZER defaults to exact-path normalization."
   (when (and (mevedel-permission--valid-plist-p
               grant '(:path :access) '(:path :access))
              (memq (plist-get grant :access) '(read write)))
-    (when-let* ((path (mevedel-permission--normalize-exact-path
+    (when-let* ((path (funcall
+                       (or path-normalizer
+                           #'mevedel-permission--normalize-exact-path)
                        (plist-get grant :path))))
       (list :path path :access (plist-get grant :access)))))
 
-(defun mevedel-permission--normalize-rule (rule)
-  "Return normalized persistent permission RULE, or nil when invalid."
+(defun mevedel-permission--normalize-rule
+    (rule &optional exact-path-normalizer path-pattern-normalizer)
+  "Return normalized persistent permission RULE, or nil when invalid.
+EXACT-PATH-NORMALIZER normalizes grants, and PATH-PATTERN-NORMALIZER
+normalizes rule path patterns."
   (when (and (proper-list-p rule) (stringp (car rule)))
     (let* ((plist (cdr rule))
            (specifier-keys
@@ -1594,8 +1649,11 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
            (normalized-file-system
             (and file-system-present
                  (proper-list-p file-system)
-                 (mapcar #'mevedel-permission--normalize-resource-grant
-                         file-system))))
+                 (mapcar
+                  (lambda (grant)
+                    (mevedel-permission--normalize-resource-grant
+                     grant exact-path-normalizer))
+                  file-system))))
       (when (and
              (mevedel-permission--valid-plist-p
               plist
@@ -1614,30 +1672,133 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
              (or (not file-system-present)
                  (and (proper-list-p file-system)
                       (cl-every #'identity normalized-file-system))))
-        (let ((normalized (copy-tree rule)))
-          (when file-system-present
-            (setcdr normalized
-                    (plist-put
-                     (cdr normalized) :file-system
-                     normalized-file-system)))
-          normalized)))))
+        (let* ((normalized (copy-tree rule))
+               (path-present (plist-member (cdr normalized) :path))
+               (normalized-path
+                (and path-present path-pattern-normalizer
+                     (funcall path-pattern-normalizer
+                              (plist-get (cdr normalized) :path)))))
+          (when (or (not (and path-present path-pattern-normalizer))
+                    normalized-path)
+            (when file-system-present
+              (setcdr normalized
+                      (plist-put
+                       (cdr normalized) :file-system
+                       normalized-file-system)))
+            (when normalized-path
+              (setcdr normalized
+                      (plist-put (cdr normalized) :path normalized-path)))
+            normalized))))))
 
-(defun mevedel-permission--normalize-store (store)
-  "Return normalized permission STORE, or nil when invalid."
+(defun mevedel-permission--normalize-store
+    (store &optional exact-path-normalizer path-pattern-normalizer)
+  "Return normalized permission STORE, or nil when invalid.
+EXACT-PATH-NORMALIZER normalizes grants, and PATH-PATTERN-NORMALIZER
+normalizes rule path patterns."
   (when (and (mevedel-permission--valid-plist-p
               store '(:rules :resource-grants) '(:rules :resource-grants))
              (proper-list-p (plist-get store :rules))
              (proper-list-p (plist-get store :resource-grants)))
-    (let ((rules (mapcar #'mevedel-permission--normalize-rule
-                         (plist-get store :rules)))
-          (grants (mapcar #'mevedel-permission--normalize-resource-grant
-                          (plist-get store :resource-grants))))
+    (let ((rules
+           (mapcar
+            (lambda (rule)
+              (mevedel-permission--normalize-rule
+               rule exact-path-normalizer path-pattern-normalizer))
+            (plist-get store :rules)))
+          (grants
+           (mapcar
+            (lambda (grant)
+              (mevedel-permission--normalize-resource-grant
+               grant exact-path-normalizer))
+            (plist-get store :resource-grants))))
       (when (and (cl-every #'identity rules)
                  (cl-every #'identity grants))
         (list :rules rules :resource-grants grants)))))
 
-(defun mevedel-permission--store-file-status (file)
-  "Return FILE's permission store status and normalized contents."
+(defun mevedel-permission--portable-runtime-path
+    (path target &optional pattern-p)
+  "Return runtime PATH in TARGET's durable path domain.
+
+PATTERN-P permits relative path globs.  Remote absolute paths must already
+carry TARGET's prefix so client paths cannot become target authority."
+  (when (stringp path)
+    (condition-case nil
+        (cond
+         ((file-remote-p path nil 'never)
+          (mevedel-execution-target-native-path target path))
+         ((mevedel-execution-target-remote-p target)
+          (cond
+           ((or (equal path "~") (string-prefix-p "~/" path))
+            (mevedel-execution-target-native-path
+             target (mevedel-execution-target-expand-path target path)))
+           ((and pattern-p (not (file-name-absolute-p path))) path)
+           (t nil)))
+         ((and pattern-p
+               (or (equal path "~") (string-prefix-p "~/" path)))
+          path)
+         ((and pattern-p (not (file-name-absolute-p path))) path)
+         ((or (file-name-absolute-p path)
+              (equal path "~") (string-prefix-p "~/" path))
+          (expand-file-name path)))
+      (mevedel-execution-target-error nil))))
+
+(defun mevedel-permission-serialize-authority (rules grants target)
+  "Return RULES and GRANTS encoded in TARGET's durable path domain.
+
+Return nil when any entry is malformed or names another filesystem authority."
+  (mevedel-permission--normalize-store
+   (list :rules rules :resource-grants grants)
+   (lambda (path)
+     (mevedel-permission--portable-runtime-path path target))
+   (lambda (path)
+     (mevedel-permission--portable-runtime-path path target t))))
+
+(defun mevedel-permission--restore-portable-path
+    (path target &optional pattern-p)
+  "Return durable PATH qualified for TARGET.
+
+PATTERN-P permits relative path globs.  Durable authority must not contain a
+client-specific remote prefix."
+  (when (and (stringp path) (not (file-remote-p path nil 'never)))
+    (condition-case nil
+        (cond
+         ((mevedel-execution-target-remote-p target)
+          (cond
+           ((or (file-name-absolute-p path)
+                (equal path "~") (string-prefix-p "~/" path))
+            (mevedel-execution-target-expand-path target path))
+           (pattern-p path)))
+         (pattern-p path)
+         (t (mevedel-permission--normalize-exact-path path)))
+      (mevedel-execution-target-error nil))))
+
+(defun mevedel-permission-deserialize-authority (rules grants target)
+  "Return durable RULES and GRANTS requalified through TARGET.
+
+Return nil when any entry is malformed or contains a client-specific target."
+  (mevedel-permission--normalize-store
+   (list :rules rules :resource-grants grants)
+   (lambda (path)
+     (mevedel-permission--restore-portable-path path target))
+   (lambda (path)
+     (mevedel-permission--restore-portable-path path target t))))
+
+(defun mevedel-permission--workspace-target (workspace)
+  "Return the live execution target for WORKSPACE when available."
+  (require 'mevedel-execution-target)
+  (let* ((data-buffer (mevedel-permission--current-data-buffer))
+         (session (and data-buffer
+                       (buffer-local-value 'mevedel--session data-buffer))))
+    (if (and session
+             (equal (mevedel-workspace-root
+                     (mevedel-session-workspace session))
+                    (mevedel-workspace-root workspace)))
+        (mevedel-session-execution-target session)
+      (mevedel-execution-target-create (mevedel-workspace-root workspace)))))
+
+(defun mevedel-permission--store-file-status (file &optional target)
+  "Return FILE's permission store status and normalized contents.
+TARGET restores portable target paths when non-nil."
   (cond
    ((not (file-exists-p file)) '(:status missing))
    ((not (file-readable-p file))
@@ -1647,7 +1808,16 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
         (with-temp-buffer
           (insert-file-contents file)
           (let* ((raw (read (current-buffer)))
-                 (store (mevedel-permission--normalize-store raw))
+                 (store
+                  (if (and target
+                           (mevedel-permission--valid-plist-p
+                            raw '(:rules :resource-grants)
+                            '(:rules :resource-grants)))
+                      (mevedel-permission-deserialize-authority
+                       (plist-get raw :rules)
+                       (plist-get raw :resource-grants)
+                       target)
+                    (mevedel-permission--normalize-store raw)))
                  (single-form-p
                   (condition-case nil
                       (progn (read (current-buffer)) nil)
@@ -1658,15 +1828,17 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
       (error
        (list :status 'invalid :reason (error-message-string err)))))))
 
-(defun mevedel-permission--read-store-file (file)
-  "Read the permission store plist from FILE, or nil when invalid."
-  (let ((result (mevedel-permission--store-file-status file)))
+(defun mevedel-permission--read-store-file (file &optional target)
+  "Read the permission store plist from FILE, or nil when invalid.
+TARGET restores portable target paths when non-nil."
+  (let ((result (mevedel-permission--store-file-status file target)))
     (and (eq (plist-get result :status) 'valid)
          (plist-get result :store))))
 
-(defun mevedel-permission--editable-store (file)
-  "Return FILE's valid store, a new store, or signal on invalid contents."
-  (let ((result (mevedel-permission--store-file-status file)))
+(defun mevedel-permission--editable-store (file &optional target)
+  "Return FILE's valid store, a new store, or signal on invalid contents.
+TARGET restores portable target paths when non-nil."
+  (let ((result (mevedel-permission--store-file-status file target)))
     (pcase (plist-get result :status)
       ('valid (plist-get result :store))
       ('missing (list :rules nil :resource-grants nil))
@@ -1683,34 +1855,60 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
 
 (defun mevedel-permission-validate-persistent-stores (workspace)
   "Warn once per invalid global or WORKSPACE permission store version."
-  (dolist (file (delete-dups
-                 (list (file-name-concat mevedel-user-dir "permissions.el")
-                       (mevedel-permission--persistent-file workspace))))
-    (let* ((result (mevedel-permission--store-file-status file))
+  (let ((target (mevedel-permission--workspace-target workspace)))
+    (dolist (entry
+             (list (cons (file-name-concat mevedel-user-dir "permissions.el")
+                         nil)
+                   (cons (mevedel-permission--persistent-file workspace)
+                         target)))
+      (let* ((file (car entry))
+             (result (mevedel-permission--store-file-status file (cdr entry)))
            (status (plist-get result :status)))
-      (if (eq status 'invalid)
-          (let ((version (mevedel-permission--store-version file))
-                (unseen (make-symbol "unseen")))
-            (unless (equal version
-                           (gethash file
-                                    mevedel-permission--warned-store-versions
-                                    unseen))
-              (puthash file version mevedel-permission--warned-store-versions)
-              (display-warning
-               'mevedel
-               (format
-                "Invalid permission store %s (%s); expected (:rules (...) :resource-grants (...)). Authority from this file is disabled until fixed"
-                file (plist-get result :reason))
-               :warning)))
-        (remhash file mevedel-permission--warned-store-versions)))))
+        (if (eq status 'invalid)
+            (let ((version (mevedel-permission--store-version file))
+                  (unseen (make-symbol "unseen")))
+              (unless (equal version
+                             (gethash file
+                                      mevedel-permission--warned-store-versions
+                                      unseen))
+                (puthash file version
+                         mevedel-permission--warned-store-versions)
+                (display-warning
+                 'mevedel
+                 (format
+                  "Invalid permission store %s (%s); expected (:rules (...) :resource-grants (...)). Authority from this file is disabled until fixed"
+                  file (plist-get result :reason))
+                 :warning)))
+          (remhash file mevedel-permission--warned-store-versions))))))
 
-(defun mevedel-permission--write-store-file (file store)
+(defun mevedel-permission--write-store-file (file store &optional target)
   "Write permission STORE plist to FILE."
-  (make-directory (file-name-directory file) t)
-  (with-temp-file file
-    (insert ";; Mevedel persistent permissions\n")
-    (insert ";; Auto-generated, safe to edit\n\n")
-    (pp store (current-buffer))))
+  (let* ((store (if target
+                    (mevedel-permission-serialize-authority
+                     (plist-get store :rules)
+                     (plist-get store :resource-grants)
+                     target)
+                  store))
+         (_ (unless store
+              (user-error "Permission authority names another execution target")))
+         (content
+         (with-temp-buffer
+           (insert ";; Mevedel persistent permissions\n")
+           (insert ";; Auto-generated, safe to edit\n\n")
+           (pp store (current-buffer))
+           (buffer-string))))
+    (if (file-remote-p file)
+        (let* ((data-buf (mevedel-permission--current-data-buffer))
+               (session (and data-buf
+                             (buffer-local-value 'mevedel--session data-buf))))
+          (unless session
+            (user-error "Remote permission changes require a live session"))
+          (require 'mevedel-session-persistence)
+          (mevedel-session-persistence-publish-text
+           session file content 'utf-8-unix))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file
+        (insert content)))))
 
 (defun mevedel-permission--load-persistent-rules (workspace)
   "Load persistent permission rules for WORKSPACE.
@@ -1721,27 +1919,25 @@ first, project rules appended after so they take precedence.
 
 Returns a merged list in `mevedel-permission-rules' format."
   (let ((global-file (file-name-concat mevedel-user-dir "permissions.el"))
-        (project-file (mevedel-permission--persistent-file workspace)))
+        (project-file (mevedel-permission--persistent-file workspace))
+        (target (mevedel-permission--workspace-target workspace)))
     (append (plist-get (mevedel-permission--read-store-file global-file) :rules)
-            (plist-get (mevedel-permission--read-store-file project-file)
+            (plist-get (mevedel-permission--read-store-file project-file target)
                        :rules))))
 
 (defun mevedel-permission--load-persistent-resource-grants (workspace)
   "Load exact resource grants persisted for WORKSPACE."
-  (cl-remove-if-not
-   (lambda (grant)
-     (and (proper-list-p grant)
-          (stringp (plist-get grant :path))
-          (file-name-absolute-p (plist-get grant :path))
-          (memq (plist-get grant :access) '(read write))))
-   (plist-get (mevedel-permission--read-store-file
-               (mevedel-permission--persistent-file workspace))
-              :resource-grants)))
+  (plist-get
+   (mevedel-permission--read-store-file
+    (mevedel-permission--persistent-file workspace)
+    (mevedel-permission--workspace-target workspace))
+   :resource-grants))
 
 (defun mevedel-permission-persistent-authority (workspace)
   "Return WORKSPACE's remembered rules and exact resource grants."
   (or (mevedel-permission--read-store-file
-       (mevedel-permission--persistent-file workspace))
+       (mevedel-permission--persistent-file workspace)
+       (mevedel-permission--workspace-target workspace))
       '(:rules nil :resource-grants nil)))
 
 (cl-defun mevedel-permission--save-persistent-rule
@@ -1757,7 +1953,8 @@ NETWORK and FILE-SYSTEM record matching additive execution authority.
 SANDBOX-PERMISSIONS qualifies an already requested execution level.  The file
 is created if it does not exist."
   (let* ((file (mevedel-permission--persistent-file workspace))
-         (store (mevedel-permission--editable-store file))
+         (target (mevedel-permission--workspace-target workspace))
+         (store (mevedel-permission--editable-store file target))
          (existing (plist-get store :rules))
          (key (or spec-key (and path :path)))
          (value (or spec-value path))
@@ -1770,44 +1967,69 @@ is created if it does not exist."
                       existing
                     (append existing (list rule)))))
     (mevedel-permission--write-store-file
-     file (plist-put store :rules updated))))
+     file (plist-put store :rules updated) target)))
 
 (defun mevedel-permission--save-persistent-resource-grant
     (workspace path access)
   "Persist exact PATH ACCESS for WORKSPACE."
   (let* ((file (mevedel-permission--persistent-file workspace))
-         (store (mevedel-permission--editable-store file))
+         (target (mevedel-permission--workspace-target workspace))
+         (store (mevedel-permission--editable-store file target))
          (grant (mevedel-permission--resource-grant path access))
          (grants
           (mevedel-permission--merge-resource-grant
            (plist-get store :resource-grants) path access)))
     (mevedel-permission--write-store-file
-     file (plist-put store :resource-grants grants))
+     file (plist-put store :resource-grants grants) target)
     grant))
 
 (defun mevedel-permission-remove-persistent-resource-grant
     (workspace path access)
   "Revoke WORKSPACE's exact PATH ACCESS resource grant."
   (let* ((file (mevedel-permission--persistent-file workspace))
-         (store (mevedel-permission--editable-store file))
+         (target (mevedel-permission--workspace-target workspace))
+         (store (mevedel-permission--editable-store file target))
          (grant (mevedel-permission--resource-grant path access)))
     (when (file-exists-p file)
       (mevedel-permission--write-store-file
        file
        (plist-put store :resource-grants
                   (cl-remove grant (plist-get store :resource-grants)
-                             :test #'equal))))))
+                             :test #'equal))
+       target))))
 
 (defun mevedel-permission-remove-persistent-rule (workspace rule)
   "Revoke exact permission RULE from WORKSPACE."
   (let* ((file (mevedel-permission--persistent-file workspace))
-         (store (mevedel-permission--editable-store file)))
+         (target (mevedel-permission--workspace-target workspace))
+         (store (mevedel-permission--editable-store file target)))
     (when (file-exists-p file)
       (mevedel-permission--write-store-file
        file
        (plist-put store :rules
                   (cl-remove rule (plist-get store :rules)
-                             :test #'equal))))))
+                             :test #'equal))
+       target))))
+
+(defun mevedel-permission-invalidate-target-grants (session)
+  "Revoke SESSION's exact authority after target replacement."
+  (require 'mevedel-session-persistence)
+  (mevedel-session-persistence-assert-mutation-authority session)
+  (setf (mevedel-session-resource-grants session) nil
+        (mevedel-session-dropped-file-grants session) nil
+        (mevedel-session-active-dropped-file-grants session) nil)
+  (when-let* ((data-buffer (mevedel-permission--current-data-buffer)))
+    (with-current-buffer data-buffer
+      (setq-local mevedel-permission--frozen-resource-grants nil)))
+  (let* ((workspace (mevedel-session-workspace session))
+         (file (mevedel-permission--persistent-file workspace))
+         (target (mevedel-session-execution-target session)))
+    (when (file-exists-p file)
+      (let ((store (mevedel-permission--editable-store file target)))
+        (when (plist-get store :resource-grants)
+          (mevedel-permission--write-store-file
+           file (plist-put store :resource-grants nil) target)))))
+  t)
 
 
 ;;

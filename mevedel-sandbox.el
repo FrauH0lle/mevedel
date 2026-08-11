@@ -30,7 +30,7 @@
 (declare-function mevedel-sandbox--additional-filesystem-mounts
                   "mevedel-sandbox-grants" (permissions &optional first-fd))
 (declare-function mevedel-sandbox--fd-backed-command
-                  "mevedel-sandbox-grants" (command paths))
+                  "mevedel-sandbox-grants" (command paths &optional workdir))
 (declare-function mevedel-sandbox--grant-paths
                   "mevedel-sandbox-grants" (grant))
 (declare-function mevedel-sandbox--granted-path-mounts
@@ -109,6 +109,14 @@ inside a session updates only that session."
   "Cached Bubblewrap availability plist, or nil before the first probe.
 A runtime failure carries :retry-on-execution until the next child launch.")
 
+(defun mevedel-sandbox-invalidate-probe-cache (&optional workdir)
+  "Invalidate cached Bubblewrap availability for WORKDIR's target.
+With nil WORKDIR, invalidate the local-target cache.  A cache for a different
+remote target is left untouched."
+  (let ((target (and workdir (file-remote-p workdir))))
+    (when (equal target (plist-get mevedel-sandbox--probe-cache :target))
+      (setq mevedel-sandbox--probe-cache nil))))
+
 (defvar mevedel-sandbox--last-facts nil
   "Most recently prepared child-confinement facts.")
 
@@ -142,18 +150,21 @@ OMIT-PROC-P leaves the host proc filesystem visible through the root bind."
          "--unshare-pid"
          "--unshare-net")
    (unless omit-proc-p (list "--proc" "/proc"))
-   (list "--" (or (executable-find "true") "/bin/true"))))
+   (list "--" "true")))
 
-(defun mevedel-sandbox--run-probe (command)
-  "Run Bubblewrap probe COMMAND within the configured time bound."
+(defun mevedel-sandbox--run-probe (command &optional workdir)
+  "Run Bubblewrap probe COMMAND in WORKDIR within the configured time bound."
   (let ((output-buffer (generate-new-buffer " *mevedel-bwrap-probe*"))
         (deadline (+ (float-time) mevedel-sandbox-probe-timeout))
-        process stderr-process timed-out result)
+        (remote (and workdir (file-remote-p workdir)))
+        process timed-out result)
     (unwind-protect
         (condition-case err
             (progn
               (with-current-buffer output-buffer
-                (set-buffer-multibyte nil))
+                (set-buffer-multibyte nil)
+                (when workdir
+                  (setq default-directory workdir)))
               (let ((filter
                      (lambda (_process output)
                        (when (buffer-live-p output-buffer)
@@ -165,26 +176,21 @@ OMIT-PROC-P leaves the host proc filesystem visible through the root bind."
                                (insert
                                 (substring output 0
                                            (min remaining
-                                                (length output)))))))))))
-                (setq stderr-process
-                      (make-pipe-process
-                       :name "mevedel-bwrap-probe-stderr"
-                       :buffer output-buffer
-                       :coding 'no-conversion
-                       :filter filter
-                       :noquery t
-                       :sentinel #'ignore))
-              (setq process
-                    (make-process
-                     :name "mevedel-bwrap-probe"
-                     :buffer output-buffer
-                     :stderr stderr-process
-                     :command command
-                     :coding 'no-conversion
-                     :connection-type 'pipe
-                     :filter filter
-                     :noquery t
-                     :sentinel #'ignore)))
+                                                (length output))))))))))
+                    (process-environment
+                     (and (not remote) process-environment)))
+                (with-current-buffer output-buffer
+                  (setq process
+                        (make-process
+                         :name "mevedel-bwrap-probe"
+                         :buffer output-buffer
+                         :command command
+                         :coding 'no-conversion
+                         :connection-type 'pipe
+                         :file-handler t
+                         :filter filter
+                         :noquery t
+                         :sentinel #'ignore))))
               (while (and (process-live-p process)
                           (< (float-time) deadline))
                 (accept-process-output
@@ -202,8 +208,6 @@ OMIT-PROC-P leaves the host proc filesystem visible through the root bind."
            (setq result (list :error (error-message-string err)))))
       (when (process-live-p process)
         (delete-process process))
-      (when (process-live-p stderr-process)
-        (delete-process stderr-process))
       (when (buffer-live-p output-buffer)
         (kill-buffer output-buffer)))
     result))
@@ -227,46 +231,64 @@ OMIT-PROC-P leaves the host proc filesystem visible through the root bind."
      (t
       (format "Bubblewrap probe failed: %s" detail)))))
 
-(defun mevedel-sandbox-probe ()
-  "Return and cache the availability facts for Linux Bubblewrap.
+(defun mevedel-sandbox-probe (&optional workdir)
+  "Return and cache Bubblewrap availability facts for WORKDIR's target.
 
 The probe creates the same core namespaces and mounts as real execution but
 runs only `true'.  A failed probe means the backend is unavailable even when a
 `bwrap' executable is installed."
-  (or mevedel-sandbox--probe-cache
-      (setq
-       mevedel-sandbox--probe-cache
-       (if (not (eq system-type 'gnu/linux))
-           (list :available nil
-                 :reason "Bubblewrap confinement is supported only on Linux")
-         (let ((executable (executable-find "bwrap")))
-           (if (not executable)
-               (list :available nil :reason "'bwrap' is not installed")
-             (let ((probe
-                    (mevedel-sandbox--run-probe
-                     (mevedel-sandbox--probe-command executable))))
-               (cond
-                ((mevedel-sandbox--probe-succeeded-p probe)
-                 (list :available t :executable executable :mount-proc t))
-                ((or (plist-get probe :timed-out-p)
-                     (plist-get probe :error))
-                 (list :available nil
-                       :executable executable
-                       :reason
-                       (mevedel-sandbox--probe-failure-reason probe)))
-                (t
-                 (let ((without-proc
-                        (mevedel-sandbox--run-probe
-                         (mevedel-sandbox--probe-command executable t))))
-                   (if (mevedel-sandbox--probe-succeeded-p without-proc)
-                       (list :available t
+  (let* ((target (and workdir (file-remote-p workdir)))
+         (cached-target (plist-get mevedel-sandbox--probe-cache :target))
+         (cache-matches-p
+          (if target (equal target cached-target) (null cached-target))))
+    (or (and cache-matches-p mevedel-sandbox--probe-cache)
+        (setq
+         mevedel-sandbox--probe-cache
+         (let* ((executable
+                 (unless (and (not target)
+                              (not (eq system-type 'gnu/linux)))
+                   (if target
+                       (with-temp-buffer
+                         (setq default-directory workdir)
+                         (executable-find "bwrap" target))
+                     (executable-find "bwrap"))))
+                (facts
+                 (cond
+                  ((and (not target) (not (eq system-type 'gnu/linux)))
+                   (list :available nil
+                         :reason
+                         "Bubblewrap confinement is supported only on Linux"))
+                  ((not executable)
+                   (list :available nil :reason "'bwrap' is not installed"))
+                  (t
+                   (let ((probe
+                          (mevedel-sandbox--run-probe
+                           (mevedel-sandbox--probe-command executable)
+                           workdir)))
+                     (cond
+                      ((mevedel-sandbox--probe-succeeded-p probe)
+                       (list :available t :executable executable
+                             :mount-proc t))
+                      ((or (plist-get probe :timed-out-p)
+                           (plist-get probe :error))
+                       (list :available nil
                              :executable executable
-                             :mount-proc nil)
-                     (list :available nil
-                           :executable executable
-                           :reason
-                           (mevedel-sandbox--probe-failure-reason
-                            without-proc)))))))))))))
+                             :reason
+                             (mevedel-sandbox--probe-failure-reason probe)))
+                      (t
+                       (let ((without-proc
+                              (mevedel-sandbox--run-probe
+                               (mevedel-sandbox--probe-command executable t)
+                               workdir)))
+                         (if (mevedel-sandbox--probe-succeeded-p without-proc)
+                             (list :available t :executable executable
+                                   :mount-proc nil)
+                           (list :available nil
+                                 :executable executable
+                                 :reason
+                                 (mevedel-sandbox--probe-failure-reason
+                                  without-proc)))))))))))
+           (if target (plist-put facts :target target) facts))))))
 
 (defun mevedel-sandbox--canonical-directories (roots)
   "Return existing canonical directories from ROOTS without duplicates."
@@ -294,8 +316,13 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 (defun mevedel-sandbox--writable-symlink-component (path writable-roots)
   "Return the first symlink crossing in PATH under WRITABLE-ROOTS."
   (require 'cl-lib)
-  (let ((current "/") found)
-    (dolist (component (split-string (expand-file-name path) "/" t))
+  (let* ((path (expand-file-name path))
+         (target-prefix (file-remote-p path))
+         (current (if target-prefix (concat target-prefix "/") "/"))
+         found)
+    (dolist (component
+             (split-string
+              (or (file-remote-p path 'localname 'never) path) "/" t))
       (unless found
         (setq current (file-name-concat current component))
         (when (and (file-symlink-p current)
@@ -317,14 +344,18 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
       (insert-file-contents path nil 0 4096)
       (goto-char (point-min))
       (when (looking-at "gitdir:[[:space:]]*\\(.+\\)$")
-        (expand-file-name (string-trim (match-string 1))
-                          (file-name-directory path))))))
+        (let ((target (string-trim (match-string 1)))
+              (target-prefix (file-remote-p path)))
+          (if (and target-prefix (file-name-absolute-p target))
+              (concat target-prefix target)
+            (expand-file-name target (file-name-directory path))))))))
 
 (defun mevedel-sandbox--protected-candidates (workdir writable-roots)
   "Return concrete protected-path candidates for WORKDIR and WRITABLE-ROOTS."
   (require 'cl-lib)
   (require 'mevedel-permissions)
-  (let (candidates)
+  (let ((target-prefix (file-remote-p workdir))
+        target-home candidates)
     (cl-labels
         ((add-candidate
           (path mode directory-p)
@@ -397,10 +428,32 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                (mode (cdr entry))
                (directory-p (string-suffix-p "/**" pattern))
                (root-pattern (if directory-p (substring pattern 0 -3) pattern))
+               (pattern-prefix (file-remote-p root-pattern))
+               (target-home-pattern-p
+                (or (string-equal root-pattern "~")
+                    (string-prefix-p "~/" root-pattern)))
+               (client-only-p
+                (and target-prefix
+                     (or (and (string-prefix-p "~" root-pattern)
+                              (not target-home-pattern-p))
+                         (and (file-name-absolute-p root-pattern)
+                              (not target-home-pattern-p)
+                              (not (equal pattern-prefix target-prefix))))))
                (absolute-pattern
-                (and (or (string-prefix-p "~" root-pattern)
-                         (file-name-absolute-p root-pattern))
-                     (expand-file-name root-pattern)))
+                (cond
+                 ((and target-prefix target-home-pattern-p)
+                  (setq target-home
+                        (or target-home
+                            (file-name-as-directory
+                             (file-truename (concat target-prefix "~/")))))
+                  (if (string-equal root-pattern "~")
+                      (directory-file-name target-home)
+                    (file-name-concat target-home
+                                      (substring root-pattern 2))))
+                 ((and (not client-only-p)
+                       (or (string-prefix-p "~" root-pattern)
+                           (file-name-absolute-p root-pattern)))
+                  (expand-file-name root-pattern))))
                (literal-directory
                 (and directory-p
                      (not absolute-pattern)
@@ -410,38 +463,39 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                             (not (string-match-p "/" suffix))
                             (not (glob-p suffix))
                             suffix)))))
-          (cond
-           ((not (glob-p root-pattern))
-            (add-candidate (or absolute-pattern
-                               (expand-file-name root-pattern workdir))
-                           mode directory-p))
-           (literal-directory
-            (dolist (root (delete-dups (copy-sequence writable-roots)))
-              (search-literal-directory root literal-directory mode)
-              (add-candidate
-               (file-name-concat root literal-directory) mode t)))
-           (t
-            (let ((search-roots (copy-sequence writable-roots)))
-              (when absolute-pattern
-                (let* ((index
-                        (cl-position-if
-                         (lambda (char) (memq char '(?* ?? ?\[)))
-                         absolute-pattern))
-                       (prefix (substring absolute-pattern 0 index))
-                       (root (if (string-suffix-p "/" prefix)
-                                 (directory-file-name prefix)
-                               (file-name-directory prefix))))
-                  (when (and root (not (string-equal root "/")))
-                    (push root search-roots))))
-              (dolist (root (delete-dups search-roots))
-                (search-tree root root-pattern mode directory-p))
-              (when (and directory-p
-                         (string-prefix-p "**/" root-pattern)
-                         (not (glob-p (substring root-pattern 3))))
-                (let ((suffix (substring root-pattern 3)))
-                  (dolist (root search-roots)
-                    (add-candidate (file-name-concat root suffix)
-                                   mode t)))))))))
+          (unless client-only-p
+            (cond
+             ((not (glob-p root-pattern))
+              (add-candidate (or absolute-pattern
+                                 (expand-file-name root-pattern workdir))
+                             mode directory-p))
+             (literal-directory
+              (dolist (root (delete-dups (copy-sequence writable-roots)))
+                (search-literal-directory root literal-directory mode)
+                (add-candidate
+                 (file-name-concat root literal-directory) mode t)))
+             (t
+              (let ((search-roots (copy-sequence writable-roots)))
+                (when absolute-pattern
+                  (let* ((index
+                          (cl-position-if
+                           (lambda (char) (memq char '(?* ?? ?\[)))
+                           absolute-pattern))
+                         (prefix (substring absolute-pattern 0 index))
+                         (root (if (string-suffix-p "/" prefix)
+                                   (directory-file-name prefix)
+                                 (file-name-directory prefix))))
+                    (when (and root (not (string-equal root "/")))
+                      (push root search-roots))))
+                (dolist (root (delete-dups search-roots))
+                  (search-tree root root-pattern mode directory-p))
+                (when (and directory-p
+                           (string-prefix-p "**/" root-pattern)
+                           (not (glob-p (substring root-pattern 3))))
+                  (let ((suffix (substring root-pattern 3)))
+                    (dolist (root search-roots)
+                      (add-candidate (file-name-concat root suffix)
+                                     mode t))))))))))
       (nreverse candidates))))
 
 (defun mevedel-sandbox-cleanup (preparation)
@@ -599,14 +653,15 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
     (list :state 'refused :error reason :facts facts)))
 
 (defun mevedel-sandbox-pending-facts
-    (&optional additional-permissions sandbox-permissions mode)
+    (&optional additional-permissions sandbox-permissions mode workdir)
   "Return the selected boundary facts for a pending child request.
 
 ADDITIONAL-PERMISSIONS is the validated additive profile.
 SANDBOX-PERMISSIONS may be `require-escalated'.  This preview may probe the
 configured backend, but it does not prepare a command or mutate launch facts.
 A `best-effort' launch can still fall back if Bubblewrap later fails before
-the requested process starts.  MODE defaults to the global sandbox mode."
+the requested process starts.  MODE defaults to the global sandbox mode.
+WORKDIR identifies the execution target that the pending child will use."
   (let ((mode (mevedel-sandbox-mode-normalize
                (or mode mevedel-sandbox-mode))))
     (cond
@@ -618,7 +673,10 @@ the requested process starts.  MODE defaults to the global sandbox mode."
            "Confinement disabled by mevedel-sandbox-mode"
          "Full execution escalation requested")))
      ((memq mode '(best-effort required))
-      (let ((availability (mevedel-sandbox-probe)))
+      (let ((availability
+             (if (and workdir (file-remote-p workdir))
+                 (mevedel-sandbox-probe workdir)
+               (mevedel-sandbox-probe))))
         (cond
          ((plist-get availability :available)
           (list :sandbox 'bubblewrap
@@ -765,7 +823,8 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
             (mevedel-sandbox--fd-backed-command
              (cons executable arguments)
              (append (plist-get ancestor-mounts :paths)
-                     (plist-get post-protection-mounts :paths)))
+                     (plist-get post-protection-mounts :paths))
+             canonical-workdir)
             :original-command command
             :marker marker
             :cleanup-paths (plist-get protected :cleanup-paths)
@@ -803,7 +862,10 @@ MODE defaults to the global sandbox mode."
       ((or 'best-effort 'required)
        (when (plist-get mevedel-sandbox--probe-cache :retry-on-execution)
          (setq mevedel-sandbox--probe-cache nil))
-       (let ((availability (mevedel-sandbox-probe)))
+       (let ((availability
+              (if (file-remote-p workdir)
+                  (mevedel-sandbox-probe workdir)
+                (mevedel-sandbox-probe))))
          (if (plist-get availability :available)
              (condition-case err
                  (let ((preparation
@@ -871,7 +933,8 @@ MODE defaults to the global sandbox mode."
 
 (defun mevedel-sandbox--record-launch-failure (child-result)
   "Record CHILD-RESULT as a retryable unavailable backend launch."
-  (let* ((output (string-trim (or (plist-get child-result :output) "")))
+  (let* ((target (plist-get mevedel-sandbox--probe-cache :target))
+         (output (string-trim (or (plist-get child-result :output) "")))
          (reason
           (cond
            ((not (string-empty-p output))
@@ -884,7 +947,9 @@ MODE defaults to the global sandbox mode."
             (format "Bubblewrap exited before process start with exit code %s"
                     (or (plist-get child-result :exit-code) "unknown"))))))
     (setq mevedel-sandbox--probe-cache
-          (list :available nil :reason reason :retry-on-execution t))
+          (let ((facts
+                 (list :available nil :reason reason :retry-on-execution t)))
+            (if target (plist-put facts :target target) facts)))
     (setq mevedel-sandbox--last-facts
           (mevedel-sandbox--unrestricted-facts 'unavailable reason))))
 

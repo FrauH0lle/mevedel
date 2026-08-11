@@ -15,7 +15,23 @@
 (declare-function gptel--model-mime-capable-p "ext:gptel-request"
                   (mime &optional model))
 
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-publish-text
+                  "mevedel-session-persistence"
+                  (session path content &optional coding))
+(declare-function mevedel-session-persistence-read-artifact
+                  "mevedel-session-persistence" (session logical
+                                                  &optional committed-only))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+
+;; `subr'
 (defvar read-eval)
+
+
+;;
+;;; Storage
 
 (defconst mevedel-tool-media--data-open "<!-- mevedel-media-data -->"
   "Opening delimiter marking a hidden tool media side-channel block.")
@@ -30,46 +46,69 @@
   (secure-hash 'sha256
                (format "%S:%S:%S" (current-time) (emacs-pid) (random t))))
 
-(defun mevedel-tool-media--store-dir (tool-results-dir &optional create)
-  "Return media directory below TOOL-RESULTS-DIR.
-When CREATE is non-nil, create the directory first."
+(defun mevedel-tool-media--store-dir (tool-results-dir)
+  "Return the existing media directory below TOOL-RESULTS-DIR."
   (when (stringp tool-results-dir)
     (let ((dir (file-name-concat tool-results-dir "media")))
-      (when create (make-directory dir t))
-      (and (or create (file-directory-p dir)) dir))))
+      (and (file-directory-p dir) dir))))
 
 (defun mevedel-tool-media--write-media-store-record
-    (id items tool-results-dir tool-use-id)
+    (id items tool-results-dir tool-use-id &optional session)
   "Persist ITEMS under ID in TOOL-RESULTS-DIR, returning the file path.
 
-TOOL-USE-ID records the tool call that owns the media."
-  (when-let* ((dir (mevedel-tool-media--store-dir tool-results-dir t)))
-    (let ((file (file-name-concat dir (concat "media-" id ".el"))))
-      (with-temp-buffer
-        (let ((print-level nil)
-              (print-length nil)
-              (print-circle t))
-          (prin1 (list :version 1 :id id
-                       :tool-use-id tool-use-id
-                       :items items)
-                 (current-buffer)))
+TOOL-USE-ID records the tool call that owns the media.  When SESSION is
+non-nil, publish through its durability seam."
+  (when (stringp tool-results-dir)
+    (let* ((dir (file-name-concat tool-results-dir "media"))
+           (file (file-name-concat dir (concat "media-" id ".el")))
+           (content
+            (let ((print-level nil)
+                  (print-length nil)
+                  (print-circle t))
+              (prin1-to-string
+               (list :version 1 :id id
+                     :tool-use-id tool-use-id
+                     :items items)))))
+      (if session
+          (progn
+            (require 'mevedel-session-persistence)
+            (mevedel-session-persistence-publish-text
+             session file content 'utf-8-unix))
+        (make-directory dir t)
         (let ((coding-system-for-write 'utf-8-unix))
-          (write-region nil nil file nil 'silent)))
+          (write-region content nil file nil 'silent)))
       file)))
 
 (defun mevedel-tool-media--read-media-store-record
-    (id tool-results-dir expected-tool-use-id)
+    (id tool-results-dir expected-tool-use-id &optional session)
   "Return media items for ID from TOOL-RESULTS-DIR.
-EXPECTED-TOOL-USE-ID rejects stale records when non-nil."
+EXPECTED-TOOL-USE-ID rejects stale records when non-nil.  SESSION resolves
+remote session artifacts through their committed publication."
   (when-let* ((id (and (stringp id) id))
-              (dir (mevedel-tool-media--store-dir tool-results-dir))
+              ((string-match-p (rx string-start (+ hex) string-end) id))
+              (dir (if session
+                       (and (stringp tool-results-dir)
+                            (file-name-concat tool-results-dir "media"))
+                     (mevedel-tool-media--store-dir tool-results-dir)))
               (file (file-name-concat dir (concat "media-" id ".el"))))
-    (when (and (file-readable-p file)
-               (string-match-p (rx string-start (+ hex) string-end) id))
+    (when (or session (file-readable-p file))
       (condition-case _
-          (let* ((read-eval nil)
+          (let* ((bytes
+                  (if session
+                      (progn
+                        (require 'mevedel-session-persistence)
+                        (mevedel-session-persistence-read-artifact
+                         session
+                         (file-relative-name
+                          file (mevedel-session-save-path session))))
+                    (with-temp-buffer
+                      (set-buffer-multibyte nil)
+                      (insert-file-contents-literally file)
+                      (buffer-string))))
+                 (read-eval nil)
                  (record (with-temp-buffer
-                           (insert-file-contents-literally file)
+                           (insert bytes)
+                           (goto-char (point-min))
                            (read (current-buffer))))
                  (items (and (equal id (plist-get record :id))
                              (equal expected-tool-use-id
@@ -92,17 +131,18 @@ payload.  EXPECTED-TOOL-USE-ID comes from the gptel tool-call record."
     (mevedel-tool-media-normalize-items items)))
 
 (defun mevedel-tool-media--store-media-data
-    (media &optional tool-results-dir tool-use-id)
+    (media &optional tool-results-dir tool-use-id session)
   "Store MEDIA in TOOL-RESULTS-DIR, returning a side-channel reference.
 
-TOOL-USE-ID records the tool call that owns the media."
+TOOL-USE-ID records the tool call that owns the media.  SESSION owns durable
+publication when non-nil."
   (when-let* ((items (mevedel-tool-media-normalize-items media)))
     (let* ((id (mevedel-tool-media--store-id))
            (record (list :version 1 :id id
                          :tool-use-id tool-use-id
                          :items items)))
       (mevedel-tool-media--write-media-store-record
-       id items tool-results-dir tool-use-id)
+       id items tool-results-dir tool-use-id session)
       (puthash id record mevedel-tool-media--store)
       (append (list :id id)
               (when (stringp tool-use-id)
@@ -110,12 +150,13 @@ TOOL-USE-ID records the tool call that owns the media."
                       (substring-no-properties tool-use-id)))))))
 
 (defun mevedel-tool-media--format-media-data-block
-    (media &optional tool-results-dir tool-use-id)
+    (media &optional tool-results-dir tool-use-id session)
   "Return serialized side-channel block for MEDIA.
 
-TOOL-RESULTS-DIR and TOOL-USE-ID describe the tool call owner."
+TOOL-RESULTS-DIR and TOOL-USE-ID describe the tool call owner.  SESSION owns
+durable publication when non-nil."
   (if-let* ((ref (mevedel-tool-media--store-media-data
-                  media tool-results-dir tool-use-id)))
+                  media tool-results-dir tool-use-id session)))
       (propertize
        (concat "\n" mevedel-tool-media--data-open "\n"
                (let ((print-level nil)
@@ -128,12 +169,13 @@ TOOL-RESULTS-DIR and TOOL-USE-ID describe the tool call owner."
     ""))
 
 (defun mevedel-tool-media-attach-result
-    (result media tool-results-dir tool-use-id)
-  "Attach MEDIA to RESULT using TOOL-RESULTS-DIR and TOOL-USE-ID."
+    (result media tool-results-dir tool-use-id &optional session)
+  "Attach MEDIA to RESULT using TOOL-RESULTS-DIR and TOOL-USE-ID.
+SESSION owns durable publication when non-nil."
   (if (and (stringp result) media)
       (concat (mevedel-tool-media--envelope-summary result)
               (mevedel-tool-media--format-media-data-block
-               media tool-results-dir tool-use-id))
+               media tool-results-dir tool-use-id session))
     result))
 
 (defun mevedel-tool-media-strip-blocks (string)
@@ -179,10 +221,10 @@ side-channel data."
       (apply #'concat (nreverse chunks)))))
 
 (defun mevedel-tool-media--read-media-reference
-    (reference tool-results-dir expected-tool-use-id)
+    (reference tool-results-dir expected-tool-use-id &optional session)
   "Return media stored for REFERENCE when its provenance matches.
 TOOL-RESULTS-DIR selects persisted storage and EXPECTED-TOOL-USE-ID
-selects the owning tool call."
+selects the owning tool call.  SESSION supplies remote artifact storage."
   (let ((id (plist-get reference :id))
         (tool-use-id (plist-get reference :tool-use-id)))
     (or (and (stringp id)
@@ -192,35 +234,36 @@ selects the owning tool call."
         (and expected-tool-use-id
              (equal expected-tool-use-id tool-use-id)
              (mevedel-tool-media--read-media-store-record
-              id tool-results-dir expected-tool-use-id)))))
+              id tool-results-dir expected-tool-use-id session)))))
 
 (defun mevedel-tool-media--candidate-data
     (payload tool-results-dir expected-tool-use-id
-             allow-payload-tool-use-id terminal-p)
+             allow-payload-tool-use-id terminal-p session)
   "Return trusted media for a candidate side-channel PAYLOAD.
 TOOL-RESULTS-DIR selects persisted storage.  EXPECTED-TOOL-USE-ID is
 preferred; when it is nil, ALLOW-PAYLOAD-TOOL-USE-ID and TERMINAL-P may
-  authorize the id in the terminal payload itself."
+authorize the id in the terminal payload itself.  SESSION supplies remote
+artifact storage."
   (condition-case _
       (let* ((read-eval nil)
              (reference (read payload))
              (payload-tool-use-id (plist-get reference :tool-use-id)))
         (or (and expected-tool-use-id
                  (mevedel-tool-media--read-media-reference
-                  reference tool-results-dir expected-tool-use-id))
+                  reference tool-results-dir expected-tool-use-id session))
             (and allow-payload-tool-use-id terminal-p payload-tool-use-id
                  (mevedel-tool-media--read-media-reference
-                  reference tool-results-dir payload-tool-use-id))))
+                  reference tool-results-dir payload-tool-use-id session))))
     (error nil)))
 
 (defun mevedel-tool-media-extract
     (result-string &optional tool-results-dir expected-tool-use-id
-                   allow-payload-tool-use-id)
+                   allow-payload-tool-use-id session)
   "Return (VISIBLE-PART . MEDIA) parsed from RESULT-STRING.
 VISIBLE-PART is the tool result with media side-channel blocks stripped.
 MEDIA is the Lisp object deserialized from inside the block, or nil.
-TOOL-RESULTS-DIR, EXPECTED-TOOL-USE-ID, and ALLOW-PAYLOAD-TOOL-USE-ID
-control trusted side-channel lookup."
+TOOL-RESULTS-DIR, EXPECTED-TOOL-USE-ID, ALLOW-PAYLOAD-TOOL-USE-ID, and
+SESSION control trusted side-channel lookup."
   (if (not (stringp result-string))
       (cons result-string nil)
     (let ((open nil)
@@ -253,7 +296,7 @@ control trusted side-channel lookup."
                      (mevedel-tool-media--candidate-data
                       candidate-payload tool-results-dir
                       expected-tool-use-id allow-payload-tool-use-id
-                      candidate-terminal-p))))
+                      candidate-terminal-p session))))
           (if candidate-data
               (setq close candidate-close
                     data candidate-data)
@@ -483,9 +526,10 @@ control trusted side-channel lookup."
    (t result)))
 
 (defun mevedel-tool-media-prepare-tool-result
-    (backend tool-call tool-results-dir)
+    (backend tool-call tool-results-dir &optional session)
   "Prepare TOOL-CALL text and media for BACKEND.
-TOOL-RESULTS-DIR selects persisted media.  Return
+TOOL-RESULTS-DIR selects persisted media.  SESSION resolves remote durable
+records.  Return
 (MODEL-RESULT . NATIVE-MEDIA)."
   (let* ((original (plist-get tool-call :result))
          (read-p (equal (plist-get tool-call :name) "Read"))
@@ -493,7 +537,7 @@ TOOL-RESULTS-DIR selects persisted media.  Return
          (extracted
           (and read-p tool-use-id (stringp original)
                (mevedel-tool-media-extract
-                original tool-results-dir tool-use-id)))
+                original tool-results-dir tool-use-id nil session)))
          (media
           (and read-p tool-use-id
                (or (mevedel-tool-media-normalize-items

@@ -28,6 +28,10 @@
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 
+(declare-function gptel-make-openai "ext:gptel-openai" (name &rest args))
+
+(defvar gptel--known-backends)
+
 (mevedel-deftest mevedel-view-send/btw ()
   ,test
   (test)

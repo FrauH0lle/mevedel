@@ -294,7 +294,20 @@
                      (mevedel-tool-code--format-xref-items (list item))))
       (should (equal '(:safe nil nil) group-state))
       (should (equal '(:safe nil nil) line-state))
-      (should (equal '(:safe nil nil) summary-state)))))
+      (should (equal '(:safe nil nil) summary-state))))
+
+  :doc "rejects an xref location from another execution target"
+  (mevedel-test--with-local-shell-tramp '("first" "second")
+    (let* ((target
+            (mevedel-tool-code--execution-target
+             "/mevedelmock:first:/srv/project/source.el"))
+           (location
+            (xref-make-file-location
+             "/mevedelmock:second:/srv/other/source.el" 1 0))
+           (item (xref-make "foreign result" location)))
+      (should-error
+       (mevedel-tool-code--format-xref-items (list item) target)
+       :type 'mevedel-execution-target-error))))
 
 
 ;;
@@ -414,7 +427,56 @@
   (should-error
    (mevedel-tool-code--xref-references
     #'ignore (list :identifier "foo" :file_path "/nonexistent/file.el"))
-   :type 'error))
+   :type 'error)
+  :doc "refuses an unverified xref backend for a remote file"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-xref-remote-" t)))
+         (native-file (file-name-concat root "source.el"))
+         (remote-file (format "/mevedelmock:code:%s" native-file))
+         mevedel-tool-code-test-xref-backend-state
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun remote-xref-target () nil)\n"
+                        nil native-file nil 'silent)
+          (mevedel-test--with-local-shell-tramp '("code")
+            (cl-letf (((symbol-function 'xref-find-backend)
+                       (lambda () 'mevedel-tool-code-test-backend)))
+              (mevedel-tool-code--xref-references
+               (lambda (envelope)
+                 (setq result
+                       (test-mevedel-tool-code--handler-result envelope)))
+               (list :identifier "remote-xref-target"
+                     :file_path remote-file))))
+          (should (string-match-p
+                   "not supported for remote workspaces" result))
+          (should-not mevedel-tool-code-test-xref-backend-state))
+      (delete-directory root t)))
+  :doc "runs Emacs Lisp reference search on the target and returns native paths"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-xref-remote-elisp-" t)))
+         (native-file (file-name-concat root "source.el"))
+         (remote-file (format "/mevedelmock:code:%s" native-file))
+         (identifier "mevedel-remote-elisp-reference-target")
+         result)
+    (unwind-protect
+        (progn
+          (write-region
+           (format "(defun %s () nil)\n(%s)\n" identifier identifier)
+           nil native-file nil 'silent)
+          (let ((default-directory root))
+            (should (zerop (process-file "git" nil nil nil "init" "--quiet")))
+            (should (zerop (process-file "git" nil nil nil
+                                         "add" "source.el"))))
+          (mevedel-test--with-local-shell-tramp '("code")
+            (mevedel-tool-code--xref-references
+             (lambda (envelope)
+               (setq result
+                     (test-mevedel-tool-code--handler-result envelope)))
+             (list :identifier identifier :file_path remote-file)))
+          (should (string-match-p (regexp-quote native-file) result))
+          (should-not (string-match-p "/mevedelmock:" result)))
+      (delete-directory root t))))
 
 
 ;;
@@ -507,7 +569,53 @@
         (fmakunbound beta))
       (when-let* ((buf (find-buffer-visiting tmp)))
         (kill-buffer buf))
-      (delete-file tmp))))
+      (delete-file tmp)))
+  :doc "refuses an unverified xref backend for a remote file"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-xref-remote-" t)))
+         (native-file (file-name-concat root "source.el"))
+         (remote-file (format "/mevedelmock:code:%s" native-file))
+         mevedel-tool-code-test-xref-backend-state
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun remote-xref-target () nil)\n"
+                        nil native-file nil 'silent)
+          (mevedel-test--with-local-shell-tramp '("code")
+            (cl-letf (((symbol-function 'xref-find-backend)
+                       (lambda () 'mevedel-tool-code-test-backend)))
+              (mevedel-tool-code--xref-definitions
+               (lambda (envelope)
+                 (setq result
+                       (test-mevedel-tool-code--handler-result envelope)))
+               (list :pattern "remote-xref-target"
+                     :file_path remote-file))))
+          (should (string-match-p
+                   "not supported for remote workspaces" result))
+          (should-not mevedel-tool-code-test-xref-backend-state))
+      (delete-directory root t)))
+  :doc "refuses local-state Emacs Lisp definition lookup for a remote file"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-xref-remote-elisp-" t)))
+         (native-file (file-name-concat root "source.el"))
+         (remote-file (format "/mevedelmock:code:%s" native-file))
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun remote-xref-target () nil)\n"
+                        nil native-file nil 'silent)
+          (mevedel-test--with-local-shell-tramp '("code")
+            (cl-letf (((symbol-function 'xref-find-backend)
+                       (lambda () 'elisp)))
+              (mevedel-tool-code--xref-definitions
+               (lambda (envelope)
+                 (setq result
+                       (test-mevedel-tool-code--handler-result envelope)))
+               (list :pattern "remote-xref-target"
+                     :file_path remote-file))))
+          (should (string-match-p
+                   "not supported for remote workspaces" result)))
+      (delete-directory root t))))
 
 
 ;;
@@ -576,7 +684,27 @@
   (should-error
    (mevedel-tool-code--imenu
     #'ignore (list :file_path "/nonexistent/file.el"))
-   :type 'error))
+   :type 'error)
+  :doc "uses a remote file buffer and returns its target-native path"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-imenu-remote-" t)))
+         (native-file (file-name-concat root "source.el"))
+         (remote-file (format "/mevedelmock:code:%s" native-file))
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun remote-imenu-target () nil)\n"
+                        nil native-file nil 'silent)
+          (mevedel-test--with-local-shell-tramp '("code")
+            (mevedel-tool-code--imenu
+             (lambda (envelope)
+               (setq result
+                     (test-mevedel-tool-code--handler-result envelope)))
+             (list :file_path remote-file)))
+          (should (string-match-p "remote-imenu-target" result))
+          (should (string-match-p (regexp-quote native-file) result))
+          (should-not (string-match-p "/mevedelmock:" result)))
+      (delete-directory root t))))
 
 
 ;;
@@ -607,7 +735,27 @@
   (should-error
    (mevedel-tool-code--treesitter
     #'ignore (list :file_path "/nonexistent/file.el"))
-   :type 'error))
+   :type 'error)
+  :doc "visits a remote file and keeps diagnostics target-native"
+  (skip-unless (treesit-available-p))
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-treesitter-remote-" t)))
+         (native-file (file-name-concat root "source.txt"))
+         (remote-file (format "/mevedelmock:code:%s" native-file))
+         result)
+    (unwind-protect
+        (progn
+          (write-region "remote tree-sitter input\n"
+                        nil native-file nil 'silent)
+          (mevedel-test--with-local-shell-tramp '("code")
+            (mevedel-tool-code--treesitter
+             (lambda (envelope)
+               (setq result
+                     (test-mevedel-tool-code--handler-result envelope)))
+             (list :file_path remote-file)))
+          (should (string-match-p (regexp-quote native-file) result))
+          (should-not (string-match-p "/mevedelmock:" result)))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-tool-code)
 ;;; test-mevedel-tool-code.el ends here

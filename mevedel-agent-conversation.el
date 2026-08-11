@@ -88,6 +88,10 @@
 (declare-function mevedel-execution-sandbox-summary-class
                   "mevedel-execution" (summary))
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--find-render-data-block-by-agent-id
                   "mevedel-pipeline" (agent-id))
@@ -112,6 +116,12 @@
                   "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-persistence--write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence-find-artifact-noselect
+                  "mevedel-session-persistence"
+                  (session logical &optional inspection))
+(declare-function mevedel-session-persistence-publish-text
+                  "mevedel-session-persistence"
+                  (session path content &optional coding))
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-project-evidence
@@ -125,6 +135,8 @@
                   "mevedel-skills-prompt" ())
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-execution-target
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
@@ -216,16 +228,20 @@ A non-positive value saves immediately.  Terminal paths always save now."
         (and workspace (mevedel-workspace-root workspace))
         default-directory))))
 
-(defun mevedel-agent-conversation-open (invocation parent-data-buffer)
-  "Create and configure INVOCATION's conversation below PARENT-DATA-BUFFER."
+(defun mevedel-agent-conversation-open
+    (invocation parent-data-buffer &optional existing-buffer)
+  "Create and configure INVOCATION's conversation below PARENT-DATA-BUFFER.
+Use EXISTING-BUFFER when hydrating a persisted logical artifact."
   (let* ((agent-id (mevedel-agent-invocation-agent-id invocation))
          (suffix (and (stringp agent-id)
                       (cadr (split-string agent-id "--" t))))
          (short-id (if (stringp suffix)
                        (substring suffix 0 (min 8 (length suffix)))
                      "anon"))
-         (buffer (generate-new-buffer
-                  (format "*mevedel-agent-%s*" short-id)))
+         (buffer
+          (or existing-buffer
+              (generate-new-buffer
+               (format "*mevedel-agent-%s*" short-id))))
          (parent-session
           (and (buffer-live-p parent-data-buffer)
                (buffer-local-value 'mevedel--session parent-data-buffer)))
@@ -341,37 +357,43 @@ A non-positive value saves immediately.  Terminal paths always save now."
     buffer))
 
 (defun mevedel-agent-conversation-hydrate
-    (invocation parent-data-buffer absolute-path)
-  "Restore INVOCATION below PARENT-DATA-BUFFER from ABSOLUTE-PATH.
+    (invocation parent-data-buffer logical-path &optional inspection)
+  "Restore INVOCATION below PARENT-DATA-BUFFER from LOGICAL-PATH.
+
+LOGICAL-PATH is session-relative.  When INSPECTION is non-nil, retain the
+resolver's read-only, no-save buffer contract.
 Return the hydrated conversation buffer."
-  (let ((buffer (mevedel-agent-conversation-open
-                 invocation parent-data-buffer)))
-    (condition-case err
-        (progn
-          (setf (mevedel-agent-invocation-buffer invocation) buffer)
-          (with-current-buffer buffer
+  (let ((session (mevedel-agent-invocation-parent-session invocation)))
+    (unless session
+      (error "Agent conversation has no session"))
+    (require 'mevedel-session-persistence)
+    (let ((buffer
+           (mevedel-session-persistence-find-artifact-noselect
+            session logical-path inspection)))
+      (condition-case err
+          (progn
             (let ((inhibit-read-only t))
-              (erase-buffer)
-              (insert-file-contents absolute-path))
-            (set-visited-file-name absolute-path t)
-            (require 'mevedel-transcript)
-            (require 'mevedel-transcript-restore)
-            (mevedel-transcript-restore-gptel-state)
-            (mevedel-transcript-normalize-properties)
-            (mevedel-agent-conversation-configure invocation)
-            (require 'mevedel-session-persistence)
-            (mevedel-session-persistence--property-delete-direct
-             "GPTEL_SYSTEM")
-            (mevedel-session-persistence--stabilize-gptel-bounds)
-            (set-buffer-modified-p nil)
-            (set-visited-file-modtime))
-          buffer)
-      (error
-       (when (buffer-live-p buffer)
-         (with-current-buffer buffer
-           (set-buffer-modified-p nil))
-         (kill-buffer buffer))
-       (signal (car err) (cdr err))))))
+              (mevedel-agent-conversation-open
+               invocation parent-data-buffer buffer))
+            (setf (mevedel-agent-invocation-buffer invocation) buffer)
+            (with-current-buffer buffer
+              (let ((inhibit-read-only t))
+                (require 'mevedel-transcript)
+                (require 'mevedel-transcript-restore)
+                (mevedel-transcript-restore-gptel-state)
+                (mevedel-transcript-normalize-properties)
+                (mevedel-agent-conversation-configure invocation)
+                (mevedel-session-persistence--property-delete-direct
+                 "GPTEL_SYSTEM")
+                (mevedel-session-persistence--stabilize-gptel-bounds)
+                (set-buffer-modified-p nil)))
+            buffer)
+        (error
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (set-buffer-modified-p nil))
+           (kill-buffer buffer))
+         (signal (car err) (cdr err)))))))
 
 (defun mevedel-agent-conversation-configure (invocation &optional buffer)
   "Install INVOCATION's frozen request locals in BUFFER.
@@ -777,17 +799,33 @@ Return nil when INVOCATION has no live conversation buffer."
                   (when (buffer-modified-p)
                     (when (bound-and-true-p gptel-mode)
                       (gptel--save-state))
-                    (let ((coding-system-for-write 'utf-8-unix)
-                          (save-silently t)
-                          (inhibit-message t)
-                          (message-log-max nil)
-                          (before-save-hook
-                           (remq 'gptel--save-state before-save-hook))
-                          (undo-tree-auto-save-history nil)
-                          (write-file-functions
-                           (remq 'undo-tree-save-history-from-hook
-                                 write-file-functions)))
-                      (basic-save-buffer)))
+                    (let* ((target (mevedel-session-execution-target session))
+                           (remote (and target
+                                        (mevedel-execution-target-remote-p
+                                         target)))
+                           (coding-system-for-write 'utf-8-unix)
+                           (save-silently t)
+                           (inhibit-message t)
+                           (message-log-max nil)
+                           (before-save-hook
+                            (remq 'gptel--save-state before-save-hook))
+                           (undo-tree-auto-save-history nil)
+                           (write-file-functions
+                            (remq 'undo-tree-save-history-from-hook
+                                  write-file-functions)))
+                      (if remote
+                          (progn
+                            (run-hooks 'before-save-hook)
+                            (require 'mevedel-session-persistence)
+                            (mevedel-session-persistence-publish-text
+                             session buffer-file-name
+                             (buffer-substring-no-properties
+                              (point-min) (point-max))
+                             'utf-8-unix)
+                            (set-visited-file-modtime)
+                            (set-buffer-modified-p nil)
+                            (run-hooks 'after-save-hook))
+                        (basic-save-buffer))))
                   (require 'mevedel-session-persistence)
                   (mevedel-session-persistence--update-transcript-entry
                    session

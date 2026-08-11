@@ -18,6 +18,7 @@
           "helpers"))
 (require 'mevedel-cockpit)
 (require 'mevedel-execution)
+(require 'mevedel-execution-target)
 (require 'mevedel-executions-list)
 (require 'mevedel-gptel-bridge)
 (require 'mevedel-menu)
@@ -510,7 +511,33 @@
     (with-current-buffer data-buf
       (setq-local mevedel--current-request t))
     (with-current-buffer view-buf
-      (should (string-match-p "running" (mevedel-menu--header))))))
+      (should (string-match-p "running" (mevedel-menu--header)))))
+
+  :doc "shows target identity, support, readiness, and sandbox state"
+  (mevedel-menu-test--with-buffers
+    (let* ((target (mevedel-execution-target-create
+                    "/ssh:user@host:/srv/project/"))
+           (remote-session
+            (mevedel-session--create
+             :name "remote" :workspace workspace
+             :working-directory "/ssh:user@host:/srv/project/"
+             :execution-target target :permission-mode 'ask)))
+      (setf (mevedel-execution-target-readiness target)
+            '(:status ready :sandbox-mode best-effort
+              :sandbox-status bubblewrap)
+            (mevedel-session-lease remote-session) '(:state owned)
+            (mevedel-session-pending-publication remote-session)
+            '(:reason "remote write failed"))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session remote-session))
+      (with-current-buffer view-buf
+        (let ((header (mevedel-menu--header)))
+          (should (string-match-p "Target.*ssh:user@host" header))
+          (should (string-match-p "supported" header))
+          (should (string-match-p "ready" header))
+          (should (string-match-p "sandbox bubblewrap" header))
+          (should (string-match-p "Persistence.*lease owned" header))
+          (should (string-match-p "publication pending" header)))))))
 
 (mevedel-deftest mevedel-menu--worktree-label ()
   ,test

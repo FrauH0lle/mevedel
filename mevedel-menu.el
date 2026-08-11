@@ -46,6 +46,20 @@
 ;; `mevedel-execution'
 (declare-function mevedel-execution-count-user "mevedel-execution" (session))
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-label
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+(declare-function mevedel-execution-target-native-root
+                  "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-readiness
+                  "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-support-tier
+                  "mevedel-execution-target" (cl-x) t)
+
 ;; `mevedel-executions-list'
 (declare-function mevedel-executions-list-open
                   "mevedel-executions-list" (&optional context))
@@ -122,6 +136,10 @@
 (declare-function mevedel-review "mevedel-review" (&optional instructions))
 (declare-function mevedel-verify "mevedel-review" (&optional instructions))
 
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-status
+                  "mevedel-session-durability" (session))
+
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills-count-label "mevedel-skills-ui" (session))
 (declare-function mevedel-skills-list-open "mevedel-skills-ui"
@@ -140,6 +158,8 @@
                   (&optional buffer))
 (declare-function mevedel-request-state-label "mevedel-structs"
                   (&optional buffer))
+(declare-function mevedel-session-execution-target
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-plan-approval
@@ -150,6 +170,7 @@
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-resource-grants
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tools'
@@ -262,11 +283,14 @@
   (mevedel-tools-active-count
    (mevedel-cockpit-context-data-buffer (mevedel-menu--context))))
 
-(defun mevedel-menu--root-label (workspace)
-  "Return a compact root label for WORKSPACE."
-  (if (and workspace (fboundp 'mevedel-workspace-root))
-      (abbreviate-file-name (mevedel-workspace-root workspace))
-    "unknown"))
+(defun mevedel-menu--root-label (workspace &optional target)
+  "Return a compact root label for WORKSPACE and TARGET."
+  (cond
+   (target
+    (abbreviate-file-name (mevedel-execution-target-native-root target)))
+   ((and workspace (fboundp 'mevedel-workspace-root))
+    (abbreviate-file-name (mevedel-workspace-root workspace)))
+   (t "unknown")))
 
 (defun mevedel-menu--worktree-label ()
   "Return the current branch or detached HEAD label."
@@ -274,12 +298,50 @@
   (plist-get (mevedel-worktree-status-summary (mevedel-menu--context))
              :label))
 
+(defun mevedel-menu--target-description (session)
+  "Return SESSION's execution-target status line."
+  (when-let* ((target (and session
+                           (mevedel-session-execution-target session))))
+    (require 'mevedel-execution-target)
+    (let* ((readiness (mevedel-execution-target-readiness target))
+           (status (or (plist-get readiness :status) 'not-probed))
+           (sandbox (plist-get readiness :sandbox-status)))
+      (format "Target %s · %s · %s%s"
+              (mevedel-execution-target-label target)
+              (mevedel-execution-target-support-tier target)
+              status
+              (if sandbox (format " · sandbox %s" sandbox) "")))))
+
+(defun mevedel-menu--durability-description (session)
+  "Return SESSION's persistence, lease, and publication status line."
+  (when (and session (mevedel-session-workspace session))
+    (require 'mevedel-execution-target)
+    (require 'mevedel-session-durability)
+    (let* ((target (mevedel-session-execution-target session))
+           (status (mevedel-session-durability-status session))
+           (path (plist-get status :authoritative-state-path))
+           (lease (or (plist-get status :lease-state)
+                      (if (and target
+                               (mevedel-execution-target-remote-p target))
+                          'none
+                        'local))))
+      (format "Persistence %s · lease %s · publication %s"
+              (if target
+                  (mevedel-execution-target-native-path target path)
+                path)
+              lease
+              (if (plist-get status :pending-publication)
+                  "pending"
+                "published")))))
+
 (defun mevedel-menu--header ()
   "Return the cockpit header string."
   (let* ((context (mevedel-menu--context))
          (data-buffer (mevedel-cockpit-context-data-buffer context))
          (session (mevedel-cockpit-context-session context))
          (workspace (mevedel-cockpit-context-workspace context))
+         (target (and session
+                      (mevedel-session-execution-target session)))
          (mode (mevedel-menu--mode-symbol
                 session data-buffer
                 (mevedel-cockpit-context-view-buffer context)))
@@ -290,14 +352,19 @@
      (mevedel-menu--value
       (or (and session (mevedel-session-name session)) "unknown"))
      "  "
-     (mevedel-menu--value (mevedel-menu--root-label workspace))
+     (mevedel-menu--value (mevedel-menu--root-label workspace target))
      "        "
      (mevedel-menu--value (mevedel-menu--mode-label mode))
      " · "
      (mevedel-menu--value
       request-state
       (if (string= request-state "running") 'warning 'transient-value))
-     "\n")))
+     "\n"
+     (when-let* ((target (mevedel-menu--target-description session)))
+       (concat "  " (mevedel-menu--value target) "\n"))
+     (when-let* ((durability
+                  (mevedel-menu--durability-description session)))
+       (concat "  " (mevedel-menu--value durability) "\n")))))
 
 (defun mevedel-menu--mode-description ()
   "Return the top-level mode row description."

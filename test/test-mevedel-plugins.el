@@ -10,6 +10,8 @@
 (require 'mevedel-cockpit)
 (require 'mevedel-menu)
 (require 'mevedel-plugins)
+(require 'mevedel-session-durability)
+(require 'mevedel-session-persistence)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -384,6 +386,58 @@
 ;;
 ;;; State
 
+(mevedel-deftest mevedel-plugins--write-state ()
+  ,test
+  (test)
+  :doc "remote plugin state refuses to write without its live session"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-plugins-remote-state-" t)))
+         (remote-root (concat "/mevedelmock:plugins:" root))
+         (workspace (mevedel-plugins-test--workspace remote-root))
+         (mevedel--session nil))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("plugins")
+          (should-error
+           (mevedel-plugins--write-state
+            '(("demo" :enabled t)) workspace)
+           :type 'user-error)
+          (should-not
+           (file-exists-p (file-name-concat root ".mevedel" "plugins.el"))))
+      (delete-directory root t)))
+
+  :doc "remote plugin state discloses, leases, and publishes on the target"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-plugins-remote-state-" t)))
+         (remote-root (concat "/mevedelmock:plugins:" root))
+         (workspace (mevedel-plugins-test--workspace remote-root))
+         (session (mevedel-session-create "main" workspace remote-root))
+         (mevedel--session session)
+         (mevedel-session-durability--disclosed-targets
+          (make-hash-table :test #'equal))
+         prompts)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("plugins")
+          (unwind-protect
+              (progn
+                (cl-letf (((symbol-function 'yes-or-no-p)
+                           (lambda (prompt)
+                             (push prompt prompts)
+                             t)))
+                  (mevedel-plugins--write-state
+                   '(("demo" :enabled t)) workspace))
+                (should (= 1 (length prompts)))
+                (should (mevedel-session-save-path session))
+                (should (eq 'owned
+                            (plist-get (mevedel-session-lease session)
+                                       :state)))
+                (should
+                 (equal '(("demo" :enabled t))
+                        (mevedel-plugins-test--read-state workspace))))
+            (when (mevedel-session-save-path session)
+              (mevedel-session-durability-lease-release
+               (mevedel-session-save-path session) session))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-plugins-enabled
   (:vars* ((user-dir (file-name-as-directory
                       (make-temp-file "mevedel-plugins-state-" t)))
@@ -460,13 +514,13 @@
                               (car prompts))))
     (let ((state (mevedel-plugins-test--state-plist workspace "demo")))
       (should (mevedel-plugins--same-root-p
-               global-root (plist-get state :source-root))))
+               global-root (plist-get state :source-root) workspace)))
     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
       (should (mevedel-plugins-enable "demo" workspace)))
     (let ((state (mevedel-plugins-test--state-plist workspace "demo")))
       (should (plist-get state :enabled))
       (should (mevedel-plugins--same-root-p
-               local-root (plist-get state :source-root)))))
+               local-root (plist-get state :source-root) workspace))))
 
   :doc "hook consent summary includes identity, handlers, and runtime data"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo"))
@@ -512,7 +566,7 @@
         (should-not (plist-get state :enabled))
         (should-not (plist-get state :hooks-enabled))
         (should (mevedel-plugins--same-root-p
-                 root (plist-get state :source-root))))
+                 root (plist-get state :source-root) workspace)))
       (should (equal "Enabled plugin demo."
                      (mevedel-plugins-test--slash
                       session "enable demo")))
@@ -520,10 +574,65 @@
         (should (plist-get state :enabled))
         (should (plist-get state :hooks-enabled))
         (should (mevedel-plugins--same-root-p
-                 root (plist-get state :source-root)))
+                 root (plist-get state :source-root) workspace))
         (should (stringp (plist-get state :hooks-fingerprint))))
       (should (string-match-p "demo enabled:on hooks:on"
                               (mevedel-plugins-test--list-string workspace)))))
+
+  :doc "keeps project activation and hook consent across equivalent TRAMP aliases"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-plugins-alias-" t)))
+         (root-a (concat "/mevedelmock:plugin-a:" root))
+         (root-b (concat "/mevedelmock:plugin-b:" root))
+         (workspace-a (mevedel-plugins-test--workspace root-a))
+         (workspace-b (mevedel-plugins-test--workspace root-b))
+         (session-a (mevedel-session-create "main" workspace-a root-a))
+         (mevedel-session-durability--disclosed-targets
+          (make-hash-table :test #'equal)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("plugin-a" "plugin-b")
+          (unwind-protect
+              (let* ((plugin-root
+                      (file-name-concat
+                       root-a ".mevedel" "plugins" "repo"))
+                     (hooks-file
+                      (file-name-concat plugin-root "hooks" "hooks.json")))
+                (make-directory (file-name-directory hooks-file) t)
+                (with-temp-file hooks-file
+                  (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
+                          "\"hooks\":[{\"type\":\"command\","
+                          "\"command\":\"echo alias\"}]}]}}"))
+                (mevedel-plugins-test--write-manifest
+                 plugin-root
+                 "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
+                (let ((mevedel--session session-a))
+                  (cl-letf (((symbol-function 'yes-or-no-p)
+                             (lambda (_prompt) t)))
+                    (should (mevedel-plugins-enable "demo" workspace-a))))
+                (let* ((state (mevedel-plugins-test--state-plist
+                               workspace-a "demo"))
+                       (fingerprint (plist-get state :hooks-fingerprint))
+                       (enabled-b (mevedel-plugins-enabled workspace-b))
+                       (plugin-b (car enabled-b)))
+                  (should (equal ".mevedel/plugins/repo/"
+                                 (plist-get state :source-root)))
+                  (should (stringp fingerprint))
+                  (should (equal '("demo")
+                                 (mapcar #'mevedel-plugin-name enabled-b)))
+                  (should (mevedel-plugin-hooks-enabled-p plugin-b))
+                  (should (mevedel-plugins--hooks-enabled-p
+                           plugin-b workspace-b))
+                  (should-not (mevedel-plugins--hooks-stale-p
+                               plugin-b workspace-b))
+                  (should-not
+                   (mevedel-plugins-pending-consent workspace-b))
+                  (should (equal fingerprint
+                                 (mevedel-plugins--hook-fingerprint
+                                  plugin-b workspace-b)))))
+            (when (mevedel-session-save-path session-a)
+              (mevedel-session-durability-lease-release
+               (mevedel-session-save-path session-a) session-a))))
+      (delete-directory root t)))
 
   :doc "supports plan-compatible hook on and off aliases"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
@@ -1098,7 +1207,7 @@
         (should-not (plist-get state :enabled))
         (should-not (plist-get state :hooks-enabled))
         (should (mevedel-plugins--same-root-p
-                 root (plist-get state :source-root))))
+                 root (plist-get state :source-root) workspace)))
       (should (string-match-p "demo enabled:off hooks:off"
                               (mevedel-plugins-test--list-string workspace)))))
 
@@ -1122,7 +1231,7 @@
         (should-not (plist-get state :enabled))
         (should-not (plist-get state :hooks-enabled))
         (should (mevedel-plugins--same-root-p
-                 root (plist-get state :source-root))))
+                 root (plist-get state :source-root) workspace)))
       (should (string-match-p "new-name enabled:off hooks:none"
                               (mevedel-plugins-test--list-string workspace)))))
 
@@ -1172,7 +1281,7 @@
       (should-not (plist-get state :enabled))
       (should-not (plist-get state :hooks-enabled))
       (should (mevedel-plugins--same-root-p
-               root (plist-get state :source-root)))))
+               root (plist-get state :source-root) workspace))))
 
   :doc "remove reports unknown plugins"
   (should (equal "Unknown plugin: missing."

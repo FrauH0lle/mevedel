@@ -19,6 +19,8 @@
 (defvar gptel--request-alist)
 
 ;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-path "mevedel-agents" (cl-x))
 
 ;; `mevedel-compact'
@@ -39,6 +41,12 @@
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--write-current-buffer-atomically
                   "mevedel-session-persistence" (path))
+(declare-function mevedel-session-persistence-publish-transcript-state
+                  "mevedel-session-persistence"
+                  (session root-buffer transcript-path content &optional coding))
+(declare-function mevedel-session-persistence-read-artifact
+                  "mevedel-session-persistence"
+                  (session logical &optional committed-only))
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
@@ -53,6 +61,8 @@
                   "mevedel-structs" (request &optional now))
 (declare-function mevedel-request-active-work-pause-started-at
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -1137,17 +1147,49 @@ RENDER-DATA is retained in the hidden transcript audit record."
                       :render-data render-data))
                (marker-table mevedel-view-stream--archived-execution-rows))
           (when path
-            (with-temp-buffer
-              (insert-file-contents path)
-              (unless
-                  (or (mevedel-view-stream--replace-archived-execution-record
+            (if (file-remote-p path)
+                (let* ((session (or mevedel--session
+                                    (error "Remote transcript has no session")))
+                       (save-path (mevedel-session-save-path session))
+                       (logical (file-relative-name path save-path))
+                       (root-buffer
+                        (if (bound-and-true-p mevedel--agent-invocation)
+                            (mevedel-agent-invocation-parent-data-buffer
+                             mevedel--agent-invocation)
+                          data-buffer))
+                       (coding (or buffer-file-coding-system 'utf-8-unix)))
+                  (require 'mevedel-session-persistence)
+                  (with-temp-buffer
+                    (setq buffer-file-coding-system coding)
+                    (insert
+                     (decode-coding-string
+                      (mevedel-session-persistence-read-artifact
+                       session logical)
+                      coding))
+                    (unless
+                        (or
+                         (mevedel-view-stream--replace-archived-execution-record
+                          tool-use-id replacement)
+                         (mevedel-view-stream--execution-completion-record-p
+                          tool-use-id replacement))
+                      (error "Persisted execution record missing: %s"
+                             tool-use-id))
+                    (mevedel-session-persistence-publish-transcript-state
+                     session root-buffer path
+                     (buffer-substring-no-properties (point-min) (point-max))
+                     coding)))
+              (with-temp-buffer
+                (insert-file-contents path)
+                (unless
+                    (or
+                     (mevedel-view-stream--replace-archived-execution-record
                       tool-use-id replacement)
-                      (mevedel-view-stream--execution-completion-record-p
-                       tool-use-id replacement))
-                (error "Persisted execution record missing: %s" tool-use-id))
-              (require 'mevedel-session-persistence)
-              (mevedel-session-persistence--write-current-buffer-atomically
-               path))
+                     (mevedel-view-stream--execution-completion-record-p
+                      tool-use-id replacement))
+                  (error "Persisted execution record missing: %s" tool-use-id))
+                (require 'mevedel-session-persistence)
+                (mevedel-session-persistence--write-current-buffer-atomically
+                 path)))
             ;; The atomic rename changed the visited file.  Refresh the
             ;; buffer's baseline before applying the same replacement in
             ;; memory, otherwise Emacs may report a spurious file-supersession

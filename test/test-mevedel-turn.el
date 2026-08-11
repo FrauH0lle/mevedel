@@ -414,6 +414,28 @@
             (should-not mevedel--current-request)))
       (kill-buffer chat-buf)))
 
+(mevedel-deftest mevedel--turn-after-publication ()
+  ,test
+  (test)
+  :doc "blocks continuation while critical publication recovery is pending"
+  (let* ((chat-buf (generate-new-buffer " *mevedel-publication-pending*"))
+         (session (mevedel-session--create
+                   :pending-publication '(:reason "offline")))
+         (fsm (gptel-make-fsm :info (list :buffer chat-buf)))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session))
+          (mevedel--turn-after-publication
+           (lambda (_fsm) (cl-incf calls)) fsm)
+          (should (= 0 calls))
+          (setf (mevedel-session-pending-publication session) nil)
+          (mevedel--turn-after-publication
+           (lambda (_fsm) (cl-incf calls)) fsm)
+          (should (= 1 calls)))
+      (kill-buffer chat-buf))))
+
 (mevedel-deftest mevedel--fail-turn ()
   ,test
   (test)

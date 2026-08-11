@@ -1103,6 +1103,19 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                      (buffer-substring-no-properties
                       (region-beginning) (region-end))))))
 
+  :doc "rolls back a destructive rebuild when projection fails"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Response.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((before (buffer-string)))
+        (cl-letf (((symbol-function 'mevedel-view--full-rerender-project)
+                   (lambda (&rest _)
+                     (error "Injected projection failure"))))
+          (should-error (mevedel-view--full-rerender)))
+        (should (equal before (buffer-string))))))
+
   :doc "records elapsed timing when render debug is enabled"
   (let ((mevedel-view-render-debug t)
         (mevedel-view-render-debug-buffer-name

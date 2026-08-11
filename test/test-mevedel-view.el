@@ -15,6 +15,7 @@
                byte-compile-current-file))
           "helpers"))
 (require 'mevedel-execution)
+(require 'mevedel-execution-target)
 (require 'mevedel-executions-list)
 (require 'mevedel-view)
 (require 'mevedel-view-stream)
@@ -86,7 +87,10 @@
 ;;; Rendering
 
 (mevedel-deftest mevedel-view--schedule-render
-  (:doc "coalesces stream, tool-boundary, and full requests into one refresh")
+  ()
+  ,test
+  (test)
+  :doc "coalesces stream, tool-boundary, and full requests into one refresh"
   (mevedel-view-test--with-buffers
     (let ((mevedel-view-stream-render-delay 1)
           (mevedel-view-tool-boundary-render-delay 1)
@@ -131,7 +135,31 @@
         (should (= 2 scheduled))
         (apply callback args)
         (should (= 1 full-count))
-        (should (= 1 incremental-count))))))
+        (should (= 1 incremental-count)))))
+
+  :doc "defers timer flushes while a TRAMP file handler owns a connection"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-rerender-debounce 1)
+          callback args
+          (scheduled 0)
+          (full-count 0))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_delay _repeat function &rest function-args)
+                   (cl-incf scheduled)
+                   (setq callback function
+                         args function-args)
+                   'scheduled))
+                ((symbol-function 'mevedel-view--full-rerender)
+                 (lambda () (cl-incf full-count))))
+        (mevedel-view-rerender view-buf)
+        (cl-progv '(tramp-current-connection) '((busy))
+          (apply callback args))
+        (should (= 2 scheduled))
+        (should (= 0 full-count))
+        (with-current-buffer view-buf
+          (should (eq 'full mevedel-view--pending-render-kind)))
+        (apply callback args)
+        (should (= 1 full-count))))))
 
 (mevedel-deftest mevedel-view--flush-scheduled-render
   (:doc "keeps historical projection fixed while refreshing live chrome")
@@ -326,6 +354,49 @@
         (should (string-match-p
                  (regexp-quote "ask · idle · model none · 0 tools")
                  line)))))
+
+  :doc "status strip identifies the session execution target"
+  (mevedel-view-test--with-buffers
+    (let* ((target (mevedel-execution-target-create
+                    "/ssh:user@host:/srv/project/"))
+           (remote-workspace
+            (mevedel-workspace--create
+             :type 'project :id "remote" :root "/ssh:user@host:/srv/project/"
+             :name "remote"))
+           (remote-session
+            (mevedel-session--create
+             :name "remote" :workspace remote-workspace
+             :working-directory "/ssh:user@host:/srv/project/"
+             :execution-target target :permission-mode 'ask)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session remote-session))
+      (with-current-buffer view-buf
+        (let ((line (mevedel-view--status-strip)))
+          (should (string-match-p "ssh:user@host" line))
+          (should (text-property-any
+                   0 (length line) 'mevedel-view-cockpit-area 'top line))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session nil))))
+
+  :doc "publication status preserves a multiline leading-> composer draft"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project :id "pending"
+                       :root temporary-file-directory :name "pending"))
+           (session (mevedel-session--create
+                     :name "pending" :workspace workspace
+                     :permission-mode 'ask))
+           (draft "> quoted\nsecond line"))
+      (setf (mevedel-session-pending-publication session)
+            '(:reason "remote write failed"))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (let ((line (mevedel-view--status-strip)))
+          (should (string-match-p "publication pending" line))
+          (should (string= draft (mevedel-view--input-text)))))))
 
   :doc "status strip reuses unchanged output and rebuilds after state changes"
   (mevedel-view-test--with-buffers

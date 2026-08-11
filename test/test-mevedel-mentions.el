@@ -9,6 +9,7 @@
 (require 'mcp-hub)
 (require 'mevedel-structs)
 (require 'mevedel-agents)
+(require 'mevedel-execution-target)
 (require 'mevedel-file-state)
 (require 'mevedel-overlays)
 (require 'mevedel-permissions)
@@ -705,6 +706,161 @@ Returns (buffer . overlay)."
           (should (equal (cons 'file (cons tmp "")) (plist-get result :key)))
           (should (stringp (plist-get result :hash))))
       (delete-file tmp)))
+
+  :doc "remote session artifacts use only resolver-verified publication bytes"
+  (let* ((host (system-name))
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-mention-artifact-" t)))
+         (remote-root (format "/mevedelmock:%s:%s" host local-root))
+         (save-path (concat remote-root "session/"))
+         (logical "plans/current.md")
+         (fixed (file-name-concat save-path logical))
+         (published (file-name-concat
+                     save-path ".publications" "generation" "000001.data"))
+         (content "committed artifact\n")
+         (range-logical "plans/range.md")
+         (range-fixed (file-name-concat save-path range-logical))
+         (range-published (file-name-concat
+                           save-path ".publications" "generation"
+                           "000002.data"))
+         (range-content "one\ncommitted range\nthree\n")
+         (unpublished-logical "plans/unpublished.md")
+         (unpublished-fixed
+          (file-name-concat save-path unpublished-logical))
+         (media-logical "tool-results/image.png")
+         (media-fixed (file-name-concat save-path media-logical))
+         (media-published (file-name-concat
+                           save-path ".publications" "generation"
+                           "000003.data"))
+         (media-content "committed png bytes\n")
+         (mevedel-permission--context-frozen-p t)
+         (mevedel-permission--frozen-persistent-rules nil)
+         session)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (let ((workspace
+                 (mevedel-workspace--create
+                  :type 'project :id "mention-artifact"
+                  :root remote-root :name "mention-artifact")))
+            (setq session (mevedel-session-create "main" workspace)))
+          (setf (mevedel-execution-target-environment
+                 (mevedel-session-execution-target session))
+                '(("HOME" . "/home/test")))
+          (setf (mevedel-session-save-path session) save-path)
+          (make-directory (file-name-directory fixed) t)
+          (write-region "poisoned fixed cache\n" nil fixed nil 'silent)
+          (make-directory (file-name-directory published) t)
+          (write-region content nil published nil 'silent)
+          (write-region range-content nil range-published nil 'silent)
+          (make-directory (file-name-directory unpublished-fixed) t)
+          (write-region "unpublished fixed cache\n"
+                        nil unpublished-fixed nil 'silent)
+          (make-directory (file-name-directory media-fixed) t)
+          (write-region "poisoned media cache\n" nil media-fixed nil 'silent)
+          (write-region media-content nil media-published nil 'silent)
+          (setf (mevedel-session-publication session)
+                (list :head ".publications/generation/manifest.el"
+                      :sidecar nil
+                      :artifacts
+                      (list
+                       (list logical :published published
+                             :sha256 (secure-hash 'sha256 content))
+                       (list range-logical :published range-published
+                             :sha256 (secure-hash 'sha256 range-content))
+                       (list media-logical :published media-published
+                             :sha256 (secure-hash 'sha256 media-content)))))
+          (let ((result
+                 (mevedel--handle-file-mention
+                  (list :match-text (concat "@file:" fixed)
+                        :capture fixed
+                        :session session
+                        :workspace-root remote-root))))
+            (should (string-match-p "committed artifact"
+                                    (plist-get result :reminder)))
+            (should-not (string-match-p "poisoned fixed cache"
+                                        (plist-get result :reminder)))
+            (should (equal (secure-hash
+                            'sha1 "1\tcommitted artifact\n")
+                           (plist-get result :hash)))))
+          (delete-file fixed)
+          (let ((result
+                 (mevedel--handle-file-mention
+                  (list :match-text (concat "@file:" fixed)
+                        :capture fixed
+                        :session session
+                        :workspace-root remote-root))))
+            (should (string-match-p "committed artifact"
+                                    (plist-get result :reminder)))
+            (should (stringp (plist-get result :hash))))
+          (let ((result
+                 (mevedel--handle-file-mention
+                  (list :match-text (concat "@file:" range-fixed "#L2")
+                        :capture range-fixed
+                        :captures
+                        (list (concat "@file:" range-fixed "#L2")
+                              range-fixed "2" nil)
+                        :session session
+                        :workspace-root remote-root))))
+            (should-not (file-exists-p range-fixed))
+            (should (string-match-p "committed range"
+                                    (plist-get result :reminder)))
+            (should-not (string-match-p "one\\|three"
+                                        (plist-get result :reminder)))
+            (should (stringp (plist-get result :hash))))
+          (let ((result
+                 (mevedel--handle-file-mention
+                  (list :match-text (concat "@file:" unpublished-fixed)
+                        :capture unpublished-fixed
+                        :session session
+                        :workspace-root remote-root))))
+            (should (string-match-p "does not exist"
+                                    (plist-get result :placeholder)))
+            (should-not (plist-get result :hash)))
+          (cl-letf (((symbol-function 'gptel--model-capable-p)
+                     (lambda (cap &optional _model) (eq cap 'media)))
+                    ((symbol-function 'gptel--model-mime-capable-p)
+                     (lambda (mime &optional _model)
+                       (equal mime "image/png"))))
+            (let* ((result
+                    (mevedel--handle-file-mention
+                     (list :match-text (concat "@file:" media-fixed)
+                           :capture media-fixed
+                           :session session
+                           :workspace-root remote-root)))
+                   (context (plist-get result :media-context))
+                   (request
+                    (mevedel-request--create
+                     :id "mention-media" :session session)))
+              (should (string-match-p "media attached"
+                                      (plist-get result :placeholder)))
+              (should (equal (secure-hash 'sha1 media-content)
+                             (plist-get result :hash)))
+              (should-not (equal (secure-hash
+                                  'sha1 "poisoned media cache\n")
+                                 (plist-get result :hash)))
+              (delete-file media-fixed)
+              (should-error
+               (apply #'mevedel-mentions--add-media-context context)
+               :type 'error)
+              (with-temp-buffer
+                (setq-local mevedel--current-request request)
+                (setq-local gptel-context nil)
+                (setq-local gptel-use-context nil)
+                (apply #'mevedel-mentions--add-media-context context)
+                (let ((staged (caar gptel-context)))
+                  (should-not (file-remote-p staged))
+                  (should (file-exists-p staged))
+                  (should
+                   (equal media-content
+                          (with-temp-buffer
+                            (set-buffer-multibyte nil)
+                            (insert-file-contents-literally staged)
+                            (buffer-string))))
+                  (mevedel-request-drain-cancellers request)
+                  (should-not (file-exists-p staged))
+                  (should-not gptel-context)))))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))))
 
   :doc "media file on unsupported model yields graceful placeholder"
   (let* ((tmp (make-temp-file "mevedel-file-" nil ".png" "not really png\n"))

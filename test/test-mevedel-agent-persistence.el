@@ -300,6 +300,24 @@
       (when (file-exists-p link) (delete-file link))
       (when (file-exists-p outside) (delete-file outside))
       (delete-directory tmp t)))
+  :doc "ignores a poisoned fixed cache when the session path is remote"
+  (let* ((tmp (file-name-as-directory (make-temp-file "agent-path-" t)))
+         (agents (file-name-concat tmp "agents"))
+         (outside (make-temp-file "agent-path-outside-" nil ".chat.org"))
+         (link (file-name-concat agents "linked.chat.org")))
+    (unwind-protect
+        (progn
+          (make-directory agents t)
+          (make-symbolic-link outside link)
+          (cl-letf (((symbol-function 'file-remote-p)
+                     (lambda (path &optional _identification _connected)
+                       (and (equal path tmp) "/mock:"))))
+            (should
+             (mevedel-agent-persistence-transcript-path-p
+              "agents/linked.chat.org" tmp))))
+      (when (file-exists-p link) (delete-file link))
+      (when (file-exists-p outside) (delete-file outside))
+      (delete-directory tmp t)))
   :doc "rejects nil and empty paths"
   (should-not (mevedel-agent-persistence-transcript-path-p nil "/tmp/"))
   (should-not (mevedel-agent-persistence-transcript-path-p "" "/tmp/")))
@@ -584,6 +602,57 @@
            (buffer-live-p
             (mevedel-agent-record-conversation-buffer valid))))
       (mevedel-agent-control-teardown-session session)
+      (when (buffer-live-p root-buffer)
+        (kill-buffer root-buffer))
+      (delete-directory root-dir t)))
+
+  :doc "hydrates a published remote transcript when the fixed cache is missing"
+  (let* ((root-dir (make-temp-file "mevedel-agent-remote-tree-" t))
+         (session (mevedel-agent-persistence-test--session root-dir))
+         (root-buffer (generate-new-buffer " *agent-remote-root*"))
+         (relative "agents/published.chat.org")
+         (record
+          (mevedel-agent-record--create
+           :id "published" :path "/root/published" :parent-path "/root"
+           :role "default"
+           :configuration (mevedel-agent-persistence-test--configuration)
+           :activity 'idle :conversation-location relative))
+         hydrated-buffer
+         seen)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) root-dir
+                (mevedel-session-agent-registry session)
+                (list (cons "/root/published" record)))
+          (with-current-buffer root-buffer
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace
+                        (mevedel-session-workspace session)))
+          (cl-letf (((symbol-function 'file-remote-p)
+                     (lambda (path &optional _identification _connected)
+                       (and (equal path root-dir) "/mock:")))
+                    ((symbol-function
+                      'mevedel-session-persistence-artifact-present-p)
+                     (lambda (seen-session logical)
+                       (should (eq session seen-session))
+                       (should (equal relative logical))
+                       t))
+                    ((symbol-function 'mevedel-agent-conversation-hydrate)
+                     (lambda (invocation parent logical &optional inspection)
+                       (setq seen
+                             (list invocation parent logical inspection)
+                             hydrated-buffer
+                             (generate-new-buffer " *agent-published*"))
+                       hydrated-buffer)))
+            (should (= 0 (mevedel-agent-persistence-restore-tree
+                          session root-buffer nil))))
+          (should (equal relative (nth 2 seen)))
+          (should-not (nth 3 seen))
+          (should (eq hydrated-buffer
+                      (mevedel-agent-record-conversation-buffer record))))
+      (when (buffer-live-p hydrated-buffer)
+        (kill-buffer hydrated-buffer))
       (when (buffer-live-p root-buffer)
         (kill-buffer root-buffer))
       (delete-directory root-dir t)))

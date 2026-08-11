@@ -8,11 +8,15 @@
 
 (require 'cl-lib)
 (require 'mevedel)
+(require 'mevedel-agents)
 (require 'mevedel-execution)
+(require 'mevedel-execution-target)
 (require 'mevedel-pipeline)
+(require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-view-stream)
+(require 'mevedel-workspace-identity)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -605,7 +609,120 @@
       (when (buffer-live-p buffer)
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))
-      (when (file-exists-p path) (delete-file path)))))
+      (when (file-exists-p path) (delete-file path))))
+  :doc "updates the committed remote transcript instead of its fixed cache"
+  (let* ((host "archived-terminal-publication")
+         (local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-archived-terminal-" t)))
+         (remote-root
+          (format "/mevedelmock:%s:%s/"
+                  host (directory-file-name local-root)))
+         (session-dir (concat remote-root "session/"))
+         (root-segment (concat session-dir "segment-0001.chat.org"))
+         (transcript (concat session-dir "agents/remote-call.chat.org"))
+         (sidecar (concat session-dir "session.meta.el"))
+         (archive
+          (mevedel-view-stream-execution-row-archive-text
+           '(:live (("remote-call" :execution-id "exec-remote"
+                     :state running :live-execution-p t)))))
+         (render-data
+          '(:execution-id "exec-remote" :state completed
+            :status success :live-execution-p nil))
+         (mevedel-session-durability--client-id (make-string 64 ?a))
+         (mevedel-session-durability--disclosed-targets
+          (make-hash-table :test #'equal))
+         buffer event root-buffer session)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (let ((workspace
+                 (mevedel-workspace--create
+                  :type 'project :id remote-root :root remote-root
+                  :name "remote")))
+            (setq session
+                  (mevedel-session-create "main" workspace remote-root)))
+          (setq event
+                (list :type 'terminal :session session :owner "main"
+                      :tool-use-id "remote-call"))
+          (mevedel-workspace-identity-ensure remote-root)
+          (mevedel-execution-target-seed-incarnation
+           (mevedel-session-execution-target session) "mock-incarnation")
+          (setf (mevedel-session-session-id session) "archived-terminal"
+                (mevedel-session-save-path session) session-dir
+                (mevedel-session-current-segment session) 1)
+          (make-directory session-dir t)
+          (puthash
+           (mevedel-execution-target-identity
+            (mevedel-session-execution-target session))
+           t mevedel-session-durability--disclosed-targets)
+          (should
+           (mevedel-session-durability-lease-acquire
+            session-dir "*archived terminal*" session))
+          (setq root-buffer (generate-new-buffer " *archived root*"))
+          (with-current-buffer root-buffer
+            (setq-local mevedel--session session)
+            (setq buffer-file-name root-segment)
+            (insert "* Root\n"))
+          (setq buffer (generate-new-buffer " *archived terminal*"))
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (setq-local
+             mevedel--agent-invocation
+             (mevedel-agent-invocation--create
+              :parent-data-buffer root-buffer))
+            (setq buffer-file-name transcript)
+            (insert archive))
+          (should
+           (mevedel-session-durability-publish
+            session
+            (list
+             (list :path transcript :content archive)
+             (list
+              :path sidecar
+              :content
+              (mevedel-session-persistence--printed-value
+               (mevedel-session-persistence--build-sidecar
+                session root-buffer))
+              :commit-marker t))))
+          (write-region "poisoned fixed cache" nil transcript nil 'silent)
+          (with-current-buffer buffer
+            (goto-char (point-max))
+            (insert "pending prompt\n")
+            (set-buffer-modified-p nil))
+          (mevedel-view-stream-commit-execution-row-archive
+           buffer
+           '(:live (("remote-call" :execution-id "exec-remote"
+                     :state running :live-execution-p t))))
+          (mevedel-view-stream--record-archived-execution-terminal
+           buffer event render-data)
+          (let ((published
+                 (decode-coding-string
+                  (mevedel-session-persistence-read-artifact
+                   session "agents/remote-call.chat.org" t)
+                  'utf-8-unix)))
+            (should-not (string-search "poisoned" published))
+            (should-not (string-search "pending prompt" published))
+            (should (= 1
+                       (length
+                        (mevedel-transcript-audit-records
+                         published 'execution-completion)))))
+          (with-current-buffer buffer
+            (should (string-search "pending prompt" (buffer-string)))
+            (should (= 1
+                       (length
+                        (mevedel-transcript-audit-records
+                         (buffer-string) 'execution-completion))))))
+      (when (and session (mevedel-session-lease session))
+        (ignore-errors
+          (mevedel-session-durability-lease-release session-dir session)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when (buffer-live-p root-buffer)
+        (with-current-buffer root-buffer (set-buffer-modified-p nil))
+        (kill-buffer root-buffer))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t)))))
 
 
 (provide 'test-mevedel-execution-lifecycle)

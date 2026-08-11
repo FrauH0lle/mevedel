@@ -98,6 +98,13 @@
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
 
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-artifact-present-p
+                  "mevedel-session-persistence" (session logical))
+(declare-function mevedel-session-persistence-read-artifact
+                  "mevedel-session-persistence"
+                  (session logical &optional committed-only))
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
@@ -683,19 +690,16 @@ sparsely while that mode remains active."
                          (error nil))))
     (when address path)))
 
-(defun mevedel-reminders--plan-absolute-path (session)
-  "Return SESSION's immutable accepted artifact absolute path, when available."
-  (when-let* ((path (mevedel-reminders--plan-path session))
-              (save-path (mevedel-session-save-path session)))
-    (file-name-concat save-path path)))
-
 (defun mevedel-reminders--plan-reference-content (session)
   "Return bounded contents of SESSION's immutable accepted artifact."
-  (when-let* ((path (mevedel-reminders--plan-absolute-path session))
-              ((file-exists-p path)))
-    (with-temp-buffer
-      (insert-file-contents path nil 0 12000)
-      (buffer-string))))
+  (when-let* ((path (mevedel-reminders--plan-path session)))
+    (require 'mevedel-session-persistence)
+    (when (mevedel-session-persistence-artifact-present-p session path)
+      (let ((content
+             (decode-coding-string
+              (mevedel-session-persistence-read-artifact session path)
+              'utf-8-unix)))
+        (substring content 0 (min 12000 (length content)))))))
 
 (defun mevedel-reminders-make-plan-reference ()
   "Create the one-shot `plan-reference' reminder."

@@ -59,6 +59,8 @@
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (declare-function mevedel-request-origin "mevedel-structs" (cl-x))
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x))
+(declare-function mevedel-session-pending-publication
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-set-pending-input-failure-paused
@@ -301,6 +303,22 @@ Signal when the request is missing or its reservation is not the next turn."
   (dolist (step steps)
     (funcall (mevedel--safe-fsm-handler step) fsm)))
 
+(defun mevedel--turn-publication-pending-p (fsm)
+  "Return non-nil when FSM's session has failed critical publication."
+  (when-let* ((info (condition-case nil
+                        (gptel-fsm-info fsm)
+                      (error nil)))
+              (buffer (plist-get info :buffer))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (and mevedel--session
+           (mevedel-session-pending-publication mevedel--session)))))
+
+(defun mevedel--turn-after-publication (function fsm)
+  "Call FUNCTION with FSM unless critical publication is pending."
+  (unless (mevedel--turn-publication-pending-p fsm)
+    (funcall function fsm)))
+
 (defun mevedel--complete-turn (fsm)
   "Run the canonical successful top-level turn transaction for FSM."
   (mevedel--turn-commit fsm)
@@ -317,8 +335,12 @@ Signal when the request is missing or its reservation is not the next turn."
            (mevedel--run-turn-terminal-hook machine 'Stop 'completed))
          #'mevedel--turn-restore-permission-mode
          #'mevedel--turn-end-request
-         #'mevedel-goal-dispatch-after-turn
-         #'mevedel-view--schedule-follow-up-drain)))
+         (lambda (machine)
+           (mevedel--turn-after-publication
+            #'mevedel-goal-dispatch-after-turn machine))
+         (lambda (machine)
+           (mevedel--turn-after-publication
+            #'mevedel-view--schedule-follow-up-drain machine)))))
 
 (defun mevedel--fail-turn (fsm status)
   "Run failure cleanup for FSM with terminal STATUS."
@@ -342,8 +364,12 @@ Signal when the request is missing or its reservation is not the next turn."
           #'mevedel--turn-restore-permission-mode
           #'mevedel--turn-fail-pending-input
           #'mevedel--turn-end-request
-          #'mevedel-goal-persist-failure
-          #'mevedel-goal-dispatch-after-turn))))
+          (lambda (machine)
+            (mevedel--turn-after-publication
+             #'mevedel-goal-persist-failure machine))
+          (lambda (machine)
+            (mevedel--turn-after-publication
+             #'mevedel-goal-dispatch-after-turn machine))))))
 
 
 (defun mevedel--handler-name (handler)

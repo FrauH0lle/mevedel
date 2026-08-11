@@ -24,11 +24,13 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-agent-control)
+(require 'mevedel-execution-target)
 (require 'mevedel-structs)
 (require 'mevedel-permissions)
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-queue)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-durability)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tools)
@@ -36,11 +38,12 @@
 (require 'mevedel-mentions)
 (require 'mevedel-skills-ui)
 
-(defun test-pq--make-session (&optional rules)
-  "Create a fresh queue-test session, optionally with RULES."
+(defun test-pq--make-session (&optional rules target)
+  "Create a fresh queue-test session with optional RULES and TARGET."
   (mevedel-session--create
    :name "test"
    :workspace nil
+   :execution-target target
    :permission-rules rules
    :permission-mode 'ask
    :permission-queue nil
@@ -185,6 +188,60 @@
     (mevedel-permission-log session 'permission-decision :tool-name "Read")
     (should (= 1 (length (mevedel-session-permission-log-pending session))))
     (should-not (mevedel-permission-log-path session)))
+
+  :doc "retains a materialized diagnostic when persistence fails"
+  (let* ((root (make-temp-file "mevedel-permission-log-retry-" t))
+         (blocked (file-name-concat root "blocked"))
+         (session (test-pq--make-session))
+         (mevedel-permission-log-enabled t))
+    (unwind-protect
+        (progn
+          (write-region "not a directory" nil blocked nil 'silent)
+          (setf (mevedel-session-save-path session) blocked)
+          (mevedel-permission-log
+           session 'permission-decision :tool-name "Read")
+          (should (= 1
+                     (length
+                      (mevedel-session-permission-log-pending session)))))
+      (delete-directory root t)))
+
+  :doc "defers remote diagnostics and combines one serialized append"
+  (let* ((root (make-temp-file "mevedel-permission-log-remote-" t))
+         (target
+          (mevedel-execution-target-create
+           "/ssh:permission-host:/workspace/"))
+         (session (test-pq--make-session nil target))
+         (mevedel-permission-log-enabled t)
+         calls)
+    (setf (mevedel-session-save-path session) root)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function
+               'mevedel-session-durability-append-diagnostic)
+              (lambda (_session path content)
+                (push (list path content) calls)
+                t))
+             ((symbol-function 'mevedel-telemetry-record) #'ignore))
+          (mevedel-permission-log
+           session 'permission-enqueued :tool-name "Read")
+          (mevedel-permission-log
+           session 'permission-resolved :tool-name "Read")
+          (should (= 2 (length
+                        (mevedel-session-permission-log-pending session))))
+          (should-not calls)
+          (mevedel-permission-log-flush session)
+          (should-not (mevedel-session-permission-log-pending session))
+          (pcase-let ((`((,path ,content)) calls))
+            (should
+             (equal (file-name-concat root "permission-log.el") path))
+            (with-temp-buffer
+              (insert content)
+              (goto-char (point-min))
+              (should (eq 'permission-enqueued
+                          (plist-get (read (current-buffer)) :event)))
+              (should (eq 'permission-resolved
+                          (plist-get (read (current-buffer)) :event))))))
+      (delete-directory root t)))
 
   :doc "side queue lifecycle forwards only whitelisted durable audit fields"
   (let* ((parent (test-pq--make-session))
@@ -343,6 +400,37 @@
             (should-not (plist-member entry :detail))))
       (when (file-directory-p dir)
         (delete-directory dir t)))))
+
+(mevedel-deftest mevedel-permission-log-flush
+  (:doc "retains failed queued diagnostics and clears them after retry")
+  (let* ((root (make-temp-file "mevedel-permission-flush-" t))
+         (blocked (file-name-concat root "blocked"))
+         (restored (file-name-concat root "restored"))
+         (session (test-pq--make-session))
+         (entry '(:event permission-decision :time "now"))
+         later-entry
+         (mevedel-permission-log-enabled t))
+    (unwind-protect
+        (progn
+          (write-region "not a directory" nil blocked nil 'silent)
+          (setf (mevedel-session-save-path session) blocked
+                (mevedel-session-permission-log-pending session)
+                (list entry))
+          (mevedel-permission-log-flush session)
+          (should (equal (list entry)
+                         (mevedel-session-permission-log-pending session)))
+          (setf (mevedel-session-save-path session) restored)
+          (cl-letf (((symbol-function 'mevedel-telemetry-record) #'ignore))
+            (mevedel-permission-log session 'permission-resolved))
+          (setq later-entry
+                (cadr (mevedel-session-permission-log-pending session)))
+          (should (= 2 (length
+                        (mevedel-session-permission-log-pending session))))
+          (mevedel-permission-log-flush session)
+          (should-not (mevedel-session-permission-log-pending session))
+          (should (equal (list entry later-entry)
+                         (test-pq--read-permission-log session))))
+      (delete-directory root t))))
 
 
 ;;

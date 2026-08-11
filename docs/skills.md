@@ -73,6 +73,11 @@ the plugin identity/source, exposed skills, hook events, executable hook
 handlers, and workspace plugin data directory rather than dumping the full
 manifest.
 
+For a remote workspace, plugin-state mutations require the live session's
+lease and use the same disclosed, serialized publication path as other
+durability-critical state.  They never write through TRAMP before storage
+disclosure or from a read-only inspector.
+
 When multiple plugin roots contain the same manifest name, mevedel keeps
 the highest-precedence plugin and reports shadowed duplicates in
 `/plugin list`. Precedence is workspace `.mevedel/plugins/`, workspace
@@ -128,6 +133,14 @@ only a label. Resolution checks that source again and never falls back to a
 different same-named skill. Hot reload may change content at the same source,
 and skill addresses retain their client-local origin rather than becoming
 execution-target paths. See [`address-to-resource.md`](address-to-resource.md#skill).
+
+Remote skill directories use TRAMP file notifications when the execution
+target provides either `inotifywait` or `gio`.  Without either program,
+mevedel reports the limitation once per target capability state and leaves
+save-triggered checks plus `M-x mevedel-skills-rescan` available.  After
+installing a notifier, refresh target readiness and rescan to install the
+watcher.  `stat-when-checking` remains an explicit opt-in because it adds one
+remote stat per known skill at each pull check.
 
 ## Local Slash Commands
 
@@ -276,6 +289,11 @@ Current fields include:
 - `paths`
 - `shell`
 - `hooks` (skill-scoped hooks active during invocation)
+
+Command hooks retain their skill resource origin.  Project skill commands and
+same-target remote project-plugin commands run on the session target.  User,
+bundled, managed, and client-local plugin skill commands stay local at the
+directory containing their `SKILL.md`.  Elisp hooks remain local.
 
 `description` follows the Agent Skills convention: it should describe both
 what the skill does and when the model should use it.
@@ -534,6 +552,14 @@ and `${MEVEDEL_EFFORT}`. Effort substitutions reflect the parsed skill
 `effort`. Literal `${...}` substitutions do not suppress the
 automatic `ARGUMENTS: ...` fallback when invocation arguments are supplied
 but no argument placeholder is present.
+
+In a remote session, project skills and same-target remote project-plugin
+skills substitute both skill-directory aliases with the target-native path.
+Their shell body injections use the ordinary session Bash pipeline.  Shell
+body injections from user, bundled, managed, or client-local plugin skills are
+refused before Bash dispatch so one session never executes them on a different
+target.  Elisp body injections continue to run in the local Emacs.  A skill
+directory naming another remote target is refused rather than dispatched.
 
 The view composer uses `argument-hint` and `arguments` as display-only
 typing guidance. `argument-hint` appears before the user starts typing

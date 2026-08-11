@@ -128,7 +128,7 @@
          release-wait release-permission stale-release)
     (setf (mevedel-session-agent-registry session)
           (list (cons "/root/worker" record)))
-    (let ((mevedel-agent-control--suppress-persistence t))
+    (let ((mevedel-agent-control-suppress-persistence t))
       (setq release-wait
             (mevedel-agent-control-block-turn
              session "/root/worker" 'waiting)
@@ -390,7 +390,7 @@
   (let ((session (mevedel-agent-control-test--session)))
     (should-not (mevedel-agent-control--persist-session session))
     (setf (mevedel-session-save-path session) temporary-file-directory)
-    (let ((mevedel-agent-control--suppress-persistence t))
+    (let ((mevedel-agent-control-suppress-persistence t))
       (should-not (mevedel-agent-control--persist-session session)))))
 
 

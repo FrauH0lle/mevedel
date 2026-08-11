@@ -67,6 +67,14 @@
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-create
+                  "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-expand-path
+                  "mevedel-execution-target" (target path &optional directory))
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
                   "mevedel-pipeline" (render-data))
@@ -529,15 +537,25 @@ CWD is used for git merge-base resolution."
 
 (defun mevedel-review--repo-root (cwd)
   "Return the Git repository root for CWD, or CWD if unavailable."
-  (file-name-as-directory
-   (expand-file-name
-    (or (mevedel-review--git-string cwd "rev-parse" "--show-toplevel")
-        cwd))))
+  (require 'mevedel-execution-target)
+  (let ((target (mevedel-execution-target-create cwd)))
+    (file-name-as-directory
+     (mevedel-execution-target-expand-path
+      target
+      (or (mevedel-review--git-string cwd "rev-parse" "--show-toplevel")
+          cwd)
+      cwd))))
 
 (defun mevedel-review--package-directory (cwd)
   "Return review package directory for CWD."
   (file-name-concat (mevedel-review--repo-root cwd)
                     ".mevedel" "review-packages"))
+
+(defun mevedel-review--target-native-path (cwd path)
+  "Return PATH in CWD's target-native path domain."
+  (require 'mevedel-execution-target)
+  (mevedel-execution-target-native-path
+   (mevedel-execution-target-create cwd) path))
 
 (defun mevedel-review--default-package-file (cwd target)
   "Return a deterministic-ish review package path for TARGET in CWD."
@@ -615,7 +633,8 @@ MODE is the optional markdown fence language."
     (with-temp-file output-file
       (insert (format "# Review package: %s\n\n"
                       (or (plist-get target :type) "unknown")))
-      (insert (format "- Working directory: %s\n" cwd))
+      (insert (format "- Working directory: %s\n"
+                      (mevedel-review--target-native-path cwd cwd)))
       (insert (format "- Generated: %s\n\n"
                       (format-time-string "%Y-%m-%d %H:%M:%S %z")))
       (pcase (plist-get target :type)
@@ -643,7 +662,8 @@ MODE is the optional markdown fence language."
   "Write TARGET's review package in CWD, returning the path or nil."
   (condition-case nil
       (when-let* ((spec (mevedel-review--target-package-spec target cwd)))
-        (mevedel-review--write-package cwd spec))
+        (mevedel-review--target-native-path
+         cwd (mevedel-review--write-package cwd spec)))
     (error nil)))
 
 (defun mevedel-review--prompt-with-package (prompt package-file command)

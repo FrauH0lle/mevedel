@@ -17,6 +17,34 @@
   (error "Tests require HOME and XDG roots under temporary-file-directory"))
 
 (defvar tabulated-list-entries)
+(defvar tramp-local-host-regexp)
+(defvar tramp-methods)
+
+
+;;
+;;; TRAMP test helper
+
+(defmacro mevedel-test--with-local-shell-tramp (hosts &rest body)
+  "Run BODY through a local-shell TRAMP method for HOSTS."
+  (declare (indent 1) (debug (form body)))
+  `(progn
+     (require 'tramp)
+     (unless (assoc "mevedelmock" tramp-methods)
+       (add-to-list
+        'tramp-methods
+        '("mevedelmock"
+          (tramp-login-program "sh")
+          (tramp-login-args (("-i")))
+          (tramp-remote-shell "/bin/sh")
+          (tramp-remote-shell-args ("-c"))
+          (tramp-connection-timeout 10))))
+     (let ((tramp-local-host-regexp
+            (concat "\\`"
+                    (regexp-opt (append ,hosts (list (system-name))))
+                    "\\'")))
+       (unwind-protect
+           (progn ,@body)
+         (tramp-cleanup-all-connections)))))
 
 
 ;;
@@ -103,6 +131,7 @@ Return the plugin root directory."
              (ignore-errors (file-notify-rm-watch desc)))
            mevedel-skills--watchers)
   (clrhash mevedel-skills--watchers)
+  (clrhash mevedel-skills--remote-watch-states)
   (clrhash mevedel-skills--dir-buffers)
   (clrhash mevedel-skills--dirty-buffers)
   (clrhash mevedel-skills--mtime-cache))

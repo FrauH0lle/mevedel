@@ -45,6 +45,7 @@
 (require 'gptel)
 (require 'gptel-agent)
 
+(require 'mevedel-execution-target)
 (require 'mevedel-workspace)
 (require 'mevedel-directive)
 (require 'mevedel-overlays)

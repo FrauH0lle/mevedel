@@ -70,7 +70,8 @@
      :owner owner :owner-context owner-context :command command
      :workdir root :writable-roots (list root)
      :artifact-directory (or artifact-directory
-                             (file-name-concat root "artifacts"))
+                             (unless (file-remote-p root)
+                               (file-name-concat root "artifacts")))
      :outcome-function outcome-function
      :tool-args tool-args :tool-use-id tool-use-id
      :tty tty :yield-time-ms yield-time-ms)

@@ -110,9 +110,9 @@
   "mevedel-tool-repair-diagnostics")
 (autoload 'mevedel-tool-repair-log-event
   "mevedel-tool-repair-diagnostics")
-(autoload 'mevedel-tool-repair-log-path
+(autoload 'mevedel-tool-repair-flush-log
   "mevedel-tool-repair-diagnostics")
-(autoload 'mevedel-tool-repair--persist-event
+(autoload 'mevedel-tool-repair-log-path
   "mevedel-tool-repair-diagnostics")
 (autoload 'mevedel-tool-repair--preserve-empty-objects
   "mevedel-tool-repair-gptel")
