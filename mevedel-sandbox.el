@@ -101,21 +101,27 @@ inside a session updates only that session."
        'best-effort)))
 
 (defcustom mevedel-sandbox-probe-timeout 0.5
-  "Maximum seconds to wait for a Bubblewrap capability probe."
+  "Maximum seconds to wait for a local Bubblewrap capability probe."
+  :type 'number
+  :group 'mevedel)
+
+(defcustom mevedel-sandbox-remote-probe-timeout 10
+  "Maximum seconds to wait for a remote Bubblewrap capability probe."
   :type 'number
   :group 'mevedel)
 
 (defvar mevedel-sandbox--probe-cache nil
-  "Cached Bubblewrap availability plist, or nil before the first probe.
-A runtime failure carries :retry-on-execution until the next child launch.")
+  "Alist mapping execution targets to cached Bubblewrap availability facts.
+The nil key denotes the local target.  A runtime failure carries
+:retry-on-execution until the next child launch on the same target.")
 
 (defun mevedel-sandbox-invalidate-probe-cache (&optional workdir)
   "Invalidate cached Bubblewrap availability for WORKDIR's target.
 With nil WORKDIR, invalidate the local-target cache.  A cache for a different
 remote target is left untouched."
   (let ((target (and workdir (file-remote-p workdir))))
-    (when (equal target (plist-get mevedel-sandbox--probe-cache :target))
-      (setq mevedel-sandbox--probe-cache nil))))
+    (setf (alist-get target mevedel-sandbox--probe-cache nil 'remove #'equal)
+          nil)))
 
 (defvar mevedel-sandbox--last-facts nil
   "Most recently prepared child-confinement facts.")
@@ -154,9 +160,12 @@ OMIT-PROC-P leaves the host proc filesystem visible through the root bind."
 
 (defun mevedel-sandbox--run-probe (command &optional workdir)
   "Run Bubblewrap probe COMMAND in WORKDIR within the configured time bound."
-  (let ((output-buffer (generate-new-buffer " *mevedel-bwrap-probe*"))
-        (deadline (+ (float-time) mevedel-sandbox-probe-timeout))
-        (remote (and workdir (file-remote-p workdir)))
+  (let* ((output-buffer (generate-new-buffer " *mevedel-bwrap-probe*"))
+         (remote (and workdir (file-remote-p workdir)))
+         (deadline (+ (float-time)
+                      (if remote
+                          mevedel-sandbox-remote-probe-timeout
+                        mevedel-sandbox-probe-timeout)))
         process timed-out result)
     (unwind-protect
         (condition-case err
@@ -238,12 +247,11 @@ The probe creates the same core namespaces and mounts as real execution but
 runs only `true'.  A failed probe means the backend is unavailable even when a
 `bwrap' executable is installed."
   (let* ((target (and workdir (file-remote-p workdir)))
-         (cached-target (plist-get mevedel-sandbox--probe-cache :target))
-         (cache-matches-p
-          (if target (equal target cached-target) (null cached-target))))
-    (or (and cache-matches-p mevedel-sandbox--probe-cache)
-        (setq
-         mevedel-sandbox--probe-cache
+         (cached (alist-get target mevedel-sandbox--probe-cache
+                            nil nil #'equal)))
+    (or cached
+        (setf
+         (alist-get target mevedel-sandbox--probe-cache nil nil #'equal)
          (let* ((executable
                  (unless (and (not target)
                               (not (eq system-type 'gnu/linux)))
@@ -288,7 +296,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                                  :reason
                                  (mevedel-sandbox--probe-failure-reason
                                   without-proc)))))))))))
-           (if target (plist-put facts :target target) facts))))))
+           facts)))))
 
 (defun mevedel-sandbox--canonical-directories (roots)
   "Return existing canonical directories from ROOTS without duplicates."
@@ -860,12 +868,18 @@ MODE defaults to the global sandbox mode."
        (mevedel-sandbox--direct-preparation
         command 'off "Confinement disabled by mevedel-sandbox-mode"))
       ((or 'best-effort 'required)
-       (when (plist-get mevedel-sandbox--probe-cache :retry-on-execution)
-         (setq mevedel-sandbox--probe-cache nil))
-       (let ((availability
-              (if (file-remote-p workdir)
-                  (mevedel-sandbox-probe workdir)
-                (mevedel-sandbox-probe))))
+       (let* ((target (and workdir (file-remote-p workdir)))
+              (cached (alist-get target mevedel-sandbox--probe-cache
+                                 nil nil #'equal))
+              availability)
+         (when (plist-get cached :retry-on-execution)
+           (setf (alist-get target mevedel-sandbox--probe-cache
+                            nil 'remove #'equal)
+                 nil))
+         (setq availability
+               (if (file-remote-p workdir)
+                   (mevedel-sandbox-probe workdir)
+                 (mevedel-sandbox-probe)))
          (if (plist-get availability :available)
              (condition-case err
                  (let ((preparation
@@ -931,9 +945,9 @@ MODE defaults to the global sandbox mode."
      (when reason
        (format "; reason: %s" reason)))))
 
-(defun mevedel-sandbox--record-launch-failure (child-result)
-  "Record CHILD-RESULT as a retryable unavailable backend launch."
-  (let* ((target (plist-get mevedel-sandbox--probe-cache :target))
+(defun mevedel-sandbox--record-launch-failure (child-result &optional workdir)
+  "Record CHILD-RESULT as a retryable backend failure for WORKDIR's target."
+  (let* ((target (and workdir (file-remote-p workdir)))
          (output (string-trim (or (plist-get child-result :output) "")))
          (reason
           (cond
@@ -946,10 +960,8 @@ MODE defaults to the global sandbox mode."
            (t
             (format "Bubblewrap exited before process start with exit code %s"
                     (or (plist-get child-result :exit-code) "unknown"))))))
-    (setq mevedel-sandbox--probe-cache
-          (let ((facts
-                 (list :available nil :reason reason :retry-on-execution t)))
-            (if target (plist-put facts :target target) facts)))
+    (setf (alist-get target mevedel-sandbox--probe-cache nil nil #'equal)
+          (list :available nil :reason reason :retry-on-execution t))
     (setq mevedel-sandbox--last-facts
           (mevedel-sandbox--unrestricted-facts 'unavailable reason))))
 

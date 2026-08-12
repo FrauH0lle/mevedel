@@ -1,0 +1,17 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+       bash bubblewrap git openssh-server ripgrep util-linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /bin/bash mevedel \
+    && install -d -m 0700 /home/mevedel/.ssh \
+    && touch /home/mevedel/.ssh/authorized_keys \
+    && chown -R mevedel:mevedel /home/mevedel/.ssh \
+    && install -d -o mevedel -g mevedel /workspace \
+    && install -d -m 0755 /run/sshd \
+    && ssh-keygen -A
+
+EXPOSE 22
+
+ENTRYPOINT ["/usr/sbin/sshd", "-D", "-e", "-o", "PasswordAuthentication=no", "-o", "PermitRootLogin=no", "-o", "StrictModes=no"]

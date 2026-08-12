@@ -97,10 +97,15 @@
   (test)
   :doc "accepts only targets with the supported tier"
   (progn
-    (should
-     (mevedel-execution-target-supported-p
-      (mevedel-execution-target-create
-       "/docker:dev:/workspace/")))
+    (dolist (root '("/ssh:dev:/workspace/"
+                    "/scp:dev:/workspace/"
+                    "/sshx:dev:/workspace/"
+                    "/scpx:dev:/workspace/"
+                    "/docker:dev:/workspace/"
+                    "/podman:dev:/workspace/"))
+      (should
+       (mevedel-execution-target-supported-p
+        (mevedel-execution-target-create root))))
     (should-not
      (mevedel-execution-target-supported-p
       (mevedel-execution-target-create
@@ -180,7 +185,15 @@
     (should-error
      (mevedel-execution-target-native-path
      target "/ssh:user@host:/srv/project/a.el")
-     :type 'mevedel-execution-target-error)))
+     :type 'mevedel-execution-target-error))
+
+  :doc "rejects quoted local paths from a local session"
+  (let ((target (mevedel-execution-target-create "/srv/project/")))
+    (dolist (path '("/:/home/user/.ssh/id_rsa"
+                    "/::/home/user/.ssh/id_rsa"))
+      (should-error
+       (mevedel-execution-target-native-path target path)
+       :type 'mevedel-execution-target-error))))
 
 (mevedel-deftest mevedel-execution-target-expand-path ()
   ,test
@@ -345,6 +358,48 @@
                        (mevedel-execution-target-missing-dependencies
                         target)))
         (should-not (mevedel-execution-target-ready-p target)))))
+
+  :doc "blocks a target whose environment does not define HOME"
+  (let ((target (mevedel-execution-target-create
+                 "/docker:dev:/workspace/")))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name &optional _remote)
+                 (concat "/usr/bin/" name)))
+              ((symbol-function 'process-file)
+               (lambda (program _in destination _display &rest _args)
+                 (with-current-buffer destination
+                   (insert (if (equal program "env")
+                               "PATH=/usr/bin\0"
+                             "Linux\n")))
+                 0)))
+      (let ((readiness (mevedel-execution-target-probe target)))
+        (should (eq 'blocked (plist-get readiness :status)))
+        (should (eq 'missing-environment (plist-get readiness :reason)))
+        (should (string-match-p
+                 "HOME"
+                 (mevedel-execution-target-readiness-message target))))))
+
+  :doc "reports empty HOME with every dependency defect"
+  (let ((target (mevedel-execution-target-create
+                 "/docker:dev:/workspace/")))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name &optional _remote)
+                 (unless (equal name "rg")
+                   (concat "/usr/bin/" name))))
+              ((symbol-function 'process-file)
+               (lambda (program _in destination _display &rest _args)
+                 (with-current-buffer destination
+                   (cond
+                    ((equal program "env") (insert "HOME=\0"))
+                    ((equal program "uname") (insert "Linux\n"))))
+                 (if (equal program "/usr/bin/setsid") 1 0))))
+      (let ((message
+             (progn
+               (mevedel-execution-target-probe target)
+               (mevedel-execution-target-readiness-message target))))
+        (should (string-match-p "non-empty HOME" message))
+        (should (string-match-p "missing required target programs: rg" message))
+        (should (string-match-p "incompatible target programs: setsid" message)))))
 
   :doc "does not blame dependent programs when Bash is missing"
   (let ((target (mevedel-execution-target-create
@@ -555,6 +610,30 @@
       (should
        (equal "/ssh:user@host:/srv/project/" invalidated))))
 
+  :doc "a fresh target invalidates same-prefix Bubblewrap facts"
+  (let ((first (mevedel-execution-target-create
+                "/ssh:user@host:/srv/project/"))
+        (second (mevedel-execution-target-create
+                 "/ssh:user@host:/srv/project/"))
+        (invalidations 0))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name &optional _remote)
+                 (concat "/usr/bin/" name)))
+              ((symbol-function 'process-file)
+               (lambda (program _in destination _display &rest _args)
+                 (with-current-buffer destination
+                   (insert (if (equal program "env")
+                               "HOME=/home/user\0"
+                             "Linux\n")))
+                 0))
+              ((symbol-function 'mevedel-sandbox-invalidate-probe-cache)
+               (lambda (&optional _workdir) (cl-incf invalidations)))
+              ((symbol-function 'mevedel-sandbox-probe)
+               (lambda (&optional _workdir) '(:available t))))
+      (mevedel-execution-target-probe first nil 'best-effort)
+      (mevedel-execution-target-probe second nil 'best-effort)
+      (should (= 2 invalidations))))
+
   :doc "reprobes after reconnect and detects a changed target incarnation"
   (let ((target (mevedel-execution-target-create
                  "/docker:dev:/workspace/"))
@@ -590,14 +669,14 @@
       (setq connection 'second)
       (mevedel-execution-target-probe target)
       (should (= 12 lookups))
-      (should (= 1 invalidations))
+      (should (= 2 invalidations))
       (should-not
        (mevedel-execution-target-incarnation-changed-p target))
       (setq connection 'third
             incarnation "replacement-incarnation")
       (mevedel-execution-target-probe target)
       (should (= 18 lookups))
-      (should (= 2 invalidations))
+      (should (= 3 invalidations))
       (should
        (mevedel-execution-target-incarnation-changed-p target))
       (should (equal "first-incarnation"

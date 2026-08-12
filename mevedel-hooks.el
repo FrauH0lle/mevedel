@@ -1586,6 +1586,9 @@ record only that context was added, without duplicating the body."
                (plist-get event-plist :workspace-root)
                default-directory)))
          (target (and session (mevedel-session-execution-target session))))
+    (unless (memq source '(project-file user user-file plugin))
+      (signal 'mevedel-execution-target-error
+              (list "Command hook has no trusted execution origin")))
     (when target
       (require 'mevedel-execution-target)
       (cond
@@ -1604,15 +1607,27 @@ record only that context was added, without duplicating the body."
                          (mevedel-session-execution-target session))))
       (progn
         (require 'mevedel-execution-target)
-        (let ((payload (copy-sequence event-plist)))
-          (dolist (key '(:cwd :workspace-root :transcript-path))
-            (when-let* ((path (plist-get payload key)))
+        (cl-labels
+            ((native-input (value)
+               (cond
+                ((and (stringp value) (file-remote-p value))
+                 (mevedel-execution-target-native-path target value))
+                ((consp value) (mapcar #'native-input value))
+                (t value))))
+          (let ((payload (copy-sequence event-plist)))
+            (dolist (key '(:cwd :workspace-root :transcript-path))
+              (when-let* ((path (plist-get payload key)))
+                (setq payload
+                      (plist-put
+                       payload key
+                       (mevedel-execution-target-native-path target path)))))
+            (when (plist-member payload :tool-input)
               (setq payload
-                    (plist-put
-                     payload key
-                     (mevedel-execution-target-native-path target path)))))
-          (plist-put payload :execution-target
-                     (mevedel-execution-target-identity target))))
+                    (plist-put payload :tool-input
+                               (native-input
+                                (plist-get payload :tool-input)))))
+            (plist-put payload :execution-target
+                       (mevedel-execution-target-identity target)))))
     event-plist))
 
 (defun mevedel-hooks--command-process-command (command remote)

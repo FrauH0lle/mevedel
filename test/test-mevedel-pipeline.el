@@ -559,6 +559,23 @@
 		    (mevedel-pipeline--step-normalize-paths
 		     context #'ignore #'ignore)
 		    :type 'mevedel-execution-target-error))
+		 :doc "rejects quoted local paths before authorization"
+		 (let* ((target (mevedel-execution-target-create "/srv/project/"))
+			(session (mevedel-session--create
+			          :name "local-quoted-path"
+			          :execution-target target
+			          :working-directory "/srv/project/"))
+			(tool (mevedel-tool--create
+			       :name "LocalPath"
+			       :args '((file_path path :required "Path"))))
+			(context (list :tool tool
+			               :session session
+			               :default-directory "/srv/project/"
+			               :args '(:file_path "/:/home/user/.ssh/id_rsa"))))
+		   (should-error
+		    (mevedel-pipeline--step-normalize-paths
+		     context #'ignore #'ignore)
+		    :type 'mevedel-execution-target-error))
 		 :doc "authorization and handler observe one identical path"
 		 (let* ((root (file-name-as-directory
 				 (make-temp-file "mevedel-normalize-" t)))

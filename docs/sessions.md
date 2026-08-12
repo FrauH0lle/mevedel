@@ -236,6 +236,9 @@ loss, consumes the transaction sources, and does not create recovery or
 republish the committed bytes.  Normal session-buffer closure and Emacs exit
 are refused while recovery is pending, so releasing a lease cannot silently
 turn the only local recovery into an unreachable temporary directory.
+If publication is queued reentrantly while a live publisher is being released,
+lease release converts the queued and preceding uncommitted batches into the
+same pending-recovery state instead of deleting their staged sources.
 
 Critical publication changes the owned generation to `publishing` and reserves
 a one-hour ownership window before each artifact.  Timer callbacks perform no

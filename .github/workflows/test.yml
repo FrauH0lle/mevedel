@@ -96,3 +96,27 @@ jobs:
 
     - name: Install package
       run: eask install
+
+  remote-transport:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: jcs090218/setup-emacs@master
+      with:
+        version: 30.2
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install podman ripgrep
+
+    - name: Install transient
+      run: npx @emacs-eask/cli install transient --force
+
+    - name: Install dependencies
+      run: npx @emacs-eask/cli install-deps --dev
+
+    - name: Run real transport acceptance
+      run: test/run-remote-acceptance.sh

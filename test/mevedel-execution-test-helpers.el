@@ -86,11 +86,11 @@
     observation))
 
 (cl-defun test-mevedel-execution--observe
-    (session execution-id &key chars (wait-ms 4000))
+    (session execution-id &key chars (wait-ms 4000) (owner "main"))
   "Observe EXECUTION-ID in SESSION and return the delivered observation."
   (let (observation)
     (mevedel-execution-observe
-     session "main" execution-id
+     session owner execution-id
      (lambda (value) (setq observation value))
      :chars chars :wait-ms wait-ms)
     (test-mevedel-execution--wait (lambda () observation))

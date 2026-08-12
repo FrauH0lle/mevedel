@@ -98,7 +98,7 @@
   :doc "required confinement refuses a helper before execution"
   (let ((mevedel-sandbox-mode 'required)
         (mevedel-sandbox--probe-cache
-         '(:available nil :reason "test unavailable")))
+         '((nil . (:available nil :reason "test unavailable")))))
     (let ((result
            (mevedel-execution-run-helper
             "mevedel-test-helper-required" '("true") nil nil)))

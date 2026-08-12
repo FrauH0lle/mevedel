@@ -3863,7 +3863,8 @@ default Bash keeps bare dot inspection automatic"
   :doc "discloses automatic unrestricted fallback"
   (let ((mevedel-sandbox-mode 'best-effort)
         (mevedel-sandbox--probe-cache
-         '(:available nil :reason "test confinement unavailable"))
+         '((nil . (:available nil
+                  :reason "test confinement unavailable"))))
         result done)
     (test-bash-permissions--call-bash
      (lambda (r)

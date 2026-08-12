@@ -16,6 +16,7 @@
           "helpers"))
 
 (defvar mevedel-sandbox-probe-timeout)
+(defvar mevedel-sandbox-remote-probe-timeout)
 
 
 ;;
@@ -107,8 +108,39 @@
   :doc "cached probe:
 `mevedel-sandbox-probe' reuses the first real availability decision"
   (let* ((cached '(:available nil :reason "cached result"))
-         (mevedel-sandbox--probe-cache cached))
+         (mevedel-sandbox--probe-cache (list (cons nil cached))))
     (should (eq (mevedel-sandbox-probe) cached)))
+  :doc "target cache:
+`mevedel-sandbox-probe' caches local and remote availability independently"
+  (let ((mevedel-sandbox--probe-cache nil)
+        calls)
+    (skip-unless (eq system-type 'gnu/linux))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (&rest _) "/test/bwrap"))
+              ((symbol-function 'mevedel-sandbox--run-probe)
+               (lambda (_command &optional workdir)
+                 (push workdir calls)
+                 '(:status 0))))
+      (mevedel-sandbox-probe)
+      (mevedel-sandbox-probe "/ssh:user@host:/srv/project/")
+      (mevedel-sandbox-probe)
+      (mevedel-sandbox-probe "/ssh:user@host:/srv/other/")
+      (should (= 2 (length calls)))
+      (should (= 2 (length mevedel-sandbox--probe-cache)))))
+  :doc "remote timeout:
+`mevedel-sandbox--run-probe' does not apply the local timeout over TRAMP"
+  (let* ((root (make-temp-file "mevedel-sandbox-remote-timeout-" t))
+         (remote-root
+          (format "/mevedelmock:%s:%s/" (system-name) root))
+         (mevedel-sandbox-probe-timeout 0.001)
+         (mevedel-sandbox-remote-probe-timeout 2))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (let ((result
+                 (mevedel-sandbox--run-probe
+                  '("sh" "-c" "sleep 0.05") remote-root)))
+            (should-not (plist-get result :timed-out-p))))
+      (delete-directory root t)))
   :doc "host probe:
 `mevedel-sandbox-probe' always returns explicit availability facts"
   (let ((mevedel-sandbox--probe-cache nil))
@@ -183,13 +215,15 @@
   (test)
   :doc "clears only the cache belonging to the requested execution target"
   (let ((mevedel-sandbox--probe-cache
-         '(:available t :target "/ssh:user@host:")))
+         '(("/ssh:user@host:" . (:available t))
+           (nil . (:available t)))))
     (mevedel-sandbox-invalidate-probe-cache
      "/ssh:user@other:/srv/project/")
     (should mevedel-sandbox--probe-cache)
     (mevedel-sandbox-invalidate-probe-cache
      "/ssh:user@host:/srv/project/")
-    (should-not mevedel-sandbox--probe-cache)))
+    (should (= 1 (length mevedel-sandbox--probe-cache)))
+    (should (alist-get nil mevedel-sandbox--probe-cache))))
 
 (mevedel-deftest mevedel-sandbox--canonical-directories ()
   ,test
@@ -503,11 +537,13 @@
   :doc "keeps a retryable runtime failure visible without consuming its retry"
   (let ((mevedel-sandbox-mode 'best-effort)
         (mevedel-sandbox--probe-cache
-         '(:available nil :reason "runtime failure" :retry-on-execution t)))
+         '((nil . (:available nil :reason "runtime failure"
+                  :retry-on-execution t)))))
     (should (string-match-p
              "runtime failure"
              (plist-get (mevedel-sandbox-pending-facts) :reason)))
-    (should (plist-get mevedel-sandbox--probe-cache :retry-on-execution)))
+    (should (plist-get (alist-get nil mevedel-sandbox--probe-cache)
+                       :retry-on-execution)))
   :doc "reports required-mode refusal instead of an unrestricted execution"
   (let ((mevedel-sandbox-mode 'required))
     (cl-letf (((symbol-function 'mevedel-sandbox-probe)
@@ -591,7 +627,9 @@
          (workdir (file-name-as-directory root))
          (mevedel-sandbox-mode 'best-effort)
          (mevedel-sandbox--probe-cache
-          (list :available t :executable executable :mount-proc t))
+          (list (cons nil
+                      (list :available t :executable executable
+                            :mount-proc t))))
          prepared)
     (skip-unless (not (eq system-type 'windows-nt)))
     (setq prepared
@@ -616,7 +654,8 @@
   (let* ((root (make-temp-file "mevedel-sandbox-host-proc-" t))
          (mevedel-sandbox-mode 'required)
          (mevedel-sandbox--probe-cache
-          '(:available t :executable "/test/bwrap" :mount-proc nil))
+          '((nil . (:available t :executable "/test/bwrap"
+                    :mount-proc nil))))
          prepared command)
     (skip-unless (not (eq system-type 'windows-nt)))
     (setq prepared (mevedel-sandbox-prepare '("true") root (list root))
@@ -639,7 +678,7 @@
 `mevedel-sandbox-prepare' discloses unrestricted direct execution"
   (let ((mevedel-sandbox-mode 'best-effort)
         (mevedel-sandbox--probe-cache
-         '(:available nil :reason "test backend unavailable")))
+         '((nil . (:available nil :reason "test backend unavailable")))))
     (let ((prepared
            (mevedel-sandbox-prepare '("true") temporary-file-directory nil)))
       (should (equal (plist-get prepared :command) '("true")))
@@ -653,8 +692,8 @@
 `mevedel-sandbox-prepare' reprobes after a transient launch failure"
   (let ((mevedel-sandbox-mode 'best-effort)
         (mevedel-sandbox--probe-cache
-         '(:available nil :reason "transient launch failure"
-           :retry-on-execution t))
+         '((nil . (:available nil :reason "transient launch failure"
+                  :retry-on-execution t))))
         cache-at-probe)
     (cl-letf (((symbol-function 'mevedel-sandbox-probe)
                (lambda ()
@@ -672,7 +711,8 @@
   (let* ((root (make-temp-file "mevedel-sandbox-network-" t))
          (mevedel-sandbox-mode 'required)
          (mevedel-sandbox--probe-cache
-          '(:available t :executable "/test/bwrap" :mount-proc t))
+          '((nil . (:available t :executable "/test/bwrap"
+                    :mount-proc t))))
          default network)
     (skip-unless (not (eq system-type 'windows-nt)))
     (setq default (mevedel-sandbox-prepare '("true") root (list root))
@@ -720,7 +760,8 @@ exact read and write mounts follow protected masks without broadening siblings"
             (,(concat credentials "/**") . inaccessible)))
          (mevedel-sandbox-mode 'required)
          (mevedel-sandbox--probe-cache
-          '(:available t :executable "/test/bwrap" :mount-proc t))
+          '((nil . (:available t :executable "/test/bwrap"
+                    :mount-proc t))))
          prepared)
     (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
@@ -763,7 +804,8 @@ exact read and write mounts follow protected masks without broadening siblings"
   (let* ((root (make-temp-file "mevedel-sandbox-dev-null-" t))
          (mevedel-sandbox-mode 'required)
          (mevedel-sandbox--probe-cache
-          '(:available t :executable "/test/bwrap" :mount-proc t))
+          '((nil . (:available t :executable "/test/bwrap"
+                    :mount-proc t))))
          prepared command facts)
     (skip-unless (not (eq system-type 'windows-nt)))
     (setq prepared
@@ -783,7 +825,8 @@ exact read and write mounts follow protected masks without broadening siblings"
 `mevedel-sandbox-prepare' refuses execution when confinement is unavailable"
   (let ((mevedel-sandbox-mode 'required)
         (mevedel-sandbox--probe-cache
-         '(:available nil :reason "required backend unavailable")))
+         '((nil . (:available nil :reason
+                  "required backend unavailable")))))
     (let ((prepared
            (mevedel-sandbox-prepare '("true") temporary-file-directory nil)))
       (should-not (plist-get prepared :command))
@@ -796,9 +839,11 @@ exact read and write mounts follow protected masks without broadening siblings"
          (outside (make-temp-file "mevedel-sandbox-outside-" t))
          (mevedel-sandbox-mode 'best-effort)
          (mevedel-sandbox--probe-cache
-          (list :available t
-                :executable (or (executable-find "bwrap") "bwrap")
-                :mount-proc t)))
+          (list
+           (cons nil
+                 (list :available t
+                       :executable (or (executable-find "bwrap") "bwrap")
+                       :mount-proc t)))))
     (unwind-protect
         (let ((prepared
                (mevedel-sandbox-prepare '("true") outside (list root))))
@@ -815,9 +860,11 @@ exact read and write mounts follow protected masks without broadening siblings"
          (link (file-name-concat resource "runner"))
          (mevedel-sandbox-mode 'best-effort)
          (mevedel-sandbox--probe-cache
-          (list :available t
-                :executable (or (executable-find "bwrap") "bwrap")
-                :mount-proc t)))
+          (list
+           (cons nil
+                 (list :available t
+                       :executable (or (executable-find "bwrap") "bwrap")
+                       :mount-proc t)))))
     (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (progn
@@ -1291,26 +1338,27 @@ a broad read grant keeps an inaccessible descendant masked"
   (test)
   :doc "launch failure state:
 `mevedel-sandbox--record-launch-failure' records a retryable runtime verdict"
-  (let ((mevedel-sandbox--probe-cache '(:available t))
+  (let ((mevedel-sandbox--probe-cache '((nil . (:available t))))
         (mevedel-sandbox--last-facts nil))
     (let ((facts
            (mevedel-sandbox--record-launch-failure
             '(:exit-code 125 :output "backend refused"))))
-      (should-not (plist-get mevedel-sandbox--probe-cache :available))
-      (should (plist-get mevedel-sandbox--probe-cache :retry-on-execution))
+      (let ((cached (alist-get nil mevedel-sandbox--probe-cache)))
+        (should-not (plist-get cached :available))
+        (should (plist-get cached :retry-on-execution)))
       (should (eq facts mevedel-sandbox--last-facts))
       (should (eq (plist-get facts :sandbox) 'unavailable))
       (should (string-match-p "backend refused" (plist-get facts :reason)))))
   :doc "empty backend output:
 `mevedel-sandbox--record-launch-failure' retains the Bubblewrap exit code"
-  (let ((mevedel-sandbox--probe-cache '(:available t)))
+  (let ((mevedel-sandbox--probe-cache '((nil . (:available t)))))
     (let ((facts
            (mevedel-sandbox--record-launch-failure
             '(:exit-code 125 :output ""))))
       (should (string-match-p "exit code 125" (plist-get facts :reason)))))
   :doc "process spawn error:
 `mevedel-sandbox--record-launch-failure' retains structured launcher errors"
-  (let ((mevedel-sandbox--probe-cache '(:available t)))
+  (let ((mevedel-sandbox--probe-cache '((nil . (:available t)))))
     (let ((facts
            (mevedel-sandbox--record-launch-failure
             '(:exit-code -1 :output ""
