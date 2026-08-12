@@ -478,6 +478,11 @@ directly only after a pre-exec Bubblewrap failure; it never replays a helper
 that may have started. `required` fails the tool explicitly and `off` runs
 directly.
 
+Bubblewrap capability probes are cached independently per execution target.
+Local probes use the short `mevedel-sandbox-probe-timeout`; remote probes use
+`mevedel-sandbox-remote-probe-timeout` (10 seconds by default) so transport
+latency does not silently disable best-effort confinement.
+
 All operating-system children receive deterministic defaults for UTF-8 locale,
 no color, terminal mode, and pagers, plus `MEVEDEL_EXECUTION=1`. An invocation
 can still override these variables inside its own command. Ordinary one-shot
@@ -694,12 +699,23 @@ MEVEDEL_TEST_PODMAN_ROOT=/podman:container:/workspace/ \
 npx @emacs-eask/cli test ert test/test-mevedel-execution-remote.el
 ```
 
-The suite never provisions, starts, or stops a target.  Its loss cases start a
-bounded target process, discard that target's client-side TRAMP processes and
-reconnect attempts, and require an unknown outcome plus the mutating-execution
-block.  They then restore connectivity and identity-check the bounded
-descendant before cleaning its process group.  This exercises real transport
-loss without requiring network or container lifecycle authority.
+The loss cases stop the disposable target container and require an unknown
+outcome plus the mutating-execution block. They then restart the target,
+reconnect, identity-check the bounded descendant, and clean its process group.
+SSH loss additionally requires `MEVEDEL_TEST_SSH_CONTAINER`, naming the Docker
+container behind the SSH root.
+
+For a disposable local matrix, the repository provides one OCI target image
+used by Docker, Podman, and SSH.  The launcher builds it, starts one container
+per runtime, routes SSH through the Docker instance, temporarily installs the
+pinned Bash tree-sitter grammar when absent, runs the acceptance file, and
+removes its containers, grammar, and temporary credentials.  It deliberately
+supplies no `--privileged`, capability, or security-profile override; the same
+default-run core transport matrix is a CI gate:
+
+```bash
+test/run-remote-acceptance.sh
+```
 
 ## Eval execution scope
 

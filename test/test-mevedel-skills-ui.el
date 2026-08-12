@@ -15,6 +15,7 @@
           "helpers"))
 (require 'gptel)
 (require 'gptel-openai)
+(require 'mevedel-chat)
 (require 'mevedel-cockpit)
 (require 'mevedel-execution)
 (require 'mevedel-executions-list)

@@ -59,7 +59,7 @@
   "Return support tier for TRAMP METHOD and HOP."
   (cond
    (hop 'experimental)
-   ((memq method '(ssh docker podman)) 'supported)
+   ((memq method '(ssh scp sshx scpx docker podman)) 'supported)
    ((eq method 'kubernetes) 'experimental)
    (method 'unsupported)
    (t 'supported)))
@@ -144,10 +144,9 @@ different execution target."
   (unless (stringp path)
     (signal 'mevedel-execution-target-error
             (list "Path must be a string")))
-  (when (and (mevedel-execution-target-remote-p target)
-             (file-name-quoted-p path 'top))
+  (when (file-name-quoted-p path 'top)
     (signal 'mevedel-execution-target-error
-            (list (format "Path explicitly names the client: %s" path))))
+            (list (format "Quoted paths are not allowed: %s" path))))
   (if-let* ((path-prefix (mevedel-execution-target--prefix path)))
       (if (equal path-prefix (mevedel-execution-target-prefix target))
           (file-remote-p path 'localname 'never)
@@ -423,7 +422,9 @@ SANDBOX-MODE records the session's effective confinement requirement."
                (not (eq connection
                         (mevedel-execution-target-connection-process target)))))
          (refresh (or refresh reconnected)))
-    (when (and refresh remote)
+    (when (and remote
+               (or refresh
+                   (null (mevedel-execution-target-readiness target))))
       (require 'mevedel-sandbox)
       (mevedel-sandbox-invalidate-probe-cache
        (mevedel-execution-target-workspace-root target)))
@@ -468,6 +469,9 @@ SANDBOX-MODE records the session's effective confinement requirement."
                             (incompatible
                              (mevedel-execution-target--probe-dependency-behavior
                               target capabilities))
+                            (home (cdr (assoc "HOME" environment)))
+                            (missing-home
+                             (or (null home) (string-empty-p home)))
                             (unsupported-os
                              (and (mevedel-execution-target-remote-p target)
                                   (not (equal operating-system "Linux"))))
@@ -483,14 +487,34 @@ SANDBOX-MODE records the session's effective confinement requirement."
                        (when incarnation
                          (mevedel-execution-target--record-incarnation
                           target incarnation))
-                       (list :status (if (or missing incompatible unsupported-os)
+                       (list :status (if (or missing-home missing incompatible
+                                             unsupported-os)
                                          'blocked
                                        'ready)
                              :reason (cond
                                       (unsupported-os
                                        'unsupported-operating-system)
+                                      (missing-home 'missing-environment)
                                       (missing 'missing-dependencies)
                                       (incompatible 'incompatible-dependencies))
+                             :error
+                             (and missing-home
+                                  (mapconcat
+                                   #'identity
+                                   (delq
+                                    nil
+                                    (list
+                                     "Target environment does not define a non-empty HOME"
+                                     (and missing
+                                          (format
+                                           "missing required target programs: %s"
+                                           (mapconcat #'symbol-name missing ", ")))
+                                     (and incompatible
+                                          (format
+                                           "incompatible target programs: %s"
+                                           (mapconcat #'symbol-name
+                                                      incompatible ", ")))))
+                                   "; "))
                              :operating-system operating-system
                              :operating-system-version operating-system-version
                              :capabilities capabilities
@@ -561,6 +585,9 @@ SANDBOX-MODE records the session's effective confinement requirement."
            (format "unsupported target operating system: %s (Linux required)"
                    (or (plist-get readiness :operating-system) "unknown")))
           ('unsupported-target "unsupported TRAMP target method")
+          ('missing-environment
+           (or (plist-get readiness :error)
+               "target environment is incomplete"))
           ('probe-failed
            (format "target probe failed: %s"
                    (or (plist-get readiness :error) "unknown error")))

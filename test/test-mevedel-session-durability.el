@@ -809,6 +809,39 @@
               (dolist (retained (plist-get pending :batches))
                 (mevedel-session-durability--delete-batch retained)))))
       (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
+  :doc "deferred release retains a reentrantly queued critical publication"
+  (let* ((local-root (file-name-as-directory
+                      (make-temp-file "mevedel-release-queued-" t)))
+         (session-dir (file-name-as-directory
+                       (file-name-concat local-root "session")))
+         (target (file-name-concat session-dir "state.el"))
+         (session (test-mevedel-session-durability--local-session local-root))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*publisher*" session))
+          (should
+           (mevedel-session-durability-call-with-reserved-lease
+            session
+            (lambda ()
+              (should
+               (eq 'queued
+                   (mevedel-session-durability-publish
+                    session (list (list :path target :content "critical")))))
+              (mevedel-session-durability-lease-release session-dir session)
+              t)))
+          (let* ((pending (mevedel-session-pending-publication session))
+                 (batch (car (plist-get pending :batches))))
+            (should pending)
+            (should (file-directory-p (plist-get batch :directory)))
+            (mevedel-session-durability--delete-batch batch)))
+      (mevedel-session-durability--cancel-renewal session)
+      (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-session-durability-forget-removed-session

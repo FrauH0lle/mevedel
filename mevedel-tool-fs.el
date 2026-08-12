@@ -119,6 +119,9 @@
 (defvar mevedel-tool-fs--resource-dispatching nil
   "Non-nil while dispatching a resource attempt into a native handler.")
 
+(defvar mevedel-tool-fs--local-media-copy nil
+  "Dynamically scoped remote path and local copy for one media read.")
+
 
 ;;
 ;;; Diff Utilities
@@ -817,8 +820,12 @@ Use DISPLAY-PATH in model-visible errors when non-nil."
 (defun mevedel-tool-fs--with-local-media-source (path function)
   "Call FUNCTION with PATH available as a local converter input.
 Delete the temporary copy before returning."
-  (if (not (file-remote-p path))
-      (funcall function path)
+  (cond
+   ((not (file-remote-p path))
+    (funcall function path))
+   ((equal path (car-safe mevedel-tool-fs--local-media-copy))
+    (funcall function (cdr mevedel-tool-fs--local-media-copy)))
+   (t
     (let ((size (file-attribute-size (file-attributes path))))
       (when (> size mevedel-tool-fs--remote-media-copy-max-bytes)
         (error "Remote media file is too large (%d bytes > %d bytes): %s"
@@ -833,8 +840,9 @@ Delete the temporary copy before returning."
                    (local (file-name-concat
                            directory (file-name-nondirectory path))))
               (copy-file path local t)
-              (funcall function local))
-          (ignore-errors (delete-directory directory t)))))))
+              (let ((mevedel-tool-fs--local-media-copy (cons path local)))
+                (funcall function local)))
+          (ignore-errors (delete-directory directory t))))))))
 
 (defun mevedel-tool-fs--tool-results-dir ()
   "Return a writable directory for Read-generated media artifacts."
@@ -1095,16 +1103,20 @@ text limit and may be sent by models as a defaulted optional value."
         (when (mevedel-tool-fs--media-transform-requested-p args)
           (error "'max_width', 'max_height', and 'max_tokens' are only supported for image files and PDF page images"))
         (mevedel-tool-fs--ensure-media-capable mime)
-        (mevedel-tool-fs--validate-media-file path mime model-path)
-        (let* ((base64 (mevedel-tool-fs--base64-file
-                        path nil model-path))
-               (media (list (list :path model-path :mime "application/pdf"
-                                  :kind 'document
-                                  :data base64))))
-          (mevedel-tool-fs--media-read-result
-           (mevedel-tool-fs--format-media-result
-            path "application/pdf" base64 nil model-path)
-           media))))
+        (mevedel-tool-fs--with-local-media-source
+         path
+         (lambda (source)
+           (mevedel-tool-fs--validate-media-file source mime model-path)
+           (let* ((base64 (mevedel-tool-fs--base64-file
+                           source nil model-path))
+                  (media (list (list :path model-path
+                                     :mime "application/pdf"
+                                     :kind 'document
+                                     :data base64))))
+             (mevedel-tool-fs--media-read-result
+              (mevedel-tool-fs--format-media-result
+               source "application/pdf" base64 nil model-path)
+              media))))))
      ((and mime (string-prefix-p "image/" mime))
       (mevedel-tool-fs--validate-media-file path mime model-path)
       (funcall
@@ -1552,39 +1564,47 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
                    (not (mevedel-tool-fs--agent-context-p))
                    (mevedel-session-read-is-duplicate-p
                     mevedel--session filename dedup-key nil))
-              (format "File %s unchanged since last read.  Reuse the previous contents."
+             (format "File %s unchanged since last read.  Reuse the previous contents."
                       (mevedel-tool-fs--visible-path filename)))
              (t
-              (condition-case err
-                  (let ((result (mevedel-tool-fs--read-media-file
-                                 filename args)))
-                    (when (and (mevedel-tool-fs--pdf-media-p filename)
-                               (null (plist-get args :pages))
-                               (mevedel-tool-fs--large-pdf-p filename))
-                      (setq result
-                            (mevedel-tool-fs--append-system-reminder
-                             result
-                             (mevedel-tool-fs--format-large-pdf-reminder
-                              filename))))
-                    (when (and (bound-and-true-p mevedel--session)
-                               (not mevedel-tool-fs--resource-address)
-                               (not (mevedel-tool-fs--agent-context-p)))
-                      (mevedel-session-record-file-access
-                       mevedel--session filename 'read dedup-key nil))
-                    result)
-                (error
-                 (let ((message (error-message-string err)))
-                   (if (and (mevedel-tool-fs--pdf-media-p filename)
-                            (null (plist-get args :pages))
-                            (string-match-p "Media file is too large"
-                                            message))
-                       (error "%s%s"
-                              message
-                              (mevedel-tool-fs--append-system-reminder
-                               ""
-                               (mevedel-tool-fs--format-large-pdf-reminder
-                                filename)))
-                     (signal (car err) (cdr err))))))))))
+              (cl-labels
+                  ((read-media
+                    ()
+                    (condition-case err
+                        (let ((result (mevedel-tool-fs--read-media-file
+                                       filename args)))
+                          (when (and (mevedel-tool-fs--pdf-media-p filename)
+                                     (null (plist-get args :pages))
+                                     (mevedel-tool-fs--large-pdf-p filename))
+                            (setq result
+                                  (mevedel-tool-fs--append-system-reminder
+                                   result
+                                   (mevedel-tool-fs--format-large-pdf-reminder
+                                    filename))))
+                          (when (and (bound-and-true-p mevedel--session)
+                                     (not mevedel-tool-fs--resource-address)
+                                     (not (mevedel-tool-fs--agent-context-p)))
+                            (mevedel-session-record-file-access
+                             mevedel--session filename 'read dedup-key nil))
+                          result)
+                      (error
+                       (let ((message (error-message-string err)))
+                         (if (and (mevedel-tool-fs--pdf-media-p filename)
+                                  (null (plist-get args :pages))
+                                  (string-match-p "Media file is too large"
+                                                  message))
+                             (error "%s%s"
+                                    message
+                                    (mevedel-tool-fs--append-system-reminder
+                                     ""
+                                     (mevedel-tool-fs--format-large-pdf-reminder
+                                      filename)))
+                           (signal (car err) (cdr err))))))))
+                (if (and (mevedel-tool-fs--pdf-media-p filename)
+                         (file-remote-p filename))
+                    (mevedel-tool-fs--with-local-media-source
+                     filename (lambda (_source) (read-media)))
+                  (read-media)))))))
       (when (plist-get args :pages)
         (error "Parameter pages is only supported for PDF files"))
       (when (mevedel-tool-fs--media-transform-requested-p args)

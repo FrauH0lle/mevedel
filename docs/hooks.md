@@ -244,7 +244,9 @@ Loaded handlers retain `:source-file` and `:source-root` metadata so dispatch
 does not infer origin from the event cwd or copy executable code between
 machines.  Project-relative commands such as
 `.mevedel/hooks/block-rm.sh` therefore resolve consistently regardless of the
-session cwd.  Default timeout is 30 seconds with a global cap. Each
+session cwd.  A command handler without trusted project, user, or plugin
+provenance is refused before launch.  Default timeout is 30 seconds with a
+global cap. Each
 stdout/stderr stream is capped by `mevedel-hooks-command-output-max-chars`
 before parsing decisions or writing log previews, so noisy hooks cannot
 inject unbounded output through `updated_result` or block reasons.
@@ -351,10 +353,11 @@ Top-level terminal events add:
 
 Command handlers receive the same data encoded as JSON with snake_case
 keys.  Their `cwd`, `workspace_root`, and `transcript_path` values are
-target-native paths, and `execution_target` contains the session's structured
-target identity.  This lets a local user or plugin hook reason about a remote
-event without receiving a client-specific TRAMP prefix or pretending to have a
-remote process cwd.
+target-native paths.  Remote file names nested in `tool_input` are target-native
+too, while ordinary strings such as Bash command text are unchanged.
+`execution_target` contains the session's structured target identity.  This
+lets a local user or plugin hook reason about a remote event without receiving
+a client-specific TRAMP prefix or pretending to have a remote process cwd.
 Elisp handlers receive the plist directly, with Emacs-qualified paths and
 `:hook-handler` holding the normalized handler metadata for declarative
 handlers.

@@ -35,6 +35,9 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-execution-test-helpers"))
 
+(defvar tramp-ssh-controlmaster-options)
+(defvar tramp-use-connection-share)
+
 
 ;;
 ;;; Test support
@@ -47,6 +50,11 @@ The root must already exist, be writable, and be reachable through normal
   (let ((value (getenv variable)))
     (unless value
       (ert-skip (format "%s is not set" variable)))
+    (when-let ((config (and (eq method 'ssh)
+                            (getenv "MEVEDEL_TEST_SSH_CONFIG"))))
+      (setq tramp-use-connection-share t
+            tramp-ssh-controlmaster-options
+            (format "-F %s" (shell-quote-argument config))))
     (when (string-empty-p value)
       (ert-fail (format "%s is set but empty" variable)))
     (let ((root (file-name-as-directory value)))
@@ -857,13 +865,23 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
       (should (process-live-p after))
       (should-not (eq before after)))))
 
-(defun test-mevedel-execution-remote--drop-target-processes (vector)
-  "Delete every live TRAMP process belonging to VECTOR."
-  (dolist (process (process-list))
-    (when (and (process-live-p process)
-               (equal vector (process-get process 'tramp-vector)))
-      (set-process-query-on-exit-flag process nil)
-      (ignore-errors (delete-process process)))))
+(defun test-mevedel-execution-remote--stop-target (root method stop-p)
+  "Stop or restart ROOT's disposable container for METHOD."
+  (let* ((runtime (if (eq method 'podman) "podman" "docker"))
+         (container
+          (if (eq method 'ssh)
+              (or (getenv "MEVEDEL_TEST_SSH_CONTAINER")
+                  (ert-skip "MEVEDEL_TEST_SSH_CONTAINER is not set"))
+            (file-remote-p root 'host 'never)))
+         (status
+          (let ((default-directory temporary-file-directory))
+            (if stop-p
+                (process-file runtime nil nil nil
+                              "stop" "--time" "0" container)
+              (process-file runtime nil nil nil "start" container)))))
+    (unless (and (integerp status) (zerop status))
+      (ert-fail (format "Could not %s %s target container"
+                        (if stop-p "stop" "restart") method)))))
 
 (defun test-mevedel-execution-remote--read-group-identity (path)
   "Return the process-group, child PID, and child start time stored at PATH."
@@ -904,7 +922,8 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
           (test-mevedel-execution-remote--real-temp-directory
            base (format "mevedel-%s-loss-" method)))
          (identity-file (file-name-concat root "lost-group.identity"))
-         session target fault-timer group-id child-pid child-start-time)
+         session target root-buffer target-stopped-p group-id child-pid
+         child-start-time)
     (unwind-protect
         (let* ((mevedel-sandbox-mode 'off)
                (workspace (test-mevedel-execution--workspace root))
@@ -915,8 +934,12 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
                         (mevedel-session-execution-target session)))
                (readiness
                 (mevedel-execution-target-probe target t 'off))
-               (vector (tramp-dissect-file-name root))
                initial execution-id result)
+          (setq root-buffer (generate-new-buffer " *remote-loss*"))
+          (with-current-buffer root-buffer
+            (setq-local mevedel--workspace workspace
+                        mevedel--session session)
+            (setq default-directory root))
           (test-mevedel-execution-remote--accept-storage session)
           (should (eq 'ready (plist-get readiness :status)))
           (setq
@@ -937,11 +960,17 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
               "while kill -0 \"$child\" 2>/dev/null; do "
               "wait \"$child\" || :; done")
              "mevedel-loss-workload" identity-file)
+            :owner "/root"
             :yield-time-ms 250)
            execution-id
            (plist-get (plist-get initial :facts) :execution-id))
-          (should (string-match-p "ready" (plist-get initial :output)))
+          (should-not (plist-get initial :error))
           (should (stringp execution-id))
+          (unless (string-match-p "ready" (plist-get initial :output))
+            (setq initial
+                  (test-mevedel-execution--observe
+                   session execution-id :owner "/root" :wait-ms 3000)))
+          (should (string-match-p "ready" (plist-get initial :output)))
           (test-mevedel-execution-remote--wait
            (lambda () (file-readable-p identity-file))
            "Remote loss workload did not publish its identity")
@@ -955,20 +984,17 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
           (should (> group-id 0))
           (should (> child-pid 0))
           (should (> child-start-time 0))
-          (setq fault-timer
-                (run-at-time
-                 0 0.02
-                 #'test-mevedel-execution-remote--drop-target-processes
-                 vector))
-          (tramp-cleanup-connection vector nil t)
+          (test-mevedel-execution-remote--stop-target root method t)
+          (setq target-stopped-p t)
           (mevedel-execution-stop
            session "/root" execution-id
            (lambda (value) (setq result value)))
           (test-mevedel-execution-remote--wait
            (lambda () result)
            "Connection-loss execution did not settle" 30)
-          (cancel-timer fault-timer)
-          (setq fault-timer nil)
+          (test-mevedel-execution-remote--stop-target root method nil)
+          (setq target-stopped-p nil)
+          (tramp-cleanup-connection (tramp-dissect-file-name root) nil t)
           (should
            (eq 'unknown
                (plist-get (plist-get result :facts) :termination)))
@@ -985,6 +1011,9 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
             :workdir root :writable-roots (list root)
             :yield-time-ms nil)
            :type 'mevedel-execution-error)
+          (when (mevedel-session-pending-publication session)
+            (should
+             (mevedel-session-durability-retry-publication session)))
           (mevedel-execution-acknowledge-unknown session)
           (should
            (zerop
@@ -995,14 +1024,19 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
              (test-mevedel-execution-remote--target-process-gone-p
               root child-pid))
            "Remote descendant survived connection-loss cleanup"))
-      (when (timerp fault-timer)
-        (cancel-timer fault-timer))
+      (when target-stopped-p
+        (ignore-errors
+          (test-mevedel-execution-remote--stop-target root method nil)))
       (when (and group-id child-pid child-start-time)
         (ignore-errors
           (test-mevedel-execution-remote--cleanup-target-group
            root group-id child-pid child-start-time)))
       (when session
         (mevedel-execution-teardown-session session))
+      (when (buffer-live-p root-buffer)
+        (with-current-buffer root-buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer root-buffer))
       (when (file-exists-p root)
         (delete-directory root t)))))
 
@@ -1102,11 +1136,16 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
              "printf 'ready\\n'; IFS= read -r line; printf 'input=%s\\n' \"$line\"; while :; do sleep 1; done")
            :tty t :tool-args '(:command "real PTY acceptance")
            :yield-time-ms 250))
-    (should (string-match-p "ready" (plist-get initial :output)))
-    (should (eq 'running (plist-get (plist-get initial :facts) :state)))
+    (should-not (plist-get initial :error))
     (setq execution-id
           (plist-get (plist-get initial :facts) :execution-id))
     (should (stringp execution-id))
+    (unless (string-match-p "ready" (plist-get initial :output))
+      (setq initial
+            (test-mevedel-execution--observe
+             session execution-id :wait-ms 3000)))
+    (should (string-match-p "ready" (plist-get initial :output)))
+    (should (eq 'running (plist-get (plist-get initial :facts) :state)))
     (setq after-input
           (test-mevedel-execution--observe
            session execution-id :chars "hello\n" :wait-ms 3000))
@@ -1162,12 +1201,17 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
          (root
           (test-mevedel-execution-remote--real-temp-directory
            base (format "mevedel-%s-acceptance-" method)))
-         session)
+         session root-buffer)
     (unwind-protect
         (let* ((mevedel-sandbox-mode 'off)
                (workspace (test-mevedel-execution--workspace root))
                (_ (setq session (mevedel-session-create "main" workspace root)))
                (target (mevedel-session-execution-target session)))
+          (setq root-buffer (generate-new-buffer " *remote-acceptance*"))
+          (with-current-buffer root-buffer
+            (setq-local mevedel--workspace workspace
+                        mevedel--session session)
+            (setq default-directory root))
           (test-mevedel-execution-remote--accept-storage session)
           (setf (mevedel-session-permission-mode session) 'full-auto
                 (mevedel-session-sandbox-mode session) 'off)
@@ -1197,6 +1241,10 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
              session root file)))
       (when session
         (mevedel-execution-teardown-session session))
+      (when (buffer-live-p root-buffer)
+        (with-current-buffer root-buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer root-buffer))
       (when (file-exists-p root)
         (delete-directory root t)))))
 
@@ -1260,57 +1308,45 @@ Optional OWNER-CONTEXT identifies the retained agent invocation."
       (when (file-exists-p root)
         (delete-directory root t)))))
 
-(mevedel-deftest mevedel-real-remote-acceptance/ssh
-  (:tags (external remote ssh)
-   :doc "exercises the complete opt-in real SSH transport matrix")
+(mevedel-deftest mevedel-real-remote-acceptance
+  (:tags (external remote))
+  ,test
+  (test)
+  :doc "exercises the core opt-in real SSH transport matrix"
   (test-mevedel-execution-remote--exercise-transport
-   "MEVEDEL_TEST_SSH_ROOT" 'ssh))
-
-(mevedel-deftest mevedel-real-remote-acceptance/docker
-  (:tags (external remote docker)
-   :doc "exercises the complete opt-in real Docker transport matrix")
+   "MEVEDEL_TEST_SSH_ROOT" 'ssh)
+  :doc "exercises the core opt-in real Docker transport matrix"
   (test-mevedel-execution-remote--exercise-transport
-   "MEVEDEL_TEST_DOCKER_ROOT" 'docker))
-
-(mevedel-deftest mevedel-real-remote-acceptance/podman
-  (:tags (external remote podman)
-   :doc "exercises the complete opt-in real Podman transport matrix")
+   "MEVEDEL_TEST_DOCKER_ROOT" 'docker)
+  :doc "exercises the core opt-in real Podman transport matrix"
   (test-mevedel-execution-remote--exercise-transport
    "MEVEDEL_TEST_PODMAN_ROOT" 'podman))
 
-(mevedel-deftest mevedel-real-remote-loss/ssh
-  (:tags (external remote ssh connection-loss)
-   :doc "classifies unprovable real SSH loss and cleans its descendant")
+(mevedel-deftest mevedel-real-remote-loss
+  (:tags (external remote connection-loss))
+  ,test
+  (test)
+  :doc "classifies unprovable real SSH loss and cleans its descendant"
   (test-mevedel-execution-remote--exercise-connection-loss
-   "MEVEDEL_TEST_SSH_ROOT" 'ssh))
-
-(mevedel-deftest mevedel-real-remote-loss/docker
-  (:tags (external remote docker connection-loss)
-   :doc "classifies unprovable real Docker loss and cleans its descendant")
+   "MEVEDEL_TEST_SSH_ROOT" 'ssh)
+  :doc "classifies unprovable real Docker loss and cleans its descendant"
   (test-mevedel-execution-remote--exercise-connection-loss
-   "MEVEDEL_TEST_DOCKER_ROOT" 'docker))
-
-(mevedel-deftest mevedel-real-remote-loss/podman
-  (:tags (external remote podman connection-loss)
-   :doc "classifies unprovable real Podman loss and cleans its descendant")
+   "MEVEDEL_TEST_DOCKER_ROOT" 'docker)
+  :doc "classifies unprovable real Podman loss and cleans its descendant"
   (test-mevedel-execution-remote--exercise-connection-loss
    "MEVEDEL_TEST_PODMAN_ROOT" 'podman))
 
-(mevedel-deftest mevedel-real-remote-bwrap/ssh
-  (:tags (external remote ssh sandbox)
-   :doc "confines an exact symlink grant through real SSH Bubblewrap")
+(mevedel-deftest mevedel-real-remote-bwrap
+  (:tags (external remote sandbox))
+  ,test
+  (test)
+  :doc "confines an exact symlink grant through real SSH Bubblewrap"
   (test-mevedel-execution-remote--exercise-bwrap
-   "MEVEDEL_TEST_SSH_ROOT" 'ssh))
-
-(mevedel-deftest mevedel-real-remote-bwrap/docker
-  (:tags (external remote docker sandbox)
-   :doc "confines an exact symlink grant through real Docker Bubblewrap")
+   "MEVEDEL_TEST_SSH_ROOT" 'ssh)
+  :doc "confines an exact symlink grant through real Docker Bubblewrap"
   (test-mevedel-execution-remote--exercise-bwrap
-   "MEVEDEL_TEST_DOCKER_ROOT" 'docker))
-
-(mevedel-deftest mevedel-real-remote-bwrap/podman
-  (:tags (external remote podman sandbox)
-   :doc "confines an exact symlink grant through real Podman Bubblewrap")
+   "MEVEDEL_TEST_DOCKER_ROOT" 'docker)
+  :doc "confines an exact symlink grant through real Podman Bubblewrap"
   (test-mevedel-execution-remote--exercise-bwrap
    "MEVEDEL_TEST_PODMAN_ROOT" 'podman))
 

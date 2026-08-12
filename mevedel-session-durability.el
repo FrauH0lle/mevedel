@@ -875,6 +875,19 @@ its lease state."
       (when session
         (mevedel-session-durability--cancel-renewal session)
         (setf (mevedel-session-lease session) nil)
+        (when-let ((queued
+                    (and (not (mevedel-session-pending-publication session))
+                         (mevedel-session-publication-queue session))))
+          (let ((batches
+                 (append
+                  (mevedel-session-publication-uncommitted-batches session)
+                  queued)))
+            (setf (mevedel-session-publication-uncommitted-batches session) nil
+                  (mevedel-session-publication-queue session) nil)
+            (mevedel-session-durability--record-pending
+             session batches
+             '(user-error
+               "Session lease released before queued publication completed"))))
         (unless (mevedel-session-pending-publication session)
           (mevedel-session-durability--clear-transient-publication session))))))
 

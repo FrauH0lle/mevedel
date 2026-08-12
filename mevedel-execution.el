@@ -51,7 +51,7 @@
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox--record-launch-failure
-                  "mevedel-sandbox" (child-result))
+                  "mevedel-sandbox" (child-result &optional workdir))
 (declare-function mevedel-sandbox-cleanup "mevedel-sandbox" (preparation))
 (declare-function mevedel-sandbox-launch-failed-p
                   "mevedel-sandbox" (preparation child-result))
@@ -1843,10 +1843,12 @@ it briefly so repeated owner polls return the same result."
                (not (mevedel-execution--record-stop-p record))
                (not (mevedel-execution--record-yielded-p record)))
           (mevedel-execution--restart-unconfined
-           record (mevedel-sandbox--record-launch-failure child-result))
+           record (mevedel-sandbox--record-launch-failure
+                   child-result (mevedel-execution--record-workdir record)))
         (when launch-failed
           (let ((facts
-                 (mevedel-sandbox--record-launch-failure child-result)))
+                 (mevedel-sandbox--record-launch-failure
+                  child-result (mevedel-execution--record-workdir record))))
             (unless (plist-get preparation :fallback-p)
               (setq facts
                     (plist-put (copy-sequence facts) :refused t)))
@@ -2761,7 +2763,7 @@ discards the process without invoking CALLBACK."
                            (mevedel-execution--mark-direct-fallback
                             session
                             (mevedel-sandbox--record-launch-failure
-                             child-result))))
+                             child-result workdir))))
                       (setq started-p nil
                             current-facts facts)
                       (when (and session
@@ -2797,7 +2799,7 @@ discards the process without invoking CALLBACK."
                              (plist-put
                               (copy-sequence
                                (mevedel-sandbox--record-launch-failure
-                                child-result))
+                                child-result workdir))
                               :refused t)
                            (plist-get preparation :facts)))
                         (clean-result

@@ -1054,6 +1054,42 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
             (should (string-match-p "pages=\"START-END\"" body))
             (should (string-match-p "42 pages" body))))
       (delete-file tmp)))
+  :doc "downloads a remote PDF only once across attachment and guidance"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-read-remote-pdf-" t)))
+         (local (file-name-concat root "document.pdf"))
+         (remote (format "/mevedelmock:pdf-once:%s" local))
+         (copy-file-function (symbol-function 'copy-file))
+         (copies 0))
+    (unwind-protect
+        (progn
+          (write-region "%PDF-1.4\npayload" nil local nil 'silent)
+          (mevedel-test--with-local-shell-tramp '("pdf-once")
+            (cl-letf (((symbol-function 'gptel--model-capable-p)
+                       (lambda (cap &optional _model) (eq cap 'media)))
+                      ((symbol-function 'gptel--model-mime-capable-p)
+                       (lambda (_mime &optional _model) t))
+                      ((symbol-function 'mevedel-tool-fs--native-media-backend-p)
+                       (lambda () t))
+                      ((symbol-function 'executable-find)
+                       (lambda (name &optional _remote)
+                         (and (equal name "pdfinfo") name)))
+                      ((symbol-function 'mevedel-execution-run-helper)
+                       (lambda (&rest _) '(:exit-code 0 :output "Pages: 42\n")))
+                      ((symbol-function 'copy-file)
+                       (lambda (file newname &optional ok-if-exists
+                                     keep-time preserve-uid-gid
+                                     preserve-extended-attributes)
+                         (when (file-remote-p file) (cl-incf copies))
+                         (funcall copy-file-function file newname ok-if-exists
+                                  keep-time preserve-uid-gid
+                                  preserve-extended-attributes))))
+              (let ((result
+                     (mevedel-tool-fs--read-file (list :file_path remote))))
+                (should (string-match-p "42 pages"
+                                        (plist-get result :result)))
+                (should (= 1 copies))))))
+      (delete-directory root t)))
   :doc "adds bounded-page reminder when direct PDF attachment is too large"
   (let ((tmp (make-temp-file "mevedel-test-" nil ".pdf" "%PDF-1.4\n")))
     (unwind-protect

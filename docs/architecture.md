@@ -197,7 +197,10 @@ owns qualified/native path conversion, and probes target readiness.  Required
 `rg` compatibility is verified against a bounded target-side fixture using the
 Glob and Grep flag surface, rather than inferred from a version string.  The
 project-owned identity in `mevedel-workspace-identity.el` lets equivalent
-client-specific TRAMP spellings reopen the same workspace.
+client-specific TRAMP spellings reopen the same workspace.  SSH-family
+`ssh`/`scp`/`sshx`/`scpx`, Docker, and Podman targets are supported; a target
+without `HOME` is blocked during readiness rather than failing later path
+permission checks.
 
 `mevedel-execution.el` is the operating-system process boundary. It owns
 process creation, process-group signaling, timeout cleanup, Bubblewrap launch
