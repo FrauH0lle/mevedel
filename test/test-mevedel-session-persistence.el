@@ -10,6 +10,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'mevedel-presets)
+(require 'mevedel-plan)
 (require 'mevedel-skills-ui)
 (require 'mevedel-reminders)
 (require 'mevedel-resource)
@@ -339,7 +340,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                 :reason "Need an API credential."
                 :token-budget 1000 :tokens-used 345
                 :time-used-seconds 12 :turns-run 4
-                :plan-reference "plans/accepted.md"
+                :plan-reference "local/plans/accepted.md"
                 :created-at "created" :updated-at "updated"))
          (plist (mevedel-session-persistence--goal-to-plist goal)))
     (should (equal "g1" (plist-get plist :id)))
@@ -348,7 +349,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (should (= 345 (plist-get plist :tokens-used)))
     (should (= 12 (plist-get plist :time-used-seconds)))
     (should (= 4 (plist-get plist :turns-run)))
-    (should (equal "plans/accepted.md" (plist-get plist :plan-reference)))
+    (should (equal "local/plans/accepted.md" (plist-get plist :plan-reference)))
     (should (equal "Need an API credential." (plist-get plist :reason)))))
 
 (mevedel-deftest mevedel-session-persistence--goal-from-plist ()
@@ -359,7 +360,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                '(:id "g1" :objective "Ship" :status active :reason nil
                  :token-budget 1000 :tokens-used 25
                  :time-used-seconds 7 :turns-run 2
-                 :plan-reference "plans/accepted.md"
+                 :plan-reference "local/plans/accepted.md"
                  :created-at "created" :updated-at "updated"))))
     (should (mevedel-goal-p goal))
     (should (equal "Ship" (mevedel-goal-objective goal)))
@@ -853,8 +854,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           '(:step submit
             :selection (:location here :context summary
                         :execution direct :mode edits)
-            :accepted (:path "plans/accepted.md"
-                       :absolute-path "/tmp/session/plans/accepted.md"
+            :accepted (:path "local/plans/accepted.md"
+                       :absolute-path "/tmp/session/local/plans/accepted.md"
                        :hash "abc")
             :summary "# Handoff"
             :failure "Transport refused"))
@@ -872,15 +873,15 @@ ROOT is a temporary directory owned and cleaned up by the caller."
             :selection (:location worktree :context fresh
                         :execution direct :mode full-auto
                         :branch "plan/topic")
-            :accepted (:path "plans/source.md"
-                       :absolute-path "/tmp/source/plans/source.md"
+            :accepted (:path "local/plans/source.md"
+                       :absolute-path "/tmp/source/local/plans/source.md"
                        :hash "abc")
             :target-directory "/tmp/repo/.worktrees/topic/"
             :target-save-path "/tmp/repo/.mevedel/target/"
             :target-session-id "target-id"
             :target-accepted
-            (:path "plans/accepted.md"
-             :absolute-path "/tmp/repo/.mevedel/target/plans/accepted.md"
+            (:path "local/plans/accepted.md"
+             :absolute-path "/tmp/repo/.mevedel/target/local/plans/accepted.md"
              :hash "abc")))
          (metadata (list :status 'accepted :implementation-retry retry))
          (result
@@ -6352,9 +6353,9 @@ The result is a plist whose :tempdir owns every created file."
         (setq parent-path (mevedel-session-save-path session)
               parent-id (mevedel-session-session-id session))
         (make-directory (file-name-concat parent-path "agents") t)
-        (make-directory (file-name-concat parent-path "plans") t)
+        (make-directory (file-name-concat parent-path "local" "plans") t)
         (write-region "# Parent plan\n" nil
-                      (file-name-concat parent-path "plans/current.md")
+                      (file-name-concat parent-path "local" "plans/current.md")
                       nil 'silent)
         (write-region eligible-transcript nil
                       (file-name-concat parent-path
@@ -6376,7 +6377,7 @@ The result is a plist whose :tempdir owns every created file."
                       (mevedel-file-history--backup-path
                        parent-path "future@v2") nil 'silent)
         (setf (mevedel-session-plan-metadata session)
-              '(:path "plans/current.md" :status presented))
+              '(:path "local/plans/current.md" :status presented))
         (setf (mevedel-session-prompt-index session)
               '((1 . ((:turn 1 :file-turn 1 :cum-turn 1)))
                 (2 . ((:turn 1 :file-turn 1 :cum-turn 2
@@ -6584,7 +6585,7 @@ The result is a plist whose :tempdir owns every created file."
                         (mevedel-session-pending-plan-approval session)
                         '(:proposal source)
                         (mevedel-session-plan-metadata session)
-                        '(:status proposed :path "plans/current.md")
+                        '(:status proposed :path "local/plans/current.md")
                         (mevedel-session-task-status-notes session)
                         '((nil :note "Source task note" :updated-turn 1))
                         (mevedel-session-last-task-write-turn session) 1
@@ -6813,7 +6814,7 @@ The result is a plist whose :tempdir owns every created file."
         (progn
           (let ((plans-dir
                  (file-name-concat
-                  (plist-get fixture :parent-path) "plans")))
+                  (plist-get fixture :parent-path) "local" "plans")))
             (make-directory plans-dir t)
             (write-region "mutable draft" nil
                           (file-name-concat plans-dir "current.md")
@@ -6821,10 +6822,15 @@ The result is a plist whose :tempdir owns every created file."
             (write-region "accepted evidence" nil
                           (file-name-concat plans-dir "accepted.md")
                           nil 'silent)
+            (write-region "unrelated plan evidence" nil
+                          (file-name-concat plans-dir "unrelated.md")
+                          nil 'silent)
             (setf (mevedel-session-plan-metadata session)
-                  '(:status accepted
-                    :accepted-turn 2
-                    :accepted-path "plans/accepted.md")))
+                  (list :status 'accepted
+                        :accepted-turn 2
+                        :accepted-path "local/plans/accepted.md"
+                        :accepted-hash (mevedel-plan-hash
+                                        "accepted evidence"))))
           (with-current-buffer staging-buffer
             (setq-local kill-buffer-hook nil))
           (let ((parent-local
@@ -6864,10 +6870,22 @@ The result is a plist whose :tempdir owns every created file."
                    (mevedel-session-persistence--lock-path staging-path)))
           (should
            (file-exists-p
-            (file-name-concat staging-path "plans" "accepted.md")))
+            (file-name-concat staging-path "local" "plans" "accepted.md")))
           (should-not
            (file-exists-p
-            (file-name-concat staging-path "plans" "current.md"))))
+            (file-name-concat staging-path "local" "plans" "unrelated.md")))
+          (should-not
+           (file-exists-p
+            (file-name-concat staging-path "local" "plans" "current.md")))
+          (write-region "tampered evidence" nil
+                        (file-name-concat
+                         (plist-get fixture :parent-path)
+                         "local" "plans" "accepted.md")
+                        nil 'silent)
+          (should-error
+           (mevedel-session-persistence--stage-fork
+            child buf staging-buffer (plist-get fixture :parent-path)
+            staging-path 2 2)))
       (when (buffer-live-p staging-buffer)
         (with-current-buffer staging-buffer
           (set-buffer-modified-p nil))

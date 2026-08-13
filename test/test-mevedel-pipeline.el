@@ -13,6 +13,7 @@
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-patch)
+(require 'mevedel-plan-mode)
 (require 'mevedel-patch-review)
 (require 'mevedel-tools)
 (require 'mevedel-view)
@@ -2778,6 +2779,8 @@
         (should (equal (list ordinary-path)
                        (mevedel-pipeline--tool-paths
                         tool (list :patch patch) prepared-context)))
+        (should-not (plist-get (plist-get prepared-context :patch-proposal)
+                               :local-only-p))
         (should (eq parsed-proposal
                     (plist-get prepared-context :patch-proposal)))))
 
@@ -2922,6 +2925,97 @@
     (should-not (mevedel-session-save-path session))
     (should-not (file-exists-p (file-name-concat root "local" "notes"
                                                  "denied.txt"))))
+
+  :doc "Plan permits and applies an all-local add update delete and move"
+  (let* ((tool (mevedel-tool-ensure "ApplyPatch"))
+         (local-root (file-name-concat save-path "local"))
+         (update-path (file-name-concat local-root "notes" "update.txt"))
+         (delete-path (file-name-concat local-root "notes" "delete.txt"))
+         (move-path (file-name-concat local-root "notes" "move.txt"))
+         (moved-path (file-name-concat local-root "notes" "moved.txt"))
+         (add-path (file-name-concat local-root "notes" "add.txt"))
+         result)
+    (make-directory (file-name-directory update-path) t)
+    (with-temp-file update-path (insert "old\n"))
+    (with-temp-file delete-path (insert "delete\n"))
+    (with-temp-file move-path (insert "move\n"))
+    (setf (mevedel-session-plan-mode session) t)
+    (with-current-buffer buffer
+      (setq-local default-directory root
+                  mevedel--workspace workspace
+                  mevedel--session session)
+      (mevedel-pipeline-run-tool
+       tool (lambda (value) (setq result value))
+       (list :patch
+             (string-join
+              (list "*** Begin Patch"
+                    "*** Update File: local://notes/update.txt"
+                    "@@"
+                    "-old"
+                    "+new"
+                    "*** Add File: local://notes/add.txt"
+                    "+added"
+                    "*** Delete File: local://notes/delete.txt"
+                    "*** Update File: local://notes/move.txt"
+                    "*** Move to: local://notes/moved.txt"
+                    "*** End Patch")
+              "\n"))))
+    (should (string-match-p "Applied patch" result))
+    (should (equal "new\n"
+                   (with-temp-buffer
+                     (insert-file-contents update-path)
+                     (buffer-string))))
+    (should (equal "added\n"
+                   (with-temp-buffer
+                     (insert-file-contents add-path)
+                     (buffer-string))))
+    (should-not (file-exists-p delete-path))
+    (should-not (file-exists-p move-path))
+    (should (equal "move\n"
+                   (with-temp-buffer
+                     (insert-file-contents moved-path)
+                     (buffer-string))))
+    (should (= 0 (hash-table-count (mevedel-session-touched-files session)))))
+
+  :doc "Plan denies ordinary mixed malformed and non-local proposals before materialization"
+  (let* ((tool (mevedel-tool-ensure "ApplyPatch"))
+         (patches
+          (list
+           (string-join
+            '("*** Begin Patch" "*** Update File: ordinary.txt" "@@"
+              "-old" "+ordinary" "*** End Patch") "\n")
+           (string-join
+            '("*** Begin Patch" "*** Update File: ordinary.txt" "@@"
+              "-old" "+mixed" "*** Add File: local://notes/mixed.txt"
+              "+mixed" "*** End Patch") "\n")
+           (string-join
+            '("*** Begin Patch" "*** Add File: local://notes/../bad.txt"
+              "+bad" "*** End Patch") "\n")
+           (string-join
+            '("*** Begin Patch"
+              "*** Update File: local://notes/bare-source.txt"
+              "*** Move to: local://" "*** End Patch") "\n")
+           (string-join
+            '("*** Begin Patch" "*** Add File: artifact://notes/bad.txt"
+              "+bad" "*** End Patch") "\n")))
+         (handler-called nil)
+         result)
+    (setf (mevedel-session-plan-mode session) t
+          (mevedel-session-save-path session) nil)
+    (cl-letf (((symbol-function 'mevedel-tool-patch-handler)
+               (lambda (&rest _args) (setq handler-called t))))
+      (dolist (patch patches)
+        (setq result nil)
+        (with-current-buffer buffer
+          (setq-local default-directory root
+                      mevedel--workspace workspace
+                      mevedel--session session)
+          (mevedel-pipeline-run-tool
+           tool (lambda (value) (setq result value)) (list :patch patch)))
+        (should (string-match-p "Error:" result))))
+    (should-not handler-called)
+    (should-not (mevedel-session-save-path session))
+    (should-not (file-exists-p (file-name-concat root "local"))))
 
   )
 

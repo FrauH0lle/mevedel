@@ -598,6 +598,48 @@
                :session-rules `((,name :action allow))
                :mode mode)
               'deny)))))))
+  :doc "Plan allows only an already-prepared all-local ApplyPatch proposal"
+  (let* ((mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (session (mevedel-session--create :name "plan" :plan-mode t))
+         (tool (mevedel-tool--create
+                :name "ApplyPatch" :read-only-p nil
+                :groups '(edit reviewed-edit))))
+    (dolist (mode '(ask edits full-auto))
+      (should
+       (eq 'allow
+           (mevedel-check-permission
+            "ApplyPatch" :tool-struct tool :session session :mode mode
+            :patch-local-only-p t)))
+      (should
+       (eq 'deny
+           (mevedel-check-permission
+            "ApplyPatch" :tool-struct tool :session session :mode mode
+            :patch-local-only-p nil))))
+    (should
+     (eq 'deny
+         (mevedel-check-permission
+          "ApplyPatch" :tool-struct tool :session session :mode 'full-auto
+          :patch-local-only-p t
+          :session-rules '(("ApplyPatch" :action deny))))))
+  :doc "directive planning keeps all-local ApplyPatch denied"
+  (let* ((mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (session (mevedel-session--create
+                   :name "directive"
+                   :directive-planning
+                   '(:directive-id "d1" :phase approval)))
+         (request (mevedel-request--create
+                   :plan-read-only t :directive-uuid "d1"))
+         (tool (mevedel-tool--create
+                :name "ApplyPatch" :read-only-p nil
+                :groups '(edit reviewed-edit)))
+         (mevedel--current-request request))
+    (should
+     (eq 'deny
+         (mevedel-check-permission
+          "ApplyPatch" :tool-struct tool :session session :mode 'full-auto
+          :patch-local-only-p t))))
   :doc "read-only tool allowed in ask mode"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)

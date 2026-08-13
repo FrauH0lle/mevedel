@@ -1201,6 +1201,8 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
            :request request
            :invocation invocation
            :one-shot-mutations-p one-shot-mutations-p
+           :patch-local-only-p
+           (plist-get (plist-get context :patch-proposal) :local-only-p)
            :buffer (plist-get context :buffer)
            :path (plist-get context :permission-path)
            :permission-request

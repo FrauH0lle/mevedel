@@ -1182,7 +1182,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
    :after-each (mevedel-tool-clear-registry))
   ,test
   (test)
-  :doc "removes native edit schemas from a root Plan request"
+  :doc "keeps ApplyPatch while removing other native edit schemas from a root Plan request"
   (let* ((session (mevedel-tools-test--make-session))
          (buf+fsm (mevedel-tools-test--make-fsm-with-ctx session))
          (buf (car buf+fsm))
@@ -1196,7 +1196,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (setf (mevedel-session-plan-mode session) t)
           (plist-put (gptel-fsm-info fsm) :tools tools)
           (mevedel-tools--handle-plan-tool-filter fsm)
-          (should (equal '("Read" "Bash")
+          (should (equal '("Read" "ApplyPatch" "Bash")
                          (mapcar #'gptel-tool-name
                                  (plist-get (gptel-fsm-info fsm) :tools))))
           (let* ((payload (append
@@ -1204,7 +1204,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                             (plist-get (gptel-fsm-info fsm) :data)
                             :tools)
                            nil)))
-            (should (= 2 (length payload)))
+            (should (= 3 (length payload)))
             (should (equal "Read" (plist-get (car payload) :name)))))
       (kill-buffer buf)))
 
@@ -1266,13 +1266,34 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                 (mevedel-agent-invocation-parent-session invocation) session)
           (plist-put (gptel-fsm-info fsm) :tools tools)
           (mevedel-tools--handle-plan-tool-filter fsm)
-          (should (equal '("Read" "Bash")
+          (should (equal '("Read" "ApplyPatch" "Bash")
                          (mapcar #'gptel-tool-name
                                  (plist-get (gptel-fsm-info fsm) :tools))))
-          (should (= 2 (length
+          (should (= 3 (length
                         (plist-get
                          (plist-get (gptel-fsm-info fsm) :data)
                          :tools)))))
+      (kill-buffer buf)))
+
+  :doc "keeps ApplyPatch for a standalone plan-read-only request"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx session))
+         (buf (car buf+fsm))
+         (fsm (cdr buf+fsm))
+         (tools (mapcar (lambda (name)
+                          (mevedel-tool-gptel-tool
+                           (mevedel-tool-get name "mevedel")))
+                        '("Read" "ApplyPatch" "Eval" "Bash"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :plan-read-only t)))
+          (plist-put (gptel-fsm-info fsm) :tools tools)
+          (mevedel-tools--handle-plan-tool-filter fsm)
+          (should (equal '("Read" "ApplyPatch" "Bash")
+                         (mapcar #'gptel-tool-name
+                                 (plist-get (gptel-fsm-info fsm) :tools)))))
       (kill-buffer buf)))
 
   :doc "keeps delegated directive planning read-only after root settlement"
@@ -1312,7 +1333,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
         (progn
           (with-current-buffer buf
             (setq-local mevedel--current-request
-                        (mevedel-request--create :plan-read-only t)))
+                        (mevedel-request--create
+                         :plan-read-only t :directive-uuid "d1")))
           (plist-put (gptel-fsm-info fsm) :tools tools)
           (mevedel-tools--handle-plan-tool-filter fsm)
           (should (equal '("Read")

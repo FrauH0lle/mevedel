@@ -7,7 +7,7 @@ flowchart TD
     A[Tool call] --> B[Extract specifiers]
     B --> C{Any deny rule?}
     C -- Yes --> Z[Deny]
-    C -- No --> D{Goal planning or review<br/>and native edit tool?}
+    C -- No --> D{Planning/review<br/>and forbidden mutation?}
     D -- Yes --> Z
     D -- No --> E{Command checker?}
     E -- Yes --> F{Checker or rules<br/>authorize command?}
@@ -36,9 +36,11 @@ Single decision function `mevedel-check-permission`. Decision chain:
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
    `get-name` slots
 2. Deny rules (across all buckets — see bucket precedence below)
-3. Active standalone Plan or directive Planning with a tool in the native
-   `edit` group or `Eval`, or active Goal planning/review with a native edit
-   tool -> deny regardless of allow rules or permission mode
+3. Active standalone Plan with a native edit tool other than an all-local
+   `ApplyPatch` or with `Eval`, active directive Planning with any native edit
+   tool or `Eval`, an `ApplyPatch` containing an ordinary, non-local, or bare
+   endpoint, or active Goal planning/review with a native edit tool -> deny
+   regardless of allow rules or permission mode
 4. Tool's own `check-permission` slot decides command authority
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
 6. Permission-mode hard deny, if any
@@ -98,9 +100,13 @@ resources keep their intrinsic read capability and current freshness rules.
 `local://` mutation uses ordinary `ApplyPatch` permission and patch review;
 recognizing an address does not broaden roots or create a grant. Skill and
 memory addresses retain client-local origin, while MCP authority remains with
-the current configured connection. Plan mode denies mutation tree-wide,
-including `local://` and retained agents, regardless of permission mode or
-allow rules. See [`address-to-resource.md`](address-to-resource.md#shared-resolution-and-permission-seam).
+the current configured connection. Standalone/sticky Plan mode allows all-local
+`ApplyPatch`, including requests from retained agents, but denies any proposal
+containing an ordinary, non-local, or bare endpoint before local materialization
+or ordinary mutation. Mixed local/ordinary and ordinary-only proposals
+therefore fail tree-wide; permission modes and allow rules cannot reopen that
+boundary. See
+[`address-to-resource.md`](address-to-resource.md#shared-resolution-and-permission-seam).
 
 The synchronous and asynchronous decision entry points then share one pure
 preflight. It normalizes decision facts, resolves absolute deny rules, and
@@ -590,9 +596,10 @@ a matching ask prompts even in `full-auto`; deny rules still win absolutely.
 Trusted skill expansion cannot create an interactive prompt and therefore
 requires existing authority, typically from the skill's `allowed-tools:
 [Eval]`.
-Plan mode withholds Eval regardless of this authority; Goal planning/review
-route Eval through the ordinary policy rather than suppressing it as a native
-edit tool. Markers introduced by argument
+Standalone/sticky Plan mode withholds Eval regardless of this authority;
+directive Planning also withholds it. Goal planning/review routes Eval through
+the ordinary policy rather than suppressing it as a native edit tool. Markers
+introduced by argument
 substitution are not trusted literals and are left as text.
 Literal markers may still contain substituted text in their expression
 body; only the marker syntax and delimiters carry the trusted-literal

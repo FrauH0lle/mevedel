@@ -35,7 +35,7 @@
   "Closing tag for proposed plans.")
 
 (defconst mevedel-plan--relative-current-path
-  (file-name-concat "plans" "current.md")
+  (file-name-concat "local" "plans" "current.md")
   "Relative path of the mutable current plan under a session directory.")
 
 ;;
@@ -182,13 +182,18 @@ Return a plist containing `:path', `:absolute-path', and `:hash'."
     (unless (and plan-path plan-hash (file-exists-p plan-path))
       (error "Accepted plan artifact does not exist"))
     (let* ((save-path (mevedel-session-save-path session))
-           (dir (file-name-directory plan-path))
+           (dir (file-name-concat save-path "local" "plans"))
            (timestamp (format-time-string "%Y%m%d-%H%M%S"))
            (archive-path
             (if relative-path
                 (file-name-concat save-path relative-path)
               (file-name-concat dir (format "accepted-%s.md" timestamp))))
            (index 1))
+      (make-directory dir t)
+      (when (and relative-path
+                 (or (file-name-absolute-p relative-path)
+                     (not (file-in-directory-p archive-path dir))))
+        (error "Accepted plan destination is outside managed plan storage"))
       (unless relative-path
         (while (file-exists-p archive-path)
           (setq archive-path

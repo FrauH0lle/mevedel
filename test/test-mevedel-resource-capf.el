@@ -7,6 +7,7 @@
 (require 'cl-lib)
 (require 'mevedel-structs)
 (require 'mevedel-agent-control)
+(require 'mevedel-plan)
 (require 'mevedel-resource)
 (require 'mevedel-resource-capf)
 (require 'mevedel-skills-core)
@@ -71,6 +72,9 @@
           (with-temp-file (file-name-concat artifact-root "batch" "result.txt")
             (insert "artifact"))
           (with-temp-buffer
+            (mevedel-plan-write-current
+             "# Managed plan" session (current-buffer)))
+          (with-temp-buffer
             (setq mevedel--session session)
             (insert "local://")
             (let ((candidates
@@ -79,6 +83,13 @@
               (should (member "local://space%20name.md" candidates))
               (should (member "local://nested" candidates))
               (should-not (member "local://nested/note.md" candidates))))
+          (with-temp-buffer
+            (setq mevedel--session session)
+            (insert "local://plans/")
+            (should
+             (member "local://plans/current.md"
+                     (mevedel-resource-capf-test--candidates
+                      (mevedel-resource-capf)))))
           (with-temp-buffer
             (setq mevedel--session session)
             (insert "local://nested/")

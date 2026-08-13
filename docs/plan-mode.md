@@ -90,16 +90,20 @@ uses the shared `summarization` workload.
 
 ## Tool boundary
 
-Plan requests omit `ApplyPatch`. The pipeline denies it tree-wide as a
-backstop, including for `local://`, retained agents, and already realized
-requests. Bash remains available only when the canonical analysis and policy
-classify the invocation as read-only. Permission modes and explicit allow
-rules cannot widen this workflow boundary. `Eval` is also unavailable:
+Plan requests expose `ApplyPatch` for all-local `local://` descendants,
+including retained agents, so durable plans and notes can be updated through
+the ordinary `ApplyPatch` path. Before materialization, the pipeline denies any
+proposal with an ordinary, non-local, or bare endpoint tree-wide; this includes
+mixed local/ordinary and ordinary-only proposals, and neither local nor
+ordinary targets are touched. Permission modes and explicit allow rules cannot
+widen this workflow boundary. Other edit tools and `Eval` remain unavailable:
 arbitrary Emacs Lisp cannot be classified reliably as read-only, including in
-a child process. Resource-address recognition does not reopen mutation or
-materialize local state; completion remains side-effect free. Other tools
-retain the ordinary permission policy. See
+a child process. Resource-address completion remains side-effect free. See
 [`address-to-resource.md`](address-to-resource.md#execution-target-and-plan-mode).
+
+Directive Plan before implementation has a separate, stricter boundary: its
+planning requests remain read-only and do not expose or allow `ApplyPatch`,
+including all-local proposals, or `Eval`.
 
 ## Proposal interaction
 

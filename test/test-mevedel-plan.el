@@ -77,7 +77,7 @@
     (unwind-protect
         (let ((session
                (mevedel-session--create :name "test" :save-path save-dir)))
-          (should (equal (file-name-concat save-dir "plans" "current.md")
+          (should (equal (file-name-concat save-dir "local" "plans" "current.md")
                          (mevedel-plan-current-path session)))
           (should (equal (file-name-concat save-dir "goals" "g1" "current.md")
                          (mevedel-plan-current-path
@@ -93,8 +93,8 @@
         (let ((session
                (mevedel-session--create
                 :name "test" :save-path save-dir
-                :plan-metadata '(:path "plans/current.md"))))
-          (should (equal (file-name-concat save-dir "plans" "current.md")
+                :plan-metadata '(:path "local/plans/current.md"))))
+          (should (equal (file-name-concat save-dir "local" "plans" "current.md")
                          (mevedel-plan--metadata-path session))))
       (delete-directory save-dir t))))
 
@@ -139,24 +139,29 @@
                   (mevedel-plan-write-current
                    "# Plan" session (current-buffer) "current.md"))
                  (accepted
-                  (mevedel-plan-archive-accepted
-                   artifact session "goals/g1/cycle-001-plan.md")))
+                 (mevedel-plan-archive-accepted
+                   artifact session "local/plans/cycle-001-plan.md")))
             (should (file-exists-p (plist-get accepted :absolute-path)))
             (should (equal (plist-get artifact :hash)
                            (plist-get accepted :hash)))
-            (should (equal "goals/g1/cycle-001-plan.md"
+            (should (equal "local/plans/cycle-001-plan.md"
                            (plist-get accepted :path)))
             (should
              (equal accepted
                     (mevedel-plan-archive-accepted
                      artifact session
-                     "goals/g1/cycle-001-plan.md")))
+                     "local/plans/cycle-001-plan.md")))
             (let ((different
                    (mevedel-plan-write-current
                     "# Different" session (current-buffer) "current.md")))
               (should-error
                (mevedel-plan-archive-accepted
-                different session "goals/g1/cycle-001-plan.md")
+                different session "local/plans/cycle-001-plan.md")
+               :type 'error))
+            (dolist (invalid '("../outside.md" "/tmp/outside.md"
+                               "goals/g1/cycle-001-plan.md"))
+              (should-error
+               (mevedel-plan-archive-accepted artifact session invalid)
                :type 'error))))
       (delete-directory save-dir t))))
 
@@ -165,14 +170,15 @@
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-body-" t))
-         (path (file-name-concat save-dir "current.md")))
+         (path (file-name-concat save-dir "local" "plans" "current.md")))
     (unwind-protect
         (progn
+          (make-directory (file-name-directory path) t)
           (write-region "# Plan" nil path nil 'silent)
           (let ((session
                  (mevedel-session--create
                   :name "test" :save-path save-dir
-                  :plan-metadata '(:path "current.md"))))
+                  :plan-metadata '(:path "local/plans/current.md"))))
             (should (equal "# Plan" (mevedel-plan-current-body session)))))
       (delete-directory save-dir t))))
 
@@ -181,14 +187,15 @@
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-exists-" t))
-         (path (file-name-concat save-dir "current.md"))
+         (path (file-name-concat save-dir "local" "plans" "current.md"))
          (session
           (mevedel-session--create
            :name "test" :save-path save-dir
-           :plan-metadata '(:path "current.md"))))
+           :plan-metadata '(:path "local/plans/current.md"))))
     (unwind-protect
         (progn
           (should-not (mevedel-plan-current-exists-p session))
+          (make-directory (file-name-directory path) t)
           (write-region "# Plan" nil path nil 'silent)
           (should (mevedel-plan-current-exists-p session)))
       (delete-directory save-dir t))))
@@ -220,10 +227,7 @@
                           :permission-mode 'full-auto
                           :turn-count 4)))
             (let* ((result (mevedel-plan-accept
-                            "# Plan\n\nDo it." session (current-buffer)
-                            nil
-                            "goals/g1/current.md"
-                            "goals/g1/cycle-001-plan.md"))
+                            "# Plan\n\nDo it." session (current-buffer)))
                    (current (plist-get result :current))
                    (accepted (plist-get result :accepted))
                    (metadata (mevedel-session-plan-metadata session)))
@@ -234,8 +238,18 @@
                        (plist-get accepted :absolute-path)))
               (should (equal (mevedel-plan-hash "# Plan\n\nDo it.")
                              (plist-get current :hash)))
-              (should (equal "goals/g1/cycle-001-plan.md"
-                             (plist-get accepted :path))))))
+              (should (equal "local/plans/current.md"
+                             (plist-get current :path)))
+              (should (string-match-p "\\`local/plans/accepted-[0-9]+-[0-9]+\\.md\\'"
+                                      (plist-get accepted :path)))
+              (should (equal (file-name-concat save-dir "local" "plans"
+                                                "current.md")
+                             (plist-get current :absolute-path)))
+              (should (equal (file-name-concat save-dir
+                                                (plist-get accepted :path))
+                             (plist-get accepted :absolute-path)))
+              (should (string-prefix-p "local/plans/accepted-"
+                                       (plist-get accepted :path))))))
       (delete-directory save-dir t))))
 
 (provide 'test-mevedel-plan)

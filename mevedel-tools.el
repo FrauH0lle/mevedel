@@ -115,10 +115,14 @@
                   "mevedel-skills-invoke" (session records))
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-directive-uuid
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-plan-read-only
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-activate-dropped-file-grants
                   "mevedel-structs" (session paths))
+(declare-function mevedel-session-directive-planning
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-input-delivery-paused-p
                   "mevedel-structs" (session))
 (defvar mevedel--current-request)
@@ -179,6 +183,22 @@
                    (mevedel-agent-invocation-parent-session invocation))
               (and (buffer-live-p buffer)
                    (buffer-local-value 'mevedel--session buffer))))
+         (request
+          (and (buffer-live-p buffer)
+               (buffer-local-value 'mevedel--current-request buffer)))
+         (directive-plan-p
+          (or (and (mevedel-request-p request)
+                   (mevedel-request-directive-uuid request))
+              (and session
+                   (mevedel-session-directive-planning session))))
+         (plan-read-only-p
+          (or (and session (mevedel-session-plan-mode session))
+              (and (mevedel-request-p request)
+                   (mevedel-request-plan-read-only request))
+              (and invocation
+                   (mevedel-agent-invocation-plan-read-only invocation))))
+         (apply-patch-visible-p
+          (and plan-read-only-p (not directive-plan-p)))
          (tools (plist-get info :tools))
          (active-root-goal-p
           (and session
@@ -191,24 +211,19 @@
              (cl-remove-if
               (lambda (tool)
                 (let ((name (gptel-tool-name tool)))
-                  (or (and (equal name "UpdateGoal")
-                           (not active-root-goal-p))
-                      (and session
-                           (or (mevedel-session-plan-mode session)
-                               (and (buffer-live-p buffer)
-                                    (buffer-local-value
-                                     'mevedel--current-request buffer)
-                                    (mevedel-request-plan-read-only
-                                     (buffer-local-value
-                                      'mevedel--current-request buffer)))
-                               (and invocation
-                                    (mevedel-agent-invocation-plan-read-only
-                                     invocation)))
-                           (when-let* ((registered
-                                       (mevedel-tool-get name)))
-                             (or (equal name "Eval")
-                                 (memq 'edit
-                                       (mevedel-tool-groups registered))))))))
+                  (or
+                   (and (equal name "UpdateGoal")
+                        (not active-root-goal-p))
+                   (and session
+                        plan-read-only-p
+                        (when-let* ((registered
+                                    (mevedel-tool-get name)))
+                          (if (equal name "ApplyPatch")
+                              (not apply-patch-visible-p)
+                            (or (equal name "Eval")
+                                (memq 'edit
+                                      (mevedel-tool-groups
+                                       registered)))))))))
               tools)))
         (unless (= (length filtered) (length tools))
           (plist-put info :tools filtered)

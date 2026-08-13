@@ -3554,14 +3554,14 @@
   :doc "keeps historical proposed-plan protocol hidden after Goal planning"
   (mevedel-view-stream-test--with-buffers
     (let* ((tmp (make-temp-file "mevedel-view-plan-" t))
-           (plan-path (file-name-concat tmp "plans" "current.md"))
+           (plan-path (file-name-concat tmp "local" "plans" "current.md"))
            (session (mevedel-session--create
                      :name "test"
                      :workspace nil
                      :save-path tmp
                      :permission-mode 'ask
                      :plan-metadata
-                     (list :path "plans/current.md"
+                     (list :path "local/plans/current.md"
                            :status 'accepted))))
       (unwind-protect
           (progn

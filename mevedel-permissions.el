@@ -40,13 +40,18 @@
                   "mevedel-skills-ui" ())
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-directive-uuid
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-goal-plan-read-path
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-one-shot-mutations-p
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-active-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-directive-planning
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
@@ -940,7 +945,7 @@ EXPLICIT takes precedence when non-nil."
           path pattern domain name mode workspace-root allowed-roots
           exact-allowed-paths invocation-rules request-rules session-rules
           persistent-rules resource-grants permission-request
-          one-shot-mutations-p warn-no-session-p)
+          one-shot-mutations-p patch-local-only-p warn-no-session-p)
   "Return normalized permission invocation context.
 
 The context concentrates facts shared by the permission decision
@@ -951,6 +956,8 @@ PATH, PATTERN, DOMAIN, NAME, MODE, WORKSPACE-ROOT, ALLOWED-ROOTS,
 EXACT-ALLOWED-PATHS, INVOCATION-RULES, REQUEST-RULES, SESSION-RULES,
 PERSISTENT-RULES, RESOURCE-GRANTS, and WARN-NO-SESSION-P provide the
 context facts.  ONE-SHOT-MUTATIONS-P defaults from REQUEST.
+PATCH-LOCAL-ONLY-P is the prepared ApplyPatch classification used by the Plan
+boundary.
 PERMISSION-REQUEST admits an interactive request at its hook boundary before
 it enters the shared queue."
   (setq tool (or tool
@@ -1030,11 +1037,13 @@ happen for a non-read-only tool."
            :persistent-rules persistent-rules
            :mode mode
            :session session
+           :request request
            :workspace-root workspace-root
            :allowed-roots allowed-roots
            :exact-allowed-paths exact-allowed-paths
            :resource-grants resource-grants
-           :one-shot-mutations-p one-shot-mutations-p))
+           :one-shot-mutations-p one-shot-mutations-p
+           :patch-local-only-p patch-local-only-p))
          (path (plist-get context :path))
          (pattern (plist-get context :pattern))
          (domain (plist-get context :domain))
@@ -1097,11 +1106,23 @@ happen for a non-read-only tool."
         (and (fboundp 'mevedel-plan-mode-active-p)
              (mevedel-plan-mode-active-p owner)))))
 
+(defun mevedel-permission--directive-plan-p
+    (&optional session request)
+  "Return non-nil when Plan authority belongs to directive planning."
+  (or (and session (mevedel-session-directive-planning session))
+      (and (or request
+               (and (boundp 'mevedel--current-request)
+                    mevedel--current-request))
+           (let ((request (or request mevedel--current-request)))
+             (and (mevedel-request-p request)
+                  (mevedel-request-directive-uuid request))))))
+
 (cl-defun mevedel-permission--preflight
-    (tool-name &key tool-struct path pattern domain name content
+    (tool-name &key tool-struct path pattern domain name content request
                invocation-rules request-rules session-rules persistent-rules
                mode session workspace-root allowed-roots exact-allowed-paths
                resource-access resource-grants one-shot-mutations-p
+               patch-local-only-p
                normalized-context)
   "Return normalized permission facts and any decision before the tool slot.
 
@@ -1111,13 +1132,15 @@ plist's `:early-decision' is nil when the tool-owned permission slot and
 the remaining decision chain still need to run.
 
 TOOL-NAME identifies the tool.  TOOL-STRUCT and CONTENT supply its policy
-and input.  PATH, PATTERN, DOMAIN, and NAME may supply pre-extracted
+and input.  REQUEST identifies the owning request when available.  PATH,
+PATTERN, DOMAIN, and NAME may supply pre-extracted
 specifiers.  INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, and
 PERSISTENT-RULES are the ordered rule sources.  MODE selects the permission
 mode.  WORKSPACE-ROOT, ALLOWED-ROOTS, EXACT-ALLOWED-PATHS, and
 RESOURCE-GRANTS define the filesystem boundary.  NORMALIZED-CONTEXT, when
 non-nil, is returned unchanged so a caller can reuse an invocation preflight.
-ONE-SHOT-MUTATIONS-P requires explicit approval for non-read-only tools."
+ONE-SHOT-MUTATIONS-P requires explicit approval for non-read-only tools.
+PATCH-LOCAL-ONLY-P is true only for a prepared all-local ApplyPatch proposal."
   (if normalized-context
       normalized-context
     (setq mode (or mode mevedel-permission-mode))
@@ -1152,8 +1175,13 @@ ONE-SHOT-MUTATIONS-P requires explicit approval for non-read-only tools."
              (deny-bucket
               (mevedel-permission--decision
                'deny 'deny-rule :bucket deny-bucket))
-             ((and (or native-edit-p (equal tool-name "Eval"))
-                   (mevedel-permission--plan-mode-p session))
+             ((and (mevedel-permission--plan-mode-p session)
+                   (or (and (equal tool-name "ApplyPatch")
+                            (or (not patch-local-only-p)
+                                (mevedel-permission--directive-plan-p
+                                 session request)))
+                       (and (not (equal tool-name "ApplyPatch"))
+                            (or native-edit-p (equal tool-name "Eval")))))
               (mevedel-permission--decision 'deny 'plan-mode)))))
       (list :tool-name tool-name
             :tool tool-struct
@@ -1170,6 +1198,8 @@ ONE-SHOT-MUTATIONS-P requires explicit approval for non-read-only tools."
             :exact-allowed-paths exact-allowed-paths
             :resource-access resource-access
             :resource-grants resource-grants
+            :request request
+            :patch-local-only-p patch-local-only-p
             :resource-granted-p resource-granted-p
             :protected-path-p (mevedel-permission--path-protected-p path)
             :workspace-boundary-p
@@ -1211,7 +1241,9 @@ The decision chain:
   1. Extract specifier values via tool-struct getters when missing
   2. Resolve absolute decisions across all buckets:
        any bucket yields `deny' -> deny;
-       Plan mode + native edit tool or Eval -> deny
+       standalone/sticky Plan allows only a prepared all-local ApplyPatch;
+       directive Planning denies all native edits, including that ApplyPatch,
+       and Eval -> deny
   3. Call the tool checker, when present, to decide command authority
   4. Resolve allow/ask rules innermost-first:
        invocation -> request -> session -> persistent -> defcustom.

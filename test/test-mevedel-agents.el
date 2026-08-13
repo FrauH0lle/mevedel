@@ -251,7 +251,16 @@
           (dolist (prompt (mapcar #'cdr prompts))
             (should (string-match-p "Documented project command" prompt))
             (should (string-match-p "## Environment" prompt))
-            (should (string-match-p "Tool orchestration" prompt)))
+            (should (string-match-p "Tool orchestration" prompt))
+            (dolist (scheme '("local://" "artifact://" "skill://" "agent://"
+                              "history://" "memory://" "mcp://"))
+              (should (string-match-p (regexp-quote scheme) prompt)))
+            (should (string-match-p "shared durable space" prompt))
+            (should (string-match-p "parent and retained agents" prompt))
+            (should (string-match-p "SendMessage" prompt))
+            (should (string-match-p
+                     "not an attachment, invocation, or delegation"
+                     prompt)))
           (dolist (name '("worker" "explorer" "verifier"))
             (should (string-match-p
                      "Reporting style"

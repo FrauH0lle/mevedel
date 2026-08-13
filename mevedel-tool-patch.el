@@ -134,8 +134,13 @@ transaction, so review and result data continue to use authored addresses.
 When MATERIALIZE is non-nil, establish the durable local-resource directory
 and resolve its physical targets.  Preparation used by the pipeline leaves
 local sessions untouched until permission and plan checks have completed."
-  (let (operands local-p session)
+  (let (operands local-p session (local-only-p t))
     (dolist (operation (plist-get proposal :operations))
+      (dolist (address (delq nil (list (plist-get operation :rel-path)
+                                       (plist-get operation :move-rel-path))))
+        (unless (and (string-prefix-p "local://" address)
+                     (> (length address) (length "local://")))
+          (setq local-only-p nil)))
       (dolist (entry '((:rel-path :physical-path :resource-attempt-path
                         :local-path-p)
                        (:move-rel-path :physical-move-path
@@ -148,6 +153,8 @@ local sessions untouched until permission and plan checks have completed."
             (push (list operation address (nth 1 entry) (nth 2 entry)
                         (nth 3 entry))
                   operands)))))
+    (unless (and operands local-only-p)
+      (setq local-only-p nil))
     (setq session (and (boundp 'mevedel--session) mevedel--session))
     (when (and local-p materialize)
       (setq session (mevedel-tool-patch--ensure-local-session)))
@@ -176,7 +183,7 @@ local sessions untouched until permission and plan checks have completed."
             (plist-put operation :local-resource-p
                        (or (plist-get operation :local-resource-p)
                            local-p))))))
-    proposal))
+    (plist-put proposal :local-only-p local-only-p)))
 
 (defun mevedel-tool-patch--materialize-resources (proposal)
   "Materialize prepared resource attempts in PROPOSAL after authorization."

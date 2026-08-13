@@ -138,6 +138,13 @@
 		  (path &optional base-directory write-empty quiet
 			include-original-content))
 
+;; `mevedel-plan'
+(declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
+
+;; `mevedel-utilities'
+(declare-function mevedel--normalize-message-text
+                  "mevedel-utilities" (text))
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-extract-render-data
 		  "mevedel-pipeline" (result))
@@ -4713,6 +4720,8 @@ mail are deliberately absent from the returned session."
            picked-segment picked-cum-turn &optional additional-roots)
   "Materialize CHILD under STAGING-PATH using STAGING-BUFFER."
   (require 'mevedel-agent-persistence)
+  (require 'mevedel-plan)
+  (require 'mevedel-utilities)
   (make-directory (file-name-concat staging-path "agents") t)
   (make-directory (file-name-concat staging-path "file-history") t)
   (when-let ((source (and parent-save-path
@@ -4720,7 +4729,12 @@ mail are deliberately absent from the returned session."
              ((file-directory-p source)))
     (copy-directory source
                     (file-name-concat staging-path "local")
-                    nil t t))
+                    nil t t)
+    ;; `local/plans' is managed plan state, not ordinary local content.
+    ;; Re-add only the accepted artifact proven valid at the fork point below.
+    (let ((plans (file-name-concat staging-path "local" "plans")))
+      (when (file-directory-p plans)
+        (delete-directory plans t))))
   (when-let* ((source
                (buffer-local-value 'mevedel--session buffer))
               (metadata (mevedel-session-plan-metadata source))
@@ -4733,9 +4747,17 @@ mail are deliberately absent from the returned session."
               (source-path (expand-file-name relative-path parent-save-path))
               ((file-in-directory-p
                 source-path
-                (file-name-concat parent-save-path "plans"))))
+                (file-name-concat parent-save-path "local" "plans"))))
     (unless (file-readable-p source-path)
       (error "Accepted plan artifact is unavailable: %s" source-path))
+    (let ((hash
+           (with-temp-buffer
+             (insert-file-contents source-path)
+             (mevedel-plan-hash
+              (mevedel--normalize-message-text (buffer-string))))))
+      (unless (and (stringp (plist-get metadata :accepted-hash))
+                   (equal hash (plist-get metadata :accepted-hash)))
+        (error "Accepted plan artifact hash does not match")))
     (let ((destination (expand-file-name relative-path staging-path)))
       (make-directory (file-name-directory destination) t)
       (copy-file source-path destination)))
