@@ -302,6 +302,8 @@ warnings.
 - **Customization**: `defcustom` uses `:group 'mevedel`
 - **Private symbols**: double-dash `--` (e.g. `mevedel--workspace`,
   `mevedel-tools--validate-params`)
+- **Path construction**: use `file-name-concat`, not `concat`, to join
+  filesystem path components.
 - **Provide**: each file ends with `(provide 'mevedel-MODNAME)` and
   `;;; mevedel-MODNAME.el ends here`
 - **Avoid `require` at top level** in library files; prefer
