@@ -121,6 +121,14 @@ Hot reload marks consuming chat buffers dirty when watched skill
 directories change. Completion and reminders rescan on demand when a
 buffer is dirty.
 
+`skill://NAME@SOURCE-KEY[/RELATIVE-PATH]` is the read-only resource address
+for an exact discovered skill source. `SOURCE-KEY` is the full lowercase
+SHA-256 digest of the canonical source key used by atomic bindings; `NAME` is
+only a label. Resolution checks that source again and never falls back to a
+different same-named skill. Hot reload may change content at the same source,
+and skill addresses retain their client-local origin rather than becoming
+execution-target paths. See [`address-to-resource.md`](address-to-resource.md#skill).
+
 ## Local Slash Commands
 
 Local slash commands are separate from `$skill` lookup. Built-ins include
@@ -246,6 +254,10 @@ completes subcommands, then installed plugin names for `enable`,
 `disable`, `update`, `remove`, `uninstall`, and supported `hooks` forms;
 `/plugin install` remains freeform. Skill names with prefixes, such as
 `superpowers:brainstorming`, are valid `$` candidates.
+Resource-address completion likewise offers scheme prefixes and bounded
+descendants as plain canonical text. It does not bind a mention, invoke a
+skill, read content, refresh a source, materialize a session, or change
+durable state.
 `/review` and `/verify` complete shared explicit target forms such as
 `current`, `HEAD`, `branch:<name>`, and `commit:<rev>`. With no arguments
 they open the target picker; unknown free-form arguments remain custom
@@ -330,6 +342,10 @@ later same-visible-name discovery result. Copy, edit invalidation, retry,
 history persistence, corrupt-binding handling, and soft-failure behavior follow
 the shared lifecycle documented in
 [`mentions.md`](mentions.md#atomic-binding-lifecycle).
+
+This `$skill` binding and invocation lifecycle is distinct from reading a
+`skill://` resource address: an address exposes source content through the
+filesystem-shaped read tools and never invokes or attaches the skill.
 
 `UserPromptExpansion` runs once per prepared canonical skill. After all bodies,
 placeholders, and instruction reminders exist, `UserPromptSubmit` runs once on

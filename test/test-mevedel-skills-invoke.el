@@ -23,6 +23,7 @@
 (require 'mevedel-models)
 (require 'mevedel-permissions)
 (require 'mevedel-pipeline)
+(require 'mevedel-resource)
 (require 'mevedel-session-persistence)
 (require 'mevedel-skills-core)
 (require 'mevedel-skills-invoke)
@@ -2513,6 +2514,43 @@ spanning lines")))
                             input session 0 6 "alpha")))
               (should (eq 'ok (plist-get outcome :status)))
               (should (eq skill-b (plist-get outcome :skill))))))
+      (delete-directory root t)))
+
+  :doc "bound skill resolution consults the canonical source locator"
+  (let* ((root (make-temp-file "mevedel-resolve-resource-" t))
+         (source (file-name-concat root "skill.md"))
+         (skill (mevedel-skill--create :name "alpha" :source-file source))
+         (session (mevedel-skills-test--make-session))
+         (input (copy-sequence "$alpha"))
+         seen)
+    (unwind-protect
+        (progn
+          (with-temp-file source (insert "body"))
+          (setf (mevedel-session-skills session) (list skill))
+          (mevedel-mention-bindings-set
+           0 6
+           (list :kind 'skill :token "$alpha" :source-file source)
+           input)
+          (cl-letf (((symbol-function 'mevedel-resource-prepare)
+                     (lambda (operation address context)
+                       (setq seen (list operation address context))
+                       'resource-attempt))
+                    ((symbol-function 'mevedel-resource-execute)
+                     (lambda (attempt executor)
+                       (should (eq attempt 'resource-attempt))
+                       (funcall executor source "skill-address")))
+                    ((symbol-function 'mevedel-skills--ensure-fresh)
+                     (lambda (&rest _) nil)))
+            (let ((outcome (mevedel-skills-resolve-user-mention-outcome
+                            input session 0 6 "alpha")))
+              (should (eq 'ok (plist-get outcome :status)))
+              (should (eq skill (plist-get outcome :skill)))
+              (should (equal
+                       (list 'read
+                             (format "skill://alpha@%s"
+                                     (mevedel-resource-skill-digest source))
+                             (list :session session))
+                       seen)))))
       (delete-directory root t)))
 
   :doc "a missing bound source is unavailable without same-name fallback"

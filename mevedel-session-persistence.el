@@ -4715,6 +4715,12 @@ mail are deliberately absent from the returned session."
   (require 'mevedel-agent-persistence)
   (make-directory (file-name-concat staging-path "agents") t)
   (make-directory (file-name-concat staging-path "file-history") t)
+  (when-let ((source (and parent-save-path
+                          (file-name-concat parent-save-path "local")))
+             ((file-directory-p source)))
+    (copy-directory source
+                    (file-name-concat staging-path "local")
+                    nil t t))
   (when-let* ((source
                (buffer-local-value 'mevedel--session buffer))
               (metadata (mevedel-session-plan-metadata source))

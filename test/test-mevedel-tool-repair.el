@@ -38,11 +38,45 @@
                           :properties (:host (:type string)
                                        :port (:type integer))
                           :required ["host"])))))
-    (should-not
+  (should-not
      (mevedel-tool-repair-validate
       tool
       '(:name "demo" :mode "safe" :ids [1 2]
               :config (:host "localhost" :port 8080)))))
+
+  :doc "accepts resource addresses only for path-or-resource contracts"
+  (let ((resource-tool
+         (mevedel-tool--create
+          :name "ResourceRead"
+          :args '((file_path path-or-resource :required "Path"))))
+        (path-tool
+         (mevedel-tool--create
+          :name "FilesystemRead"
+          :args '((file_path path :required "Path")))))
+    (should-not
+     (mevedel-tool-repair-validate
+      resource-tool '(:file_path "local://notes.md")))
+    (let ((issues
+           (mevedel-tool-repair-validate
+            path-tool '(:file_path "local://notes.md"))))
+      (should (equal '(resource-address)
+                     (mapcar (lambda (issue) (plist-get issue :kind))
+                             issues)))
+      (should (string-match-p
+               "filesystem-only path arguments do not accept resource addresses"
+               (mevedel-tool-repair-format-issues path-tool issues)))))
+
+  :doc "rejects Markdown autolinks in path-or-resource contracts"
+  (let* ((tool
+          (mevedel-tool--create
+           :name "ResourceRead"
+           :args '((file_path path-or-resource :required "Path"))))
+         (issues
+          (mevedel-tool-repair-validate
+           tool '(:file_path "[notes.md](https://notes.md)"))))
+    (should (equal '(path-autolink)
+                   (mapcar (lambda (issue) (plist-get issue :kind))
+                           issues))))
 
   :doc "returns ordered issues for invalid declared values"
   (let* ((tool

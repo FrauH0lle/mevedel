@@ -264,13 +264,8 @@
                                   (plist-get observation :output)))
           (should (= 10 (plist-get (plist-get observation :facts)
                                    :omitted-output-bytes)))
-          (let ((path (plist-get (plist-get observation :facts)
+          (should-not (plist-get (plist-get observation :facts)
                                  :output-path)))
-            (should (file-exists-p path))
-            (should (equal "1234567890abcdefghij"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string))))))
       (delete-directory root t)))
   :doc "preserves split UTF-8 characters in pipe and PTY filter chunks"
   (let* ((root (make-temp-file "mevedel-managed-utf8-" t))
@@ -336,15 +331,21 @@
                 (test-mevedel-execution--start-managed
                  session root
                  '("sh" "-c" "printf first; sleep 2; printf second")
-                 :owner "agent--one"))
+                 :owner "agent--one"
+                 :artifact-directory
+                 (file-name-concat (mevedel-session-save-path session)
+                                   "tool-results" "executions")))
           (let* ((facts (plist-get observation :facts))
                  (id (plist-get facts :execution-id))
                  (path (plist-get facts :output-path)))
             (should (stringp id))
             (should (eq 'running (plist-get facts :state)))
-            (should (file-in-directory-p
-                     path (file-name-concat root "artifacts")))
-            (should (file-exists-p path))
+            (should (string-prefix-p "artifact://executions/" path))
+            (should (directory-files
+                     (file-name-concat
+                      (mevedel-session-save-path session)
+                      "tool-results" "executions")
+                     nil "\\`execution-" t))
             (should (equal id
                            (plist-get
                             (car (mevedel-execution-list
@@ -408,15 +409,23 @@
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root
-                 '("sh" "-c" "printf before; sleep .05; head -c 10000 /dev/zero | tr '\\0' x")))
+                 '("sh" "-c" "printf before; sleep .2; head -c 10000 /dev/zero | tr '\\0' x")
+                 :artifact-directory
+                 (file-name-concat (mevedel-session-save-path session)
+                                   "tool-results" "executions")))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
           (setq final (test-mevedel-execution--observe session id))
           (should (eq 'output-limit
                       (plist-get (plist-get final :facts) :termination)))
           (should (= 64 (plist-get (plist-get final :facts)
                                    :output-bytes)))
-          (should (file-exists-p
-                   (plist-get (plist-get final :facts) :output-path))))
+          (let ((path (plist-get (plist-get final :facts) :output-path)))
+            (should (string-prefix-p "artifact://executions/" path))
+            (should (directory-files
+                     (file-name-concat
+                      (mevedel-session-save-path session)
+                      "tool-results" "executions")
+                     nil "\\`execution-" t))))
       (delete-directory root t)))
   :doc "cleans descendants when the managed shell exits"
   (let* ((root (make-temp-file "mevedel-managed-descendant-" t))

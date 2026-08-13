@@ -53,6 +53,20 @@
 (declare-function mevedel-pipeline--tool-results-dir
                   "mevedel-pipeline" (session buffer &optional request))
 
+;; `mevedel-resource'
+(declare-function mevedel-resource-address-like-p
+                  "mevedel-resource" (value))
+(declare-function mevedel-resource-current-attempt
+                  "mevedel-resource" (address))
+(declare-function mevedel-resource-encode-component
+                  "mevedel-resource" (value))
+(declare-function mevedel-resource-execute
+                  "mevedel-resource" (attempt &optional executor options))
+(declare-function mevedel-resource-parse-address
+                  "mevedel-resource" (address))
+(declare-function mevedel-resource--within-root-p
+                  "mevedel-resource" (path root))
+
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-queue-turn-event
                   "mevedel-reminders" (buffer key body &optional commit))
@@ -85,6 +99,12 @@
 
 (defvar mevedel-tool-fs--read-render-cache (make-hash-table :test #'equal)
   "Cache for cheap `Read' renderer header metadata.")
+
+(defvar mevedel-tool-fs--resource-address nil
+  "Authored resource address for the current file-system operation.")
+
+(defvar mevedel-tool-fs--resource-dispatching nil
+  "Non-nil while dispatching a resource attempt into a native handler.")
 
 
 ;;
@@ -163,7 +183,11 @@ via `mevedel-view--fontify-as'."
 
 (defun mevedel-tool-fs--display-path (path)
   "Return PATH as a compact display path for tool headers."
-  (or (when (and (stringp path)
+  (or (and (stringp path)
+           (require 'mevedel-resource)
+           (mevedel-resource-address-like-p path)
+           path)
+      (when (and (stringp path)
                  (not (string-empty-p path)))
         (let* ((root (mevedel-tool-fs--current-workspace-root))
                (expanded-root (and root (expand-file-name root)))
@@ -180,6 +204,235 @@ via `mevedel-view--fontify-as'."
             (file-relative-name full-path expanded-root))))
       (and path (file-name-nondirectory path))
       "?"))
+
+(defun mevedel-tool-fs--visible-path (path)
+  "Return model-visible PATH for the active resource operation.
+
+Resource handlers keep their resolved path in local variables, but every
+path that crosses the handler result boundary is the authored address."
+  (or mevedel-tool-fs--resource-address path))
+
+(defun mevedel-tool-fs--resource-attempt (address)
+  "Return the prepared attempt for authored ADDRESS, or nil for a path."
+  (when (and (stringp address)
+             (require 'mevedel-resource)
+             (mevedel-resource-address-like-p address))
+    (mevedel-resource-current-attempt address)))
+
+(defun mevedel-tool-fs--resource-search-roots (target)
+  "Return helper roots carried by virtual resource TARGET, if any."
+  (and (listp target)
+       (plist-get target :virtual)
+       (plist-get target :resource-search-roots)))
+
+(defun mevedel-tool-fs--resource-rg-exclusions (address)
+  "Return private-resource exclusions for ADDRESS's helper invocation."
+  (when (and (stringp address)
+             (string-prefix-p "artifact://" address))
+    '("--glob=!**/.mevedel-pending-executions/**")))
+
+(defun mevedel-tool-fs--resource-child-address
+    (address root path &optional address-prefix)
+  "Return the logical child of ADDRESS for private PATH below ROOT.
+
+ADDRESS is parsed with the canonical resource parser; ROOT and PATH are
+only used to compute a relative component and are never returned.  When
+ADDRESS-PREFIX is non-nil, use it as an already canonical logical prefix;
+this is used for the dynamic memory union whose root itself is not an
+addressable locator."
+  (when (and address root path)
+    (let* ((root (expand-file-name root))
+           (path (expand-file-name path root)))
+      (when (mevedel-resource--within-root-p path root)
+        (let* ((parsed (and (not address-prefix)
+                            (mevedel-resource-parse-address address)))
+               (scheme (and parsed (plist-get parsed :scheme)))
+               (components (and parsed
+                                (copy-sequence
+                                 (plist-get parsed :components))))
+               (relative (file-relative-name path root)))
+          (unless (string= relative ".")
+            (let ((relative-components
+                   (file-name-split relative)))
+              (if address-prefix
+                  (setq components relative-components)
+                (setq components (append components relative-components)))))
+          (if address-prefix
+              (concat address-prefix
+                      (unless (string= relative ".")
+                        (concat "/"
+                                (mapconcat
+                                 #'mevedel-resource-encode-component
+                                 components "/"))))
+            (concat (symbol-name scheme) "://"
+                    (if (eq scheme 'skill)
+                        (concat (mevedel-resource-encode-component
+                                 (plist-get parsed :name))
+                                "@" (plist-get parsed :source-key)
+                                (if components
+                                    (concat "/"
+                                            (mapconcat
+                                             #'mevedel-resource-encode-component
+                                             components
+                                             "/"))
+                                  ""))
+                      (mapconcat #'mevedel-resource-encode-component
+                                 components "/")))))))))
+
+(defun mevedel-tool-fs--resource-search-candidate-end (line root)
+  "Return the private path end in LINE below ROOT, or nil.
+
+Resource searches use ripgrep's NUL path separator.  Prefer the longest
+existing prefix for captured output without that separator, so a colon in a
+filename is not mistaken for a line-number delimiter."
+  (let* ((root (expand-file-name root))
+         (directory (file-name-as-directory root)))
+    (cond
+     ((string= line root) (length line))
+     ((and (string-prefix-p root line)
+           (< (length root) (length line))
+           (= (aref line (length root)) ?:))
+      (length root))
+     ((string-prefix-p directory line)
+      (let ((position (length directory))
+            candidate-end)
+        (while (setq position (string-search ":" line position))
+          (when (file-exists-p (substring line 0 position))
+            (setq candidate-end position))
+          (setq position (1+ position)))
+        (or candidate-end (length line)))))))
+
+(defun mevedel-tool-fs--resource-search-rewrite-path (address root path)
+  "Rewrite private PATH below ROOT as a child of ADDRESS, or an error."
+  (or (mevedel-tool-fs--resource-child-address address root path)
+      (format "Error: Resource search returned an unsafe path for %s"
+              address)))
+
+(defun mevedel-tool-fs--rewrite-resource-search-output
+    (output root address &optional path-list-p)
+  "Replace private search paths in OUTPUT with logical ADDRESS paths.
+
+Only path prefixes emitted by ripgrep are rewritten.  Match text and
+context lines remain untouched.  PATH-LIST-P selects NUL-delimited file-list
+output, used by Glob; content output keeps its match suffixes."
+  (if (or (null output) (null root) (null address))
+      output
+    (if (string-search "\0" output)
+        (if path-list-p
+            (mapconcat
+             (lambda (path)
+               (mevedel-tool-fs--resource-search-rewrite-path
+                address root path))
+             (split-string output "\0" t) "\n")
+          (let ((scan 0)
+                (copy-start 0)
+                pieces)
+            (while-let ((nul (string-search "\0" output scan)))
+              (let* ((newline (cl-position ?\n output :end nul :from-end t))
+                     (line-start (if newline (1+ newline) 0))
+                     (path (substring output line-start nul)))
+                (push (substring output copy-start line-start) pieces)
+                (push (mevedel-tool-fs--resource-search-rewrite-path
+                       address root path)
+                      pieces)
+                (setq copy-start (1+ nul)
+                      scan (1+ nul))))
+            (push (substring output copy-start) pieces)
+            (apply #'concat (nreverse pieces))))
+      (let ((root (expand-file-name root))
+            (lines (split-string output "\n" nil)))
+        (mapconcat
+         (lambda (line)
+           (let* ((candidate-end
+                   (mevedel-tool-fs--resource-search-candidate-end
+                    line root))
+                  (candidate (and candidate-end
+                                  (substring line 0 candidate-end)))
+                  (logical (and candidate
+                                (mevedel-tool-fs--resource-child-address
+                                 address root candidate))))
+             (if logical
+                 (concat logical (substring line (or candidate-end 0)))
+               (if candidate
+                   (format "Error: Resource search returned an unsafe path for %s"
+                           address)
+                 line))))
+         lines "\n")))))
+
+(defun mevedel-tool-fs--rewrite-resource-search-roots
+    (output roots &optional path-list-p)
+  "Replace private paths in multi-root resource OUTPUT.
+
+ROOTS are plists with `:path', `:address-prefix', and optional `:label'.
+The same path-prefix and containment checks as single-root rewriting apply
+before a logical address is emitted."
+  (if (or (null output) (null roots))
+      output
+    (let ((roots
+           (sort (copy-sequence roots)
+                 (lambda (left right)
+                   (> (length (expand-file-name (plist-get left :path)))
+                      (length (expand-file-name (plist-get right :path))))))))
+      (if (and path-list-p (string-search "\0" output))
+          (mapconcat
+           (lambda (path)
+             (or
+              (cl-loop
+               for root-data in roots
+               for root = (expand-file-name (plist-get root-data :path))
+               for logical =
+               (mevedel-tool-fs--resource-child-address
+                (or (plist-get root-data :address-prefix)
+                    (plist-get root-data :address))
+                root path (plist-get root-data :address-prefix))
+               when logical
+               return
+               (concat logical
+                       (when-let ((label (plist-get root-data :label)))
+                         (concat "\t" label))))
+              "Error: Resource search returned an unsafe path"))
+           (split-string output "\0" t) "\n")
+        (mapconcat
+         (lambda (line)
+           (or
+             (cl-loop
+             for root-data in roots
+             for root = (expand-file-name (plist-get root-data :path))
+             for candidate-end =
+             (mevedel-tool-fs--resource-search-candidate-end line root)
+             for candidate = (and candidate-end
+                                  (substring line 0 candidate-end))
+             for logical =
+             (and candidate-end
+                  (mevedel-tool-fs--resource-child-address
+                   (or (plist-get root-data :address-prefix)
+                       (plist-get root-data :address))
+                   root candidate
+                   (plist-get root-data :address-prefix)))
+             if candidate-end
+             return
+             (if logical
+                 (concat logical
+                         (when-let ((label (plist-get root-data :label)))
+                           (concat "\t" label))
+                         (substring line candidate-end))
+               (format "Error: Resource search returned an unsafe path")))
+            line))
+         (split-string output "\n" nil)
+         "\n")))))
+
+(defun mevedel-tool-fs--rewrite-resource-handler-result
+    (result root address &optional path-list-p)
+  "Return RESULT with private search paths rewritten for ADDRESS."
+  (if (and (proper-list-p result)
+           (plist-member result :result)
+           (stringp (plist-get result :result)))
+      (let ((copy (copy-sequence result)))
+        (plist-put copy :result
+                   (mevedel-tool-fs--rewrite-resource-search-output
+                    (plist-get result :result) root address path-list-p))
+        copy)
+    result))
 
 (defun mevedel-tool-fs--strip-system-reminders (result)
   "Return RESULT without a trailing appended system-reminder block."
@@ -487,9 +740,11 @@ cut at the last complete line and a guidance message is appended.")
 (defun mevedel-tool-fs--validate-media-file (path mime)
   "Signal an error unless PATH contents match supported media MIME."
   (unless (> (file-attribute-size (file-attributes path)) 0)
-    (error "Media file is empty: %s" path))
+    (error "Media file is empty: %s"
+           (mevedel-tool-fs--visible-path path)))
   (unless (mevedel-tool-fs--valid-media-file-p path mime)
-    (error "File contents do not match media type %s: %s" mime path)))
+    (error "File contents do not match media type %s: %s" mime
+           (mevedel-tool-fs--visible-path path))))
 
 (defun mevedel-tool-fs--parse-pages (pages)
   "Parse Read PAGES string into a cons cell (START . END).
@@ -528,7 +783,7 @@ invalid forms or ranges over the per-request page limit."
         (cap (or max-bytes mevedel-tool-fs--media-max-bytes)))
     (when (> size cap)
       (error "Media file is too large (%d bytes > %d bytes): %s"
-             size cap path))
+             size cap (mevedel-tool-fs--visible-path path)))
     (with-temp-buffer
       (insert-file-contents-literally path)
       (base64-encode-region (point-min) (point-max) :no-line-break)
@@ -607,11 +862,11 @@ meaning to leading and trailing whitespace."
                               (and page-count
                                    (format "%d pages" page-count))))))
     (format "PDF `%s` is large%s. Prefer bounded `Read(file_path=\"%s\", pages=\"START-END\")` requests for relevant pages instead of rereading or reattaching the whole document. Each PDF page request is capped at %d pages; use page selectors like \"1-5\" or \"6-\" when you need the next chunk."
-            path
+            (mevedel-tool-fs--visible-path path)
             (if details
                 (format " (%s)" (string-join details ", "))
               "")
-            path
+            (mevedel-tool-fs--visible-path path)
             mevedel-tool-fs--read-max-pages)))
 
 (defun mevedel-tool-fs--append-system-reminder (result body)
@@ -709,8 +964,10 @@ The returned value is a cons cell (PATH . MIME).  If ARGS contains
 SOURCE is the original source path when PATH points to a generated file."
   (let ((size (file-attribute-size (file-attributes path))))
     (concat "<media-file>\n"
-            (format "path: %s\n" path)
-            (when source (format "source: %s\n" source))
+            (format "path: %s\n" (mevedel-tool-fs--visible-path path))
+            (when source
+              (format "source: %s\n"
+                      (mevedel-tool-fs--visible-path source)))
             (format "mime_type: %s\n" mime)
             (format "size_bytes: %d\n" size)
             "encoding: base64\n"
@@ -781,7 +1038,8 @@ text limit and may be sent by models as a defaulted optional value."
         (mevedel-tool-fs--ensure-media-capable mime)
         (mevedel-tool-fs--validate-media-file path mime)
         (let* ((base64 (mevedel-tool-fs--base64-file path))
-               (media (list (list :path path :mime "application/pdf"
+               (media (list (list :path (mevedel-tool-fs--visible-path path)
+                                  :mime "application/pdf"
                                   :kind 'document
                                   :data base64))))
           (mevedel-tool-fs--media-read-result
@@ -797,18 +1055,22 @@ text limit and may be sent by models as a defaulted optional value."
              (_ (mevedel-tool-fs--validate-media-file
                  prepared-path prepared-mime))
              (base64 (mevedel-tool-fs--base64-file prepared-path))
-             (media (list (list :path prepared-path :mime prepared-mime
+             (media (list (list :path (mevedel-tool-fs--visible-path
+                                      prepared-path)
+                                :mime prepared-mime
                                 :kind 'image
                                 :data base64
                                 :source (unless (equal prepared-path path)
-                                          path)))))
+                                          (mevedel-tool-fs--visible-path
+                                           path))))))
         (mevedel-tool-fs--media-read-result
          (mevedel-tool-fs--format-media-result
           prepared-path prepared-mime base64
           (unless (equal prepared-path path) path))
          media)))
      (t
-      (error "Unsupported media file type: %s" path)))))
+      (error "Unsupported media file type: %s"
+             (mevedel-tool-fs--visible-path path))))))
 
 (defun mevedel-tool-fs--read-pdf-pages (path pages args)
   "Render PDF PATH PAGES to images according to ARGS.
@@ -839,7 +1101,7 @@ Return a media result plist."
                         (list path) (list (file-name-directory output)))))
             (unless (zerop exit-code)
               (error "'pdftoppm' failed while rendering page %d of %s%s"
-                     page path
+                     page (mevedel-tool-fs--visible-path path)
                      (if (string-empty-p process-output)
                          ""
                        (concat ": " process-output)))))
@@ -858,8 +1120,10 @@ Return a media result plist."
             (push (mevedel-tool-fs--format-media-result
                    prepared-path prepared-mime base64 path)
                   results)
-            (push (list :path prepared-path :mime prepared-mime
-                        :kind 'image :data base64 :source path :page page)
+            (push (list :path (mevedel-tool-fs--visible-path prepared-path)
+                        :mime prepared-mime :kind 'image :data base64
+                        :source (mevedel-tool-fs--visible-path path)
+                        :page page)
                   media))))
       (mevedel-tool-fs--media-read-result
        (mapconcat #'identity (nreverse results) "\n\n")
@@ -925,12 +1189,16 @@ Return a media result plist."
 
 (defun mevedel-tool-fs--format-missing-file-error (path)
   "Return a friendly missing-file error for PATH."
-  (let ((suggestions (mevedel-tool-fs--missing-file-suggestions path)))
-    (concat (format "File %s does not exist" path)
+  (let ((suggestions (unless mevedel-tool-fs--resource-address
+                       (mevedel-tool-fs--missing-file-suggestions path))))
+    (concat (format "File %s does not exist"
+                    (mevedel-tool-fs--visible-path path))
             (when suggestions
               (concat ". Did you mean:\n"
                       (mapconcat (lambda (candidate)
-                                   (format "- %s" candidate))
+                                   (format "- %s"
+                                           (mevedel-tool-fs--visible-path
+                                            candidate)))
                                  suggestions "\n"))))))
 
 (defun mevedel-tool-fs--add-line-numbers (start-line)
@@ -973,7 +1241,8 @@ truncated with a [...] marker."
 (defun mevedel-tool-fs--read-continuation-hint (path next-line)
   "Return continuation guidance for PATH starting at NEXT-LINE."
   (format "\n\n... Read output truncated. Use Read(file_path=%S, offset=%d, limit=%d) to continue, or use Grep for targeted searches."
-          path next-line mevedel-tool-fs--read-default-limit))
+          (mevedel-tool-fs--visible-path path)
+          next-line mevedel-tool-fs--read-default-limit))
 
 (defun mevedel-tool-fs--finalize-read-buffer (path start-line line-truncated-next)
   "Line-number and bound current text Read buffer.
@@ -998,7 +1267,8 @@ already truncated the buffer, or nil.  Return the model-visible string."
 (defun mevedel-tool-fs--list-directory (path &optional max-entries)
   "List files under directory PATH, respecting .gitignore.
 
-Uses `rg --files --hidden --follow' so the listing is gitignore-aware
+Uses `rg --files --hidden' (and follows links for ordinary paths) so the
+listing is gitignore-aware
 and stable across runs (entries are sorted by path).  Returns a cons
 cell (ENTRIES . TRUNCATED-P) where ENTRIES is a list of paths relative
 to PATH and TRUNCATED-P is non-nil if the listing was capped at
@@ -1008,25 +1278,30 @@ PATH is not a readable directory, or rg exits with an unexpected code."
     (unless (executable-find "rg")
       (error "`ripgrep' not installed"))
     (unless (and (file-directory-p path) (file-readable-p path))
-      (error "%s is not a readable directory" path))
+      (error "%s is not a readable directory"
+             (mevedel-tool-fs--visible-path path)))
     (pcase-let* ((`(,exit . ,output)
                   (mevedel-tool-fs--call-process-capturing-output
                    "mevedel-list-directory"
-                   (list "rg" "--files" "--hidden" "--follow"
-                         "--sort" "path" path)
+                   (append (list "rg" "--files" "--hidden")
+                           (unless mevedel-tool-fs--resource-address
+                             '("--follow"))
+                           (mevedel-tool-fs--resource-rg-exclusions
+                            mevedel-tool-fs--resource-address)
+                           (list "--sort" "path" path))
                    (list path))))
         (cond
          ((= exit 0)
           (let* ((raw (split-string output "\n" t))
                  (all (mapcar (lambda (s)
-                                (setq s (replace-regexp-in-string "\\\\" "/" s))
                                 (file-relative-name s path))
                               raw))
                  (truncated (> (length all) max))
                  (entries (if truncated (seq-take all max) all)))
             (cons entries truncated)))
          ((= exit 1) (cons nil nil))
-         (t (error "`rg' exited with code %d listing %s" exit path))))))
+         (t (error "`rg' exited with code %d listing %s" exit
+                   (mevedel-tool-fs--visible-path path)))))))
 
 (defun mevedel-tool-fs--slurp-file-contents (path &optional offset limit)
   "Return file PATH content with OFFSET and LIMIT.
@@ -1042,17 +1317,20 @@ Returns the bounded content string with line numbers; signals an error on
 any validation failure.  Callers that want graceful degradation should
 wrap in `condition-case'."
   (unless (file-readable-p path)
-    (error "File %s is not readable" path))
+    (error "File %s is not readable"
+           (mevedel-tool-fs--visible-path path)))
   (when (file-directory-p path)
-    (error "Cannot read directory %s as file" path))
+    (error "Cannot read directory %s as file"
+           (mevedel-tool-fs--visible-path path)))
   (when (file-symlink-p path)
     (setq path (file-truename path)))
   (when (mevedel-tool-fs--binary-extension-p path)
     (let ((ext (file-name-extension path)))
-      (error "Cannot read binary file (type: .%s): %s" ext path)))
+      (error "Cannot read binary file (type: .%s): %s" ext
+             (mevedel-tool-fs--visible-path path))))
   (when (mevedel-tool-fs--blocked-device-p path)
     (error "Cannot read %s: device file would block or produce infinite output"
-           path))
+           (mevedel-tool-fs--visible-path path)))
   (if (zerop (file-attribute-size (file-attributes path)))
       ""
     (let ((start-line (max 1 (or offset 1)))
@@ -1115,14 +1393,16 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
     (unless (file-exists-p filename)
       (error "%s" (mevedel-tool-fs--format-missing-file-error filename)))
     (unless (file-readable-p filename)
-      (error "File %s is not readable" filename))
+      (error "File %s is not readable"
+             (mevedel-tool-fs--visible-path filename)))
     (when (file-directory-p filename)
-      (error "Cannot read directory %s as file" filename))
+      (error "Cannot read directory %s as file"
+             (mevedel-tool-fs--visible-path filename)))
     (when (file-symlink-p filename)
       (setq filename (file-truename filename)))
     (when (mevedel-tool-fs--blocked-device-p filename)
       (error "Cannot read %s: device file would block or produce infinite output"
-             filename))
+             (mevedel-tool-fs--visible-path filename)))
     (if (mevedel-tool-fs--media-mime-type filename)
         (progn
           (when (mevedel-tool-fs--text-range-requested-p offset limit)
@@ -1139,11 +1419,12 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
           (let ((dedup-key (mevedel-tool-fs--media-dedup-key args)))
             (cond
              ((and (bound-and-true-p mevedel--session)
+                   (not mevedel-tool-fs--resource-address)
                    (not (mevedel-tool-fs--agent-context-p))
                    (mevedel-session-read-is-duplicate-p
                     mevedel--session filename dedup-key nil))
               (format "File %s unchanged since last read.  Reuse the previous contents."
-                      filename))
+                      (mevedel-tool-fs--visible-path filename)))
              (t
               (condition-case err
                   (let ((result (mevedel-tool-fs--read-media-file
@@ -1157,6 +1438,7 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
                              (mevedel-tool-fs--format-large-pdf-reminder
                               filename))))
                     (when (and (bound-and-true-p mevedel--session)
+                               (not mevedel-tool-fs--resource-address)
                                (not (mevedel-tool-fs--agent-context-p)))
                       (mevedel-session-record-file-access
                        mevedel--session filename 'read dedup-key nil))
@@ -1180,38 +1462,122 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
         (error "`max_width', `max_height', and `max_tokens' are only supported for image files and PDF page images"))
       (when (mevedel-tool-fs--binary-extension-p filename)
         (let ((ext (file-name-extension filename)))
-          (error "Cannot read binary file (type: .%s): %s" ext filename)))
+          (error "Cannot read binary file (type: .%s): %s" ext
+                 (mevedel-tool-fs--visible-path filename))))
       (cond
        ((and (bound-and-true-p mevedel--session)
+             (not mevedel-tool-fs--resource-address)
              (not (mevedel-tool-fs--agent-context-p))
              (mevedel-session-read-is-duplicate-p
               mevedel--session filename offset limit))
         (format "File %s unchanged since last read.  Reuse the previous contents."
-                filename))
+                (mevedel-tool-fs--visible-path filename)))
        ((zerop (file-attribute-size (file-attributes filename)))
         (when (and (bound-and-true-p mevedel--session)
+                   (not mevedel-tool-fs--resource-address)
                    (not (mevedel-tool-fs--agent-context-p)))
           (mevedel-session-record-file-access
            mevedel--session filename 'read offset limit))
         (format "<system-reminder>\n\
 File %s exists but is empty (0 bytes). This is the actual file \
-content, not a read failure.\n</system-reminder>" filename))
+content, not a read failure.\n</system-reminder>"
+                (mevedel-tool-fs--visible-path filename)))
        (t
         (let ((content (mevedel-tool-fs--slurp-file-contents
                         filename offset limit)))
           (when (and (bound-and-true-p mevedel--session)
+                     (not mevedel-tool-fs--resource-address)
                      (not (mevedel-tool-fs--agent-context-p)))
             (mevedel-session-record-file-access
              mevedel--session filename 'read offset limit))
           content))))))
 
+(defun mevedel-tool-fs--read-resource-directory (path address)
+  "Return a logical listing for resource ADDRESS rooted at PATH."
+  (condition-case err
+      (pcase-let ((`(,entries . ,truncated)
+                   (mevedel-tool-fs--list-directory path)))
+        (let ((result
+               (mapconcat
+                (lambda (entry)
+                  (mevedel-tool-fs--resource-child-address
+                   address path (expand-file-name entry path)))
+                entries "\n")))
+          (if truncated
+              (concat result
+                      (unless (string-empty-p result) "\n")
+                      (format "... Results truncated (limit: 1000). Use Read(file_path=%S) for a narrower resource."
+                              address))
+            (if (string-empty-p result)
+                (format "No files found under %s" address)
+              result))))
+    (error
+     (error "Cannot read resource %s: %s"
+            address (error-message-string err)))))
+
+(defun mevedel-tool-fs--read-virtual-text (text args address)
+  "Read virtual TEXT with the normal bounded text Read behavior."
+  (let* ((args (mevedel-tool-fs--normalize-read-args args))
+         (offset (plist-get args :offset))
+         (limit (plist-get args :limit)))
+    (when (or (plist-get args :pages)
+              (mevedel-tool-fs--media-transform-requested-p args))
+      (error "Virtual resources only support text Read options"))
+    (unless (stringp text)
+      (error "Resource %s did not return text" address))
+    (if (string-empty-p text)
+        ""
+      (when (and (null offset) (null limit)
+                 (> (string-bytes text) (* 512 1024)))
+        (error "Resource is too large (> 512 KB). Use offset and limit to read specific portions"))
+      (with-temp-buffer
+        (insert text)
+        (let ((start-line (max 1 (or offset 1)))
+              (num-lines (or limit mevedel-tool-fs--read-default-limit)))
+          (goto-char (point-min))
+          (when (> start-line 1)
+            (forward-line (1- start-line))
+            (delete-region (point-min) (point)))
+          (let ((line-truncated-p
+                 (mevedel-tool-fs--truncate-buffer-to-lines num-lines)))
+            (mevedel-tool-fs--finalize-read-buffer
+             address start-line
+             (and line-truncated-p (+ start-line num-lines)))))))))
+
+(defun mevedel-tool-fs--read-resource (args attempt)
+  "Read prepared resource ATTEMPT using the private execution seam."
+  (mevedel-resource-execute
+   attempt
+   (lambda (path address)
+     (if (and (listp path) (plist-get path :virtual))
+         (mevedel-tool-fs--read-virtual-text
+          (plist-get path :result) args address)
+       (progn
+           (unless (and (stringp path) (file-exists-p path))
+             (error "Resource %s is not available for file reading" address))
+           (when (and (string-prefix-p "memory://" address)
+                      (mevedel-tool-fs--media-mime-type path))
+             (error "Memory resources only support text reads"))
+           (let ((mevedel-tool-fs--resource-address address))
+             (if (file-directory-p path)
+                 (mevedel-tool-fs--read-resource-directory path address)
+               (let ((read-args (copy-sequence args)))
+                 (plist-put read-args :file_path path)
+                 (mevedel-tool-fs--read-file read-args)))))))))
+
 (defun mevedel-tool-fs--read (args)
   "Return the Read result for ARGS in a canonical handler envelope."
-  (let ((result (mevedel-tool-fs--handler-result
-                 (mevedel-tool-fs--read-file args))))
-    (mevedel-tool-fs--queue-workspace-instructions
-     (plist-get (mevedel-tool-fs--normalize-read-args args) :file_path))
-    result))
+  (let* ((address (plist-get args :file_path))
+         (attempt (mevedel-tool-fs--resource-attempt address)))
+    (if attempt
+        (let ((mevedel-tool-fs--resource-address address))
+          (mevedel-tool-fs--handler-result
+           (mevedel-tool-fs--read-resource args attempt)))
+      (let ((result (mevedel-tool-fs--handler-result
+                     (mevedel-tool-fs--read-file args))))
+        (mevedel-tool-fs--queue-workspace-instructions
+         (plist-get (mevedel-tool-fs--normalize-read-args args) :file_path))
+        result))))
 
 (defun mevedel-tool-fs--workspace-instruction-owner ()
   "Return the canonical conversation owner for the current Read."
@@ -1405,26 +1771,113 @@ and FAILURE-GUIDANCE tells the caller how to narrow a failed invocation."
   "Find files matching a glob pattern using ripgrep.
 CALLBACK receives the result envelope.  ARGS is a plist with :pattern
 and optional :path."
-  (let* ((pattern (plist-get args :pattern))
-         (path (plist-get args :path)))
+  (let* ((address (plist-get args :path))
+         (attempt (and (not mevedel-tool-fs--resource-dispatching)
+                       (mevedel-tool-fs--resource-attempt address))))
+    (if attempt
+        (mevedel-resource-execute
+         attempt
+         (lambda (path authored)
+           (if (mevedel-tool-fs--resource-search-roots path)
+             (let ((native-args (copy-sequence args))
+                     (mevedel-tool-fs--resource-address authored)
+                     (mevedel-tool-fs--resource-dispatching t))
+                 (plist-put native-args :resource-roots
+                            (mevedel-tool-fs--resource-search-roots path))
+                 (plist-put native-args :path nil)
+                 (mevedel-tool-fs--glob callback native-args))
+             (if (and (listp path) (plist-get path :virtual))
+               (funcall callback
+                        (mevedel-tool-fs--handler-result
+                         (plist-get path :result)))
+               (unless (and (stringp path) (file-exists-p path))
+                 (error "Resource %s is not available for Glob" authored))
+               (let ((native-args (copy-sequence args))
+                     (mevedel-tool-fs--resource-address authored)
+                     (mevedel-tool-fs--resource-dispatching t))
+                 (plist-put native-args :path path)
+                 (mevedel-tool-fs--glob
+                  (lambda (result)
+                    (funcall
+                     callback
+                     (mevedel-tool-fs--rewrite-resource-handler-result
+                      result path authored t)))
+                  native-args))))))
+      (let* ((pattern (plist-get args :pattern))
+             (path (plist-get args :path))
+             (resource-roots (plist-get args :resource-roots)))
     (when (string-empty-p pattern)
       (error "Pattern must not be empty"))
     (unless (executable-find "rg")
       (error "`ripgrep` not installed"))
-    (setq path (expand-file-name (or path ".")))
-    (unless (and (file-readable-p path) (file-directory-p path))
-      (error "Path %s is not a readable directory" path))
-    (if-let ((normalized
-              (and (not (mevedel-tool-fs--vcs-metadata-path-p path))
-                   (mevedel-tool-fs--normalize-rg-glob path pattern))))
+    (let* ((resource-paths
+            (and resource-roots
+                 (mapcar (lambda (root)
+                           (expand-file-name (plist-get root :path)))
+                         resource-roots)))
+           (paths (or resource-paths
+                      (list (expand-file-name (or path "."))))))
+      (unless (cl-every (lambda (root)
+                          (and (file-readable-p root)
+                               (or (null resource-roots)
+                                   (file-directory-p root))))
+                        paths)
+        (error "Path %s is not a readable directory"
+               (mevedel-tool-fs--visible-path (car paths))))
+      (if resource-roots
+          (let* ((session (bound-and-true-p mevedel--session))
+                 (rg-args
+                  (append (list "--files" "--hidden" "--no-ignore"
+                                "--color=never" "--iglob" pattern)
+                          (when (or resource-roots
+                                    mevedel-tool-fs--resource-address)
+                            (list "--null"))
+                          (mevedel-tool-fs--resource-rg-exclusions
+                           (plist-get args :path))
+                          mevedel-tool-fs--rg-vcs-exclusions
+                          paths)))
+            (require 'mevedel-execution)
+            (mevedel-execution-start-helper
+             (lambda (child-result)
+               (with-temp-buffer
+                 (let* ((settlement
+                         (mevedel-tool-fs--settle-rg-result
+                          child-result "glob" "No files found matching pattern"
+                          "Narrow :path or :pattern."))
+                        (partial-warning
+                        (plist-get settlement :partial-warning)))
+                   (let ((settled (buffer-string)))
+                   (erase-buffer)
+                   (insert
+                    (mevedel-tool-fs--rewrite-resource-search-roots
+                     settled
+                     resource-roots
+                     t))
+                   (let ((result (mevedel-tool-fs--finalize-glob-buffer)))
+                     (funcall callback
+                              (mevedel-tool-fs--handler-result
+                               (mevedel-tool-fs--prepend-partial-warning
+                                partial-warning result
+                                mevedel-tool-fs--glob-max-output-bytes))))))))
+             "mevedel-glob" (cons "rg" rg-args) paths nil
+             :session session :owner (mevedel-current-origin)
+             :timeout mevedel-tool-fs-search-timeout))
+        (let ((path (car paths)))
+          (if-let ((normalized
+                    (and (not (mevedel-tool-fs--vcs-metadata-path-p path))
+                         (mevedel-tool-fs--normalize-rg-glob path pattern))))
         (let* ((path (car normalized))
                (pattern (cdr normalized))
                (session (bound-and-true-p mevedel--session))
                (rg-args
-                (append (list "--files" "--hidden" "--no-ignore"
-                              "--color=never" "--iglob" pattern)
-                        mevedel-tool-fs--rg-vcs-exclusions
-                        (list path))))
+                        (append (list "--files" "--hidden" "--no-ignore"
+                                      "--color=never" "--iglob" pattern)
+                                (when mevedel-tool-fs--resource-address
+                                  (list "--null"))
+                                (mevedel-tool-fs--resource-rg-exclusions
+                                 (or address mevedel-tool-fs--resource-address))
+                                mevedel-tool-fs--rg-vcs-exclusions
+                                (list path))))
           (require 'mevedel-execution)
           (mevedel-execution-start-helper
            (lambda (child-result)
@@ -1446,15 +1899,50 @@ and optional :path."
            :timeout mevedel-tool-fs-search-timeout))
       (funcall callback
                (mevedel-tool-fs--handler-result
-                "No files found matching pattern")))))
+                "No files found matching pattern"))))))))))
 
 (defun mevedel-tool-fs--grep (callback args)
   "Search file contents with ripgrep.
 CALLBACK receives the result envelope.  ARGS is a plist with :pattern and
 optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
 :type, :multiline, :context, :-A, :-B, :-C."
-  (let* ((pattern (plist-get args :pattern))
+  (let* ((address (plist-get args :path))
+         (attempt (and (not mevedel-tool-fs--resource-dispatching)
+                       (mevedel-tool-fs--resource-attempt address))))
+    (if attempt
+        (mevedel-resource-execute
+         attempt
+         (lambda (path authored)
+           (if (mevedel-tool-fs--resource-search-roots path)
+               (let ((native-args (copy-sequence args))
+                     (mevedel-tool-fs--resource-address authored)
+                     (mevedel-tool-fs--resource-dispatching t))
+                 (plist-put native-args :resource-roots
+                            (mevedel-tool-fs--resource-search-roots path))
+                 (plist-put native-args :resource-address authored)
+                 (plist-put native-args :path nil)
+                 (mevedel-tool-fs--grep callback native-args))
+             (if (and (listp path) (plist-get path :virtual))
+               (funcall callback
+                        (mevedel-tool-fs--handler-result
+                         (plist-get path :result)))
+               (unless (and (stringp path) (file-exists-p path))
+                 (error "Resource %s is not available for Grep" authored))
+               (let ((native-args (copy-sequence args))
+                     (mevedel-tool-fs--resource-address authored)
+                     (mevedel-tool-fs--resource-dispatching t))
+                 (plist-put native-args :path path)
+                 (mevedel-tool-fs--grep
+                  (lambda (result)
+                    (funcall
+                     callback
+                     (mevedel-tool-fs--rewrite-resource-handler-result
+                      result path authored)))
+                  native-args))))))
+      (let* ((pattern (plist-get args :pattern))
          (path (mevedel-tool-string-arg args :path "."))
+         (resource-roots (plist-get args :resource-roots))
+         (resource-address (plist-get args :resource-address))
          (file-glob (mevedel-tool-string-arg args :glob))
          (output-mode (mevedel-tool-string-arg
                        args :output_mode "files_with_matches"))
@@ -1478,15 +1966,28 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
     (unless (executable-find "rg")
       (error "`ripgrep` not installed"))
     (setq path (expand-file-name path))
-    (unless (file-readable-p path)
-      (error "Path %s is not readable" path))
-    (let* ((search-root path)
-           (vcs-metadata-p (mevedel-tool-fs--vcs-metadata-path-p path))
-           (normalized (and (not vcs-metadata-p)
-                            file-glob
-                            (file-directory-p path)
-                            (mevedel-tool-fs--normalize-rg-glob
-                             path file-glob))))
+    (let* ((resource-paths
+            (and resource-roots
+                 (mapcar (lambda (root)
+                           (expand-file-name (plist-get root :path)))
+                         resource-roots)))
+           (search-roots (or resource-paths (list path))))
+      (unless (cl-every (lambda (root)
+                          (and (file-readable-p root)
+                               (if resource-roots
+                                   (file-directory-p root)
+                                 (file-exists-p root))))
+                        search-roots)
+        (error "Path %s is not readable"
+               (mevedel-tool-fs--visible-path (car search-roots))))
+      (let* ((vcs-metadata-p (and (null resource-roots)
+                                  (mevedel-tool-fs--vcs-metadata-path-p path)))
+             (normalized (and (null resource-roots)
+                              (not vcs-metadata-p)
+                              file-glob
+                              (file-directory-p path)
+                              (mevedel-tool-fs--normalize-rg-glob
+                               path file-glob))))
       (when vcs-metadata-p
         (setq path nil))
       (when (and path file-glob (file-directory-p path))
@@ -1521,12 +2022,17 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
           (when multiline (push "-U" rg-args) (push "--multiline-dotall" rg-args))
           (when file-glob (push (format "--glob=%s" file-glob) rg-args))
           (when file-type (push (format "--type=%s" file-type) rg-args))
+          (when (or resource-roots mevedel-tool-fs--resource-address)
+            (push "--null" rg-args))
           (setq rg-args (nreverse rg-args))
           (setq rg-args
                 (append
                  rg-args
+                 (mevedel-tool-fs--resource-rg-exclusions
+                  (or resource-address mevedel-tool-fs--resource-address))
                  mevedel-tool-fs--rg-vcs-exclusions
-                 (list "-e" pattern path)))
+                 (list "-e" pattern)
+                 (or resource-paths (list path))))
           (require 'mevedel-execution)
           (mevedel-execution-start-helper
            (lambda (child-result)
@@ -1539,6 +2045,12 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                        (plist-get settlement :partial-warning))
                       (pageable-output-p
                        (plist-get settlement :pageable-p)))
+                 (when resource-roots
+                   (let ((rewritten
+                          (mevedel-tool-fs--rewrite-resource-search-roots
+                           (buffer-string) resource-roots)))
+                     (erase-buffer)
+                     (insert rewritten)))
                  ;; Apply offset and head_limit.
                  (when (and pageable-output-p
                             (or (> offset 0) head-limit))
@@ -1567,9 +2079,9 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                     partial-warning
                     (buffer-string)
                     mevedel-tool-fs--grep-max-output-bytes))))))
-           "mevedel-grep" (cons "rg" rg-args) (list search-root) nil
+           "mevedel-grep" (cons "rg" rg-args) search-roots nil
            :session session :owner (mevedel-current-origin)
-           :timeout mevedel-tool-fs-search-timeout))))))
+           :timeout mevedel-tool-fs-search-timeout)))))))))
 
 
 ;;
@@ -1585,7 +2097,7 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
     :handler #'mevedel-tool-fs--glob
     :args ((pattern string :required
                    "The glob pattern to match files against.")
-           (path path :optional
+           (path path-or-resource :optional
                  "The directory to search in. If not specified, the session working directory will be used. Relative paths are resolved from the session working directory."))
     :async-p t
     :read-only-p t
@@ -1599,7 +2111,7 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
     :description "Read a file from the local filesystem."
     :prompt-file "tools/read.md"
     :handler #'mevedel-tool-fs--read
-    :args ((file_path path :required "Absolute or relative path to the file to read. Relative paths are resolved from the session working directory.")
+    :args ((file_path path-or-resource :required "Absolute or relative path to the file to read, or a canonical resource address. Relative paths are resolved from the session working directory.")
            (offset integer :optional
                   "Text-file line number to start reading from. Do not provide for images or PDFs.")
            (limit integer :optional
@@ -1624,7 +2136,7 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
     :handler #'mevedel-tool-fs--grep
     :args ((pattern string :required
                    "The regular expression pattern to search for in file contents.")
-           (path path :optional
+           (path path-or-resource :optional
                  "File or directory to search in (rg PATH). Defaults to the session working directory. Relative paths are resolved from the session working directory. An explicitly selected ignored path is searched.")
            (glob string :optional
                  "Explicit inclusion glob for files (e.g. \"*.el\", \"*.{ts,tsx}\") -- maps to rg --glob and may select otherwise ignored files.")

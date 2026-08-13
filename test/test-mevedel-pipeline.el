@@ -392,7 +392,7 @@
 (mevedel-deftest mevedel-pipeline--step-normalize-paths ()
 		 ,test
 		 (test)
-		 :doc "canonicalizes only `path'-typed args"
+			 :doc "canonicalizes `path' and ordinary `path-or-resource' args"
 		 (let* ((default-directory "/tmp/root/")
 			(tool (mevedel-tool--create
 			       :name "Mixed"
@@ -407,7 +407,33 @@
 				  (plist-get (plist-get updated :args) :file_path)))
 		   (should (equal "c/d"
 				  (plist-get (plist-get updated :args) :label))))
-		 :doc "leaves args untouched when nothing needs canonicalizing"
+		 :doc "leaves authored resource addresses unchanged"
+		 (let* ((default-directory "/tmp/root/")
+			(tool (mevedel-tool--create
+			       :name "Resource"
+			       :args '((file_path path-or-resource :required "Path"))))
+			(args '(:file_path "memory://root/topic.md"))
+			(ctx (list :tool tool :args args))
+			updated)
+		   (mevedel-pipeline--step-normalize-paths
+		    ctx (lambda (c) (setq updated c)) #'ignore)
+		   (should (eq args (plist-get updated :args)))
+		   (should (equal "memory://root/topic.md"
+				  (plist-get (plist-get updated :args) :file_path))))
+		 :doc "normalizes ordinary `path-or-resource' values before authorization"
+		 (let* ((default-directory "/tmp/root/")
+			(process-environment
+			 (cons "MEVEDEL_TEST_ROOT=/tmp/probe" process-environment))
+			(tool (mevedel-tool--create
+			       :name "Resource"
+			       :args '((file_path path-or-resource :required "Path"))))
+			(ctx (list :tool tool :args '(:file_path "$MEVEDEL_TEST_ROOT/x")))
+			updated)
+		   (mevedel-pipeline--step-normalize-paths
+		    ctx (lambda (c) (setq updated c)) #'ignore)
+		   (should (equal "/tmp/probe/x"
+				  (plist-get (plist-get updated :args) :file_path))))
+			 :doc "leaves args untouched when nothing needs canonicalizing"
 		 (let* ((tool (mevedel-tool--create
 			       :name "Absolute"
 			       :args '((file_path path :required "Path"))))
@@ -724,33 +750,13 @@
 			       :name "ReadTool"
 			       :read-only-p t))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 13))
-		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
-		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
-		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-normalize-paths))
-		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-permission))
-		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-capture-coverage))
-		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-handler))
-		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-repair-reminder))
-		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-render-transform))
-		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-specialist-nudges))
-		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-goal-budget-warning))
-		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 12 steps) #'mevedel-pipeline--step-attach-media-data)))
-		 :doc "write tool includes snapshot step"
-		 (let* ((tool (mevedel-tool--create
-			       :name "WriteTool"
-			       :read-only-p nil
-			       :snapshot-p t))
-			(steps (mevedel-pipeline--build-steps tool)))
 		   (should (= (length steps) 14))
 		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
 		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
 		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-normalize-paths))
-		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-permission))
-		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-capture-coverage))
-		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-snapshot))
+		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-prepare-resources))
+		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-permission))
+		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-capture-coverage))
 		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-handler))
 		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-repair-reminder))
 		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-render-transform))
@@ -759,12 +765,34 @@
 		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-goal-budget-warning))
 		   (should (eq (nth 12 steps) #'mevedel-pipeline--step-attach-render-data))
 		   (should (eq (nth 13 steps) #'mevedel-pipeline--step-attach-media-data)))
+		 :doc "write tool includes snapshot step"
+		 (let* ((tool (mevedel-tool--create
+			       :name "WriteTool"
+			       :read-only-p nil
+			       :snapshot-p t))
+			(steps (mevedel-pipeline--build-steps tool)))
+		   (should (= (length steps) 15))
+		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
+		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
+		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-normalize-paths))
+		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-prepare-resources))
+		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-permission))
+		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-capture-coverage))
+		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-snapshot))
+		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-handler))
+		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-repair-reminder))
+		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-render-transform))
+		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-specialist-nudges))
+		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-post-tool-hooks))
+		   (should (eq (nth 12 steps) #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 13 steps) #'mevedel-pipeline--step-attach-render-data))
+		   (should (eq (nth 14 steps) #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "mutating tool without snapshot declaration skips snapshot step"
 		 (let* ((tool (mevedel-tool--create
 			       :name "MkDir"
 			       :read-only-p nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 13))
+		   (should (= (length steps) 14))
 		   (should-not
 		    (memq #'mevedel-pipeline--step-snapshot steps)))
 		 :doc "includes persist step when max-result-size is set"
@@ -773,20 +801,20 @@
 			       :read-only-p t
 			       :max-result-size 1000))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 15 (length steps)))
-		   (should (eq (nth 6 steps)
-			       #'mevedel-pipeline--step-repair-reminder))
+		   (should (= 16 (length steps)))
 		   (should (eq (nth 7 steps)
+			       #'mevedel-pipeline--step-repair-reminder))
+		   (should (eq (nth 8 steps)
 			       #'mevedel-pipeline--step-render-transform))
-		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-persist))
-		   (should (eq (nth 9 steps)
-			       #'mevedel-pipeline--step-specialist-nudges))
+		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-persist))
 		   (should (eq (nth 10 steps)
+			       #'mevedel-pipeline--step-specialist-nudges))
+		   (should (eq (nth 11 steps)
 			       #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-persist))
-		   (should (eq (nth 12 steps)
-		               #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 12 steps) #'mevedel-pipeline--step-persist))
 		   (should (eq (nth 13 steps)
+			       #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 14 steps)
 			       #'mevedel-pipeline--step-attach-render-data))
 			   (should (eq (car (last steps))
 			       #'mevedel-pipeline--step-attach-media-data)))
@@ -796,7 +824,7 @@
 			       :read-only-p t
 			       :max-result-size nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 13 (length steps)))
+		   (should (= 14 (length steps)))
 		   (should-not (memq #'mevedel-pipeline--step-persist steps))
 		   (should (memq #'mevedel-pipeline--step-specialist-nudges steps))
 		   (should (memq #'mevedel-pipeline--step-attach-render-data steps))
@@ -2638,22 +2666,357 @@
 ;;
 ;;; Full pipeline
 
-(mevedel-deftest mevedel-pipeline-run-tool ()
-		 ,test
-		 (test)
-		 :doc "sync tool runs through pipeline"
-		 (let* ((tool (mevedel-tool--create
-			       :name "Echo"
-			       :handler (lambda (args)
-					  (list :result (plist-get args :msg)))
-			       :args '((msg string :required "Message"))
-			       :read-only-p t
-			       :async-p nil))
-			result)
-		   (mevedel-pipeline-run-tool
-		    tool (lambda (r) (setq result r)) '(:msg "hello"))
-		   (should (equal result "hello")))
-		 :doc "side tool lifecycle audit uses the durable target without content"
+(mevedel-deftest mevedel-pipeline-apply-patch-resources
+  (:vars* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-pipeline-patch-resource-" t)))
+           (save-path (make-temp-file "mevedel-pipeline-patch-save-" t))
+           (ordinary-path (file-name-concat root "ordinary.txt"))
+           (local-path (file-name-concat save-path "local" "notes" "new.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'test :id root :root root :name "patch-resource"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session--create
+                     :name "patch-resource" :workspace workspace
+                     :save-path save-path :working-directory root
+                     :permission-mode 'full-auto
+                     :touched-files (make-hash-table :test #'equal)))
+           (buffer (generate-new-buffer " *mevedel-pipeline-patch-resource*")))
+   :before-each
+   (with-temp-file ordinary-path (insert "old\n"))
+   :after-each
+   (progn
+     (when (buffer-live-p buffer) (kill-buffer buffer))
+     (when (file-directory-p root) (delete-directory root t))
+     (when (file-directory-p save-path) (delete-directory save-path t))))
+  ,test
+  (test)
+  :doc "Rejects malformed ApplyPatch resources before permission, handler, or post-use"
+  (let ((permission-called nil)
+        (handler-called nil)
+        (post-called nil)
+        result
+        (tool (mevedel-tool--create
+               :name "ApplyPatch"
+               :handler (lambda (_args)
+                          (setq handler-called t)
+                          '(:result "unexpected"))
+               :args '((patch string :required "Patch"))
+               :read-only-p nil
+               :async-p nil)))
+    (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+               (lambda (event _payload callback &rest _)
+                 (when (memq event '(PostToolUse PostToolUseFailure))
+                   (setq post-called t))
+                 (funcall callback nil)))
+              ((symbol-function
+                'mevedel-check-permission-async-with-metadata)
+               (lambda (_name callback &rest _)
+                 (setq permission-called t)
+                 (funcall callback '(:outcome allow :raw-outcome allow)))))
+      (with-current-buffer buffer
+        (setq-local default-directory root
+                    mevedel--workspace workspace
+                    mevedel--session session)
+        (mevedel-pipeline-run-tool
+         tool (lambda (value) (setq result value))
+         (list :patch (string-join
+                       '("*** Begin Patch"
+                         "*** Add File: local://notes/../bad.txt"
+                         "+bad"
+                         "*** End Patch")
+                       "\n")))))
+    (should (string-match-p "Error:" result))
+    (should (string-match-p "local://notes/../bad.txt" result))
+    (should-not permission-called)
+    (should-not handler-called)
+    (should-not post-called))
+
+  :doc "Prepares one mixed proposal once and keeps ordinary paths in bookkeeping"
+  (let* ((parsed-proposal nil)
+         (prepared-context nil)
+         (parse-count 0)
+         (request (mevedel-request--create
+                   :file-snapshots (make-hash-table :test #'equal)))
+         (patch (string-join
+                 '("*** Begin Patch"
+                   "*** Update File: ordinary.txt"
+                   "@@"
+                   "-old"
+                   "+new"
+                   "*** Add File: local://notes/new.txt"
+                   "+created"
+                   "*** End Patch")
+                 "\n"))
+         (original-parse (symbol-function 'mevedel-tool-patch--parse))
+         (tool (mevedel-tool--create
+                :name "ApplyPatch"
+                :handler (lambda (_args) '(:result "prepared"))
+                :args '((patch string :required "Patch"))
+                :read-only-p nil
+                :async-p t
+                :groups '(edit)
+                :snapshot-p t
+                :get-paths #'mevedel-tool-patch--get-paths)))
+    (with-current-buffer buffer
+      (setq-local default-directory root
+                  mevedel--workspace workspace
+                  mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-tool-patch--parse)
+                 (lambda (&rest args)
+                   (setq parse-count (1+ parse-count))
+                   (setq parsed-proposal (apply original-parse args)))))
+        (mevedel-pipeline--step-prepare-resources
+         (list :tool tool :args (list :patch patch)
+               :session session :workspace workspace :request request
+               :buffer buffer :default-directory root)
+         (lambda (context) (setq prepared-context context)) #'ert-fail)
+        (should (eq 'apply-patch
+                    (mevedel-pipeline--resource-operation tool)))
+        (should (= 1 parse-count))
+        (should (eq parsed-proposal
+                    (plist-get prepared-context :patch-proposal)))
+        (should (equal (list ordinary-path)
+                       (mevedel-pipeline--tool-paths
+                        tool (list :patch patch) prepared-context)))
+        (should (eq parsed-proposal
+                    (plist-get prepared-context :patch-proposal)))))
+
+  :doc "The actual ApplyPatch handler consumes the pipeline proposal once"
+  (let* ((parse-count 0)
+         (prepare-count 0)
+         (prepared nil)
+         (materialized nil)
+         (result nil)
+         (patch (string-join
+                 '("*** Begin Patch"
+                   "*** Update File: ordinary.txt"
+                   "@@"
+                   "-old"
+                   "+new"
+                   "*** Add File: local://notes/new.txt"
+                   "+created"
+                   "*** End Patch")
+                 "\n"))
+         (tool (mevedel-tool-ensure "ApplyPatch"))
+         (original-parse (symbol-function 'mevedel-tool-patch--parse))
+         (original-prepare
+          (symbol-function 'mevedel-tool-patch--prepare-resources))
+         (original-materialize
+          (symbol-function 'mevedel-tool-patch--materialize-resources)))
+    (cl-letf (((symbol-function 'mevedel-tool-patch--parse)
+               (lambda (&rest args)
+                 (setq parse-count (1+ parse-count))
+                 (apply original-parse args)))
+              ((symbol-function 'mevedel-tool-patch--prepare-resources)
+               (lambda (proposal &optional materialize)
+                 (setq prepare-count (1+ prepare-count)
+                       prepared proposal)
+                 (funcall original-prepare proposal materialize)))
+              ((symbol-function 'mevedel-tool-patch--materialize-resources)
+               (lambda (proposal)
+                 (setq materialized proposal)
+                 (funcall original-materialize proposal))))
+      (should (eq 'apply-patch (mevedel-pipeline--resource-operation tool)))
+      (with-current-buffer buffer
+        (setq-local default-directory root
+                    mevedel--workspace workspace
+                    mevedel--session session)
+        (mevedel-pipeline-run-tool
+         tool (lambda (value) (setq result value)) (list :patch patch))))
+    (should (= 1 parse-count))
+    (should (= 1 prepare-count))
+    (should (eq prepared materialized))
+    (should (string-match-p "Applied patch" result))
+    (should (equal "new\n"
+                   (with-temp-buffer
+                     (insert-file-contents ordinary-path)
+                     (buffer-string))))
+    (should (equal "created\n"
+                   (with-temp-buffer
+                     (insert-file-contents local-path)
+                     (buffer-string))))))
+
+  :doc "A malformed mixed proposal leaves both ordinary and local targets unchanged"
+  (let ((permission-called nil)
+        (handler-called nil)
+        result
+        (tool (mevedel-tool--create
+               :name "ApplyPatch"
+               :handler (lambda (callback args)
+                          (setq handler-called t)
+                          (mevedel-tool-patch-handler callback args))
+               :args '((patch string :required "Patch"))
+               :read-only-p nil
+               :async-p t
+               :groups '(edit)
+               :snapshot-p t
+               :get-paths #'mevedel-tool-patch--get-paths)))
+    (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+               (lambda (_event _payload callback &rest _)
+                 (funcall callback nil)))
+              ((symbol-function
+                'mevedel-check-permission-async-with-metadata)
+               (lambda (_name callback &rest _)
+                 (setq permission-called t)
+                 (funcall callback '(:outcome allow :raw-outcome allow)))))
+      (with-current-buffer buffer
+        (setq-local default-directory root
+                    mevedel--workspace workspace
+                    mevedel--session session)
+        (mevedel-pipeline-run-tool
+         tool (lambda (value) (setq result value))
+         (list :patch (string-join
+                       '("*** Begin Patch"
+                         "*** Update File: ordinary.txt"
+                         "@@"
+                         "-does-not-match"
+                         "+should-not-apply"
+                         "*** Add File: local://notes/new.txt"
+                         "+bad"
+                         "*** End Patch")
+                       "\n")))))
+    (should (string-match-p "Error:" result))
+    (should permission-called)
+    (should-not (file-exists-p local-path))
+    (should (equal "old\n"
+                   (with-temp-buffer
+                     (insert-file-contents ordinary-path)
+                   (buffer-string)))))
+
+  :doc "Denied local proposals do not materialize session state"
+  (let ((permission-called nil)
+        result
+        (tool (mevedel-tool--create
+               :name "ApplyPatch"
+               :handler (lambda (_callback _args)
+                          '(:result "unexpected"))
+               :args '((patch string :required "Patch"))
+               :read-only-p nil
+               :async-p t
+               :groups '(edit)
+               :snapshot-p t
+               :get-paths #'mevedel-tool-patch--get-paths)))
+    (setf (mevedel-session-save-path session) nil)
+    (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+               (lambda (_event _payload callback &rest _)
+                 (funcall callback nil)))
+              ((symbol-function
+                'mevedel-check-permission-async-with-metadata)
+               (lambda (_name callback &rest _)
+                 (setq permission-called t)
+                 (funcall callback '(:outcome deny :raw-outcome deny)))))
+      (with-current-buffer buffer
+        (setq-local default-directory root
+                    mevedel--workspace workspace
+                    mevedel--session session)
+        (mevedel-pipeline-run-tool
+         tool (lambda (value) (setq result value))
+         (list :patch (string-join
+                       '("*** Begin Patch"
+                         "*** Add File: local://notes/denied.txt"
+                         "+denied"
+                         "*** End Patch")
+                       "\n")))))
+    (should permission-called)
+    (should (string-match-p "Error:" result))
+    (should-not (mevedel-session-save-path session))
+    (should-not (file-exists-p (file-name-concat root "local" "notes"
+                                                 "denied.txt"))))
+
+  )
+
+(mevedel-deftest mevedel-pipeline-run-tool
+  ()
+  ,test
+  (test)
+
+  :doc "sync tool runs through pipeline"
+  (let* ((tool (mevedel-tool--create
+                :name "Echo"
+                :handler (lambda (args)
+                           (list :result (plist-get args :msg)))
+                :args '((msg string :required "Message"))
+                :read-only-p t
+                :async-p nil))
+         result)
+    (mevedel-pipeline-run-tool
+     tool (lambda (value) (setq result value)) '(:msg "hello"))
+    (should (equal result "hello")))
+
+  :doc "rejects malformed resource addresses before permission or post-use hooks"
+  (let* ((permission-called nil)
+         (post-called nil)
+         (handler-called nil)
+         result
+         (tool (mevedel-tool--create
+                :name "Read"
+                :handler (lambda (_args)
+                           (setq handler-called t)
+                           '(:result "unexpected"))
+                :args '((file_path path-or-resource :required "Path"))
+                :read-only-p t
+                :async-p nil)))
+    (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+               (lambda (event _payload callback &rest _)
+                 (when (memq event '(PostToolUse PostToolUseFailure))
+                   (setq post-called t))
+                 (funcall callback nil)))
+              ((symbol-function
+                'mevedel-check-permission-async-with-metadata)
+               (lambda (&rest _)
+                 (setq permission-called t))))
+      (with-temp-buffer
+        (mevedel-pipeline-run-tool
+         tool (lambda (value) (setq result value))
+         '(:file_path "local://notes/../secret"))))
+    (should (string-match-p "Error:" result))
+    (should-not permission-called)
+    (should-not post-called)
+    (should-not handler-called))
+
+  :doc "pre-tool rewrites are prepared after rewrite validation"
+  (let* ((save-path (make-temp-file "mevedel-pipeline-resource-" t))
+         (session (mevedel-session--create
+                   :name "resource"
+                   :save-path save-path))
+         (attempt-seen nil)
+         result
+         (tool (mevedel-tool--create
+                :name "Read"
+                :handler
+                (lambda (args)
+                  (setq attempt-seen
+                        (mevedel-resource-current-attempt
+                         (plist-get args :file_path)))
+                  '(:result "prepared"))
+                :args '((file_path path-or-resource :required "Path"))
+                :read-only-p t
+                :async-p nil)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat save-path "local") t)
+          (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (event _payload callback &rest _)
+                     (if (eq event 'PreToolUse)
+                         (funcall callback
+                                  '(:updated-input
+                                    (:file_path "local://rewritten.txt")))
+                       (funcall callback nil))))
+                  ((symbol-function
+                    'mevedel-check-permission-async-with-metadata)
+                   (lambda (_name callback &rest _)
+                     (funcall callback
+                              '(:outcome allow :raw-outcome allow)))))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (mevedel-pipeline-run-tool
+             tool (lambda (value) (setq result value))
+             '(:file_path "local://original.txt")))
+          (should (string-prefix-p "prepared" result))
+          (should attempt-seen)))
+      (delete-directory save-path t)))
+
+  :doc "side tool lifecycle audit uses the durable target without content"
 		 (let* ((parent (mevedel-session--create :name "parent"))
 			(side (mevedel-session--create
 			       :name "side" :audit-session parent
@@ -3750,10 +4113,17 @@
 			 ;; Preview should contain the XML wrapper
 			 (should (string-prefix-p "<persisted-output>" persisted))
 			 (should (string-suffix-p "</persisted-output>" persisted))
-			 ;; Preview should mention the size
-			 (should (string-match-p "500 chars" persisted))
-			 (should (string-match-p "Use Read(file_path=" persisted))
-			 (should (string-match-p "or Grep(pattern=" persisted))
+				 ;; Preview should mention the size
+				 (should (string-match-p "500 chars" persisted))
+				 (should (string-match-p "Use Read(file_path=" persisted))
+				 (should (string-match-p "or Grep(pattern=" persisted))
+				 (should (string-match-p
+					      "Full output saved to: artifact://TestTool-[^[:space:]]+\\.txt"
+					      persisted))
+				 (should-not (string-search save-path persisted))
+				 (should (string-match-p "Read(file_path=\"artifact://" persisted))
+				 (should (string-match-p "Grep(pattern=PATTERN, path=\"artifact://"
+							      persisted))
 			 ;; The persisted file should exist and contain the full result
 			 (let ((files (directory-files
 				       (file-name-concat save-path "tool-results")

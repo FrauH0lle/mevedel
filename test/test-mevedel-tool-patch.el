@@ -110,6 +110,134 @@
                      (insert-file-contents update-path)
                      (buffer-string))))))
 
+(mevedel-deftest mevedel-tool-patch-resource-handler
+  (:vars* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-apply-patch-resource-" t)))
+           (workspace (mevedel-workspace--create
+                       :type 'test :id root :root root :name "patch-resource"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session--create
+                     :name "patch-resource" :workspace workspace
+                     :working-directory root :permission-mode 'edits
+                     :touched-files (make-hash-table :test #'equal)))
+           (buffer (generate-new-buffer " *mevedel-apply-patch-resource*"))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Add File: local://notes/new.txt"
+                     "+created"
+                     "*** End Patch")
+                   "\n"))
+           result)
+   :after-each
+   (progn
+     (when (buffer-live-p buffer) (kill-buffer buffer))
+     (when (file-directory-p root) (delete-directory root t))))
+  ,test
+  (test)
+  :doc "Local resources materialize a durable session on first write"
+  (progn
+    (with-current-buffer buffer
+      (setq-local default-directory root
+                  mevedel--workspace workspace
+                  mevedel--session session)
+      (mevedel-tool-patch-handler
+       (lambda (value) (setq result value))
+       (list :patch patch)))
+    (let* ((save-path (mevedel-session-save-path session))
+           (local-path (file-name-concat save-path "local" "notes" "new.txt")))
+      (should save-path)
+      (should (equal "created\n"
+                     (with-temp-buffer
+                       (insert-file-contents local-path)
+                       (buffer-string))))
+      (should (string-match-p "local://notes/new.txt"
+                              (plist-get result :result)))
+      (should (= 0 (hash-table-count (mevedel-session-touched-files session)))))))
+
+(mevedel-deftest mevedel-tool-patch-mixed-move-locality
+  (:doc "Tracks only the ordinary operand of mixed local moves")
+  ,test
+  (test)
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-apply-patch-mixed-move-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root :name "mixed-move"
+                     :file-cache (mevedel-test-file-cache-create)))
+         (session (mevedel-session--create
+                   :name "mixed-move" :workspace workspace
+                   :working-directory root :permission-mode 'edits
+                   :touched-files (make-hash-table :test #'equal)))
+         (buffer (generate-new-buffer " *mevedel-apply-patch-mixed-move*"))
+         (local-source "local://notes/from-local.txt")
+         (local-target "local://notes/to-local.txt")
+         (ordinary-source (file-name-concat root "from-ordinary.txt"))
+         (ordinary-target (file-name-concat root "to-ordinary.txt"))
+         result)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local default-directory root
+                        mevedel--workspace workspace
+                        mevedel--session session)
+            (mevedel-session-persistence--shallow-ensure-files
+             session buffer))
+          (let ((local-root (file-name-concat
+                             (mevedel-session-save-path session) "local")))
+            (make-directory (file-name-concat local-root "notes") t)
+            (with-temp-file (file-name-concat local-root "notes" "from-local.txt")
+              (insert "local source\n")))
+          (with-current-buffer buffer
+            (let ((mevedel-pipeline--auto-apply-edit-p t))
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch
+                     (string-join
+                      (list "*** Begin Patch"
+                            (concat "*** Update File: " local-source)
+                            (concat "*** Move to: "
+                                    (file-name-nondirectory ordinary-target))
+                            "*** End Patch")
+                      "\n")))
+              (should result))
+            (should (file-exists-p ordinary-target))
+            (should-not (file-exists-p
+                         (file-name-concat
+                          (mevedel-session-save-path session) "local"
+                          "notes" "from-local.txt")))
+            (should (gethash ordinary-target
+                             (mevedel-session-touched-files session)))
+            (should-not (gethash
+                         (file-name-concat
+                          (mevedel-session-save-path session) "local"
+                          "notes" "from-local.txt")
+                         (mevedel-session-touched-files session)))
+            (with-temp-file ordinary-source (insert "ordinary source\n"))
+            (mevedel-tool-patch-handler
+             (lambda (value) (setq result value))
+             (list :patch
+                   (string-join
+                    (list "*** Begin Patch"
+                          (concat "*** Update File: "
+                                  (file-name-nondirectory ordinary-source))
+                          (concat "*** Move to: " local-target)
+                          "*** End Patch")
+                    "\n")))
+            (should result)
+            (should-not (file-exists-p ordinary-source))
+            (should (file-exists-p
+                     (file-name-concat
+                      (mevedel-session-save-path session) "local"
+                      "notes" "to-local.txt")))
+            (should (gethash ordinary-source
+                             (mevedel-session-touched-files session)))
+            (should-not (gethash
+                         (file-name-concat
+                          (mevedel-session-save-path session) "local"
+                          "notes" "to-local.txt")
+                         (mevedel-session-touched-files session)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (file-directory-p root) (delete-directory root t)))))
+
 (mevedel-deftest mevedel-tool-patch--annotate-line-numbers
   (:doc "Computes old and new start lines against the captured baseline")
   ,test
@@ -793,6 +921,11 @@
     (should (= 2 (length
                   (mevedel-tool-patch--get-paths
                    '(:patch "*** Begin Patch\n*** Update File: a\n*** Move to: b\n*** End Patch")))))))
+  :doc "Omits local operands but keeps ordinary paths in mixed proposals"
+  (let ((default-directory "/tmp/"))
+    (should (equal '("/tmp/ordinary.txt")
+                   (mevedel-tool-patch--get-paths
+                    '(:patch "*** Begin Patch\n*** Add File: local://scratch.txt\n+x\n*** Delete File: ordinary.txt\n*** End Patch")))))
 
 (mevedel-deftest mevedel-tool-patch--render
   (:doc "Produces one collapsible aggregate with per-file diff blocks") ,test (test)

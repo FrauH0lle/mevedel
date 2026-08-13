@@ -418,7 +418,9 @@
            :role "default" :configuration configuration :activity 'idle
            :conversation-location "agents/task.chat.org"
            :hook-context-pending
-           '((:event UserPromptSubmit :body "persist me")))))
+           '((:event UserPromptSubmit :body "persist me"))
+           :settled-result "persist me too"
+           :settled-outcome 'completed)))
     (setf (mevedel-session-agent-registry source)
           (list (cons "/root/task" record)))
     (let* ((raw (mevedel-agent-persistence-serialize-registry source))
@@ -441,6 +443,10 @@
       (should
        (equal '((:event UserPromptSubmit :body "persist me"))
               (mevedel-agent-record-hook-context-pending result)))
+      (should (equal "persist me too"
+                     (mevedel-agent-record-settled-result result)))
+      (should (eq 'completed
+                  (mevedel-agent-record-settled-outcome result)))
       (should (gptel-backend-p (alist-get 'gptel-backend locals)))
       (should (gptel-tool-p (car (alist-get 'gptel-tools locals))))
       (should (equal '("/tmp/plain.el" ("/tmp/durable.el"))

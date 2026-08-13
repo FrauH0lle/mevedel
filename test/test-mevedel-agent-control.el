@@ -416,9 +416,21 @@
     (should (= 5 (length (mevedel-session-messages session))))
     (should (cl-every
              (lambda (message)
-               (and (eq 'RESULT (plist-get message :type))
-                    (eq 'interrupted (plist-get message :outcome))))
+               (let ((record (cdr (assoc (plist-get message :sender)
+                                         (mevedel-session-agent-registry
+                                          session)))))
+                 (and (eq 'RESULT (plist-get message :type))
+                      (eq 'interrupted (plist-get message :outcome))
+                      (equal (mevedel-agent-record-settled-result record)
+                             (plist-get message :payload)))))
              (mevedel-session-messages session)))
+    (should (cl-every
+             (lambda (entry)
+               (let ((record (cdr entry)))
+                 (and (eq 'interrupted
+                          (mevedel-agent-record-settled-outcome record))
+                      (stringp (mevedel-agent-record-settled-result record)))))
+             (mevedel-session-agent-registry session)))
     (should (zerop (mevedel-agent-control-recover-interrupted session)))
     (should (= 5 (length (mevedel-session-messages session))))))
 
@@ -650,7 +662,11 @@
       (should-not (mevedel-agent-record-blockers record))
       (should (eq 'RESULT (plist-get result :type)))
       (should (eq 'errored (plist-get result :outcome)))
-      (should (equal "Provider failed" (plist-get result :payload)))))
+      (should (equal "Provider failed" (plist-get result :payload)))
+      (should (equal "Provider failed"
+                     (mevedel-agent-record-settled-result record)))
+      (should (eq 'errored
+                  (mevedel-agent-record-settled-outcome record)))))
 
   :doc "settles a workflow-owned turn once through its RESULT handler"
   (let* ((session (mevedel-agent-control-test--session))
@@ -668,9 +684,64 @@
     (should (= 1 (length results)))
     (should (eq 'completed (plist-get (car results) :outcome)))
     (should (equal "review result" (plist-get (car results) :payload)))
+    (should (equal "review result"
+                   (mevedel-agent-record-settled-result record)))
+    (should (eq 'completed
+                (mevedel-agent-record-settled-outcome record)))
     (should (eq 'idle (mevedel-agent-record-activity record)))
     (should-not (mevedel-agent-record-invocation record))
     (should-not (mevedel-session-messages session))))
+
+  :doc "retains a complete oversized response while mailbox delivery is bounded"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation (mevedel-agent-invocation-create
+                      (mevedel-agent-default)))
+         (payload (concat "response-head\n"
+                          (make-string 40000 ?x)
+                          "\nresponse-tail"))
+         (record (mevedel-agent-record--create
+                  :path "/root/large"
+                  :parent-path "/root"
+                  :activity 'running
+                  :invocation invocation)))
+    (setf (mevedel-agent-invocation-transcript-status invocation) 'completed)
+    (mevedel-agent-control--settle session record invocation payload)
+    (let* ((message (car (mevedel-session-messages session)))
+           (delivered (plist-get message :payload))
+           (retained (mevedel-agent-control-settled-result record)))
+      (should (equal payload
+                     (mevedel-agent-record-settled-result record)))
+      (should (eq 'completed
+                  (mevedel-agent-record-settled-outcome record)))
+      (should (equal payload (plist-get retained :payload)))
+      (should (eq 'completed (plist-get retained :outcome)))
+      (should (< (length delivered) (length payload)))
+      (should (<= (length delivered)
+                  mevedel-agent-control--result-limit))
+      (should-not (equal payload delivered))))
+
+(mevedel-deftest mevedel-agent-control-settled-result ()
+  ,test
+  (test)
+  :doc "hides a retained result while its agent turn is active"
+  (let ((record
+         (mevedel-agent-record--create
+          :path "/root/active"
+          :activity 'running
+          :settled-result "old result"
+          :settled-outcome 'completed)))
+    (should-not (mevedel-agent-control-settled-result record)))
+  :doc "returns a retained result and terminal outcome when idle"
+  (let* ((record
+          (mevedel-agent-record--create
+           :path "/root/idle"
+           :activity 'idle
+           :settled-result "complete result"
+           :settled-outcome 'completed))
+         (result (mevedel-agent-control-settled-result record)))
+    (should (equal '(:outcome completed :payload "complete result") result))
+    (should (equal "complete result"
+                   (mevedel-agent-record-settled-result record)))))
 
 (mevedel-deftest mevedel-agent-control-interrupt ()
   ,test
@@ -770,6 +841,11 @@
             (should (eq 'interrupted (plist-get result :outcome)))
             (should (string-match-p "useful work"
                                     (plist-get result :payload))))
+          (should (eq 'interrupted
+                      (mevedel-agent-record-settled-outcome record)))
+          (should (equal (plist-get (car (mevedel-session-messages session))
+                                    :payload)
+                         (mevedel-agent-record-settled-result record)))
           (should (eq 'idle (mevedel-agent-record-activity record)))
           (should-not (mevedel-agent-record-invocation record))
           (should (eq 'running
@@ -957,6 +1033,8 @@
            :configuration (mevedel-agent-control-test--configuration)
            :activity 'idle
            :conversation-buffer buffer
+           :settled-result "previous result"
+           :settled-outcome 'completed
            :conversation-location "agents/worker.chat.org"))
          (persisted 0))
     (setf (mevedel-session-agent-registry session)
@@ -971,8 +1049,48 @@
             session "/root/worker" "Try the next turn."))
           (should (eq 'idle (mevedel-agent-record-activity record)))
           (should-not (mevedel-agent-record-invocation record))
+          (should-not (mevedel-agent-control-settled-result record))
           (should (= 1 persisted)))
       (kill-buffer buffer)))
+
+  :doc "clears the previous result before a retained followup becomes active"
+  (let* ((session (mevedel-agent-control-test--session))
+         (buffer (generate-new-buffer " *agent-control-clears-result*"))
+         (record
+          (mevedel-agent-record--create
+           :id "worker--retained"
+           :path "/root/worker"
+           :parent-path "/root"
+           :role "worker"
+           :configuration (mevedel-agent-control-test--configuration)
+           :activity 'idle
+           :conversation-buffer buffer
+           :conversation-location "agents/worker.chat.org"
+           :settled-result "previous result"
+           :settled-outcome 'completed)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record)))
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-agent-runtime-dispatch)
+              (lambda (_agent _description _message &rest keys)
+                (should-not (mevedel-agent-control-settled-result record))
+                (let ((invocation
+                       (mevedel-agent-invocation--create
+                        :agent-id "worker--retained"
+                        :path "/root/worker"
+                        :parent-session session
+                        :buffer buffer)))
+                  (setf (mevedel-agent-invocation-frozen-configuration
+                         invocation)
+                        (plist-get keys :frozen-configuration))
+                  (funcall (plist-get keys :on-invocation) invocation)
+                  t))))
+          (mevedel-agent-control-followup
+           session "/root/worker" "Start a fresh turn."))
+      (kill-buffer buffer))
+    (should (eq 'running (mevedel-agent-record-activity record)))
+    (should-not (mevedel-agent-control-settled-result record)))
 
   :doc "attributes peer steering while returning results to the spawn parent"
   (let* ((session (mevedel-agent-control-test--session))

@@ -99,6 +99,16 @@
 (declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
                   (tool callback args))
 
+;; `mevedel-resource'
+(declare-function mevedel-resource-encode-component
+                  "mevedel-resource" (value))
+(declare-function mevedel-resource-execute
+                  "mevedel-resource" (attempt &optional executor options))
+(declare-function mevedel-resource-prepare
+                  "mevedel-resource" (operation address context))
+(declare-function mevedel-resource-skill-digest
+                  "mevedel-resource" (source-file))
+
 ;; `mevedel-structs'
 (declare-function mevedel-current-origin "mevedel-structs" ())
 (declare-function mevedel-request-attached-skill-records
@@ -2235,6 +2245,26 @@ sources are checked before the submission leaves the composer."
              result)))))
     result))
 
+(defun mevedel-skills--bound-source-available-p (name source-file session)
+  "Return non-nil when SOURCE-FILE still resolves as skill NAME.
+The resource resolver checks the exact source identity and current enabled
+state; the executor callback intentionally does not read the skill body."
+  (require 'mevedel-resource)
+  (condition-case nil
+      (let* ((address
+              (format "skill://%s@%s"
+                      (mevedel-resource-encode-component name)
+                      (mevedel-resource-skill-digest source-file)))
+             (attempt (mevedel-resource-prepare
+                       'read address (list :session session))))
+        (mevedel-resource-execute
+         attempt
+         (lambda (path _address)
+           (and (file-regular-p path)
+                (file-readable-p path))))
+    )
+    (error nil)))
+
 (defun mevedel-skills-resolve-user-mention-outcome
     (text session start end name)
   "Return the resolution outcome for user skill NAME at START..END in TEXT.
@@ -2254,7 +2284,10 @@ Unknown unbound names are successful with a nil skill."
          (skill
           (cond
            (binding
-            (mevedel-session-get-skill-by-source session source-file))
+            (and (mevedel-skills--bound-source-available-p
+                  name source-file session)
+                 (mevedel-session-get-skill-by-source
+                  session source-file)))
            (bound nil)
            (t (mevedel-session-get-skill session name)))))
     (cond

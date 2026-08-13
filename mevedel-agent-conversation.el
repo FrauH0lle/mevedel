@@ -113,6 +113,13 @@
 (declare-function mevedel-session-persistence--write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
 
+;; `mevedel-transcript'
+(declare-function mevedel-transcript-project-evidence
+                  "mevedel-transcript"
+                  (ranges &rest keys))
+(declare-function mevedel-transcript-segments
+                  "mevedel-transcript" (start end))
+
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-install-activation-hook
                   "mevedel-skills-prompt" ())
@@ -703,6 +710,41 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                  (string-trim
                   (buffer-substring-no-properties start end))))
             (unless (string-empty-p text) text)))))))
+
+(defun mevedel-agent-conversation-project-history (buffer &optional session)
+  "Return concise redacted Markdown projected from live BUFFER.
+
+Only canonical user, assistant, and tool transcript segments are projected.
+Transcript classification and tool-result projection remain owned by
+`mevedel-transcript'; ignored control text, provider metadata, Org scaffolding,
+and private media paths therefore do not become history content."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (require 'mevedel-transcript)
+      (let ((ranges
+             (cl-loop for segment in
+                      (mevedel-transcript-segments (point-min) (point-max))
+                      when (memq (car segment) '(user response tool))
+                      collect (cons (cadr segment) (caddr segment)))))
+        (replace-regexp-in-string
+         "; path [^]]+" ""
+         (substring-no-properties
+          (mevedel-transcript-project-evidence
+           ranges
+           :tool-results-dir
+           (and session
+                (mevedel-session-save-path session)
+                (file-name-concat (mevedel-session-save-path session)
+                                  "tool-results")))))))))
+
+(defun mevedel-agent-conversation-history-markdown (invocation)
+  "Return concise Markdown for retained agent INVOCATION's conversation.
+
+Return nil when INVOCATION has no live conversation buffer."
+  (when-let* (((mevedel-agent-invocation-p invocation))
+              (buffer (mevedel-agent-invocation-buffer invocation)))
+    (mevedel-agent-conversation-project-history
+     buffer (mevedel-agent-invocation-parent-session invocation))))
 
 (defun mevedel-agent-conversation--cancel-save (invocation)
   "Cancel INVOCATION's pending debounced save."

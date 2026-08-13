@@ -12,6 +12,7 @@
 (require 'mevedel-presets)
 (require 'mevedel-skills-ui)
 (require 'mevedel-reminders)
+(require 'mevedel-resource)
 (require 'mevedel-view)
 (require 'mevedel-view-history)
 (require 'mevedel-chat)
@@ -6826,9 +6827,28 @@ The result is a plist whose :tempdir owns every created file."
                     :accepted-path "plans/accepted.md")))
           (with-current-buffer staging-buffer
             (setq-local kill-buffer-hook nil))
+          (let ((parent-local
+                 (file-name-concat
+                  (plist-get fixture :parent-path) "local" "notes.md")))
+            (make-directory (file-name-directory parent-local) t)
+            (write-region "parent local\n" nil parent-local nil 'silent))
           (mevedel-session-persistence--stage-fork
            child buf staging-buffer (plist-get fixture :parent-path)
            staging-path 2 2)
+          (let ((parent-local
+                 (file-name-concat
+                  (plist-get fixture :parent-path) "local" "notes.md"))
+                (child-local
+                 (file-name-concat staging-path "local" "notes.md")))
+            (should (equal "parent local\n"
+                           (with-temp-buffer
+                             (insert-file-contents child-local)
+                             (buffer-string))))
+            (write-region "child local\n" nil child-local nil 'silent)
+            (should (equal "parent local\n"
+                           (with-temp-buffer
+                             (insert-file-contents parent-local)
+                             (buffer-string)))))
           (should (file-exists-p
                    (mevedel-session-persistence--segment-path
                     staging-path 1)))
@@ -7551,14 +7571,16 @@ The result is a plist whose :tempdir owns every created file."
                                         :exit-code)))
                   (let ((artifact
                          (plist-get (plist-get terminal :facts) :output-path)))
-                    (should (string-prefix-p
-                             (mevedel-session-save-path session) artifact))
-                    (should (file-exists-p artifact))
+                    (should (string-prefix-p "artifact://" artifact))
                     (should
                      (equal "beforeafter"
-                            (with-temp-buffer
-                              (insert-file-contents artifact)
-                              (buffer-string)))))))
+                            (mevedel-resource-execute
+                             (mevedel-resource-prepare
+                              'read artifact (list :session session))
+                             (lambda (path _address)
+                               (with-temp-buffer
+                                 (insert-file-contents path)
+                                 (buffer-string)))))))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
       (delete-directory tempdir t)

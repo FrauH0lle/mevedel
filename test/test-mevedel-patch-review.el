@@ -726,6 +726,65 @@
         (when (buffer-live-p visited) (kill-buffer visited))
         (when (file-directory-p root) (delete-directory root t))))))
 
+(mevedel-deftest mevedel-patch-review-local-visit
+  (:doc "Review displays authored local addresses and visits resolved targets")
+  ,test
+  (test)
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-local-visit-" t)))
+           (workspace (mevedel-workspace--create
+                       :type 'test :id root :root root :name "local-visit"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session--create
+                     :name "local-visit" :workspace workspace
+                     :working-directory root :permission-mode 'ask))
+           (address "local://notes/one.txt")
+           (patch (string-join
+                   (list "*** Begin Patch"
+                         (concat "*** Update File: " address)
+                         "@@ two"
+                         "-old"
+                         "+new"
+                         "*** End Patch")
+                   "\n"))
+           result visited local-path)
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-session-persistence--shallow-ensure-files
+               session data-buf)
+              (setq local-path
+                    (file-name-concat (mevedel-session-save-path session)
+                                      "local" "notes" "one.txt"))
+              (make-directory (file-name-directory local-path) t)
+              (with-temp-file local-path
+                (insert "one\ntwo\nold\nfour\n"))
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            (should-not result)
+            (with-current-buffer view-buf
+              (let ((text (buffer-substring-no-properties
+                           (point-min) mevedel-view--input-marker)))
+                (should (string-search address text))
+                (should-not (string-search local-path text)))
+              (goto-char (point-min))
+              (search-forward address)
+              (mevedel-patch-review-toggle-fold)
+              (goto-char (point-min))
+              (search-forward "@@ two")
+              (mevedel-patch-review-visit)
+              (setq visited (current-buffer)))
+            (should (equal local-path (buffer-file-name visited)))
+            (should (= 3 (with-current-buffer visited
+                           (line-number-at-pos))))
+        (when (buffer-live-p visited) (kill-buffer visited))
+        (when (file-directory-p root) (delete-directory root t)))))))
+
 (mevedel-deftest mevedel-patch-review-next-row
   (:doc "n and p move between file and hunk rows")
   ,test

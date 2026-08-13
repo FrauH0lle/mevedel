@@ -171,6 +171,23 @@ running. `/review`, `/verify`, and fork-skill workflows may keep their owning
 interaction open until a leaf result arrives, but that awaiting behavior does
 not create another agent execution mode.
 
+## Agent resource results
+
+Each retained registry record keeps the complete latest settled payload and
+its terminal outcome (`completed`, `errored`, or `interrupted`) separately from
+the bounded inline `RESULT` mailbox preview. The complete payload is recorded
+before the preview is published, including recovery settlements. A new or
+follow-up turn clears the previous settled result before it becomes active;
+active agents therefore expose no streaming or stale result and are reported
+as not ready. A later idle turn replaces the retained result atomically.
+
+`agent://root/PATH` reads that complete settled payload and
+`history://root/PATH` reads the same retained identity's transcript through
+the shared read-only resource-address resolver. Neither address changes the
+conversation, mailbox, transcript, or settlement state. The canonical path,
+not the registry's opaque storage identity, is the only addressable identity.
+See [`address-to-resource.md`](address-to-resource.md#agent-and-history).
+
 ## Interrupting retained agent turns
 
 `InterruptAgent(target)` resolves only canonical or relative retained paths. It
@@ -281,8 +298,10 @@ hydration; transcript storage location never becomes tool cwd. The
 sidecar persists an explicit registry record for its canonical and parent
 paths, role and frozen configuration, activity, unread mailbox, pending
 conversation-local hook context, conversation location, and internal storage
-identity. The canonical path is the only
-model-facing address; storage identities never enter collaboration tools.
+identity, plus the latest settled payload and terminal outcome when present.
+The canonical path is the only model-facing address; storage identities never
+enter collaboration tools or resource addresses. The mailbox remains a
+bounded delivery preview rather than the source of truth for an agent result.
 The frozen configuration is authoritative for the agent's system prompt, so
 agent transcripts omit gptel's redundant expanded `GPTEL_SYSTEM` property
 while retaining `GPTEL_BOUNDS` and the remaining conversation metadata.

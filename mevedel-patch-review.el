@@ -50,6 +50,10 @@
                   "mevedel-tool-patch" (lines first-line))
 (declare-function mevedel-tool-patch--planned-changes
                   "mevedel-tool-patch" (proposal))
+(declare-function mevedel-tool-patch--physical-path
+                  "mevedel-tool-patch" (operation))
+(declare-function mevedel-tool-patch--resource-address-p
+                  "mevedel-tool-patch" (value))
 (declare-function mevedel-tool-patch--proposal-stats
                   "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch--result
@@ -268,9 +272,12 @@ OPERATION owns TARGET and is retained as interaction metadata."
                              'mevedel-view-tool-diff-removed)))
              (sep () (propertize " · " 'font-lock-face 'shadow))
              (disp (path)
-               (if-let* ((root (plist-get proposal :root)))
-                   (file-relative-name path root)
-                 path))
+               (if (or (mevedel-tool-patch--resource-address-p path)
+                       (not (file-name-absolute-p path)))
+                   path
+                 (if-let* ((root (plist-get proposal :root)))
+                     (file-relative-name path root)
+                   path)))
              (path-label (rel dim-p)
                (let ((dir (file-name-directory rel))
                      (base (file-name-nondirectory rel)))
@@ -369,11 +376,11 @@ OPERATION owns TARGET and is retained as interaction metadata."
                     (propertize (mevedel-tool-patch--status operation)
                                 'font-lock-face
                                 (mevedel-tool-patch--kind-face kind)))
-                   (source (or (plist-get operation :path)
-                               (plist-get operation :rel-path)))
+                   (source (or (plist-get operation :rel-path)
+                               (plist-get operation :path)))
                    (label
-                    (if-let* ((move (or (plist-get operation :move-path)
-                                        (plist-get operation :move-rel-path))))
+                    (if-let* ((move (or (plist-get operation :move-rel-path)
+                                        (plist-get operation :move-path))))
                         (concat (path-label (disp source) dim-p)
                                 (propertize " → " 'font-lock-face 'shadow)
                                 (path-label (disp move) dim-p))
@@ -682,7 +689,7 @@ On an Update file row this toggles every hunk in the file at once."
       (user-error "No patch change at point"))
     (when (eq (plist-get operation :kind) 'add)
       (user-error "File is not created until the patch is applied"))
-    (let ((path (plist-get operation :path)))
+    (let ((path (mevedel-tool-patch--physical-path operation)))
       (unless (file-exists-p path)
         (user-error "File does not exist: %s" path))
       (find-file-other-window path)

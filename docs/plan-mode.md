@@ -91,12 +91,15 @@ uses the shared `summarization` workload.
 ## Tool boundary
 
 Plan requests omit `ApplyPatch`. The pipeline denies it tree-wide as a
-backstop, including for retained agents and already
-realized requests. Bash remains available only when the canonical analysis and
-policy classify the invocation as read-only. Permission modes and explicit
-allow rules cannot widen this workflow boundary. `Eval` is also unavailable:
+backstop, including for `local://`, retained agents, and already realized
+requests. Bash remains available only when the canonical analysis and policy
+classify the invocation as read-only. Permission modes and explicit allow
+rules cannot widen this workflow boundary. `Eval` is also unavailable:
 arbitrary Emacs Lisp cannot be classified reliably as read-only, including in
-a child process. Other tools retain the ordinary permission policy.
+a child process. Resource-address recognition does not reopen mutation or
+materialize local state; completion remains side-effect free. Other tools
+retain the ordinary permission policy. See
+[`address-to-resource.md`](address-to-resource.md#execution-target-and-plan-mode).
 
 ## Proposal interaction
 

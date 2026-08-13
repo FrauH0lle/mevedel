@@ -10,6 +10,7 @@
 (require 'cl-lib)
 (require 'mevedel-agents)
 (require 'mevedel-execution)
+(require 'mevedel-resource)
 (require 'mevedel-sandbox)
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
@@ -910,6 +911,79 @@
       (setq-default mevedel-protected-paths original-policy)
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-execution--artifact-address
+  (:doc "publishes logical addresses and hides non-session artifact paths")
+  ,test
+  (test)
+  (let* ((root (make-temp-file "mevedel-execution-address-" t))
+         (session (test-mevedel-execution--session root))
+         (artifact-directory
+          (file-name-concat (mevedel-session-save-path session)
+                            "tool-results" "executions"))
+         (mevedel-sandbox-mode 'off)
+         (temporary-artifact-directory (file-name-concat root "artifacts"))
+         initial final id yielded foreground pending-final)
+    (unwind-protect
+        (progn
+          (mevedel-execution-start-bash
+           (lambda (value) (setq initial value))
+           :session session :owner "main" :owner-context session
+           :command '("sh" "-c" "printf first; sleep .2; printf second")
+           :tool-args '(:command "printf first; sleep .2; printf second")
+           :workdir root :writable-roots (list root)
+           :artifact-directory artifact-directory :yield-time-ms 10)
+          (test-mevedel-execution--wait (lambda () initial))
+          (setq id (plist-get (plist-get initial :facts) :execution-id))
+          (let ((address (plist-get (plist-get initial :facts) :output-path)))
+            (should (string-prefix-p "artifact://executions/" address))
+            (should-not (file-name-absolute-p address))
+            (should-not (string-match-p (regexp-quote root) address)))
+          (setq final (test-mevedel-execution--observe session id))
+          (should (equal (plist-get (plist-get initial :facts) :output-path)
+                         (plist-get (plist-get final :facts) :output-path)))
+          (should (string-match-p "first" (plist-get initial :output)))
+          (should (string-match-p "second" (plist-get final :output)))
+          (mevedel-execution-start-bash
+           (lambda (value) (setq yielded value))
+           :session session :owner "main" :owner-context session
+           :command '("sh" "-c" "sleep .2; printf yielded")
+           :tool-args '(:command "sleep .2; printf yielded")
+           :workdir root :writable-roots (list root)
+           :artifact-directory temporary-artifact-directory :yield-time-ms 10)
+          (test-mevedel-execution--wait (lambda () yielded))
+          (should-not (plist-get (plist-get yielded :facts) :output-path))
+          (mevedel-execution-start-bash
+           (lambda (value) (setq foreground value))
+           :session session :owner "main" :owner-context session
+           :command '("sh" "-c" "printf foreground")
+           :tool-args '(:command "printf foreground")
+           :workdir root :writable-roots (list root)
+           :artifact-directory temporary-artifact-directory
+           :yield-time-ms nil)
+          (test-mevedel-execution--wait (lambda () foreground))
+          (should-not (plist-get (plist-get foreground :facts) :output-path))
+          (mevedel-execution-start-bash
+           (lambda (value) (setq pending-final value))
+           :session session :owner "main" :owner-context session
+           :command '("sh" "-c" "sleep .2; printf pending")
+           :tool-args '(:command "sleep .2; printf pending")
+           :workdir root :writable-roots (list root)
+           :artifact-directory temporary-artifact-directory
+           :yield-time-ms nil)
+          (let* ((state (mevedel-session-execution-state session))
+                 (pending-id
+                  (format "exec-%06d"
+                          (mevedel-execution--state-next-id state)))
+                 (record (gethash pending-id
+                                  (mevedel-execution--state-records state)))
+                 (spool (mevedel-execution--record-spool-path record)))
+            (should (string-match-p "\.mevedel-pending-executions"
+                                    spool))
+            (should-not (mevedel-resource-artifact-address spool session)))
+          (test-mevedel-execution--wait (lambda () pending-final)))
       (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 

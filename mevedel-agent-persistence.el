@@ -211,6 +211,17 @@ callers reverse it only when delivering the mailbox as FIFO."
          (not (gethash path seen-paths))
          (not (gethash id seen-ids)))))
 
+(defun mevedel-agent-persistence--settled-result-p
+    (payload outcome activity)
+  "Return non-nil when settled PAYLOAD and OUTCOME fit ACTIVITY.
+
+Active records cannot retain a previous settled result.  Idle records may
+have no result yet, but a stored result always includes both fields."
+  (or (and (null payload) (null outcome))
+      (and (eq activity 'idle)
+           (stringp payload)
+           (memq outcome '(completed errored interrupted)))))
+
 (defun mevedel-agent-persistence--serialize-record
     (entry seen-paths seen-ids)
   "Encode registry ENTRY, rejecting duplicates in SEEN-PATHS and SEEN-IDS."
@@ -224,13 +235,19 @@ callers reverse it only when delivering the mailbox as FIFO."
          (location
           (and id (mevedel-agent-record-conversation-location record)))
          (hook-context
-          (and id (mevedel-agent-record-hook-context-pending record))))
+          (and id (mevedel-agent-record-hook-context-pending record)))
+         (settled-result
+          (and id (mevedel-agent-record-settled-result record)))
+         (settled-outcome
+          (and id (mevedel-agent-record-settled-outcome record))))
     (unless
         (and (equal (car entry) path)
              (mevedel-agent-persistence--identity-p
               id path parent role activity location seen-paths seen-ids)
              (proper-list-p hook-context)
-             (mevedel--plain-data-p hook-context))
+             (mevedel--plain-data-p hook-context)
+             (mevedel-agent-persistence--settled-result-p
+              settled-result settled-outcome activity))
       (error "Invalid live agent registry entry"))
     (let ((encoded
            (list :id id
@@ -241,6 +258,9 @@ callers reverse it only when delivering the mailbox as FIFO."
                  (mevedel-agent-persistence--encode-configuration
                   (mevedel-agent-record-configuration record))
                  :activity activity
+                 :settled-result (and settled-result
+                                      (copy-sequence settled-result))
+                 :settled-outcome settled-outcome
                  :conversation-location location
                  :hook-context-pending (copy-tree hook-context)
                  :mailbox
@@ -378,11 +398,15 @@ succeed after silently losing an addressable agent."
          (role (and id (plist-get entry :role)))
          (activity (and id (plist-get entry :activity)))
          (location (and id (plist-get entry :conversation-location)))
-         (hook-context (and id (plist-get entry :hook-context-pending))))
+         (hook-context (and id (plist-get entry :hook-context-pending)))
+         (settled-result (and id (plist-get entry :settled-result)))
+         (settled-outcome (and id (plist-get entry :settled-outcome))))
     (unless (and (mevedel-agent-persistence--identity-p
                   id path parent role activity location seen-paths seen-ids)
                  (proper-list-p hook-context)
-                 (mevedel--plain-data-p hook-context))
+                 (mevedel--plain-data-p hook-context)
+                 (mevedel-agent-persistence--settled-result-p
+                  settled-result settled-outcome activity))
       (mevedel-agent-persistence--invalid
        "Invalid persisted agent identity"))
     (let ((record
@@ -395,6 +419,9 @@ succeed after silently losing an addressable agent."
             (mevedel-agent-persistence--decode-configuration
              (plist-get entry :configuration) role)
             :activity activity
+            :settled-result (and settled-result
+                                 (copy-sequence settled-result))
+            :settled-outcome settled-outcome
             :conversation-location location
             :hook-context-pending (copy-tree hook-context)
             :mailbox

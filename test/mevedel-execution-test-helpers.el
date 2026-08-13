@@ -61,7 +61,7 @@
 (cl-defun test-mevedel-execution--start-managed
     (session root command &key (owner "main") owner-context data-buffer
              outcome-function tty tool-args tool-use-id
-             (yield-time-ms 10))
+             (yield-time-ms 10) artifact-directory)
   "Start managed COMMAND for SESSION at ROOT and return its first observation."
   (let (observation)
     (mevedel-execution-start-bash
@@ -69,7 +69,8 @@
      :session session :data-buffer data-buffer
      :owner owner :owner-context owner-context :command command
      :workdir root :writable-roots (list root)
-     :artifact-directory (file-name-concat root "artifacts")
+     :artifact-directory (or artifact-directory
+                             (file-name-concat root "artifacts"))
      :outcome-function outcome-function
      :tool-args tool-args :tool-use-id tool-use-id
      :tty tty :yield-time-ms yield-time-ms)

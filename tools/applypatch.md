@@ -2,6 +2,15 @@ Apply one coherent filesystem change with a Codex-style patch. Put every
 related file operation in one call. Paths are relative to the session working
 directory unless absolute.
 
+Resource addresses
+- File operands may use ordinary paths or canonical `local://` addresses.
+- `local://notes.md` names session scratch content; it is the only resource
+  family writable by ApplyPatch. Bare addresses and other resource schemes
+  are not patch targets.
+- Keep authored addresses in patch markers. ApplyPatch resolves them once,
+  keeps local and ordinary operations in one atomic proposal, and presents
+  the authored address in review and results.
+
 The argument must use this grammar:
 
 ```text

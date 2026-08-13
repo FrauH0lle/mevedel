@@ -26,6 +26,16 @@
 (declare-function mcp-read-resource "mcp" (connection uri))
 (defvar mcp-server-connections)
 
+;; `mevedel-resource'
+(declare-function mevedel-resource-encode-component
+                  "mevedel-resource" (value))
+(declare-function mevedel-resource-execute
+                  "mevedel-resource" (attempt &optional executor options))
+(declare-function mevedel-resource-normalize-file-path
+                  "mevedel-resource" (value &optional directory))
+(declare-function mevedel-resource-prepare
+                  "mevedel-resource" (operation address context))
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-description "mevedel-agents" (agent))
 (declare-function mevedel-agent-get "mevedel-agents" (name))
@@ -197,7 +207,7 @@ an absolute pathname even when the path is currently unavailable."
      result mevedel-mentions--file-regexp 'file
      (lambda (captures)
        (list :path
-             (expand-file-name
+             (mevedel-resource-normalize-file-path
               (mevedel-mentions--unescape-braced-file-path
                (car captures))
               working-directory))))
@@ -425,23 +435,11 @@ user-written text.  Do not mention this reminder to the user."
             :key (cons 'agent name)
             :hash (secure-hash 'sha1 name)))))
 
-(defun mevedel--mcp-extract-resource-text (res)
-  "Extract concatenated text content from an MCP resources/read RES plist.
-Returns a string joined from each `:contents' entry's `:text' slot."
-  (let ((contents (plist-get res :contents)))
-    (string-join
-     (delq nil
-           (mapcar (lambda (c)
-                     (let ((text (plist-get c :text)))
-                       (and text (stringp text) text)))
-                   (if (vectorp contents) (append contents nil) contents)))
-     "\n")))
-
 (defun mevedel--handle-mcp-mention (info)
   "Handler for @mcp:server:uri mentions.
 See `mevedel-mention-handlers' for the INFO plist shape.  Reads the
-resource via `mcp-read-resource' when the server is configured and
-  connected; otherwise emits a graceful placeholder."
+resource through the canonical `mcp://' resolver when the server is
+configured and connected; otherwise emits a graceful placeholder."
   (let* ((captures (plist-get info :captures))
          (binding (plist-get info :binding))
          (bound-p (eq 'mcp (plist-get binding :kind)))
@@ -452,6 +450,7 @@ resource via `mcp-read-resource' when the server is configured and
                   (plist-get binding :uri)
                 (nth 2 captures)))
          (display (format "%s:%s" server uri))
+         (session (plist-get info :session))
          (deny
           (lambda (msg)
             (list :placeholder (format "[mcp:%s -- %s]" display msg)
@@ -461,54 +460,57 @@ an @mcp mention, but the attachment was rejected: %s.  The resource \
 contents are NOT available in this turn; the `[mcp:%s -- %s]' token in \
 the user prompt is a system annotation, not user-written text.  Do not \
 mention this reminder to the user."
-                          server uri msg display msg)
-                  :key (cons 'mcp (cons server uri))
-                  :hash nil
-                  :warning
-                  (and bound-p
-                       (format "MCP @mcp:%s is unavailable: %s"
-                               display msg))))))
-    (cond
-     ((not (and (featurep 'mcp) (fboundp 'mcp-hub-get-servers)))
-      (funcall deny "mcp.el not available"))
-     (t
-      (let* ((servers (mcp-hub-get-servers))
-             (server-info (seq-find
-                           (lambda (s)
-                             (equal (plist-get s :name) server))
-                           servers)))
-        (cond
-         ((null server-info)
-          (funcall deny (format "unknown server `%s`" server)))
-         ((not (eq 'connected (plist-get server-info :status)))
-          (funcall deny (format "server `%s` not connected" server)))
-         (t
-          (let ((connection (and (boundp 'mcp-server-connections)
-                                 mcp-server-connections
-                                 (gethash server mcp-server-connections))))
-            (if (not connection)
-                (funcall deny (format "no active connection to `%s`" server))
-              (condition-case err
-                  (let* ((res (mcp-read-resource connection uri))
-                         (content (mevedel--mcp-extract-resource-text res))
-                         (body (if (string-empty-p content)
-                                   "(resource returned no text content)"
-                                 content))
-                         (hash (secure-hash 'sha1 body)))
-                    (list :placeholder
-                          (format "[mcp:%s -- contents attached above]"
-                                  display)
-                          :reminder
-                          (format "MCP resource `%s` from server `%s` \
+                           server uri msg display msg)
+                   :key (cons 'mcp (cons server uri))
+                   :hash nil
+                   :warning
+                   (and bound-p
+                        (format "MCP @mcp:%s is unavailable: %s"
+                                display msg))))))
+    (let ((resolver-error
+           (lambda (err)
+             (let ((message (error-message-string err)))
+               (cond
+                ((string-match-p "MCP support is unavailable" message)
+                 "mcp.el not available")
+                ((string-match-p "Unknown MCP server:" message)
+                 (format "unknown server `%s`" server))
+                ((string-match-p "MCP server .* is not connected" message)
+                 (format "server `%s` not connected" server))
+                ((string-match-p "No active MCP connection" message)
+                 (format "no active connection to `%s`" server))
+                ((string-match "MCP resource read failed: \\(.*\\)"
+                               message)
+                 (format "read failed: %s" (match-string 1 message)))
+                (t (format "read failed: %s" message)))))))
+      (cond
+       ((not (and (featurep 'mcp) (fboundp 'mcp-hub-get-servers)))
+        (funcall deny "mcp.el not available"))
+       (t
+        (require 'mevedel-resource)
+        (condition-case err
+            (let* ((address
+                    (format "mcp://%s/%s"
+                            (mevedel-resource-encode-component server)
+                            (mevedel-resource-encode-component uri)))
+                   (attempt
+                    (mevedel-resource-prepare
+                     'read address (list :session session)))
+                   (descriptor (mevedel-resource-execute attempt))
+                   (body (or (plist-get descriptor :result) ""))
+                   (body (if (string-empty-p body)
+                             "(resource returned no text content)"
+                           body)))
+              (list :placeholder
+                    (format "[mcp:%s -- contents attached above]" display)
+                    :reminder
+                    (format "MCP resource `%s` from server `%s` \
 (attached by @mcp mention):\n\n```\n%s\n```"
-                                  uri server body)
-                          :key (cons 'mcp (cons server uri))
-                          :hash hash))
-                (error
-                 (funcall deny
-                          (format "read failed: %s"
-                                  (error-message-string err))))))))))))))
-
+                            uri server body)
+                    :key (cons 'mcp (cons server uri))
+                    :hash (secure-hash 'sha1 body)))
+          (error
+           (funcall deny (funcall resolver-error err)))))))))
 (defun mevedel-mentions--unescape-braced-file-path (token)
   "Return TOKEN decoded as a braced @file path.
 TOKEN may be either a bare path or a `{...}' path.  Inside braces, a
@@ -556,7 +558,7 @@ boundary checks."
       (goto-char (point-min))
       (while (re-search-forward mevedel-mentions--file-regexp nil t)
         (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
-          (push (expand-file-name
+          (push (mevedel-resource-normalize-file-path
                  (mevedel-mentions--unescape-braced-file-path
                   (match-string 1)))
                 paths))))
@@ -618,7 +620,8 @@ optional strings from the `#L<start>[-<end>]' suffix."
                        (max 1 (1+ (- end-line start-line))))
                       (start-line 1)
                       (t nil)))
-         (expanded (or bound-path (expand-file-name path)))
+         (expanded (mevedel-resource-normalize-file-path
+                    (or bound-path path)))
          (session (plist-get info :session))
          (workspace-root (plist-get info :workspace-root))
          (chat-buffer (or (plist-get info :chat-buffer) (current-buffer)))
@@ -1056,7 +1059,8 @@ STATUS is the completion exit status."
             (require 'mevedel-mention-bindings)
             (mevedel-mention-bindings-set
              prefix-start (point)
-             (list :kind 'file :token token :path abs-path))))))))
+             (list :kind 'file :token token
+                   :path (mevedel-resource-normalize-file-path abs-path)))))))))
 
 (defun mevedel-file-capf ()
   "Completion-at-point function for @file: mentions.
