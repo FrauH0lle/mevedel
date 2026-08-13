@@ -26,7 +26,6 @@
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-queue)
 (require 'mevedel-tool-repair)
-(require 'mevedel-resource)
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
@@ -80,6 +79,19 @@
                   "mevedel-permissions" (path))
 (declare-function mevedel-permission-decision-raw-outcome
                   "mevedel-permissions" (decision))
+
+;; `mevedel-resource'
+(declare-function mevedel-resource-address-like-p "mevedel-resource" (value))
+(declare-function mevedel-resource-artifact-address "mevedel-resource"
+                  (path session))
+(declare-function mevedel-resource-discard-attempts "mevedel-resource"
+                  (attempts))
+(declare-function mevedel-resource-normalize-file-path "mevedel-resource"
+                  (value &optional directory))
+(declare-function mevedel-resource-prepare "mevedel-resource"
+                  (operation address context))
+(defvar mevedel-resource--attempts-cell)
+(defvar mevedel-resource--current-attempts)
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--shallow-ensure-files
@@ -157,17 +169,6 @@
 (declare-function mevedel-tool-render-transform
                   "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-snapshot-p "mevedel-tool-registry" (cl-x) t)
-
-;; `mevedel-resource'
-(declare-function mevedel-resource-address-like-p "mevedel-resource" (value))
-(declare-function mevedel-resource-artifact-address "mevedel-resource"
-                  (path session))
-(declare-function mevedel-resource-prepare "mevedel-resource"
-                  (operation address context))
-(declare-function mevedel-resource-discard-attempts "mevedel-resource"
-                  (attempts))
-(defvar mevedel-resource--current-attempts)
-(defvar mevedel-resource--attempts-cell)
 
 ;; `mevedel-tool-repair-diagnostics'
 (declare-function mevedel-tool-repair-audit-record
@@ -270,6 +271,7 @@ BUFFER is the chat data buffer used to shallowly materialize SESSION
 when it has not been saved yet.  If no session-owned directory is
 available, falls back to `mevedel-pipeline--truncate-result'."
   (setq result (mevedel--normalize-message-text result))
+  (require 'mevedel-resource)
   (if-let* ((dir (mevedel-pipeline--tool-results-dir session buffer)))
       (let* ((name (mevedel-tool-name tool))
              (_ (make-directory dir t))
@@ -626,6 +628,7 @@ handlers used to do that themselves after authorization had already
 run against the unsubstituted string.  A malformed substitution leaves
 VALUE untouched; the handler then opens that same literal string, so
 the authorized resource still matches the used one."
+  (require 'mevedel-resource)
   (mevedel-resource-normalize-file-path value))
 
 (defun mevedel-pipeline--step-normalize-paths (context next _fail)
@@ -638,6 +641,7 @@ re-resolve these arguments.  Resource-looking `path-or-resource' values stay
 authored addresses and are prepared by the resource step.  FAIL is unused:
 normalization cannot fail, since an unresolvable value is passed through
 verbatim."
+  (require 'mevedel-resource)
   (let* ((tool (plist-get context :tool))
          (args (plist-get context :args))
          (updated nil))
@@ -673,6 +677,7 @@ Preparation is deliberately content-free.  It parses each semantic
 ordinary filesystem paths pass through unchanged.  Malformed addresses and
 unsupported operation/scheme pairs signal validation failures before any
 permission or handler work begins."
+  (require 'mevedel-resource)
   (let* ((tool (plist-get context :tool))
          (operation (mevedel-pipeline--resource-operation tool))
          (args (plist-get context :args))
