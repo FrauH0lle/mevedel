@@ -8,8 +8,11 @@ plain serialization of a canonical locator, not a grant: preparation validates
 and resolves an opaque attempt plus logical authority facts before permission,
 and authorized execution consumes that attempt without reparsing or exposing
 backing paths. Existing `Read`, `Glob`, `Grep`, and reviewed `ApplyPatch`
-surfaces keep their operation-specific capabilities; Plan mode continues to
-deny mutation, including `local://`.
+surfaces keep their operation-specific capabilities. Standalone and sticky Plan
+mode permit `ApplyPatch` only when every source and destination operand is a
+non-bare `local://` descendant, so durable plans and notes stay editable while
+workspace mutation remains denied tree-wide; Directive Planning stays fully
+read-only.
 
 This rejects a public scheme registry, one model tool per resource kind,
 generic caching, URL/path fallbacks, and address-driven permission grants.

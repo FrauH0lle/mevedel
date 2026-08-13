@@ -146,6 +146,10 @@ The `local/plans/` subtree is shared by the parent and retained agents for
 current and accepted plans, alongside durable notes, findings, contracts, and
 handoffs. It is addressed as `local://plans/...`; there is no compatibility
 migration from a separate top-level plans directory or older plan format.
+Accepted archives always use canonical `accepted-TIMESTAMP.md` names, so every
+managed plan is addressable. `local/plans/` is also the one part of `local/`
+that a Fork does not copy verbatim: the child keeps only the artifact already
+accepted at the fork point, after its recorded hash is re-verified.
 
 ### `artifact://`
 

@@ -134,9 +134,16 @@ ephemeral request without durable session ownership cannot create or mutate it.
 
 `local/plans/` is the shared durable plan namespace. The parent and retained
 agents use `local://plans/...` for current and accepted plans alongside shared
-notes, findings, contracts, and handoffs. The layout is intentionally current:
-there is no migration or compatibility reader for an older top-level `plans/`
-directory or persisted plan format.
+notes, findings, contracts, and handoffs. Accepted archives are always canonical
+`accepted-TIMESTAMP.md` names, so every managed plan is addressable. The layout
+is intentionally current: there is no migration or compatibility reader for an
+older top-level `plans/` directory or persisted plan format.
+
+`local/plans/` is the one exception to plain Fork copying, because it is managed
+plan state rather than free-form local content. A Fork drops the copied
+`local/plans/` subtree and re-adds only the accepted artifact that was already
+accepted at the fork point, after re-verifying its recorded hash. The child
+therefore starts without an inherited current-plan draft.
 
 Session-owned `local://`, `artifact://`, `agent://`, and `history://` addresses
 belong to the session's execution target. Client-local skill and memory roots

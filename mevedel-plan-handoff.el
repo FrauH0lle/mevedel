@@ -66,7 +66,7 @@
 (declare-function mevedel-plan--metadata-put "mevedel-plan"
                   (session key value))
 (declare-function mevedel-plan-archive-accepted "mevedel-plan"
-                  (artifact session &optional relative-path))
+                  (artifact session))
 (declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
 (declare-function mevedel-plan-resource-address "mevedel-plan"
                   (relative-path))
@@ -407,8 +407,7 @@ directory so the artifact survives session rename and resume."
                 (mevedel-plan-handoff--accepted-body existing target-session)
                 existing)
             (mevedel-plan-archive-accepted
-             source-artifact target-session
-             nil)))
+             source-artifact target-session)))
          (prepared (copy-tree record)))
     (unless existing
       (setf (mevedel-session-preset-name target-session)

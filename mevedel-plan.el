@@ -181,11 +181,12 @@ Return an explicit artifact plist containing `:path', `:absolute-path', and
           :absolute-path path
           :hash hash)))
 
-(defun mevedel-plan-archive-accepted
-    (current-artifact session &optional relative-path)
+(defun mevedel-plan-archive-accepted (current-artifact session)
   "Archive CURRENT-ARTIFACT as an accepted plan for SESSION.
 CURRENT-ARTIFACT is the plist returned by `mevedel-plan-write-current'.
-RELATIVE-PATH names a deterministic immutable destination when non-nil.
+The immutable destination is always a canonical `accepted-TIMESTAMP.md'
+name below `local/plans/', so every archive is addressable through
+`mevedel-plan-resource-address'.
 Return a plist containing `:path', `:absolute-path', and `:hash'."
   (require 'mevedel-structs)
   (let ((plan-path (plist-get current-artifact :absolute-path))
@@ -195,31 +196,16 @@ Return a plist containing `:path', `:absolute-path', and `:hash'."
     (let* ((save-path (mevedel-session-save-path session))
            (dir (file-name-concat save-path "local" "plans"))
            (timestamp (format-time-string "%Y%m%d-%H%M%S"))
-           (archive-path
-            (if relative-path
-                (file-name-concat save-path relative-path)
-              (file-name-concat dir (format "accepted-%s.md" timestamp))))
+           (archive-path (file-name-concat dir
+                                           (format "accepted-%s.md" timestamp)))
            (index 1))
       (make-directory dir t)
-      (when (and relative-path
-                 (or (file-name-absolute-p relative-path)
-                     (not (file-in-directory-p archive-path dir))))
-        (error "Accepted plan destination is outside managed plan storage"))
-      (unless relative-path
-        (while (file-exists-p archive-path)
-          (setq archive-path
-                (file-name-concat dir (format "accepted-%s-%d.md"
-                                              timestamp index)))
-          (setq index (1+ index))))
-      (make-directory (file-name-directory archive-path) t)
-      (if (file-exists-p archive-path)
-          (with-temp-buffer
-            (insert-file-contents archive-path)
-            (unless (and relative-path
-                         (equal plan-hash
-                                (mevedel-plan-hash (buffer-string))))
-              (error "Accepted plan artifact already exists with different content")))
-        (copy-file plan-path archive-path))
+      (while (file-exists-p archive-path)
+        (setq archive-path
+              (file-name-concat dir (format "accepted-%s-%d.md"
+                                            timestamp index)))
+        (setq index (1+ index)))
+      (copy-file plan-path archive-path)
       (list :path (and save-path (file-relative-name archive-path save-path))
             :absolute-path archive-path
             :hash plan-hash))))
@@ -270,15 +256,12 @@ SKIP-VERIFICATION is non-nil, do not leave verification pending."
     metadata))
 
 (defun mevedel-plan-accept
-    (plan-markdown session buffer &optional skip-verification
-                   accepted-relative-path)
+    (plan-markdown session buffer &optional skip-verification)
   "Persist and accept PLAN-MARKDOWN for SESSION and BUFFER.
-ACCEPTED-RELATIVE-PATH overrides the deterministic accepted artifact path.
 Return `(:current ARTIFACT :accepted ARTIFACT)' for later dispatch."
   (let* ((current (mevedel-plan-write-current
                    plan-markdown session buffer))
-         (accepted (mevedel-plan-archive-accepted
-                    current session accepted-relative-path)))
+         (accepted (mevedel-plan-archive-accepted current session)))
     (mevedel-plan-mark-accepted
      session current accepted skip-verification)
     (list :current current :accepted accepted)))

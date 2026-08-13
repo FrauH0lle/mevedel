@@ -150,7 +150,7 @@
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-archive-accepted
-  (:doc "reuses an identical deterministic accepted artifact")
+  (:doc "archives only canonical addressable immutable artifacts")
   ,test
   (test)
   (let ((save-dir (make-temp-file "mevedel-plan-archive-" t)))
@@ -162,30 +162,35 @@
                   (mevedel-plan-write-current
                    "# Plan" session (current-buffer)))
                  (accepted
-                 (mevedel-plan-archive-accepted
-                   artifact session "local/plans/cycle-001-plan.md")))
+                  (mevedel-plan-archive-accepted artifact session)))
             (should (file-exists-p (plist-get accepted :absolute-path)))
             (should (equal (plist-get artifact :hash)
                            (plist-get accepted :hash)))
-            (should (equal "local/plans/cycle-001-plan.md"
-                           (plist-get accepted :path)))
-            (should
-             (equal accepted
-                    (mevedel-plan-archive-accepted
-                     artifact session
-                     "local/plans/cycle-001-plan.md")))
-            (let ((different
-                   (mevedel-plan-write-current
-                    "# Different" session (current-buffer))))
-              (should-error
-               (mevedel-plan-archive-accepted
-                different session "local/plans/cycle-001-plan.md")
-               :type 'error))
-            (dolist (invalid '("../outside.md" "/tmp/outside.md"
-                               "goals/g1/cycle-001-plan.md"))
-              (should-error
-               (mevedel-plan-archive-accepted artifact session invalid)
-               :type 'error))))
+            (should (string-match-p "\\`local/plans/accepted-[0-9]+-[0-9]+\\.md\\'"
+                                    (plist-get accepted :path)))
+            ;; Every archive stays serializable as a canonical address.
+            (should (string-prefix-p
+                     "local://plans/accepted-"
+                     (mevedel-plan-resource-address
+                      (plist-get accepted :path))))
+            ;; A second archive never overwrites the immutable first one.
+            (let ((second (mevedel-plan-archive-accepted artifact session)))
+              (should-not (equal (plist-get second :absolute-path)
+                                 (plist-get accepted :absolute-path)))
+              (should (file-exists-p (plist-get accepted :absolute-path)))
+              (should (string-prefix-p
+                       "local://plans/accepted-"
+                       (mevedel-plan-resource-address
+                        (plist-get second :path)))))
+            ;; A caller-chosen destination is not part of the contract.
+            (should-error
+             (mevedel-plan-archive-accepted
+              artifact session "local/plans/cycle-001-plan.md")
+             :type 'wrong-number-of-arguments)
+            (should-error
+             (mevedel-plan-archive-accepted '(:path "local/plans/current.md")
+                                            session)
+             :type 'error)))
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-current-body
@@ -279,7 +284,7 @@
               (should-error
                (mevedel-plan-accept
                 "# Plan\n\nDo it." session (current-buffer) t
-                "goals/g1/current.md" "local/plans/accepted.md")
+                "local/plans/accepted.md")
                :type 'wrong-number-of-arguments))))
       (delete-directory save-dir t))))
 
