@@ -968,17 +968,29 @@
               (file-name-as-directory tmp) "pr"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-plan-reference))
-         (plan-path (file-name-concat tmp "local" "plans" "current.md")))
+         (plan-path (file-name-concat tmp "local" "plans" "current.md"))
+         (accepted-path
+          (file-name-concat tmp "local" "plans"
+                            "accepted-20260813-120000.md")))
     (make-directory (file-name-directory plan-path) t)
-    (write-region "# Plan\n\nDo it." nil plan-path nil 'silent)
+    (write-region "# Current draft" nil plan-path nil 'silent)
+    (write-region "# Accepted\n\nDo it." nil accepted-path nil 'silent)
     (setf (mevedel-session-save-path session) tmp)
     (setf (mevedel-session-turn-count session) 6)
     (setf (mevedel-session-plan-metadata session)
-          '(:path "local/plans/current.md" :status accepted :accepted-turn 5))
+          '(:path "local/plans/current.md"
+            :accepted-path "local/plans/accepted-20260813-120000.md"
+            :status accepted :accepted-turn 5))
     (should (funcall (mevedel-reminder-trigger r) session))
     (let ((content (funcall (mevedel-reminder-content r) session)))
-      (should (string-match-p "local/plans/current.md" content))
-      (should (string-match-p "# Plan" content))))
+      (should (string-match-p
+               "local://plans/accepted-20260813-120000.md"
+               content))
+      (should-not (string-match-p "local/plans/current.md" content))
+      (should-not (string-match-p "local://plans/current.md" content))
+      (should-not (string-match-p (regexp-quote tmp) content))
+      (should (string-match-p "# Accepted" content))
+      (should-not (string-match-p "# Current draft" content))))
 
   :doc "waits until after the acceptance turn before firing"
   (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))
@@ -987,16 +999,40 @@
               (file-name-as-directory tmp) "pr"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-plan-reference))
-         (plan-path (file-name-concat tmp "local" "plans" "current.md")))
+         (plan-path (file-name-concat tmp "local" "plans" "current.md"))
+         (accepted-path
+          (file-name-concat tmp "local" "plans"
+                            "accepted-20260813-120000.md")))
     (make-directory (file-name-directory plan-path) t)
     (write-region "# Plan\n\nDo it." nil plan-path nil 'silent)
+    (write-region "# Accepted\n\nDo it." nil accepted-path nil 'silent)
     (setf (mevedel-session-save-path session) tmp)
     (setf (mevedel-session-turn-count session) 5)
     (setf (mevedel-session-plan-metadata session)
-          '(:path "local/plans/current.md" :status accepted :accepted-turn 5))
+          '(:path "local/plans/current.md"
+            :accepted-path "local/plans/accepted-20260813-120000.md"
+            :status accepted :accepted-turn 5))
     (should-not (funcall (mevedel-reminder-trigger r) session))
     (setf (mevedel-session-turn-count session) 6)
     (should (funcall (mevedel-reminder-trigger r) session)))
+
+  :doc "does not fire or read the mutable plan without an accepted artifact"
+  (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))
+         (ws (mevedel-workspace-get-or-create
+              'project (file-name-as-directory tmp)
+              (file-name-as-directory tmp) "pr"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-plan-reference))
+         (plan-path (file-name-concat tmp "local" "plans" "current.md")))
+    (make-directory (file-name-directory plan-path) t)
+    (write-region "# Mutable current plan" nil plan-path nil 'silent)
+    (setf (mevedel-session-save-path session) tmp)
+    (setf (mevedel-session-turn-count session) 6)
+    (setf (mevedel-session-plan-metadata session)
+          '(:path "local/plans/current.md"
+            :status accepted :accepted-turn 5))
+    (should-not (funcall (mevedel-reminder-trigger r) session))
+    (should-not (funcall (mevedel-reminder-content r) session)))
 
   :doc "stays suppressed during a standalone Plan conversation"
   (let ((session

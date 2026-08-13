@@ -722,7 +722,8 @@
         (let ((draft (mevedel-view--input-text)))
           (should (string-match-p "Plan feedback:" draft))
           (should (string-match-p "complete replacement" draft))
-          (should (string-match-p "local/plans/current.md" draft))
+          (should (string-match-p "local://plans/current.md" draft))
+          (should-not (string-match-p "local/plans/current.md" draft))
           (should-not (string-match-p "old draft" draft)))))))
 
 (mevedel-deftest mevedel-plan-mode--read-worktree-branch
@@ -980,14 +981,17 @@
                            :execution direct :mode full-auto
                            :model-provider "OpenAI:gpt-5"))))
           (let* ((metadata (mevedel-session-plan-metadata session))
-                 (accepted (plist-get metadata :accepted-absolute-path)))
+                 (accepted (plist-get metadata :accepted-absolute-path))
+                 (address (mevedel-plan-resource-address
+                           (plist-get metadata :accepted-path))))
             (should-not (mevedel-session-plan-mode session))
             (should (eq 'full-auto
                         (mevedel-session-permission-mode session)))
             (should (eq 'accepted (plist-get metadata :status)))
             (should-not (plist-member metadata :verification-pending))
             (should (file-exists-p accepted))
-            (should (string-match-p (regexp-quote accepted) hook-input))
+            (should (string-match-p (regexp-quote address) hook-input))
+            (should-not (string-match-p (regexp-quote accepted) hook-input))
             (should (string-match-p "# Accepted" hook-input))
             (should (plist-member metadata :implementation-retry))
             (should-not (mevedel-session-goal session))
@@ -1056,14 +1060,17 @@
                            :model-provider "OpenAI:gpt-5"))))
           (let* ((metadata (mevedel-session-plan-metadata session))
                  (goal (mevedel-session-goal session))
-                 (accepted (plist-get metadata :accepted-absolute-path)))
+                 (accepted (plist-get metadata :accepted-absolute-path))
+                 (address (mevedel-plan-resource-address
+                           (plist-get metadata :accepted-path))))
             (should (equal mevedel-plan-handoff--accepted-goal-objective
                            (mevedel-goal-objective goal)))
             (should (equal reserved-id (mevedel-goal-id goal)))
             (should (equal (plist-get metadata :accepted-path)
                            (mevedel-goal-plan-reference goal)))
             (should (= 4321 (mevedel-goal-token-budget goal)))
-            (should (string-match-p (regexp-quote accepted) hook-input))
+            (should (string-match-p (regexp-quote address) hook-input))
+            (should-not (string-match-p (regexp-quote accepted) hook-input))
             (should (string-match-p "Free-form accepted plan" hook-input))
             (should (string-match-p "Begin the active Goal" hook-input))
             (should-not (string-match-p

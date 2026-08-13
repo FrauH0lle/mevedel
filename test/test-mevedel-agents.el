@@ -40,6 +40,25 @@
     (load-file (locate-library "mevedel-agents")))
   (mevedel-tools-register))
 
+(mevedel-deftest mevedel-plan-directive-p
+  ()
+  ,test
+  (test)
+  :doc "recognizes session and request directive planning authority"
+  (let ((session (mevedel-session--create
+                  :name "directive"
+                  :directive-planning '(:directive-id "d1" :phase approval)))
+        (request (mevedel-request--create :directive-uuid "d1")))
+    (should (mevedel-plan-directive-p session))
+    (should (mevedel-plan-directive-p nil request)))
+  :doc "recognizes ambient directive planning and rejects ordinary requests"
+  (let ((mevedel--current-request
+         (mevedel-request--create :directive-uuid "d1")))
+    (should (mevedel-plan-directive-p)))
+  (let ((session (mevedel-session--create :name "ordinary"))
+        (request (mevedel-request--create :plan-read-only t)))
+    (should-not (mevedel-plan-directive-p session request))))
+
 (mevedel-deftest mevedel-agent-invocation-require-path
   ()
   ,test

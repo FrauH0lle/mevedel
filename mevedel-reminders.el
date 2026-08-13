@@ -91,6 +91,10 @@
 (declare-function mevedel-hooks-format-context "mevedel-hooks"
                   (entries))
 
+;; `mevedel-plan'
+(declare-function mevedel-plan-resource-address "mevedel-plan"
+                  (relative-path))
+
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
 
@@ -670,21 +674,23 @@ sparsely while that mode remains active."
    :interval 'one-shot))
 
 (defun mevedel-reminders--plan-path (session)
-  "Return SESSION's latest plan path, when recorded."
+  "Return SESSION's immutable accepted plan path, when valid."
+  (require 'mevedel-plan)
   (when-let* ((metadata (mevedel-session-plan-metadata session))
-              (path (plist-get metadata :path)))
-    path))
+              (path (plist-get metadata :accepted-path))
+              (address (condition-case nil
+                           (mevedel-plan-resource-address path)
+                         (error nil))))
+    (when address path)))
 
 (defun mevedel-reminders--plan-absolute-path (session)
-  "Return SESSION's latest plan artifact absolute path, when available."
-  (let ((metadata (mevedel-session-plan-metadata session)))
-    (or (when-let* ((path (mevedel-reminders--plan-path session))
-                    (save-path (mevedel-session-save-path session)))
-          (file-name-concat save-path path))
-        (plist-get metadata :absolute-path))))
+  "Return SESSION's immutable accepted artifact absolute path, when available."
+  (when-let* ((path (mevedel-reminders--plan-path session))
+              (save-path (mevedel-session-save-path session)))
+    (file-name-concat save-path path)))
 
 (defun mevedel-reminders--plan-reference-content (session)
-  "Return bounded contents of SESSION's latest plan artifact."
+  "Return bounded contents of SESSION's immutable accepted artifact."
   (when-let* ((path (mevedel-reminders--plan-absolute-path session))
               ((file-exists-p path)))
     (with-temp-buffer
@@ -708,14 +714,14 @@ sparsely while that mode remains active."
                      (not (mevedel-session-plan-mode session))
                      (mevedel-reminders--plan-reference-content session))))
    :content (lambda (session)
-              (let ((path (or (mevedel-reminders--plan-path session)
-                              "latest plan"))
-                    (content (mevedel-reminders--plan-reference-content
-                              session)))
+              (when-let* ((path (mevedel-reminders--plan-path session))
+                          (address (mevedel-plan-resource-address path))
+                          (content (mevedel-reminders--plan-reference-content
+                                    session)))
                 (format
                  "An accepted plan may be relevant to this turn. Plan artifact: %s\n\n%s\n\nContinue from this plan only if it matches the current user request; otherwise treat it as historical context."
-                 path
-                 (or content ""))))
+                 address
+                 content)))
    :interval 'one-shot))
 
 (defun mevedel-session-ensure-reminder (session reminder)

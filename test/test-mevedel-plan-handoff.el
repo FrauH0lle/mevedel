@@ -84,8 +84,11 @@
   (test)
   (let ((prompt
          (mevedel-plan-handoff--implementation-prompt
-          '(:absolute-path "/tmp/accepted.md") "# Accepted")))
-    (should (string-match-p "/tmp/accepted.md" prompt))
+          '(:path "local/plans/accepted-20260813-120000.md"
+            :absolute-path "/tmp/accepted.md") "# Accepted")))
+    (should (string-match-p "local://plans/accepted-20260813-120000.md"
+                            prompt))
+    (should-not (string-match-p "/tmp/accepted.md" prompt))
     (should (string-match-p "# Accepted" prompt))
     (should (string-match-p "Implement the accepted plan" prompt)))
 
@@ -98,7 +101,8 @@
      instructions)
     (let* ((prompt
             (mevedel-plan-handoff--implementation-prompt
-             '(:absolute-path "/tmp/accepted.md") "# Accepted"
+             '(:path "local/plans/accepted-20260813-120000.md"
+               :absolute-path "/tmp/accepted.md") "# Accepted"
              (list
               :skills
               '((:name "alpha"
@@ -119,12 +123,17 @@
   (:doc "includes the artifact and plan before the compact kickoff")
   ,test
   (test)
-  (let* ((artifact '(:absolute-path "/tmp/accepted.md"))
+  (let* ((artifact '(:path "local/plans/accepted-20260813-120000.md"
+                     :absolute-path "/tmp/accepted.md"))
          (body "Free-form plan")
          (prompt (mevedel-plan-handoff--goal-kickoff-prompt artifact body)))
-    (should (< (string-search "/tmp/accepted.md" prompt)
+    (should (< (string-search "local://plans/accepted-20260813-120000.md"
+                              prompt)
                (string-search body prompt)
                (string-search "Begin the active Goal" prompt)))
+    (should-not
+     (string-match-p "/tmp/accepted.md"
+                     prompt))
     (should-not
      (string-match-p "/tmp/accepted.md"
                      mevedel-plan-handoff--accepted-goal-objective))))
@@ -525,7 +534,7 @@
                     ((symbol-function 'mevedel-plan-archive-accepted)
                      (lambda (_artifact _session relative-path)
                        (setq archive-relative-path relative-path)
-                       '(:path "local/plans/accepted.md"
+                       '(:path "local/plans/accepted-20260813-120000.md"
                          :absolute-path "/tmp/target-accepted.md"
                          :hash "target-hash")))
                     ((symbol-function 'mevedel-preset-restore-session)
@@ -548,8 +557,10 @@
                      source-session source-buffer record)))
               (should (eq 'submit (plist-get prepared :step)))
               (should (eq 'full-auto mode))
-              (should (equal "local/plans/accepted.md"
-                             archive-relative-path))
+              (should-not archive-relative-path)
+              (should (equal "local/plans/accepted-20260813-120000.md"
+                             (plist-get
+                              (plist-get prepared :target-accepted) :path)))
               (should (= 4321
                          (buffer-local-value
                           'mevedel-goal-token-budget target-buffer)))
@@ -859,7 +870,8 @@
             :instructions "Use $alpha"))
          (record
           (list :selection selection
-                :accepted '(:absolute-path "/tmp/accepted.md" :hash "h")))
+                :accepted '(:path "local/plans/accepted-20260813-120000.md"
+                            :absolute-path "/tmp/accepted.md" :hash "h")))
          planned dispatched)
     (unwind-protect
         (progn

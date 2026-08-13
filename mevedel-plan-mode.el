@@ -39,6 +39,8 @@
 (declare-function mevedel-plan-current-body "mevedel-plan"
 		  (&optional session))
 (declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
+(declare-function mevedel-plan-resource-address "mevedel-plan"
+		  (relative-path))
 (defvar mevedel-plan--relative-current-path)
 
 ;; `mevedel-plan-handoff'
@@ -314,7 +316,8 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
         (insert
          (format
           "Plan feedback:\n\n\n\nRevise the proposal to address this feedback. Emit one complete replacement <proposed_plan> block; the current draft is reference-only.\n\nCurrent plan artifact: %s"
-          mevedel-plan--relative-current-path))
+          (mevedel-plan-resource-address
+           mevedel-plan--relative-current-path)))
         (goto-char start)
         (forward-line 2)))))
 
