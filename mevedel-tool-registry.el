@@ -353,19 +353,25 @@ Convenience wrapper around `mevedel-tool-resolve' that extracts the
 ;;; Args conversion
 
 (defconst mevedel-tool--path-description-suffix
-  "Pass a raw filesystem path, not Markdown or a URL."
-  "Provider-facing guidance appended to semantic path arguments.")
+  "Pass a raw filesystem path, not Markdown or a web URL."
+  "Provider-facing guidance appended to filesystem-only path arguments.")
+
+(defconst mevedel-tool--path-or-resource-description-suffix
+  "Pass a raw filesystem path or canonical resource address, not Markdown or a web URL."
+  "Provider-facing guidance appended to path-or-resource arguments.")
 
 (defun mevedel-tool--provider-arg-description (type description)
   "Return provider-facing DESCRIPTION for argument TYPE."
   (let ((description (or description "")))
-    (if (and (eq type 'path)
-             (not (string-search mevedel-tool--path-description-suffix
-                                 description)))
-        (concat description
-                (unless (string-empty-p description) " ")
-                mevedel-tool--path-description-suffix)
-      description)))
+    (let ((suffix (pcase type
+                    ('path mevedel-tool--path-description-suffix)
+                    ('path-or-resource
+                     mevedel-tool--path-or-resource-description-suffix))))
+      (if (and suffix (not (string-search suffix description)))
+          (concat description
+                  (unless (string-empty-p description) " ")
+                  suffix)
+        description))))
 
 (defun mevedel-tool--args-to-gptel (args)
   "Convert mevedel ARGS spec to gptel plist format.
@@ -391,7 +397,8 @@ types under strict function-schema validation."
             (desc (cadr rest))
             (extras (cddr rest))
             (result (list :name (symbol-name name)
-                          :type (if (eq type 'path) 'string type)
+                          :type (if (memq type '(path path-or-resource))
+                                    'string type)
                           :description
                           (mevedel-tool--provider-arg-description
                            type desc))))

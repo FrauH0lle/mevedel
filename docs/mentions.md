@@ -23,6 +23,12 @@ the same placeholder plus `<system-reminder>` output path, but keeps a
 separate parser because `$skill` quote, escape, and Markdown-code rules differ
 from `@` mentions.
 
+Resource addresses are a separate tool-target syntax. A mention performs an
+attachment, invocation, or delegation operation; a resource address names
+content for an existing filesystem-shaped tool. When both identify a file,
+skill source, or MCP server/URI, they share the same canonical resource
+locator, but they do not share side effects.
+
 `mevedel-mention-bindings.el` owns the shared atomic binding lifecycle for
 skills, direct references, files, and MCP resources. Kind-specific discovery,
 resolution, content loading, permission checks, and request annotations remain
@@ -47,6 +53,11 @@ MCP server/URI pair can bind even while unavailable.
 Reference queries intentionally remain unbound so every dispatch evaluates the
 current matching set. Agent mentions also remain unbound because registered
 agent names already provide their live identity.
+
+The canonical locator can be serialized as a resource address for tool input,
+but the hidden binding itself is not an address string and does not grant
+authority. Dynamic listings and queries remain unbound so dispatch resolves
+their current state.
 
 Composer drafts, pending input, retries, transcript prompts, history recall,
 and persisted input history carry the propertized prompt string. Copying or
@@ -108,7 +119,8 @@ schema, send-time binding, and dispatch branches.
   "permission denied". Missing and unreadable files are rejected.
 - **@agent:name** — asks main agent to delegate via
   `Agent(task_name="NAME", message=...)` (the name is validated against
-  `mevedel-agent--registry` before the reminder is created)
+  `mevedel-agent--registry` before the reminder is created). This delegation
+  mention is not an `agent://` resource address, which is read-only inspection.
 - **@mcp:server:uri** — attaches an MCP resource via mcp.el
   (`mcp-hub-get-servers`, `mcp-server-connections`, `mcp-read-resource`).
   Resource completion binds the selected server-name/URI pair immediately;
@@ -118,7 +130,9 @@ schema, send-time binding, and dispatch branches.
   same locator. Current MCP availability and server access behavior still
   apply, and read or access failure exposes no resource contents.
   URI capture is greedy past internal colons so `file:///...` works.
-  mcp.el is optional (declared via `declare-function`).
+  mcp.el is optional (declared via `declare-function`). The same canonical
+  server/URI locator is used by `mcp://` resource addresses; both resolve the
+  current connection and fresh resource contents.
 
 Every rejection branch emits a follow-up `<system-reminder>` telling the
 LLM the bracketed placeholder is a system annotation, not user text.
@@ -180,3 +194,9 @@ attachment path as a dropped file. If no clipboard image is available,
 `mevedel-mcp-capf` (two-stage: server names at `@mcp:`, resource URIs at
 `@mcp:server:`). Font-lock uses `success`/`shadow`/`link` box faces.
 Registered in `mevedel-install`/`-uninstall`.
+
+Resource-address completion offers scheme prefixes first and bounded
+scheme-specific descendants afterward. It inserts plain canonical text and
+does not bind a mention, attach context, invoke a skill, delegate an agent,
+read content, refresh MCP, materialize a session, or change durable state. See
+[`address-to-resource.md`](address-to-resource.md#completion-and-side-effects).

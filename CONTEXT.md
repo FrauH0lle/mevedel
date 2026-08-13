@@ -6,6 +6,8 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 
 - **mevedel** — An Emacs Lisp package for visual AI-assisted programming workflows inside Emacs.
 - **workspace** — The project context mevedel operates in, including repository roots, workspace configuration, persistent memory, and session state.
+- **resource locator** — The canonical identity of a selected resource shared by atomic bindings and resource resolution. It names a target, not its content, authority, or mention operation. _Avoid_: resource address, resource grant
+- **resource address** — The context-qualified `scheme://` text form of a resource locator consumed by filesystem-shaped tools. It may be exact, session-relative, or a discovery query. _Avoid_: URL, mention, resource grant
 - **agent resource** — A portable user- or project-authored asset intended to be shared with agent tools, such as a skill, plugin, or durable memory.
 - **mevedel state** — Runtime data owned by mevedel, such as session persistence, tool artifacts, input history, and generated metadata.
 - **session** — A chat/workflow instance attached to a workspace. Sessions hold transcript state, permissions, reminders, tasks, agent state, and persistence metadata.

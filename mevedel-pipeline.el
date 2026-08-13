@@ -4,14 +4,15 @@
 
 ;; Sequential step-based execution engine for mevedel tools.  Each tool
 ;; invocation runs through a standard pipeline: validate -> pre-tool-hooks ->
-;; permission -> capture-coverage -> snapshot -> handler -> repair-reminder ->
-;; persist -> specialist-nudges -> post-hooks -> re-persist ->
+;; normalize-paths -> prepare-resources -> permission -> capture-coverage ->
+;; snapshot -> handler -> repair-reminder -> persist -> specialist-nudges ->
+;; post-hooks -> re-persist ->
 ;; Goal-budget-warning -> attach-render-data -> attach-media.
 ;; Interactive handlers own any confirmation needed after the pipeline's
 ;; permission and snapshot steps.
 ;;
 ;; The persist step saves oversized results to disk and replaces them
-;; with a preview + file path, preventing LLM context overflow from
+;; with a preview + logical artifact address, preventing LLM context overflow from
 ;; unexpectedly large tool output.
 
 ;;; Code:
@@ -25,6 +26,7 @@
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-queue)
 (require 'mevedel-tool-repair)
+(require 'mevedel-resource)
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
@@ -130,6 +132,15 @@
 (declare-function mevedel-tool-media-strip-blocks
                   "mevedel-tool-media" (string))
 
+;; `mevedel-tool-patch'
+(declare-function mevedel-tool-patch--get-paths-from-proposal
+                  "mevedel-tool-patch" (proposal))
+(declare-function mevedel-tool-patch--parse
+                  "mevedel-tool-patch" (patch &optional root))
+(declare-function mevedel-tool-patch--prepare-resources
+                  "mevedel-tool-patch" (proposal))
+(defvar mevedel-tool-patch--prepared-proposal)
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-async-p "mevedel-tool-registry" (cl-x) t)
@@ -146,6 +157,17 @@
 (declare-function mevedel-tool-render-transform
                   "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-snapshot-p "mevedel-tool-registry" (cl-x) t)
+
+;; `mevedel-resource'
+(declare-function mevedel-resource-address-like-p "mevedel-resource" (value))
+(declare-function mevedel-resource-artifact-address "mevedel-resource"
+                  (path session))
+(declare-function mevedel-resource-prepare "mevedel-resource"
+                  (operation address context))
+(declare-function mevedel-resource-discard-attempts "mevedel-resource"
+                  (attempts))
+(defvar mevedel-resource--current-attempts)
+(defvar mevedel-resource--attempts-cell)
 
 ;; `mevedel-tool-repair-diagnostics'
 (declare-function mevedel-tool-repair-audit-record
@@ -256,14 +278,16 @@ available, falls back to `mevedel-pipeline--truncate-result'."
              (preview (mevedel-pipeline--head-tail-preview result)))
         (let ((coding-system-for-write 'utf-8-unix))
           (write-region result nil file nil 'silent))
-        (concat "<persisted-output>\n"
-                (format "Output too large (%d chars). Full output saved to: %s\n\n"
-                        (length result) file)
-                (format "Use Read(file_path=%S, offset=1, limit=2000) and continue with the returned offset, or Grep(pattern=PATTERN, path=%S).\n\n"
-                        file file)
-                "Preview (head and tail):\n"
-                preview "\n"
-                "</persisted-output>"))
+        (if-let* ((address (mevedel-resource-artifact-address file session)))
+            (concat "<persisted-output>\n"
+                    (format "Output too large (%d chars). Full output saved to: %s\n\n"
+                            (length result) address)
+                    (format "Use Read(file_path=%S, offset=1, limit=2000) and continue with the returned offset, or Grep(pattern=PATTERN, path=%S).\n\n"
+                            address address)
+                    "Preview (head and tail):\n"
+                    preview "\n"
+                    "</persisted-output>")
+          (mevedel-pipeline--truncate-result result tool)))
     (mevedel-pipeline--truncate-result result tool)))
 
 (defun mevedel-pipeline--truncate-result (result tool &optional ephemeral-p)
@@ -402,6 +426,14 @@ that bypass `mevedel-pipeline-run-tool'."
   "Return the durable tool-use id of the currently starting handler."
   mevedel-pipeline--active-tool-use-id)
 
+(defun mevedel-pipeline--discard-resource-attempts (context)
+  "Discard prepared resource attempts held by CONTEXT."
+  (when-let* ((cell (plist-get context :resource-attempts-cell))
+              (attempts (and (consp cell) (car cell))))
+    (require 'mevedel-resource)
+    (mevedel-resource-discard-attempts attempts)
+    (setcar cell nil)))
+
 (defun mevedel-pipeline--run (steps callback context)
   "Run the pipeline, calling CALLBACK with the result.
 
@@ -526,6 +558,15 @@ ignoring duplicate outcome"
             (funcall callback
                      (mevedel-pipeline--format-context-failure
                       context (or (cadr err) "Validation error"))))))
+        (mevedel-resource-error
+         (funcall clear-cancel)
+         (funcall finish-telemetry 'error 'validation)
+         (mevedel-pipeline--with-context-default-directory
+          context
+          (lambda ()
+            (funcall callback
+                     (mevedel-pipeline--format-context-failure
+                      context (or (cadr err) "Invalid resource address"))))))
         (mevedel-permission-denied
          (funcall clear-cancel)
          (funcall finish-telemetry 'error 'permission-denied)
@@ -585,35 +626,83 @@ handlers used to do that themselves after authorization had already
 run against the unsubstituted string.  A malformed substitution leaves
 VALUE untouched; the handler then opens that same literal string, so
 the authorized resource still matches the used one."
-  (if (or (not (stringp value)) (string-empty-p value))
-      value
-    (expand-file-name
-     (condition-case nil
-         (substitute-in-file-name value)
-       (error value)))))
+  (mevedel-resource-normalize-file-path value))
 
 (defun mevedel-pipeline--step-normalize-paths (context next _fail)
-  "Canonicalize `path'-typed arguments in CONTEXT before authorization.
+  "Canonicalize filesystem path arguments in CONTEXT before authorization.
 
 Runs after the pre-tool hooks, which may rewrite arguments, and before
 the permission step, so the path the decision chain authorizes is
 byte-identical to the one the handler receives.  Handlers must not
-re-resolve these arguments.  FAIL is unused: normalization cannot fail,
-since an unresolvable value is passed through verbatim."
+re-resolve these arguments.  Resource-looking `path-or-resource' values stay
+authored addresses and are prepared by the resource step.  FAIL is unused:
+normalization cannot fail, since an unresolvable value is passed through
+verbatim."
   (let* ((tool (plist-get context :tool))
          (args (plist-get context :args))
          (updated nil))
     (when (listp args)
       (dolist (spec (mevedel-tool-args tool))
-        (when (eq (cadr spec) 'path)
-          (let* ((key (intern (concat ":" (symbol-name (car spec)))))
-                 (value (plist-get (or updated args) key))
-                 (normalized (mevedel-pipeline--normalize-path-value value)))
-            (unless (equal value normalized)
-              (setq updated
-                    (plist-put (or updated (copy-sequence args))
-                               key normalized)))))))
+        (let* ((type (cadr spec))
+               (key (intern (concat ":" (symbol-name (car spec)))))
+               (value (plist-get (or updated args) key))
+               (resource-p (and (eq type 'path-or-resource)
+                                (mevedel-resource-address-like-p value))))
+          (when (and (memq type '(path path-or-resource))
+                     (not resource-p))
+            (let ((normalized (mevedel-pipeline--normalize-path-value value)))
+              (unless (equal value normalized)
+                (setq updated
+                      (plist-put (or updated (copy-sequence args))
+                                 key normalized))))))))
     (funcall next (if updated (plist-put context :args updated) context))))
+
+(defun mevedel-pipeline--resource-operation (tool)
+  "Return the resource operation implemented by TOOL, or nil."
+  (pcase (mevedel-tool-name tool)
+    ("Read" 'read)
+    ("Glob" 'glob)
+    ("Grep" 'grep)
+    ("ApplyPatch" 'apply-patch)))
+
+(defun mevedel-pipeline--step-prepare-resources (context next _fail)
+  "Prepare addressed operands after normalization and before permission.
+
+Preparation is deliberately content-free.  It parses each semantic
+`path-or-resource' argument once and stores opaque attempts for the handler;
+ordinary filesystem paths pass through unchanged.  Malformed addresses and
+unsupported operation/scheme pairs signal validation failures before any
+permission or handler work begins."
+  (let* ((tool (plist-get context :tool))
+         (operation (mevedel-pipeline--resource-operation tool))
+         (args (plist-get context :args))
+         attempts
+         patch-proposal)
+    (if (eq operation 'apply-patch)
+        (let ((mevedel-resource--attempts-cell
+               (plist-get context :resource-attempts-cell)))
+          (setq patch-proposal
+                (mevedel-tool-patch--prepare-resources
+                 (mevedel-tool-patch--parse
+                  (plist-get args :patch)
+                  (plist-get context :default-directory)))))
+      (when operation
+      (dolist (spec (mevedel-tool-args tool))
+        (when (eq (cadr spec) 'path-or-resource)
+          (let* ((key (intern (concat ":" (symbol-name (car spec)))))
+                 (address (plist-get args key)))
+            (when (and (stringp address)
+                       (mevedel-resource-address-like-p address))
+              (let ((attempt
+                     (mevedel-resource-prepare operation address context)))
+                (push (cons address attempt) attempts))))))))
+    (funcall next
+             (cond
+              (patch-proposal
+               (plist-put context :patch-proposal patch-proposal))
+              (attempts
+               (plist-put context :resource-attempts attempts))
+              (t context)))))
 
 (defun mevedel-pipeline--current-request ()
   "Return the current mevedel request struct, if any."
@@ -1167,23 +1256,38 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
           :permission-context permission-context)))
      (mevedel-permission--checker-args permission-context))))
 
-(defun mevedel-pipeline--tool-paths (tool args)
-  "Return every filesystem path declared by TOOL for ARGS."
-  (delete-dups
-   (delq nil
-         (condition-case nil
-             (cond
-              ((mevedel-tool-get-paths tool)
-               (funcall (mevedel-tool-get-paths tool) args))
-              ((mevedel-tool-get-path tool)
-               (list (funcall (mevedel-tool-get-path tool) args))))
-           (error nil)))))
+(defun mevedel-pipeline--tool-paths (tool args &optional context)
+  "Return every filesystem path declared by TOOL for ARGS.
+
+Addressed read-only operands are already authorized by their resource
+attempt and do not become permission paths.  Ordinary paths retain the
+existing path extraction behavior."
+  (let* ((proposal (plist-get context :patch-proposal))
+         (paths
+          (condition-case nil
+              (if proposal
+                  (mevedel-tool-patch--get-paths-from-proposal proposal)
+                (cond
+                 ((mevedel-tool-get-paths tool)
+                  (funcall (mevedel-tool-get-paths tool) args))
+                 ((mevedel-tool-get-path tool)
+                  (list (funcall (mevedel-tool-get-path tool) args)))))
+            (error nil)))
+         (attempts (plist-get context :resource-attempts)))
+    (delete-dups
+     (delq nil
+           (mapcar
+            (lambda (path)
+              (if (and (stringp path) (cdr (assoc path attempts)))
+                  nil
+                path))
+            paths)))))
 
 (defun mevedel-pipeline--step-permission (context next fail)
   "Authorize each filesystem path in CONTEXT before continuing."
   (let* ((tool (plist-get context :tool))
          (paths (mevedel-pipeline--tool-paths
-                 tool (plist-get context :args))))
+                 tool (plist-get context :args) context)))
     (if (null paths)
         (mevedel-pipeline--step-permission-one context next fail)
       (cl-labels
@@ -1334,7 +1438,7 @@ unused -- a snapshot failure is best-effort and should never fail the
 pipeline."
   (let ((tool (plist-get context :tool))
         (args (plist-get context :args)))
-    (dolist (path (mevedel-pipeline--tool-paths tool args))
+    (dolist (path (mevedel-pipeline--tool-paths tool args context))
       (mevedel--snapshot-file-if-needed path))
     (funcall next context)))
 
@@ -1475,6 +1579,10 @@ buffer."
                    (plist-get context :tool-use-id))
                   (mevedel-pipeline--auto-apply-edit-p
                    (plist-get context :auto-apply-edit-p))
+                  (mevedel-resource--current-attempts
+                   (plist-get context :resource-attempts))
+                  (mevedel-tool-patch--prepared-proposal
+                   (plist-get context :patch-proposal))
                   (mevedel-execution--sandbox-summary-cell
                    (plist-get context :sandbox-summary-cell)))
               (mevedel-tool-repair-mark-executed repair-entry)
@@ -2305,21 +2413,22 @@ Returns a list of step functions based on TOOL's behavioral flags:
   1. validate            -- always included
   2. pre-tool-hooks      -- always included
   3. normalize-paths     -- canonicalizes `path'-typed args for authorization
-  4. permission          -- always included
-  5. capture-coverage    -- records mutation paths without exact snapshots
-  6. snapshot            -- included when snapshot-p
-  7. handler             -- always included
-  8. repair-reminder     -- appends feedback for committed input repairs
-  9. render-transform    -- always included; no-op when tool has none
-  10. persist            -- included when max-result-size is set
-  11. specialist-nudges  -- bounded guidance for generic code tools
-  12. post-tool-hooks    -- always included
-  13. persist            -- included when max-result-size is set; bounds
+  4. prepare-resources   -- parses addressed operands before permission
+  5. permission          -- always included
+  6. capture-coverage    -- records mutation paths without exact snapshots
+  7. snapshot            -- included when snapshot-p
+  8. handler             -- always included
+  9. repair-reminder     -- appends feedback for committed input repairs
+  10. render-transform   -- always included; no-op when tool has none
+  11. persist            -- included when max-result-size is set
+  12. specialist-nudges  -- bounded guidance for generic code tools
+  13. post-tool-hooks    -- always included
+  14. persist            -- included when max-result-size is set; bounds
                             hook-updated results
-  14. Goal budget warning -- appends one early 100% warning when crossed
-  15. attach-render-data -- always included; no-op when handler returned
+  15. Goal budget warning -- appends one early 100% warning when crossed
+  16. attach-render-data -- always included; no-op when handler returned
                             neither render-data nor explicit status
-  16. attach-media-data  -- always included; no-op when handler returned
+  17. attach-media-data  -- always included; no-op when handler returned
                              no media"
   (let ((steps nil))
     (push #'mevedel-pipeline--step-attach-media-data steps)
@@ -2338,6 +2447,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
       (push #'mevedel-pipeline--step-snapshot steps))
     (push #'mevedel-pipeline--step-capture-coverage steps)
     (push #'mevedel-pipeline--step-permission steps)
+    (push #'mevedel-pipeline--step-prepare-resources steps)
     (push #'mevedel-pipeline--step-normalize-paths steps)
     (push #'mevedel-pipeline--step-pre-tool-hooks steps)
     (push #'mevedel-pipeline--step-validate steps)
@@ -2389,6 +2499,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
          (tool-use-id (mevedel-pipeline--current-tool-use-id tool args))
          (repair-entry
           (mevedel-tool-repair-consume-ledger-entry tool args))
+         (resource-attempts-cell (list nil))
          (steps (mevedel-pipeline--build-steps tool))
          (cancel-cell (list nil))
          (sandbox-summary-cell (list nil))
@@ -2417,11 +2528,13 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                         :origin (mevedel-current-origin)
                         :buffer dispatch-buffer
                         :default-directory workdir
+                        :resource-attempts-cell resource-attempts-cell
                         :cancel-cell cancel-cell
                         :sandbox-summary-cell sandbox-summary-cell))
          (called nil)
          (once-callback
           (lambda (result)
+            (mevedel-pipeline--discard-resource-attempts context)
             (cond
              ((not called)
               (setq called t)

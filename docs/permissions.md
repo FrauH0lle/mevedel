@@ -82,6 +82,26 @@ extraction, rule buckets, mode, allowed roots, exact resource grants,
 missing-session fallback warnings, and the prompt rule shape used for
 outside-root approvals.
 
+## Resource-address authority
+
+A resource address identifies a target; it is not a permission grant. After
+repair and final validation, resource preparation resolves an opaque attempt
+and only the logical authority facts needed here, without reading content.
+Permission then applies the ordinary operation policy before the authorized
+handler consumes that attempt. Malformed or unsupported addresses, traversal,
+and containment failures stop before permission and post-use hooks; a valid but
+missing, disconnected, stale, or unreadable resource follows ordinary handler
+failure handling.
+
+Read-only `artifact://`, `skill://`, `agent://`, `history://`, and `memory://`
+resources keep their intrinsic read capability and current freshness rules.
+`local://` mutation uses ordinary `ApplyPatch` permission and patch review;
+recognizing an address does not broaden roots or create a grant. Skill and
+memory addresses retain client-local origin, while MCP authority remains with
+the current configured connection. Plan mode denies mutation tree-wide,
+including `local://` and retained agents, regardless of permission mode or
+allow rules. See [`address-to-resource.md`](address-to-resource.md#shared-resolution-and-permission-seam).
+
 The synchronous and asynchronous decision entry points then share one pure
 preflight. It normalizes decision facts, resolves absolute deny rules, and
 records protected-path and resource-boundary facts exactly once. Both paths

@@ -144,6 +144,69 @@
 					 invocation))))
 		     (kill-buffer buffer))))
 
+(mevedel-deftest mevedel-agent-conversation-history-markdown ()
+  ,test
+  (test)
+  :doc "projects canonical user, assistant, and tool transcript content"
+  (let* ((buffer (generate-new-buffer " *agent-conversation-history*"))
+         (invocation (mevedel-agent-invocation--create :buffer buffer)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (org-mode)
+            (insert ":PROPERTIES:\n"
+                    ":GPTEL_SYSTEM: hidden provider prompt\n"
+                    ":GPTEL_BOUNDS: hidden persistence metadata\n"
+                    ":END:\n\n"
+                    "Inspect the project.\n")
+            (let ((response-start (point)))
+              (insert "I will inspect the project.\n")
+              (put-text-property response-start (point) 'gptel 'response))
+            (insert "#+begin_tool (Read :file_path \"src.el\")\n")
+            (let ((content-start (point)))
+              (insert "(:name \"Read\" :args (:file_path \"src.el\"))\n\n"
+                      "visible tool result\n")
+              (put-text-property content-start (point)
+                                 'gptel '(tool . "call-read")))
+            (insert "#+end_tool\n")
+            (insert "<system-reminder>\n"
+                    "hidden reminder\n"
+                    "</system-reminder>\n\n"
+                    "<hook-context>\n"
+                    "hidden hook\n"
+                    "</hook-context>\n\n"
+                    "<!-- mevedel-render-data -->\n"
+                    "(:secret \"hidden render data\")\n"
+                    "<!-- /mevedel-render-data -->\n")
+            (let ((response-start (point)))
+              (insert "Final assistant answer.\n")
+              (put-text-property response-start (point) 'gptel 'response))
+            (insert "#+begin_reasoning\nhidden reasoning\n#+end_reasoning\n"))
+          (let ((history (mevedel-agent-conversation-history-markdown
+                          invocation)))
+            (should (equal history (substring-no-properties history)))
+            (should (string-match-p (regexp-quote "Inspect the project.")
+                                    history))
+            (should (string-match-p (regexp-quote "visible tool result")
+                                    history))
+            (should (string-match-p (regexp-quote "Final assistant answer.")
+                                    history))
+            (should (< (string-match "Inspect the project\." history)
+                       (string-match "visible tool result" history)))
+            (should (< (string-match "visible tool result" history)
+                       (string-match "Final assistant answer\." history)))
+            (dolist (hidden '("hidden provider prompt"
+                              "hidden persistence metadata"
+                              "hidden reminder"
+                              "hidden hook"
+                              "hidden render data"
+                              "hidden reasoning"
+                              "#+begin_tool"
+                              "#+end_tool"))
+              (should-not (string-match-p (regexp-quote hidden) history)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (mevedel-deftest mevedel-agent-conversation-final-activity ()
 		 ,test
 		 (test)
@@ -524,7 +587,11 @@
 			   (should (equal "Frozen worker prompt" gptel-system-prompt))
 			   (should (equal root default-directory))
 			   (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
-			   (should-not (buffer-modified-p))))
+			   (should-not (buffer-modified-p))
+			   (should (string-match-p
+					    (regexp-quote "Conversation")
+					    (mevedel-agent-conversation-history-markdown
+					     invocation)))))
 		     (when (buffer-live-p buffer)
 		       (with-current-buffer buffer
 			 (set-buffer-modified-p nil)

@@ -278,13 +278,35 @@
     (should (equal description (nth 3 (car args))))
     (should
      (equal
-      "File path Pass a raw filesystem path, not Markdown or a URL."
+      "File path Pass a raw filesystem path, not Markdown or a web URL."
       provider-description))
     (should-not
      (string-match-p
       (concat (regexp-quote mevedel-tool--path-description-suffix) ".*"
               (regexp-quote mevedel-tool--path-description-suffix))
       provider-description)))
+
+  :doc "keeps ordinary path guidance filesystem-only"
+  (let* ((result
+          (mevedel-tool--args-to-gptel
+           '((path path :required "File path"))))
+         (description (plist-get (car result) :description)))
+    (should (equal
+             "File path Pass a raw filesystem path, not Markdown or a web URL."
+             description))
+    (should-not (string-search "resource address" description)))
+
+  :doc "adds resource guidance to path-or-resource arguments"
+  (let* ((result
+          (mevedel-tool--args-to-gptel
+           '((path path-or-resource :required "File path"))))
+         (provider-arg (car result))
+         (description (plist-get (car result) :description)))
+    (should (eq 'string (plist-get provider-arg :type)))
+    (should (string-suffix-p
+             mevedel-tool--path-or-resource-description-suffix
+             description))
+    (should (string-search "canonical resource address" description)))
 
   :doc "does not add path semantics to wrapped string arguments"
   (let* ((wrapped

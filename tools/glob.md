@@ -1,5 +1,20 @@
 Fast file pattern matching tool that works with any codebase size.
 
+Resource addresses
+- `path` accepts a raw filesystem path or canonical `local://`,
+  `artifact://`, `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]`, or
+  `memory://root`/`memory://ROOT-KEY/RELATIVE-PATH` address. These are the only
+  resource families supported by Glob. Examples include `local://notes`,
+  `artifact://tool-result.txt`, and `memory://root`.
+- Bare `local://` and `artifact://` list current entries;
+  `memory://root` searches the configured memory roots. A skill search must
+  name an exact `skill://NAME@SOURCE-KEY` source. Agent, history, MCP,
+  and other unsupported scheme/operation pairs are rejected explicitly.
+- Use canonical `scheme://` text. Resource addresses name a tool target only:
+  they do not attach content, invoke skills, or delegate agents. `@file` and
+  `@mcp` attach content, `$skill` invokes instructions, and `@agent` delegates
+  work. Do not use Markdown links or web URLs as filesystem paths.
+
 - Supports glob patterns like "**/*.ts" or "src/**/*.py"
 - Results are capped at 100 entries by default; narrow with `path` / a more
   specific pattern if results are truncated.

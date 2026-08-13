@@ -3,6 +3,24 @@ using this tool. Assume this tool is able to read all files on the machine. If
 the user provides a path to a file assume that path is valid. It is okay to read
 a file that does not exist; an error will be returned.
 
+Resource addresses
+- `file_path` accepts a raw filesystem path or canonical resource address.
+  Read supports `local://`, `artifact://`,
+  `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]`, `agent://`, `history://`,
+  `memory://root` or `memory://ROOT-KEY/RELATIVE-PATH`, and
+  `mcp://` or `mcp://ENCODED-SERVER[/ENCODED-RESOURCE-URI]`. Examples:
+  `local://notes.md`, `artifact://result.txt`,
+  `skill://lint@0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/README.md`,
+  `agent://root/reviewer#/findings/0/path`, and
+  `mcp://default/urn%3Aexample%3Areadme`.
+- Bare `local://`, `artifact://`, `skill://`, `agent://`, `history://`, and
+  `mcp://` list current entries; `mcp://ENCODED-SERVER` lists that server's
+  advertised resources, and `memory://root` returns the current memory index.
+- Use canonical `scheme://` text. Resource addresses name a tool target only:
+  they do not attach content, invoke skills, or delegate agents. `@file` and
+  `@mcp` attach content, `$skill` invokes instructions, and `@agent` delegates
+  work. Do not use Markdown links or web URLs as filesystem paths.
+
 Usage:
 - The file_path parameter can be absolute or relative. Relative paths are
   resolved from the session working directory.

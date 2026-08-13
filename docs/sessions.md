@@ -92,6 +92,7 @@ Layout:
   file-history/                      ; per-session backup store
     4f1e8c9a3b2d6e57@v1
     4f1e8c9a3b2d6e57@v2
+  local/                              ; lazy session-owned scratch resources
   agents/                            ; sub-agent transcript .chat.org files
 ```
 
@@ -120,6 +121,22 @@ An Agent `summary` selection is persisted only in the child transcript as a
 labelled `<task-background>` block before the authoritative Agent Task. The
 parent sidecar and tool result retain only provider/model/effort metadata, not
 the generated summary text.
+
+## Session-owned local state
+
+`local/` is created lazily when the first durable write to `local://` succeeds.
+It is shared by the root and its retained-agent tree, survives save, resume,
+and rename, and is removed when its owning session is cleaned up. A Conversation
+or Worktree Fork copies it into independent child state; Rewind leaves it
+unchanged. Local files are not workspace snapshots, touched files, instruction
+discovery, LSP inputs, directive patch captures, or Git summary inputs. An
+ephemeral request without durable session ownership cannot create or mutate it.
+
+Session-owned `local://`, `artifact://`, `agent://`, and `history://` addresses
+belong to the session's execution target. Client-local skill and memory roots
+retain their origin, while MCP addresses use the current configured connection;
+no resource address changes a session's target. See
+[`address-to-resource.md`](address-to-resource.md#local).
 
 Pending input is live-session state, not sidecar state. Same-turn steering,
 queued follow-ups, their category order and edit state, session-local IDs,
@@ -337,7 +354,8 @@ even when it is the first turn in the session.
 
 Current session settings survive. Tasks, Goal, retained agents and mailboxes,
 pending Plan state, permission queues, and execution state are cleared because
-they do not have a trustworthy per-turn journal.
+they do not have a trustworthy per-turn journal. Session-owned `local/` is
+deliberately not per-turn state and remains unchanged.
 
 Rewind refuses while the session has live executions and points the user to
 `/ps` and `/stop`; hiding a process behind older history would violate its
@@ -390,8 +408,9 @@ child-owned values. Prompt indexes, file snapshots, skill history, historical
 agent transcripts, and accepted-plan evidence stop at the fork point. Tasks,
 Goal, pending Plan/handoff state, addressable agents and mail, pending inputs,
 requests, interactions, queues, executions, callbacks, logs, caches, and
-one-shot prompt context start empty. Only dropped-file grants referenced by
-the transferred draft move to Child.
+one-shot prompt context start empty. Session-owned `local/` is copied into
+independent child state rather than shared. Only dropped-file grants referenced
+by the transferred draft move to Child.
 
 Conversation children use the first unused direct-child name
 `<source> · conversation N`, receive a normal unique session ID, and can be
@@ -434,7 +453,8 @@ suffix.
 
 Renaming a materialized session preserves live execution ownership. Retained
 artifact paths are retargeted immediately after the session directory moves,
-before process filters can append further output.
+before process filters can append further output; session-relative `local://`
+addresses remain valid within the renamed session.
 
 ### Agent transcripts
 
@@ -443,7 +463,9 @@ Retained-agent transcript files live under `agents/`. The sidecar's
 terminal transcript inspection. The separate `:agent-registry` is the
 addressability source of truth; it persists canonical and parent paths, role
 and frozen configuration, activity, unread mailbox, conversation location,
-and internal storage identity.
+and internal storage identity, plus each retained agent's latest settled
+payload and terminal outcome when present. The `RESULT` mailbox remains a
+bounded preview; history addresses use the retained transcript identity.
 
 On normal resume, a persisted active turn has no surviving provider request.
 Recovery settles it once as interrupted, releases its capacity slot, preserves
@@ -498,7 +520,8 @@ are obsolete, unreadable, or missing. Exit cleanup scans every workspace
 registered during the Emacs invocation before releasing live-session locks.
 Cleanup uses `:updated-at` when available, otherwise the sidecar or session
 directory modification time. It skips active locks and is throttled to once per
-workspace per Emacs invocation. `nil` disables.
+workspace per Emacs invocation. Expired session cleanup removes its `local/`
+scratch directory with the rest of the session. `nil` disables.
 
 ## Defcustoms
 

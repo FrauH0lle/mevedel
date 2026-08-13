@@ -33,6 +33,10 @@
                   "mevedel-execution-scheduler"
                   (scheduler mode start &optional admit-p reject))
 
+;; `mevedel-resource'
+(declare-function mevedel-resource-artifact-address
+                  "mevedel-resource" (path session))
+
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox--record-launch-failure
                   "mevedel-sandbox" (child-result))
@@ -837,6 +841,7 @@ run."
 
 (defun mevedel-execution--telemetry (record event &rest props)
   "Record safe execution EVENT and PROPS for RECORD."
+  (require 'mevedel-telemetry)
   (let* ((origin (mevedel-execution--record-origin record))
          (session (and (mevedel-execution--origin-p origin)
                        (mevedel-execution--origin-session origin)))
@@ -915,7 +920,9 @@ run."
          record 'execution-first-output
          :chunk-bytes (string-bytes written-text)))
       (let ((coding-system-for-write 'utf-8-unix))
-        (write-region written-text nil path t 'silent))
+        (condition-case nil
+            (write-region written-text nil path t 'silent)
+          (file-error nil)))
       (mevedel-execution--retain-output record written-text)
       (cl-incf (mevedel-execution--record-newline-count record)
                (cl-count ?\n written-text))
@@ -996,6 +1003,16 @@ preserve the default zero-success/nonzero-failure rule."
    ((processp (mevedel-execution--record-process record)) 'running)
    (t 'queued)))
 
+(defun mevedel-execution--artifact-address (record)
+  "Return RECORD's logical model-visible artifact address, or nil."
+  (when (and (mevedel-execution--record-yielded-p record)
+             (mevedel-execution--record-spool-path record))
+    (require 'mevedel-resource)
+    (mevedel-resource-artifact-address
+     (mevedel-execution--record-spool-path record)
+     (mevedel-execution--origin-session
+      (mevedel-execution--record-origin record)))))
+
 (defun mevedel-execution--facts (record)
   "Return an immutable public fact snapshot for RECORD."
   (let* ((finished (mevedel-execution--record-finished-p record))
@@ -1023,9 +1040,7 @@ preserve the default zero-success/nonzero-failure rule."
           :omitted-output-bytes
           (or (mevedel-execution--record-omitted-output-bytes record) 0)
           :tty (and (mevedel-execution--record-tty-p record) t)
-          :output-path
-          (and (mevedel-execution--record-retained-p record)
-               (mevedel-execution--record-spool-path record)))))
+          :output-path (mevedel-execution--artifact-address record))))
 
 (defun mevedel-execution--event (record type &rest properties)
   "Return an immutable TYPE event for RECORD with PROPERTIES."
@@ -1414,6 +1429,31 @@ it briefly so repeated owner polls return the same result."
               (funcall callback
                        (mevedel-execution--observation record t)))))))))
 
+(defun mevedel-execution--publish-yielded-artifact (record)
+  "Publish RECORD's spool without moving a file still being appended.
+
+Foreground output stays under a hidden pending directory until the first
+yield.  The initial bytes are copied into the retained directory, then future
+process-filter appends use the published path."
+  (let* ((path (mevedel-execution--record-spool-path record))
+         (private-directory (and path (file-name-directory path)))
+         (private-name (and private-directory
+                            (file-name-nondirectory
+                             (directory-file-name private-directory)))))
+    (when (and path
+               (equal private-name ".mevedel-pending-executions"))
+      (let* ((public-directory
+              (file-name-directory (directory-file-name private-directory)))
+             (target (file-name-concat
+                      public-directory (file-name-nondirectory path))))
+        (condition-case nil
+            (progn
+              (make-directory public-directory t)
+              (copy-file path target t)
+              (setf (mevedel-execution--record-spool-path record) target)
+              (delete-file path))
+          (error nil))))))
+
 (defun mevedel-execution--yield-managed (record)
   "Deliver RECORD's initial running observation and detach it from request."
   (unless (or (mevedel-execution--record-finished-p record)
@@ -1422,6 +1462,7 @@ it briefly so repeated owner polls return the same result."
       (if (and (processp process)
                (memq (process-status process) '(exit signal)))
           (mevedel-execution--process-ended record process)
+        (mevedel-execution--publish-yielded-artifact record)
         (setf (mevedel-execution--record-yielded-p record) t
               (mevedel-execution--record-retained-p record) t)
         (mevedel-execution--release-scheduler record)
@@ -1592,7 +1633,10 @@ terminal settlement."
            (id (mevedel-execution--next-id state))
            (artifact-directory
             (or artifact-directory temporary-file-directory))
-           (_ (make-directory artifact-directory t))
+           (pending-artifact-directory
+            (file-name-concat artifact-directory
+                              ".mevedel-pending-executions"))
+           (_ (make-directory pending-artifact-directory t))
            (record
             (mevedel-execution--record-create
              :callback callback :execution-id id
@@ -1613,7 +1657,8 @@ terminal settlement."
              :sandbox-summary-cell (list nil)
              :spool-path
              (make-temp-file
-              (file-name-concat artifact-directory "execution-") nil ".log")
+              (file-name-concat pending-artifact-directory "execution-")
+              nil ".log")
              :started-at (float-time) :token id
              :tty-p (and tty t) :workdir workdir
              :yield-time-ms yield-time-ms)))

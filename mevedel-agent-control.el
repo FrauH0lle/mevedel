@@ -167,12 +167,44 @@
   hook-context-pending
   blockers
   waiter
-  result-handler)
+  result-handler
+  settled-result
+  settled-outcome)
 
 (defun mevedel-agent-control--active-p (record)
   "Return non-nil when RECORD owns one active-turn slot."
   (mevedel-agent-control-active-activity-p
    (mevedel-agent-record-activity record)))
+
+(defun mevedel-agent-control-settled-result (record)
+  "Return RECORD's settled result plist when it is idle, or nil.
+
+The returned plist contains the terminal `:outcome' and the complete
+unbounded `:payload'.  Active turns deliberately expose no previous result."
+  (when (and (mevedel-agent-record-p record)
+             (eq (mevedel-agent-record-activity record) 'idle)
+             (stringp (mevedel-agent-record-settled-result record))
+             (memq (mevedel-agent-record-settled-outcome record)
+                   '(completed errored interrupted)))
+    (list :outcome (mevedel-agent-record-settled-outcome record)
+          :payload (copy-sequence
+                    (mevedel-agent-record-settled-result record)))))
+
+(defun mevedel-agent-control--clear-settled-result (record)
+  "Clear RECORD's settled result before starting another turn."
+  (setf (mevedel-agent-record-settled-result record) nil
+        (mevedel-agent-record-settled-outcome record) nil))
+
+(defun mevedel-agent-control--record-settled-result
+    (record outcome payload)
+  "Store complete PAYLOAD and OUTCOME as RECORD's settled result.
+Return the normalized payload stored in the record."
+  (let ((payload (if (stringp payload) payload (format "%S" payload))))
+    (unless (memq outcome '(completed errored interrupted))
+      (error "Invalid agent result outcome: %s" outcome))
+    (setf (mevedel-agent-record-settled-result record) payload
+          (mevedel-agent-record-settled-outcome record) outcome)
+    payload))
 
 (defun mevedel-agent-control--persist-session (session)
   "Best-effort persist SESSION's changed agent state."
@@ -562,8 +594,8 @@ Return the resolved recipient path.  Sending never activates a turn."
    (lambda (a b)
      (string-lessp (plist-get a :path) (plist-get b :path)))))
 
-(defun mevedel-agent-control--recovery-result (record)
-  "Return RECORD's interrupted recovery payload with useful partial text."
+(defun mevedel-agent-control--recovery-result-text (record)
+  "Return RECORD's complete interrupted recovery payload."
   (let* ((buffer (mevedel-agent-record-conversation-buffer record))
          (identity
           (and (buffer-live-p buffer)
@@ -575,16 +607,19 @@ Return the resolved recipient path.  Sending never activates a turn."
                  (ignore-errors
                    (mevedel-agent-conversation-final-response identity)))))
          (location (mevedel-agent-record-conversation-location record)))
-    (mevedel-agent-control--bounded-result
-     record
-     (concat
+    (concat
      "Agent turn was interrupted by session recovery."
       "\n\nReason: the persisted turn had no live provider "
       "request after resume."
       (when partial
         (format "\n\nPartial response:\n\n%s" partial))
       (when location
-        (format "\n\nTranscript: %s" location))))))
+        (format "\n\nTranscript: %s" location)))))
+
+(defun mevedel-agent-control--recovery-result (record)
+  "Return RECORD's bounded interrupted recovery payload."
+  (mevedel-agent-control--bounded-result
+   record (mevedel-agent-control--recovery-result-text record)))
 
 (defun mevedel-agent-control-recover-interrupted (session)
   "Recover every persisted active turn in SESSION as an interrupted RESULT.
@@ -596,18 +631,23 @@ rewrite after the complete registry has been repaired."
     (dolist (entry (mevedel-session-agent-registry session))
       (let ((record (cdr entry)))
         (when (mevedel-agent-control--active-p record)
-          (setf (mevedel-agent-record-activity record) 'idle)
-          (setf (mevedel-agent-record-invocation record) nil)
-          (setf (mevedel-agent-record-blockers record) nil)
-          (mevedel-agent-control--enqueue
-           session (mevedel-agent-record-parent-path record)
-           (list :type 'RESULT
-                 :sender (mevedel-agent-record-path record)
-                 :recipient (mevedel-agent-record-parent-path record)
-                 :outcome 'interrupted
-                 :payload (mevedel-agent-control--recovery-result record)
-                 :timestamp (current-time)))
-          (cl-incf count))))
+          (let ((payload
+                 (mevedel-agent-control--recovery-result-text record)))
+            (mevedel-agent-control--record-settled-result
+             record 'interrupted payload)
+            (setf (mevedel-agent-record-activity record) 'idle)
+            (setf (mevedel-agent-record-invocation record) nil)
+            (setf (mevedel-agent-record-blockers record) nil)
+            (mevedel-agent-control--enqueue
+             session (mevedel-agent-record-parent-path record)
+             (list :type 'RESULT
+                   :sender (mevedel-agent-record-path record)
+                   :recipient (mevedel-agent-record-parent-path record)
+                   :outcome 'interrupted
+                   :payload
+                   (mevedel-agent-control--bounded-result record payload)
+                   :timestamp (current-time)))
+            (cl-incf count)))))
     count))
 
 (defun mevedel-agent-control--validate-spawn (session task-name message)
@@ -740,6 +780,9 @@ it queued for ordinary parent delivery."
                     (mevedel-agent-invocation-terminal-reason invocation)
                     "Agent turn failed")
               response)))
+      (setq payload
+            (mevedel-agent-control--record-settled-result
+             record outcome payload))
       (setf (mevedel-agent-record-activity record) 'idle)
       (setf (mevedel-agent-record-invocation record) nil)
       (setf (mevedel-agent-record-blockers record) nil)
@@ -763,6 +806,7 @@ it queued for ordinary parent delivery."
            (mevedel-agent-invocation-path invocation)))
   (setf (mevedel-agent-record-id record)
         (mevedel-agent-invocation-agent-id invocation))
+  (mevedel-agent-control--clear-settled-result record)
   (setf (mevedel-agent-record-invocation record) invocation)
   (setf (mevedel-agent-record-blockers record) nil)
   (setf (mevedel-agent-record-conversation-buffer record)
@@ -857,6 +901,7 @@ it queued for ordinary parent delivery."
                   (mevedel-session-agent-turn-capacity session))
           (user-error "Agent tree is at its active-turn capacity"))
         (setf (mevedel-agent-record-activity record) 'starting)
+        (mevedel-agent-control--clear-settled-result record)
         (condition-case err
             (mevedel-agent-control--dispatch-followup
              session record message parent-tool-use-id)

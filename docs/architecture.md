@@ -333,6 +333,28 @@ Matching files are included from broadest to closest scope as
 `## Workspace Configuration` so deeper instructions override earlier
 ones.
 
+## Resource addressing
+
+Filesystem-shaped tools consume one closed set of seven resource-address
+families: `local://`, `artifact://`, `skill://`, `agent://`, `history://`,
+`memory://`, and `mcp://`. `Read` supports all seven; `Glob` and `Grep`
+support `local://`, `artifact://`, `skill://`, and `memory://`; `ApplyPatch`
+supports `local://` alongside ordinary filesystem paths. Addresses serialize
+canonical resource locators and do not replace target-native paths, mentions,
+or permissions.
+
+The resolver prepares an opaque attempt and logical authority facts after
+repair, final validation, and pre-use hooks, then permission and any review
+authorize it before execution consumes that attempt without reparsing. Content,
+backing paths, and helper roots remain behind the boundary. Local, artifact,
+agent, and history resources belong to the session execution target; skills and
+memory retain client-local origin; MCP uses the current configured connection.
+Freshness and persistence remain owned by each family, while completion and
+atomic mention bindings preserve locator identity without side effects. Plan
+mode remains tree-wide read-only, including local and retained-agent targets.
+See [`address-to-resource.md`](address-to-resource.md) and
+[`ADR 0099`](adr/0099-keep-resource-addresses-closed-and-capability-neutral.md).
+
 ## Persistent memory
 
 Memory indexes are read from configured `.mevedel/memory/` and

@@ -157,6 +157,9 @@
 (declare-function mevedel-prompt-submission-set-outcome
 		  "mevedel-prompt-submission" (submission outcome))
 
+;; `mevedel-resource-capf'
+(declare-function mevedel-resource-capf "mevedel-resource-capf" ())
+
 ;; `mevedel-review'
 (declare-function mevedel-review--mark-command-outcome
 		  "mevedel-review" (outcome))
@@ -1184,6 +1187,9 @@ ARG is passed through from the interactive prefix."
                 (not mevedel-view--side-conversation-p))
     (mevedel-mentions-install)
     (mevedel-view--install-dnd)
+    (require 'mevedel-resource-capf)
+    (add-hook 'completion-at-point-functions
+              #'mevedel-resource-capf nil t)
     (unless mevedel-view--side-conversation-p
       (mevedel-view-history-load mevedel--session)
       (add-hook 'completion-at-point-functions

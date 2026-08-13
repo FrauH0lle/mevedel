@@ -110,12 +110,13 @@ of `(args validation-issues)` and must return changed `:args` plus value-free
 candidate is committed only when final validation succeeds; otherwise the
 model gets bounded, value-free retry guidance and no tentative arguments run.
 
-`path` is an internal semantic argument type for mevedel-owned filesystem
-contracts. Provider schemas lower it to an ordinary JSON string and append
-the guidance “Pass a raw filesystem path, not Markdown or a URL.” This lets
-native tools opt into the narrow auto-link repair without guessing whether an
-arbitrary string is a path. Wrapped tools can use `:repair-input` when their
-source schema cannot express mevedel's semantic `path` type.
+`path` is an internal semantic argument type for filesystem-only contracts.
+Provider schemas lower it to an ordinary JSON string and append the guidance
+“Pass a raw filesystem path, not Markdown or a URL.” Tools that also accept
+resource addresses use a separate path-or-resource contract, so a recognized
+`scheme://` address is not rejected as a web URL and ordinary paths retain
+their current behavior. Wrapped tools can use `:repair-input` when their
+source schema cannot express either semantic type.
 
 Committed repairs proceed without a retry and add one corrective note to the
 final tool result, including error results. If a multi-step candidate still
@@ -144,6 +145,32 @@ the prior mevedel wrapper, matching native tool registration.
 Preset application also resolves its tool specs from the current registry.
 Reloading a native tool therefore updates the next request's schema and
 handler instead of leaving a stale `gptel-tool` captured by an older preset.
+
+## Resource addresses in filesystem-shaped tools
+
+The closed resource resolver accepts the seven documented `scheme://` families
+without adding a model-facing tool. The operation matrix is deliberately
+narrow: `Read` accepts every family; `Glob` and `Grep` accept `local://`,
+`artifact://`, `skill://`, and `memory://`; `ApplyPatch` accepts `local://` and
+ordinary filesystem paths. Unsupported combinations fail explicitly. Bare
+addresses list only when the family defines a discovery listing.
+
+Resource preparation runs after repair, final validation, `PreToolUse`, and
+hook-rewrite validation, but before permission, snapshots, helper execution,
+patch review, or handlers. It returns an opaque resolved attempt and logical
+authority facts without reading content. After permission, the handler
+executes that attempt without reparsing the authored address. Malformed or
+unsupported addresses therefore stop before permission and post-use hooks;
+valid but unavailable resources follow ordinary handler failure handling.
+
+Authored addresses remain in model-visible errors, headings, search results,
+truncation notices, and persisted tool arguments. Backing paths and helper
+roots stay private. Directory-backed resource searches use the existing
+confined helper boundary with exact read roots; virtual resources stay
+in-process. A mixed local/ordinary `ApplyPatch` remains one proposal and one
+atomic review transaction. See
+[`address-to-resource.md`](address-to-resource.md) for canonical grammar,
+freshness, and lifecycle contracts.
 
 Tools carry `:groups`. `(:deferred GROUP)` in a preset's or agent's tool
 list pulls every tool tagged with GROUP into the session's deferred set.
@@ -400,8 +427,9 @@ When `:max-result-size` is set and result exceeds the effective limit
 (min of tool value and 50,000-char global cap), the full result is saved
 to `.mevedel/tool-results/` and replaced with a preview wrapped in
 `<persisted-output>` XML. The LLM can `Read` the file to see the full
-output, and the notice provides exact bounded `Read` continuation and `Grep`
-recovery calls. `Grep` accepts an explicit persisted `tool-results/*.txt` path.
+output, and the notice provides a followable `artifact://` address plus exact
+bounded `Read` continuation and `Grep` recovery calls. `Grep` accepts an
+explicit artifact address; absolute session-storage paths remain internal.
 When persistence is unavailable, the notice says the omitted text is
 unavailable and asks for a narrower rerun. Oversized error results are
 truncated but not persisted according to
@@ -414,8 +442,9 @@ workspace → no persistence.
 Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
 Glob 30k, Ask 30k, Xref*/Imenu 20k, Treesitter 30k,
 WebFetch/YouTube 50k. Read/ApplyPatch: nil (self-bounded or short). Agent
-`RESULT` mailbox records inline at most a 32 KiB preview of the
-final response and point to the persisted transcript when available.
+`RESULT` mailbox records inline at most a 32 KiB preview of the final response;
+the retained agent resource keeps the complete latest settled payload and
+terminal outcome.
 
 ## External helper confinement
 

@@ -39,6 +39,9 @@
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-repair-input "mevedel-tool-registry" (cl-x) t)
 
+;; `mevedel-resource'
+(declare-function mevedel-resource-address-like-p "mevedel-resource" (value))
+
 ;; `mevedel-utilities'
 (declare-function mevedel--format-hook-audit-record
                   "mevedel-utilities" (record))
@@ -160,7 +163,7 @@
 (defun mevedel-tool-repair--type-p (type value)
   "Return non-nil when VALUE satisfies schema TYPE."
   (pcase type
-    ((or 'string 'path) (stringp value))
+    ((or 'string 'path 'path-or-resource) (stringp value))
     ('integer (integerp value))
     ('number (numberp value))
     ('boolean (or (eq value t) (eq value :json-false)))
@@ -169,6 +172,12 @@
                  (and (hash-table-p value)
                       (= 0 (hash-table-count value)))))
     (_ (error "Unsupported tool schema type: %S" type))))
+
+(defun mevedel-tool-repair--resource-address-like-p (value)
+  "Return non-nil when VALUE begins with a resource-like scheme prefix."
+  (when (stringp value)
+    (require 'mevedel-resource)
+    (mevedel-resource-address-like-p value)))
 
 (defun mevedel-tool-repair--issue (path kind expected actual &optional schema)
   "Return a structured validation issue."
@@ -276,8 +285,14 @@
                path 'invalid-enum enum
                (mevedel-tool-repair--actual-type value) schema)
               issues))
-      (when (and mevedel-tool-repair--raw-input-p
-                 (eq type 'path)
+      (when (and (eq type 'path)
+                 (mevedel-tool-repair--resource-address-like-p value))
+        (push (mevedel-tool-repair--issue
+               path 'resource-address 'path 'string schema)
+              issues))
+      (when (and (or (eq type 'path-or-resource)
+                     (and mevedel-tool-repair--raw-input-p
+                          (eq type 'path)))
                  (mevedel-tool-repair--unwrap-path-autolink value))
         (push (mevedel-tool-repair--issue
                path 'path-autolink 'path 'string schema)
@@ -547,6 +562,7 @@ positional dispatch, which represents omitted optional arguments as nil."
                      (mevedel-tool-repair-format-path path))))))
          ((and (eq rule 'unwrap-path-autolink)
                (eq kind 'path-autolink)
+               (eq (plist-get schema :type) 'path)
                (mevedel-tool-repair--unwrap-path-autolink
                 (mevedel-tool-repair--value-at-path args path)))
           (let ((unwrapped
@@ -958,6 +974,9 @@ with `Error:' so gptel settles the call without invoking its handler."
                path))
       ('path-autolink
        (format "`%s`: pass a raw filesystem path, not Markdown or a URL."
+               path))
+      ('resource-address
+       (format "`%s`: filesystem-only path arguments do not accept resource addresses."
                path))
       ('wrong-type
        (let* ((schema (plist-get issue :schema))

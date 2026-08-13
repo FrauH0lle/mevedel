@@ -43,6 +43,7 @@
 (require 'mevedel-hooks)
 (require 'mevedel-view-zone)
 (require 'mevedel-view-history)
+(require 'mevedel-resource-capf)
 (require 'gptel-request)
 (require 'mcp)
 
@@ -1464,6 +1465,47 @@
               (should (equal "$remember d"
                              (mevedel-view--input-text))))))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-view-resource-capf
+  (:doc "composer installs inert resource-address completion")
+  (let* ((save-path (make-temp-file "mevedel-view-resource-capf-" t))
+         (session (mevedel-session--create
+                   :name "resource-capf" :save-path save-path)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat save-path "local") t)
+          (with-temp-file
+              (file-name-concat save-path "local" "note.md")
+            (insert "note"))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (should (memq #'mevedel-resource-capf
+                            completion-at-point-functions))
+              (goto-char (mevedel-view--input-start))
+              (insert "local://")
+              (let* ((result (mevedel-resource-capf))
+                     (candidates (mevedel-view-test--capf-candidates result)))
+                (should (member "local://note.md" candidates))
+                (should-not (get-text-property
+                             0 'mevedel-mention-binding
+                             (car candidates)))))))
+      (delete-directory save-path t))))
+
+(mevedel-deftest mevedel-view-side-resource-capf
+  (:doc "side composers install resource-address completion")
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      ;; The setup above creates a normal composer.  Reinitialize the same
+      ;; editable surface as a side composer after removing the first hook so
+      ;; this assertion covers the side-specific initialization branch.
+      (remove-hook 'completion-at-point-functions
+                   #'mevedel-resource-capf t)
+      (setq-local mevedel-view--side-conversation-p t)
+      (mevedel-view-composer-initialize)
+      (should (memq #'mevedel-resource-capf
+                    completion-at-point-functions)))))
 
 (mevedel-deftest mevedel-view--refresh-skill-argument-hint ()
   ,test

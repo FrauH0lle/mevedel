@@ -37,6 +37,9 @@ lazily — read them when planning work in the relevant area. The
   (`mevedel-workspace`, `-session`, `-request`, `-tool`), workspace
   context chain, gptel integration, persistent memory layout, chat
   buffer formatting
+- [`docs/address-to-resource.md`](docs/address-to-resource.md) — closed
+  resource-address families, canonical locators, operation matrix, permission
+  seam, lifecycle, freshness, and capability boundaries
 - [`docs/view.md`](docs/view.md) — dual-buffer view model, status /
   interaction / input zones, rendered agent transcript views, input
   history

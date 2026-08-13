@@ -14,6 +14,7 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-view)
 (require 'mevedel-tool-fs)
+(require 'mevedel-resource)
 (require 'mevedel-workspace)
 (require 'gptel-agent-tools)
 (require 'helpers
@@ -26,6 +27,7 @@
 
 (defvar gptel-backend)
 (defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*")
+(defvar mevedel-session--read-only-mode nil)
 
 
 ;;
@@ -131,7 +133,7 @@
                      ("Read" file_path)
                      ("Grep" path)))
       (should
-       (eq 'path
+       (eq 'path-or-resource
            (cadr (assq (cadr entry)
                        (mevedel-tool-args (mevedel-tool-get (car entry))))))))
     (should
@@ -153,6 +155,116 @@
       (nth 3 (assq 'path
                    (mevedel-tool-args (mevedel-tool-get "Grep"))))))))
 
+(mevedel-deftest mevedel-tool-fs--resource-dispatch ()
+  ,test
+  (test)
+  :doc "reads local and artifact resources without exposing backing paths"
+  (let* ((save-path (make-temp-file "mevedel-fs-resource-" t))
+         (session (mevedel-session--create :save-path save-path))
+         (local-root (file-name-concat save-path "local" "src"))
+         (artifact-root (file-name-concat save-path "tool-results" "part one"))
+         (local-file (file-name-concat local-root "notes.md"))
+         (artifact-file (file-name-concat artifact-root "result.txt"))
+         (local-address "local://src/notes.md")
+         (artifact-address "artifact://part%20one/result.txt"))
+    (unwind-protect
+        (progn
+          (make-directory local-root t)
+          (make-directory artifact-root t)
+          (with-temp-file local-file (insert "local note\n"))
+          (with-temp-file artifact-file (insert "artifact result\n"))
+          (cl-labels
+              ((read-resource (address operation path)
+                 (let* ((attempt (mevedel-resource-prepare
+                                  operation address (list :session session)))
+                        (mevedel-resource--current-attempts
+                         (list (cons address attempt)))
+                        (mevedel--session session)
+                        (result (plist-get
+                                 (mevedel-tool-fs--read
+                                  (list :file_path address))
+                                 :result)))
+                   (should (string-match-p path result))
+                   (should-not (string-match-p
+                                (regexp-quote save-path) result))
+                   result)))
+            ;; Read uses the executor synchronously.
+            (read-resource local-address 'read "local note")
+            (read-resource artifact-address 'read "artifact result")
+            (let* ((record (mevedel-agent-record--create
+                            :path "/root/reviewer" :role "reviewer"
+                            :activity 'idle
+                            :settled-result "alpha\nbeta\ngamma"
+                            :settled-outcome 'completed))
+                   (virtual-address "agent://root/reviewer")
+                   virtual-attempt)
+              (mevedel-session--set-agent-registry
+               session (list (cons "/root/reviewer" record)))
+              (setq virtual-attempt
+                    (mevedel-resource-prepare
+                     'read virtual-address (list :session session)))
+              (let ((mevedel-resource--current-attempts
+                     (list (cons virtual-address virtual-attempt))))
+                (let ((result
+                       (plist-get
+                        (mevedel-tool-fs--read
+                         (list :file_path virtual-address :offset 2 :limit 1))
+                        :result)))
+                  (should (string-match-p "2\11beta" result))
+                  (should-not (string-match-p "alpha" result))
+                  (should-not (string-match-p (regexp-quote save-path)
+                                              result)))))
+            ;; Search handlers retain their existing ripgrep execution path;
+            ;; only the path prefix in its model-visible result is rewritten.
+            (let ((local-root-address "local://src")
+                  (artifact-root-address "artifact://part%20one"))
+              (let ((local-attempt
+                     (mevedel-resource-prepare
+                      'glob local-root-address (list :session session)))
+                    (artifact-attempt
+                     (mevedel-resource-prepare
+                      'grep artifact-root-address (list :session session))))
+                (let ((mevedel-resource--current-attempts
+                       (list (cons local-root-address local-attempt)))
+                      (mevedel--session session))
+                  (cl-letf (((symbol-function
+                              'mevedel-execution-start-helper)
+                             (lambda (callback &rest _)
+                               (funcall callback
+                                        (list :exit-code 0
+                                              :output (concat local-file "\n")
+                                              :timed-out-p nil
+                                              :output-limit-p nil)))))
+                    (let ((result
+                           (test-mevedel-tool-fs--await-callback
+                            #'mevedel-tool-fs--glob
+                            (list :pattern "*.md" :path local-root-address))))
+                      (should (string-match-p
+                               "local://src/notes.md" result))
+                      (should-not (string-match-p
+                                   (regexp-quote save-path) result)))))
+                (let ((mevedel-resource--current-attempts
+                       (list (cons artifact-root-address artifact-attempt)))
+                      (mevedel--session session))
+                  (cl-letf (((symbol-function
+                              'mevedel-execution-start-helper)
+                             (lambda (callback &rest _)
+                               (funcall callback
+                                        (list :exit-code 0
+                                              :output (concat artifact-file "\n")
+                                              :timed-out-p nil
+                                              :output-limit-p nil)))))
+                    (let ((result
+                           (test-mevedel-tool-fs--await-callback
+                            #'mevedel-tool-fs--grep
+                            (list :pattern "result"
+                                  :path artifact-root-address))))
+                      (should (string-match-p
+                               "artifact://part%20one/result.txt" result))
+                      (should-not (string-match-p
+                                   (regexp-quote save-path) result)))))))))
+      (delete-directory save-path t))))
+
 (defun test-mevedel-tool-fs--await-callback (fn args)
   "Call async tool handler FN with ARGS and return its callback result."
   (let ((done nil)
@@ -171,6 +283,94 @@
     (should (and (proper-list-p result)
                  (plist-member result :result)))
     (plist-get result :result)))
+
+(mevedel-deftest mevedel-tool-fs--memory-resource-search
+  (:doc "searches every configured memory root and rewrites paths with root identities")
+  ,test
+  (test)
+  (let* ((workspace-root (make-temp-file "mevedel-memory-search-" t))
+         (first-root (file-name-concat workspace-root "first"))
+         (second-root (file-name-concat workspace-root "second"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id workspace-root :root workspace-root
+                     :name "memory-search"))
+         (session (mevedel-session--create
+                   :workspace workspace :working-directory workspace-root))
+         (address "memory://root")
+         (mevedel-memory-dirs (list first-root second-root)))
+    (unwind-protect
+        (progn
+          (make-directory first-root t)
+          (make-directory second-root t)
+          (with-temp-file (file-name-concat first-root "topic.md")
+            (insert "needle"))
+          (with-temp-file (file-name-concat second-root "topic.md")
+            (insert "needle"))
+          (let* ((roots (mevedel-system--memory-roots workspace))
+                 (first-address
+                  (concat "memory://"
+                          (mevedel-resource-memory-root-key (car roots))
+                          "/topic.md"))
+                 (second-address
+                  (concat "memory://"
+                          (mevedel-resource-memory-root-key (cadr roots))
+                          "/topic.md"))
+                 (attempt (mevedel-resource-prepare
+                           'glob address (list :session session)))
+                 (mevedel-resource--current-attempts
+                  (list (cons address attempt)))
+                 (mevedel--session session))
+            (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                       (lambda (callback &rest _)
+                         (funcall callback
+                                  (list :exit-code 0
+                                        :output (format "%s\n%s\n"
+                                                        (file-name-concat
+                                                         first-root "topic.md")
+                                                        (file-name-concat
+                                                         second-root "topic.md"))
+                                        :timed-out-p nil
+                                        :output-limit-p nil)))))
+              (let ((result
+                     (test-mevedel-tool-fs--await-callback
+                      #'mevedel-tool-fs--glob
+                      (list :pattern "*.md" :path address))))
+                (should (string-match-p (regexp-quote first-address) result))
+                (should (string-match-p (regexp-quote second-address) result))
+                (should-not (string-match-p
+                             (regexp-quote workspace-root) result))))))
+      (delete-directory workspace-root t))))
+
+(mevedel-deftest mevedel-tool-fs--memory-resource-media
+  (:doc "rejects binary and media reads through memory addresses")
+  ,test
+  (test)
+  (let* ((workspace-root (make-temp-file "mevedel-memory-media-" t))
+         (memory-root (file-name-concat workspace-root "memory"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id workspace-root :root workspace-root
+                     :name "memory-media"))
+         (session (mevedel-session--create
+                   :workspace workspace :working-directory workspace-root))
+         (mevedel-memory-dirs (list memory-root)))
+    (unwind-protect
+        (progn
+          (make-directory memory-root t)
+          (with-temp-file (file-name-concat memory-root "picture.png")
+            (insert "not really an image"))
+          (let* ((root (car (mevedel-system--memory-roots workspace)))
+                 (address (format "memory://%s/picture.png"
+                                  (mevedel-resource-memory-root-key root)))
+                 (attempt (mevedel-resource-prepare
+                           'read address (list :session session)))
+                 (mevedel-resource--current-attempts
+                  (list (cons address attempt)))
+                 (mevedel--session session)
+                 (err (should-error
+                       (mevedel-tool-fs--read (list :file_path address)))))
+            (should (string-match-p "Memory resources only support text reads"
+                                    (error-message-string err)))))
+      (delete-directory workspace-root t))))
 
 
 ;;

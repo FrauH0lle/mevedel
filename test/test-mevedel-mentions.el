@@ -14,6 +14,7 @@
 (require 'mevedel-permissions)
 (require 'mevedel-persistence)
 (require 'mevedel-mentions)
+(require 'mevedel-resource)
 (require 'mevedel-transcript)
 (require 'mevedel-tool-fs)
 (require 'mevedel-workspace)
@@ -299,6 +300,23 @@ Returns (buffer . overlay)."
           (should (equal (expand-file-name "notes.txt" working-directory)
                          (plist-get binding :path))))
       (delete-directory elsewhere t)
+      (delete-directory root t)))
+
+  :doc "normalizes ordinary file locators through the resource seam"
+  (let* ((root (make-temp-file "mevedel-file-resource-locator-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root :name "file-locator"))
+         (session (mevedel-session-create "main" workspace root))
+         (process-environment
+          (cons (concat "MEVEDEL_MENTION_ROOT=" root) process-environment))
+         (token "@file:$MEVEDEL_MENTION_ROOT/notes.txt")
+         (prepared (mevedel-mentions-prepare-user-input token session))
+         (binding (get-text-property
+                   (string-match (regexp-quote token) prepared)
+                   'mevedel-mention-binding prepared)))
+    (unwind-protect
+        (should (equal (file-name-concat root "notes.txt")
+                       (plist-get binding :path)))
       (delete-directory root t)))
 
   :doc "binds self-delimited file mentions before prose punctuation"
@@ -1155,6 +1173,31 @@ Returns (buffer . overlay)."
         (should (equal (cons 'mcp (cons "srv" "uri/x"))
                        (plist-get result :key)))
         (should (stringp (plist-get result :hash))))))
+
+  :doc "bound MCP locators use the canonical resource resolver"
+  (let (seen)
+    (cl-letf (((symbol-function 'mevedel-resource-prepare)
+               (lambda (operation address context)
+                 (setq seen (list operation address context))
+                 'resource-attempt))
+              ((symbol-function 'mevedel-resource-execute)
+               (lambda (attempt)
+                 (should (eq attempt 'resource-attempt))
+                 '(:result "resolver body"))))
+      (let ((result
+             (mevedel--handle-mcp-mention
+              (list :match-text "@mcp:srv:file:///guide"
+                    :captures '("@mcp:srv:file:///guide" "srv"
+                                "file:///guide")
+                    :binding (list :kind 'mcp
+                                   :token "@mcp:srv:file:///guide"
+                                   :server "srv"
+                                   :uri "file:///guide")))))
+        (should (string-match-p "resolver body"
+                                (plist-get result :reminder)))
+        (should (equal '(read "mcp://srv/file%3A%2F%2F%2Fguide"
+                              (:session nil))
+                       seen)))))
 
   :doc "a replacement connection under the same server name is used"
   (let ((first-connection (make-symbol "first-connection"))

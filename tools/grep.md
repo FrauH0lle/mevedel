@@ -1,5 +1,20 @@
 A powerful search tool built on ripgrep.
 
+Resource addresses
+- `path` accepts a raw filesystem path or canonical `local://`,
+  `artifact://`, `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]`, or
+  `memory://root`/`memory://ROOT-KEY/RELATIVE-PATH` address. These are the only
+  resource families supported by Grep. Examples include `local://notes`,
+  `artifact://tool-result.txt`, and `memory://root`.
+- Bare `local://` and `artifact://` search current entries;
+  `memory://root` searches the configured memory roots. A skill search must
+  name an exact `skill://NAME@SOURCE-KEY` source. Agent, history, MCP,
+  and other unsupported scheme/operation pairs are rejected explicitly.
+- Use canonical `scheme://` text. Resource addresses name a tool target only:
+  they do not attach content, invoke skills, or delegate agents. `@file` and
+  `@mcp` attach content, `$skill` invokes instructions, and `@agent` delegates
+  work. Do not use Markdown links or web URLs as filesystem paths.
+
   Usage:
   - Supports full regex syntax (e.g., "log.*Error", "defun\s+\w+")
   - Filter files with glob parameter (e.g., "*.ts", "**/*.tsx") or type
