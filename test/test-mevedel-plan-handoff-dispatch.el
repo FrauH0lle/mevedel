@@ -706,7 +706,7 @@
              (plist-member (mevedel-session-plan-metadata source-session)
                            :implementation-retry))
             (dolist (prompt prompts)
-              (should (string-match-p (regexp-quote target-address) prompt))))
+              (should (string-match-p (regexp-quote target-address) prompt)))))
       (dolist (buffer (list view-buffer target-buffer source-buffer))
         (when (buffer-live-p buffer) (kill-buffer buffer)))
       (delete-directory target-directory t)
