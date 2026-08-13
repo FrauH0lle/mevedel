@@ -11,14 +11,19 @@
 (require 'cl-lib)
 
 ;; `gptel-request'
+(declare-function gptel--merge-plists "ext:gptel-request" (&rest plists))
+(declare-function gptel--model-request-params "ext:gptel-request" (model))
 (declare-function gptel-backend-models "ext:gptel-request" (cl-x) t)
+(declare-function gptel-backend-request-params "ext:gptel-request" (backend))
 (declare-function gptel-get-backend "ext:gptel-request" (name))
 (defvar gptel--known-backends)
+(defvar gptel--request-params)
 
 ;; `gptel'
 (declare-function gptel-backend-name "ext:gptel" (cl-x) t)
 (declare-function gptel--model-name "ext:gptel" (model))
 (defvar gptel-backend)
+(defvar gptel-max-tokens)
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
 
@@ -33,6 +38,20 @@
 
 ;;
 ;;; Customization
+
+(defcustom mevedel-model-context-limit nil
+  "Fallback context window in tokens.
+
+Mevedel uses this only when the active model has no declared
+`:context-window'.  When nil, the fallback is 128000 tokens."
+  :type '(choice (const :tag "Use built-in fallback" nil)
+          (natnum :tag "Fallback token count"))
+  :group 'mevedel)
+
+(defcustom mevedel-model-reserve-tokens 20000
+  "Token headroom reserved below the model context window."
+  :type 'natnum
+  :group 'mevedel)
 
 (defcustom mevedel-model-tiers
   '((fast)
@@ -60,6 +79,53 @@ Each entry is (WORKLOAD :tier TIER :provider PROVIDER :effort EFFORT).
 inherit the current session values."
   :group 'mevedel
   :type '(repeat sexp))
+
+
+;;
+;;; Context budget
+
+(defsubst mevedel-model-context-window (&optional model)
+  "Return MODEL's context window in tokens.
+MODEL defaults to `gptel-model'.  gptel stores `:context-window' in
+thousands of tokens, sometimes as a float."
+  (when-let* ((m (or model gptel-model))
+              (kt (get m :context-window)))
+    (round (* kt 1000))))
+
+(defun mevedel-model--max-output-tokens (policy)
+  "Return POLICY's configured maximum output token count, or zero."
+  (let ((gptel-backend (plist-get policy :backend))
+        (gptel-model (plist-get policy :model))
+        (gptel-max-tokens (plist-get policy :max-tokens))
+        (gptel--request-params (plist-get policy :request-params)))
+    (or gptel-max-tokens
+        (when (and gptel-backend
+                   (fboundp 'gptel--merge-plists)
+                   (fboundp 'gptel-backend-request-params)
+                   (fboundp 'gptel--model-request-params))
+          (let ((params
+                 (gptel--merge-plists
+                  gptel--request-params
+                  (gptel-backend-request-params gptel-backend)
+                  (gptel--model-request-params gptel-model))))
+            (or (plist-get params :max_tokens)
+                (plist-get params :maxOutputTokens)
+                (plist-get params :max_output_tokens)
+                (plist-get params :num_predict))))
+        0)))
+
+(defun mevedel-model-usable-input-tokens (policy)
+  "Return usable input context tokens for model POLICY.
+
+POLICY is a plist carrying `:backend', `:model', `:max-tokens', and
+`:request-params'.  The response reserve is capped at half the context
+window so small local models keep a meaningful budget."
+  (let* ((context (or (mevedel-model-context-window (plist-get policy :model))
+                      mevedel-model-context-limit
+                      128000))
+         (reserve (max mevedel-model-reserve-tokens
+                       (mevedel-model--max-output-tokens policy))))
+    (max 1 (- context (min reserve (max 1 (/ context 2)))))))
 
 
 ;;

@@ -526,6 +526,12 @@ durable parent.  Runtime state and unsanitized subsystem logs continue to
 belong to SESSION; only explicitly sanitized audit events use this target."
   (or (and session (mevedel-session-audit-session session)) session))
 
+(defun mevedel-session-tool-results-directory (session)
+  "Return SESSION's persisted tool-results directory, or nil.
+The directory is not created here; callers that write into it own that."
+  (when-let* ((save-path (and session (mevedel-session-save-path session))))
+    (file-name-concat save-path "tool-results")))
+
 (defun mevedel-session-buffer-name (session-name workspace)
   "Return the buffer name for SESSION-NAME in WORKSPACE.
 Format: *mevedel:SESSION@WORKSPACE*"

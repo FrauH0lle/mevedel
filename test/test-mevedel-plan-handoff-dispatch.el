@@ -33,7 +33,7 @@
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-fresh-" t))
-         (accepted-path (file-name-concat save-dir "local" "plans" "accepted.md"))
+         (accepted-path (file-name-concat save-dir "local" "plans" "accepted-20260813-120000.md"))
          (current-path (file-name-concat save-dir "local" "plans" "current.md"))
          (body "# Immutable accepted plan")
          (selection '(:location here :context fresh
@@ -42,7 +42,7 @@
          (record
           (list :step 'prepare-context :selection selection
                 :accepted
-                (list :path "local/plans/accepted.md"
+                (list :path "local/plans/accepted-20260813-120000.md"
                       :absolute-path accepted-path
                       :hash (mevedel-plan-hash body))))
          (session
@@ -130,7 +130,7 @@
             :selection (:location here :context fresh
                         :execution direct :mode edits
                         :model-provider "Test:test-model")
-            :accepted (:path "local/plans/accepted.md"
+            :accepted (:path "local/plans/accepted-20260813-120000.md"
                        :absolute-path "/tmp/accepted.md"
                        :hash "hash")))
          (session
@@ -155,7 +155,7 @@
   :doc "constructs a prepared Worktree Goal only in the target session"
   (let* ((source-save (make-temp-file "mevedel-plan-goal-source-" t))
          (target-save (make-temp-file "mevedel-plan-goal-target-" t))
-         (target-path (file-name-concat target-save "local" "plans" "accepted.md"))
+         (target-path (file-name-concat target-save "local" "plans" "accepted-20260813-120000.md"))
          (body "Worktree Goal plan")
          (selection '(:location worktree :context fresh
                       :execution goal :mode full-auto :branch "plan/goal"
@@ -166,7 +166,7 @@
                 :target-save-path target-save :target-session-id "target"
                 :target-directory default-directory
                 :target-accepted
-                (list :path "local/plans/accepted.md" :absolute-path target-path
+                (list :path "local/plans/accepted-20260813-120000.md" :absolute-path target-path
                       :hash (mevedel-plan-hash body))))
          (source-session
           (mevedel-session--create
@@ -216,7 +216,7 @@
           (let ((goal (mevedel-session-goal target-session)))
             (should goal)
             (should (= 7000 (mevedel-goal-token-budget goal)))
-            (should (equal "local/plans/accepted.md"
+            (should (equal "local/plans/accepted-20260813-120000.md"
                            (mevedel-goal-plan-reference goal))))
           (should (eq 'ask
                       (mevedel-session-permission-mode source-session))))
@@ -227,18 +227,18 @@
 
   :doc "reuses a matching Goal left durable before source retry cleanup"
   (let* ((save-dir (make-temp-file "mevedel-plan-goal-crash-" t))
-         (accepted-path (file-name-concat save-dir "local" "plans" "accepted.md"))
+         (accepted-path (file-name-concat save-dir "local" "plans" "accepted-20260813-120000.md"))
          (body "Crash-window plan")
          (goal (mevedel-goal--create
                 :id "reserved" :status 'paused :reason "session resumed"
-                :plan-reference "local/plans/accepted.md"))
+                :plan-reference "local/plans/accepted-20260813-120000.md"))
          (record
           (list :step 'submit :goal-id "reserved"
                 :selection '(:location here :context current
                               :execution goal :mode edits
                               :model-provider "Test:test-model")
                 :accepted
-                (list :path "local/plans/accepted.md"
+                (list :path "local/plans/accepted-20260813-120000.md"
                       :absolute-path accepted-path
                       :hash (mevedel-plan-hash body))))
          (session
@@ -287,7 +287,7 @@
 
   :doc "leaves a different unfinished target Goal untouched and retryable"
   (let* ((save-dir (make-temp-file "mevedel-plan-goal-conflict-" t))
-         (accepted-path (file-name-concat save-dir "local" "plans" "accepted.md"))
+         (accepted-path (file-name-concat save-dir "local" "plans" "accepted-20260813-120000.md"))
          (body "Conflicting Goal plan")
          (goal (mevedel-goal--create
                 :id "other" :status 'paused :reason "owned"
@@ -298,7 +298,7 @@
                               :execution goal :mode edits
                               :model-provider "Test:test-model")
                 :accepted
-                (list :path "local/plans/accepted.md"
+                (list :path "local/plans/accepted-20260813-120000.md"
                       :absolute-path accepted-path
                       :hash (mevedel-plan-hash body))))
          (session
@@ -346,7 +346,7 @@
 
   :doc "pauses after kickoff startup failure and resumes held input first"
   (let* ((save-dir (make-temp-file "mevedel-plan-goal-kickoff-" t))
-         (accepted-path (file-name-concat save-dir "local" "plans" "accepted.md"))
+         (accepted-path (file-name-concat save-dir "local" "plans" "accepted-20260813-120000.md"))
          (body "Kickoff failure plan")
          (record
           (list :step 'submit :goal-id "reserved"
@@ -354,7 +354,7 @@
                               :execution goal :mode edits
                               :model-provider "Test:test-model")
                 :accepted
-                (list :path "local/plans/accepted.md"
+                (list :path "local/plans/accepted-20260813-120000.md"
                       :absolute-path accepted-path
                       :hash (mevedel-plan-hash body))))
          (session
@@ -426,7 +426,7 @@
 
   :doc "Here/Summary caches one zero-tail compaction across dispatch retry"
   (let* ((save-dir (make-temp-file "mevedel-plan-summary-" t))
-         (accepted-path (file-name-concat save-dir "local" "plans" "accepted.md"))
+         (accepted-path (file-name-concat save-dir "local" "plans" "accepted-20260813-120000.md"))
          (body "# Accepted plan\n\nImplement the endpoint.")
          (selection '(:location here :context summary
                       :execution direct :mode edits
@@ -434,7 +434,7 @@
          (record
           (list :step 'prepare-summary :selection selection
                 :accepted
-                (list :path "local/plans/accepted.md"
+                (list :path "local/plans/accepted-20260813-120000.md"
                       :absolute-path accepted-path
                       :hash (mevedel-plan-hash body))))
          (session
@@ -553,7 +553,9 @@
                            :implementation-retry))
             (dolist (prompt prompts)
               (let ((path-position
-                     (string-search accepted-path prompt))
+                     (string-search
+                      "local://plans/accepted-20260813-120000.md"
+                      prompt))
                     (plan-position (string-search body prompt))
                     (instruction-position
                      (string-search "Implementation instructions:" prompt)))
@@ -572,7 +574,7 @@
          (target-directory
           (file-name-as-directory
            (make-temp-file "mevedel-plan-worktree-checkout-" t)))
-         (source-path (file-name-concat source-save "local" "plans" "accepted.md"))
+         (source-path (file-name-concat source-save "local" "plans" "accepted-20260813-120000.md"))
          (body "# Worktree plan\n\nImplement it.")
          (selection '(:location worktree :context fresh
                       :execution direct :mode full-auto
@@ -581,7 +583,7 @@
          (record
           (list :step 'prepare-worktree :selection selection
                 :accepted
-                (list :path "local/plans/accepted.md"
+                (list :path "local/plans/accepted-20260813-120000.md"
                       :absolute-path source-path
                       :hash (mevedel-plan-hash body))))
          (source-session
@@ -603,6 +605,7 @@
          (archives 0)
          (attempts 0)
          request-fsm
+         target-address
          prompts)
     (unwind-protect
         (progn
@@ -666,6 +669,9 @@
                    (target-path
                     (plist-get (plist-get retry :target-accepted)
                                :absolute-path)))
+              (setq target-address
+                    (mevedel-plan-resource-address
+                     (plist-get (plist-get retry :target-accepted) :path)))
               (should (= 1 creates))
               (should (= 1 archives))
               (should (eq 'submit (plist-get retry :step)))
@@ -700,11 +706,7 @@
              (plist-member (mevedel-session-plan-metadata source-session)
                            :implementation-retry))
             (dolist (prompt prompts)
-              (should (string-match-p
-                       (regexp-quote
-                        (file-name-concat target-save
-                                          "local" "plans" "accepted.md"))
-                       prompt)))))
+              (should (string-match-p (regexp-quote target-address) prompt))))
       (dolist (buffer (list view-buffer target-buffer source-buffer))
         (when (buffer-live-p buffer) (kill-buffer buffer)))
       (delete-directory target-directory t)
@@ -720,7 +722,7 @@
          (target-directory
           (file-name-as-directory
            (make-temp-file "mevedel-plan-worktree-summary-target-checkout-" t)))
-         (source-path (file-name-concat source-save "local" "plans" "accepted.md"))
+         (source-path (file-name-concat source-save "local" "plans" "accepted-20260813-120000.md"))
          (body "# Worktree summary plan\n\nImplement it.")
          (selection '(:location worktree :context summary
                       :execution direct :mode edits :branch "plan/summary"
@@ -728,7 +730,7 @@
          (record
           (list :step 'prepare-summary :selection selection
                 :accepted
-                (list :path "local/plans/accepted.md"
+                (list :path "local/plans/accepted-20260813-120000.md"
                       :absolute-path source-path
                       :hash (mevedel-plan-hash body))))
          (source-session
@@ -855,8 +857,9 @@
                                        (point-min) (point-max)))))
               (let ((path-position
                      (string-search
-                      (plist-get (plist-get retry :target-accepted)
-                                 :absolute-path)
+                      (mevedel-plan-resource-address
+                       (plist-get (plist-get retry :target-accepted)
+                                  :path))
                       prompt))
                     (plan-position (string-search body prompt))
                     (instruction-position

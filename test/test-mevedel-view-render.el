@@ -276,7 +276,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
         (should (= 1 (length turns)))
         (should (eq 'assistant (plist-get (car turns) :role)))))))
 
-  :doc "task background and authoritative Agent Task are separate user turns"
+  :doc "task background is its own turn beside the authoritative Agent Task"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
@@ -286,7 +286,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (with-current-buffer data-buf
       (let* ((segments (mevedel-transcript-segments (point-min) (point-max)))
              (turns (mevedel-view--group-into-turns segments data-buf)))
-        (should (equal '(user user)
+        (should (equal '(task-background user)
                        (mapcar (lambda (turn) (plist-get turn :role)) turns)))
         (should (eq 'task-background
                     (caar (plist-get (car turns) :segments)))))))
@@ -770,7 +770,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft "> quote\nsecond line" 3)
         (mevedel-view--render-turn
-         (list :role 'user
+         (list :role 'task-background
                :segments (list (list 'task-background 1 end))
                :start 1 :end end)
          data-buf)

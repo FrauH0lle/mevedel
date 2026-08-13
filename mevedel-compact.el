@@ -74,10 +74,6 @@
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 
-;; `mevedel-context-summary'
-(declare-function mevedel-context-summary-usable-tokens
-                  "mevedel-context-summary" (policy))
-
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
                   (decision &optional event))
@@ -98,9 +94,12 @@
 (declare-function mevedel--transform-expand-mentions "mevedel-mentions" (fsm))
 
 ;; `mevedel-models'
+(declare-function mevedel-model-context-window "mevedel-models" (&optional model))
 (declare-function mevedel-model-resolve-workload
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
+(declare-function mevedel-model-usable-input-tokens "mevedel-models" (policy))
+(defvar mevedel-model-context-limit)
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--transform "mevedel-reminders" (fsm))
@@ -133,6 +132,8 @@
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-invoked-skills "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-tool-results-directory
+                  "mevedel-structs" (session))
 (declare-function mevedel-session-touched-files "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -237,15 +238,6 @@
     (gptel--handle-wait fsm)))
 
 
-(defcustom mevedel-compact-context-limit nil
-  "Fallback context window in tokens.
-
-Mevedel uses this only when the active model has no declared
-`:context-window'.  When nil, the fallback is 128000 tokens."
-  :type '(choice (const :tag "Use built-in fallback" nil)
-          (natnum :tag "Fallback token count"))
-  :group 'mevedel)
-
 (defcustom mevedel-compact-token-threshold 0.80
   "Fraction of usable context that triggers auto-compaction."
   :type '(restricted-sexp
@@ -255,11 +247,6 @@ Mevedel uses this only when the active model has no declared
              (and (floatp value)
                   (< 0.0 value)
                   (< value 1.0)))))
-  :group 'mevedel)
-
-(defcustom mevedel-compact-reserve-tokens 20000
-  "Token headroom reserved below the model context window."
-  :type 'natnum
   :group 'mevedel)
 
 (defcustom mevedel-compact-image-token-estimate 1844
@@ -346,18 +333,10 @@ block."
     (when (re-search-forward "Local Variables:" nil t)
       (line-beginning-position))))
 
-(defsubst mevedel--model-context-window (&optional model)
-  "Return MODEL's context window in tokens.
-MODEL defaults to `gptel-model'.  gptel stores `:context-window' in
-thousands of tokens, sometimes as a float."
-  (when-let* ((m (or model gptel-model))
-              (kt (get m :context-window)))
-    (round (* kt 1000))))
-
 (defun mevedel--compact-usable-tokens ()
   "Return usable context tokens after response reserve."
-  (require 'mevedel-context-summary)
-  (mevedel-context-summary-usable-tokens
+  (require 'mevedel-models)
+  (mevedel-model-usable-input-tokens
    (list :backend gptel-backend
          :model gptel-model
          :max-tokens gptel-max-tokens
@@ -388,15 +367,11 @@ thousands of tokens, sometimes as a float."
         :max-tokens gptel-max-tokens
         :request-params gptel--request-params))
 
-(defun mevedel--compact-policy-usable-tokens (policy)
-  "Return usable input context tokens for model POLICY."
-  (require 'mevedel-context-summary)
-  (mevedel-context-summary-usable-tokens policy))
-
 (defun mevedel--compact-policy-threshold-tokens (policy)
   "Return the compaction threshold for model POLICY."
+  (require 'mevedel-models)
   (mevedel--compact-threshold-tokens
-   (mevedel--compact-policy-usable-tokens policy)))
+   (mevedel-model-usable-input-tokens policy)))
 
 (defun mevedel--compact-token-usage-count (tokens)
   "Return total prompt/output TOKENS from a gptel token-usage plist."
@@ -445,8 +420,8 @@ count never becomes the baseline for the chat buffer."
               (mevedel--compact-estimate-buffer-tokens chat-buffer))
              (model (or (plist-get info :model) gptel-model))
              (context-window
-              (or (mevedel--model-context-window model)
-                  mevedel-compact-context-limit
+              (or (mevedel-model-context-window model)
+                  mevedel-model-context-limit
                   128000))
              (provider-status
               (cond
@@ -570,7 +545,7 @@ excludes file-local variables block."
      (mevedel--compact-estimate-buffer-tokens (current-buffer))
      :target-model (plist-get target-policy :model)
      :model-context-window
-     (mevedel--model-context-window (plist-get target-policy :model))
+     (mevedel-model-context-window (plist-get target-policy :model))
      :threshold
      (min (mevedel--compact-policy-threshold-tokens target-policy)
           (mevedel--compact-policy-threshold-tokens summary-policy))
@@ -1072,11 +1047,7 @@ reconstructed into a child conversation."
     (mevedel-transcript-project-evidence
      (nreverse ranges)
      :tool-output-max mevedel-compact-body-tool-output-max
-     :tool-results-dir
-     (and session
-          (mevedel-session-save-path session)
-          (file-name-concat (mevedel-session-save-path session)
-                            "tool-results"))
+     :tool-results-dir (mevedel-session-tool-results-directory session)
      :skill-provenance
      (mevedel--compact-skill-provenance session 0 agent-path))))
 
@@ -1489,9 +1460,7 @@ current agent buffer's invocation."
                 :skill-agent-path
                 (mevedel-agent-invocation-require-path invocation)
                 :tool-results-dir
-                (and (mevedel-session-save-path session)
-                     (file-name-concat (mevedel-session-save-path session)
-                                       "tool-results"))
+                (mevedel-session-tool-results-directory session)
                 :eligible-p t
                 :apply #'mevedel--compact-agent-apply
                 :start #'mevedel--compact-agent-start
@@ -1685,10 +1654,7 @@ AUTO is non-nil for automatic compaction."
           :prompt-session session
           :skill-agent-path "/root"
           :tool-results-dir
-          (and session
-               (mevedel-session-save-path session)
-               (file-name-concat (mevedel-session-save-path session)
-                                 "tool-results"))
+          (mevedel-session-tool-results-directory session)
           :eligible-p (mevedel--compact-current-persisted-p)
           :begin-context-epoch t
           :apply #'mevedel--compact-main-apply
@@ -1714,6 +1680,7 @@ AUTO is non-nil for automatic compaction."
   auto
   callback
   chat-buffer
+  focus
   instructions
   invocation
   old-content
@@ -1732,7 +1699,6 @@ AUTO is non-nil for automatic compaction."
   telemetry-span
   tokens-before
   trigger
-  focus
   workspace
   (attempt 0))
 
@@ -1900,39 +1866,44 @@ the persistent failure counter unchanged."
             sizep)))))))
 
 (defun mevedel--compact-run-send-request (state hook-context hook-audits)
-  "Generate STATE's summary with HOOK-CONTEXT and HOOK-AUDITS."
-  (if-let* ((prepared (mevedel--compact-run-state-prepared-summary state)))
-      (mevedel--compact-run-apply-summary state prepared hook-audits)
-    (require 'mevedel-context-summary)
-    (let* ((source
-            (if hook-context
-                (concat
-                 (mevedel--compact-run-state-old-content state)
-                 "\n\n--- evidence item; provenance: hook-context ---\n"
-                 hook-context
-                 "\n--- end evidence item ---")
-              (mevedel--compact-run-state-old-content state)))
-           (source-transform
-            (mevedel--compact-run-state-source-transform state))
-           (source (if source-transform
-                       (funcall source-transform source)
-                     source))
-           (purpose (mevedel--compact-run-state-purpose state))
-           (cancel
-            (mevedel-context-summary-generate
-             source purpose
-             (apply-partially
-              #'mevedel--compact-run-handle-summary state hook-audits)
-             :session (mevedel--compact-run-state-session state)
-             :previous-summary
-             (and (eq purpose 'continuation)
-                  (plist-get (mevedel--compact-run-state-target state)
-                             :previous-summary))
-             :focus (mevedel--compact-run-state-focus state)
-             :guidance (mevedel--compact-run-state-instructions state)
-             :policy (mevedel--compact-run-state-policy state))))
-      (unless (mevedel--compact-run-state-settled state)
-        (setf (mevedel--compact-run-state-request-cancel state) cancel)))))
+  "Generate STATE's summary with HOOK-CONTEXT and HOOK-AUDITS.
+A synchronous generator failure settles STATE as a retryable attempt
+rather than escaping, because the caller may be an asynchronous hook."
+  (condition-case err
+      (if-let* ((prepared (mevedel--compact-run-state-prepared-summary state)))
+          (mevedel--compact-run-apply-summary state prepared hook-audits)
+        (require 'mevedel-context-summary)
+        (let* ((source
+                (if hook-context
+                    (concat
+                     (mevedel--compact-run-state-old-content state)
+                     "\n\n--- evidence item; provenance: hook-context ---\n"
+                     hook-context
+                     "\n--- end evidence item ---")
+                  (mevedel--compact-run-state-old-content state)))
+               (source-transform
+                (mevedel--compact-run-state-source-transform state))
+               (source (if source-transform
+                           (funcall source-transform source)
+                         source))
+               (purpose (mevedel--compact-run-state-purpose state))
+               (cancel
+                (mevedel-context-summary-generate
+                 source purpose
+                 (apply-partially
+                  #'mevedel--compact-run-handle-summary state hook-audits)
+                 :session (mevedel--compact-run-state-session state)
+                 :previous-summary
+                 (and (eq purpose 'continuation)
+                      (plist-get (mevedel--compact-run-state-target state)
+                                 :previous-summary))
+                 :focus (mevedel--compact-run-state-focus state)
+                 :guidance (mevedel--compact-run-state-instructions state)
+                 :policy (mevedel--compact-run-state-policy state))))
+          (unless (mevedel--compact-run-state-settled state)
+            (setf (mevedel--compact-run-state-request-cancel state) cancel))))
+    (error
+     (mevedel--compact-run-fail state (format "%s" err) t))))
 
 (defun mevedel--compact-run-begin-attempt (state)
   "Run STATE's PreCompact hook and start one summary attempt."
@@ -1992,7 +1963,7 @@ AGGRESSIVE selects whether to preserve the ordinary recent-turn tail."
           (mevedel--compact-preserved-tail-turn-count
            tail-start limit aggressive))
          (content
-         (mevedel-transcript-project-evidence
+          (mevedel-transcript-project-evidence
            history-regions
            :tool-output-max mevedel-compact-body-tool-output-max
            :tool-results-dir (plist-get target :tool-results-dir)

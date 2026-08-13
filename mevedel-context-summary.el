@@ -24,20 +24,14 @@
 (defvar gptel-use-tools)
 
 ;; `gptel-request'
-(declare-function gptel--merge-plists "ext:gptel-request" (&rest plists))
-(declare-function gptel--model-request-params "ext:gptel-request" (model))
 (declare-function gptel-abort "ext:gptel-request" (buf))
-(declare-function gptel-backend-request-params "ext:gptel-request" (backend))
 (declare-function gptel-request "ext:gptel-request")
-
-;; `mevedel-compact'
-(defvar mevedel-compact-context-limit)
-(defvar mevedel-compact-reserve-tokens)
 
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
+(declare-function mevedel-model-usable-input-tokens "mevedel-models" (policy))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-p "mevedel-structs" (object))
@@ -79,11 +73,16 @@
   "Return trimmed SUMMARY when its headings match PURPOSE exactly."
   (unless (and (stringp summary) (not (string-blank-p summary)))
     (error "Context summary response is empty"))
-  (let ((start 0)
+  (let ((fenced nil)
         headings)
-    (while (string-match "^## \\(.+\\)$" summary start)
-      (push (match-string 1 summary) headings)
-      (setq start (match-end 0)))
+    ;; Only top-level headings count; a summary may legitimately quote
+    ;; Markdown inside a fenced code block.
+    (dolist (line (split-string summary "\n"))
+      (cond
+       ((string-match-p "\\`[ \t]*\\(?:```\\|~~~\\)" line)
+        (setq fenced (not fenced)))
+       ((and (not fenced) (string-match "\\`## \\(.+\\)\\'" line))
+        (push (match-string 1 line) headings))))
     (setq headings (nreverse headings))
     (unless (equal headings (mevedel-context-summary--headings purpose))
       (error "Context summary headings are invalid for %s: %S"
@@ -134,51 +133,14 @@ consumer-supplied relevance data."
              "\n--- end frozen untrusted evidence ---")))
    "\n"))
 
-(defun mevedel-context-summary--model-max-output-tokens (policy)
-  "Return POLICY's configured maximum output token count, or zero."
-  (let ((gptel-backend (plist-get policy :backend))
-        (gptel-model (plist-get policy :model))
-        (gptel-max-tokens (plist-get policy :max-tokens))
-        (gptel--request-params (plist-get policy :request-params)))
-    (or gptel-max-tokens
-        (when (and gptel-backend
-                   (fboundp 'gptel--merge-plists)
-                   (fboundp 'gptel-backend-request-params)
-                   (fboundp 'gptel--model-request-params))
-          (let ((params
-                 (gptel--merge-plists
-                  gptel--request-params
-                  (gptel-backend-request-params gptel-backend)
-                  (gptel--model-request-params gptel-model))))
-            (or (plist-get params :max_tokens)
-                (plist-get params :maxOutputTokens)
-                (plist-get params :max_output_tokens)
-                (plist-get params :num_predict))))
-        0)))
-
-(defun mevedel-context-summary-usable-tokens (policy)
-  "Return usable input tokens for summarization model POLICY."
-  (let* ((model (plist-get policy :model))
-         (context
-          (or (when-let* ((thousands (and model
-                                          (get model :context-window))))
-                (round (* thousands 1000)))
-              (and (boundp 'mevedel-compact-context-limit)
-                   mevedel-compact-context-limit)
-              128000))
-         (reserve
-          (max (if (boundp 'mevedel-compact-reserve-tokens)
-                   mevedel-compact-reserve-tokens
-                 20000)
-               (mevedel-context-summary--model-max-output-tokens policy))))
-    (max 1 (- context (min reserve (max 1 (/ context 2)))))))
-
 (defun mevedel-context-summary--estimated-tokens (system input)
   "Return a conservative token estimate for exact SYSTEM and INPUT text."
   (/ (+ (length system) (length input) 5) 4))
 
 (defun mevedel-context-summary--policy-buffer (session)
-  "Return SESSION's live root data buffer for workload resolution."
+  "Return SESSION's live root data buffer for workload resolution.
+Without a SESSION the caller owns the policy context, so return the
+current buffer."
   (if (not (and session
                 (fboundp 'mevedel-session-p)
                 (mevedel-session-p session)))
@@ -224,30 +186,14 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
                 mevedel-context-summary--guidance-max))
   (require 'gptel)
   (require 'mevedel-models)
-  (let* ((policy
-          (or policy
-              (with-current-buffer
-                  (mevedel-context-summary--policy-buffer session)
-                (append '(:max-tokens nil :request-params nil)
-                        (mevedel-model-resolve-workload 'summarization)))))
-         (system (mevedel-context-summary--prompt purpose))
-         (input (mevedel-context-summary--input
-                 source purpose previous-summary focus guidance))
-         (request-buffer (generate-new-buffer " *mevedel-context-summary*"))
+  (let* ((request-buffer (generate-new-buffer " *mevedel-context-summary*"))
+         ;; gptel runs response callbacks in its own process buffer, so
+         ;; restore the caller's buffer before settling.  Consumers resume
+         ;; session-local work (dispatch, buffer-local state) from here.
+         (caller-buffer (current-buffer))
          (settled nil)
          (request-started nil)
-         (span
-          (and session
-               (fboundp 'mevedel-telemetry-start)
-               (mevedel-telemetry-start
-                session 'context-summary-request
-                :purpose purpose
-                :backend
-                (when-let* ((backend (plist-get policy :backend)))
-                  (or (ignore-errors (gptel-backend-name backend))
-                      (format "%s" backend)))
-                :model (plist-get policy :model)
-                :effort (plist-get policy :effort))))
+         span
          (settle
           (lambda (result &optional info)
             (unless settled
@@ -265,12 +211,15 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
                       (plist-get (plist-get info :tokens) :output))))
               (when (buffer-live-p request-buffer)
                 (kill-buffer request-buffer))
-              (funcall callback
-                       (append
-                        result
-                        (list :backend (plist-get policy :backend)
-                              :model (plist-get policy :model)
-                              :effort (plist-get policy :effort)))))))
+              (with-current-buffer (if (buffer-live-p caller-buffer)
+                                       caller-buffer
+                                     (current-buffer))
+                (funcall callback
+                         (append
+                          result
+                          (list :backend (plist-get policy :backend)
+                                :model (plist-get policy :model)
+                                :effort (plist-get policy :effort))))))))
          (provider-callback
           (lambda (response info)
             (pcase response
@@ -304,38 +253,60 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
                       :error-class 'provider)
                 info))))))
     (condition-case err
-        (let ((estimate (mevedel-context-summary--estimated-tokens
-                         system input))
-              (usable (mevedel-context-summary-usable-tokens policy)))
-          (if (> estimate usable)
-              (funcall
-               settle
-               (list :outcome 'error
-                     :error
-                     (format
-                      "Context summary request (%d tokens) exceeds usable context (%d tokens)"
-                      estimate usable)
-                     :error-class 'size))
-            (let ((gptel-use-tools nil)
-                  (gptel-tools nil))
-              (gptel-with-preset 'gptel-default
-                (let ((gptel-backend (plist-get policy :backend))
-                      (gptel-model (plist-get policy :model))
-                      (gptel-reasoning-effort (plist-get policy :effort))
-                      (gptel-max-tokens (plist-get policy :max-tokens))
-                      (gptel--request-params
-                       (plist-get policy :request-params))
-                      (gptel-stream nil))
-                  (setq request-started t)
-                  (gptel-request
-                   input
-                   :system system
-                   :buffer request-buffer
-                   :stream nil
-                   :transforms nil
-                   :context
-                   (list :mevedel-context-summary t :purpose purpose)
-                   :callback provider-callback))))))
+        (progn
+          (unless policy
+            (setq policy
+                  (with-current-buffer
+                      (mevedel-context-summary--policy-buffer session)
+                    (append '(:max-tokens nil :request-params nil)
+                            (mevedel-model-resolve-workload 'summarization)))))
+          (setq span
+                (and session
+                     (fboundp 'mevedel-telemetry-start)
+                     (mevedel-telemetry-start
+                      session 'context-summary-request
+                      :purpose purpose
+                      :backend
+                      (when-let* ((backend (plist-get policy :backend)))
+                        (or (ignore-errors (gptel-backend-name backend))
+                            (format "%s" backend)))
+                      :model (plist-get policy :model)
+                      :effort (plist-get policy :effort))))
+          (let* ((system (mevedel-context-summary--prompt purpose))
+                 (input (mevedel-context-summary--input
+                         source purpose previous-summary focus guidance))
+                 (estimate (mevedel-context-summary--estimated-tokens
+                            system input))
+                 (usable (mevedel-model-usable-input-tokens policy)))
+            (if (> estimate usable)
+                (funcall
+                 settle
+                 (list :outcome 'error
+                       :error
+                       (format
+                        "Context summary request (%d tokens) exceeds usable context (%d tokens)"
+                        estimate usable)
+                       :error-class 'size))
+              (let ((gptel-use-tools nil)
+                    (gptel-tools nil))
+                (gptel-with-preset 'gptel-default
+                  (let ((gptel-backend (plist-get policy :backend))
+                        (gptel-model (plist-get policy :model))
+                        (gptel-reasoning-effort (plist-get policy :effort))
+                        (gptel-max-tokens (plist-get policy :max-tokens))
+                        (gptel--request-params
+                         (plist-get policy :request-params))
+                        (gptel-stream nil))
+                    (setq request-started t)
+                    (gptel-request
+                     input
+                     :system system
+                     :buffer request-buffer
+                     :stream nil
+                     :transforms nil
+                     :context
+                     (list :mevedel-context-summary t :purpose purpose)
+                     :callback provider-callback)))))))
       (error
        (funcall
         settle

@@ -22,8 +22,8 @@
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
 
-;; `mevedel-compact'
-(defvar mevedel-compact-context-limit)
+;; `mevedel-models'
+(defvar mevedel-model-context-limit)
 
 ;; `mevedel-reminders'
 (defvar mevedel-reminders--current-chat-buffer)
@@ -83,7 +83,7 @@
 
 The dynamic prompt roster enumerates active, model-invocable skills so
 the model can call them by name via the `Skill' tool.  This fraction of
-`mevedel-compact-context-limit' (converted to characters at four chars
+`mevedel-model-context-limit' (converted to characters at four chars
 per token) caps the roster so it cannot crowd out the user's
 conversation on long sessions."
   :type 'float
@@ -91,11 +91,10 @@ conversation on long sessions."
 
 (defun mevedel-skills--listing-budget-chars ()
   "Return the character budget for the model-facing skills roster.
-Derived from `mevedel-skills-listing-budget' and the compact context
-limit; assumes ~4 characters per token."
-  (let ((limit (or (and (boundp 'mevedel-compact-context-limit)
-                        mevedel-compact-context-limit)
-                   200000)))
+Derived from `mevedel-skills-listing-budget' and the fallback model
+context limit; assumes ~4 characters per token."
+  (require 'mevedel-models)
+  (let ((limit (or mevedel-model-context-limit 200000)))
     (max 0 (floor (* mevedel-skills-listing-budget limit 4)))))
 
 (defun mevedel-skills--format-listing-result (skills)

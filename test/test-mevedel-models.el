@@ -519,5 +519,27 @@
       (should (eq 'fast-model (plist-get info :model)))
       (should (eq 'high (plist-get info :reasoning-effort))))))
 
+(mevedel-deftest mevedel-model--max-output-tokens ()
+  ,test
+  (test)
+  :doc "prefers the explicit policy output limit"
+  (should (= 321 (mevedel-model--max-output-tokens '(:max-tokens 321)))))
+
+(mevedel-deftest mevedel-model-usable-input-tokens ()
+  ,test
+  (test)
+  :doc "caps the reserve for a small model context"
+  (let ((model (make-symbol "small-model"))
+        (mevedel-model-reserve-tokens 20000))
+    (put model :context-window 8)
+    (should (= 4000 (mevedel-model-usable-input-tokens
+                     (list :model model :max-tokens nil)))))
+
+  :doc "falls back to the configured context limit without model metadata"
+  (let ((mevedel-model-context-limit 40000)
+        (mevedel-model-reserve-tokens 10000))
+    (should (= 30000 (mevedel-model-usable-input-tokens
+                      '(:model nil :max-tokens nil))))))
+
 (provide 'test-mevedel-models)
 ;;; test-mevedel-models.el ends here
