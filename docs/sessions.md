@@ -82,8 +82,6 @@ Layout:
   segment-0001.chat.org              ; finalized at compact #1
   segment-0002.chat.org              ; finalized at compact #2
   segment-0003.chat.org              ; current/live
-  plans/current.md                   ; mutable standalone Plan draft/proposal
-  plans/accepted-*.md                ; immutable accepted standalone plans
   hook-log.el                        ; one hook execution plist per line
   permission-log.el                  ; permission/request diagnostic plists
   repair-log.el                      ; redacted tool-input validation telemetry
@@ -92,7 +90,9 @@ Layout:
   file-history/                      ; per-session backup store
     4f1e8c9a3b2d6e57@v1
     4f1e8c9a3b2d6e57@v2
-  local/                              ; lazy session-owned scratch resources
+  local/                              ; lazy session-owned shared resources
+    plans/current.md                 ; mutable Plan draft/proposal
+    plans/accepted-*.md              ; immutable accepted plans
   agents/                            ; sub-agent transcript .chat.org files
 ```
 
@@ -132,6 +132,12 @@ unchanged. Local files are not workspace snapshots, touched files, instruction
 discovery, LSP inputs, directive patch captures, or Git summary inputs. An
 ephemeral request without durable session ownership cannot create or mutate it.
 
+`local/plans/` is the shared durable plan namespace. The parent and retained
+agents use `local://plans/...` for current and accepted plans alongside shared
+notes, findings, contracts, and handoffs. The layout is intentionally current:
+there is no migration or compatibility reader for an older top-level `plans/`
+directory or persisted plan format.
+
 Session-owned `local://`, `artifact://`, `agent://`, and `history://` addresses
 belong to the session's execution target. Client-local skill and memory roots
 retain their origin, while MCP addresses use the current configured connection;
@@ -145,7 +151,8 @@ resuming a session therefore restores accepted text only through the ordinary
 workspace input history; it does not recreate either pending-input category or
 any delivery state. There is no compatibility migration or queue-size cap.
 
-Standalone Plan state lives in the same sidecar and session directory.
+Standalone Plan metadata lives in the same sidecar, while its artifacts live
+under `local/plans/` in the session directory.
 Here/Fresh finalizes the planning segment through the `/clear` rotation path
 and records a `SessionStart(clear)` context snapshot.  Here/Summary instead
 uses aggressive root compaction with no preserved tail and records the compact
@@ -408,9 +415,13 @@ child-owned values. Prompt indexes, file snapshots, skill history, historical
 agent transcripts, and accepted-plan evidence stop at the fork point. Tasks,
 Goal, pending Plan/handoff state, addressable agents and mail, pending inputs,
 requests, interactions, queues, executions, callbacks, logs, caches, and
-one-shot prompt context start empty. Session-owned `local/` is copied into
-independent child state rather than shared. Only dropped-file grants referenced
-by the transferred draft move to Child.
+one-shot prompt context start empty. Ordinary session-owned local content is
+copied into independent child state rather than shared, but managed
+`local/plans/` state is projected separately: the mutable current plan and
+unrelated evidence are discarded, and only an accepted artifact that is valid
+at the fork point is preserved. There is no compatibility migration for
+discarded plan state. Only dropped-file grants referenced by the transferred
+draft move to Child.
 
 Conversation children use the first unused direct-child name
 `<source> · conversation N`, receive a normal unique session ID, and can be

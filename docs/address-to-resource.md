@@ -122,6 +122,11 @@ and Git summaries. An ephemeral request without durable session ownership may
 inspect already available read-only resources but cannot create or mutate
 `local://` state.
 
+The `local/plans/` subtree is shared by the parent and retained agents for
+current and accepted plans, alongside durable notes, findings, contracts, and
+handoffs. It is addressed as `local://plans/...`; there is no compatibility
+migration from a separate top-level plans directory or older plan format.
+
 ### `artifact://`
 
 Artifacts are a read-only logical view over existing session-owned persisted
@@ -228,11 +233,16 @@ their client pathname is not reinterpreted as a target-native workspace path.
 MCP authority remains with the configured connection. No address changes the
 session's target or turns a local path into cross-target authority.
 
-Plan mode is strictly read-only. It omits `ApplyPatch` and the pipeline denies
-it tree-wide, including for `local://` targets and retained agents, regardless
-of permission mode or allow rules. Resource recognition does not reopen this
-boundary. Local mutation is available only outside Plan mode through the
-ordinary reviewed `ApplyPatch` path.
+Standalone/sticky Plan mode keeps all-local `ApplyPatch` available, including
+calls from retained agents, so plans and other durable local artifacts can be
+updated through the ordinary `ApplyPatch` path. Before materialization, the
+pipeline denies any proposal with an ordinary, non-local, or bare endpoint:
+mixed local/ordinary and ordinary-only proposals are denied tree-wide, and no
+local directory or ordinary target is touched. Permission mode and allow rules
+cannot widen that boundary. Other edit tools and `Eval` remain unavailable;
+resource recognition does not reopen those capabilities. Directive Planning
+has a separate strictly read-only boundary and does not allow `ApplyPatch`,
+including all-local proposals, or `Eval`.
 
 See [`tools.md`](tools.md#resource-addresses-in-filesystem-shaped-tools),
 [`mentions.md`](mentions.md#atomic-binding-lifecycle),

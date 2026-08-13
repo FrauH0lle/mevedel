@@ -350,8 +350,16 @@ backing paths, and helper roots remain behind the boundary. Local, artifact,
 agent, and history resources belong to the session execution target; skills and
 memory retain client-local origin; MCP uses the current configured connection.
 Freshness and persistence remain owned by each family, while completion and
-atomic mention bindings preserve locator identity without side effects. Plan
-mode remains tree-wide read-only, including local and retained-agent targets.
+atomic mention bindings preserve locator identity without side effects.
+Standalone/sticky Plan mode keeps all-local `ApplyPatch` available across the
+root and retained-agent tree. Any ordinary, non-local, or bare endpoint,
+including mixed and ordinary-only proposals, is rejected before local
+materialization. Other edit tools and `Eval` remain unavailable. Directive
+Planning remains strictly read-only and does not allow `ApplyPatch`, including
+all-local proposals, or `Eval`. The shared `local/plans/` namespace holds
+durable plans, notes, findings, contracts, and handoffs for the parent and
+retained agents. There is no migration or compatibility reader for an older
+standalone plan layout.
 See [`address-to-resource.md`](address-to-resource.md) and
 [`ADR 0099`](adr/0099-keep-resource-addresses-closed-and-capability-neutral.md).
 

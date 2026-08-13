@@ -106,6 +106,7 @@
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-settings "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
@@ -299,10 +300,26 @@ reservation while its prepared kickoff has not started."
       (setq record (plist-put record :goal-id (mevedel-goal-new-id))))
     record))
 
-(defun mevedel-plan-handoff--accepted-body (artifact)
-  "Return ARTIFACT's validated immutable accepted-plan body."
-  (let ((path (plist-get artifact :absolute-path))
-        (hash (plist-get artifact :hash)))
+(defun mevedel-plan-handoff--accepted-body (artifact &optional session)
+  "Return ARTIFACT's validated immutable accepted-plan body.
+When SESSION is given, resolve its relative path below SESSION's save
+directory so the artifact survives session rename and resume."
+  (let* ((relative-path (plist-get artifact :path))
+         (save-path (and session (mevedel-session-save-path session)))
+         (path
+          (if session
+              (progn
+                (unless (and (stringp save-path)
+                             (stringp relative-path)
+                             (not (file-name-absolute-p relative-path)))
+                  (error "Accepted plan artifact path is invalid"))
+                (let ((candidate (expand-file-name relative-path save-path))
+                      (root (file-name-concat save-path "local" "plans")))
+                  (unless (file-in-directory-p candidate root)
+                    (error "Accepted plan artifact is outside managed plan storage"))
+                  candidate))
+            (plist-get artifact :absolute-path)))
+         (hash (plist-get artifact :hash)))
     (unless (and (stringp path) (file-exists-p path) (stringp hash))
       (error "Accepted plan artifact is unavailable"))
     (with-temp-buffer
@@ -369,7 +386,7 @@ reservation while its prepared kickoff has not started."
          (target-session
           (buffer-local-value 'mevedel--session target-buffer))
          (source-artifact (plist-get record :accepted))
-         (_body (mevedel-plan-handoff--accepted-body source-artifact))
+         (_body (mevedel-plan-handoff--accepted-body source-artifact session))
          (target-metadata (mevedel-session-plan-metadata target-session))
          (existing
           (and (eq (plist-get target-metadata :status) 'accepted)
@@ -383,11 +400,11 @@ reservation while its prepared kickoff has not started."
                 (unless (equal (plist-get existing :hash)
                                (plist-get source-artifact :hash))
                   (error "Prepared Worktree plan does not match source"))
-                (mevedel-plan-handoff--accepted-body existing)
+                (mevedel-plan-handoff--accepted-body existing target-session)
                 existing)
             (mevedel-plan-archive-accepted
              source-artifact target-session
-             (file-name-concat "plans" "accepted.md"))))
+             (file-name-concat "local" "plans" "accepted.md"))))
          (prepared (copy-tree record)))
     (unless existing
       (setf (mevedel-session-preset-name target-session)
@@ -460,7 +477,8 @@ reservation while its prepared kickoff has not started."
     (let* ((selection (plist-get record :selection))
            (worktree-p (eq (plist-get selection :location) 'worktree))
            (plan
-            (mevedel-plan-handoff--accepted-body (plist-get record :accepted)))
+            (mevedel-plan-handoff--accepted-body (plist-get record :accepted)
+                                                 session))
            (target (mevedel--compact-main-target))
            (previous-summary (plist-get target :previous-summary))
            (focus (mevedel-plan-handoff--summary-focus plan selection))
@@ -783,7 +801,7 @@ the durable retry was retained"
                        (if (eq location 'worktree)
                            :target-accepted
                          :accepted)))
-           (body (mevedel-plan-handoff--accepted-body accepted))
+           (body (mevedel-plan-handoff--accepted-body accepted target-session))
            (prompt
             (if goal-p
                 (mevedel-plan-handoff--goal-kickoff-prompt

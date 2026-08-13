@@ -259,13 +259,13 @@
             :token-budget 1000 :tokens-used 400
             :time-used-seconds 12 :turns-run 3
             :reason "Provider credits exhausted"
-            :plan-reference "plans/accepted.md")))
+            :plan-reference "local/plans/accepted.md")))
       (setf (mevedel-session-goal session) goal)
       (with-current-buffer view-buf
         (let ((text (mevedel-menu--goal-description)))
           (dolist (needle '("Ship the feature" "Status: paused"
                             "Provider credits exhausted" "400/1000"
-                            "Turns: 3" "Elapsed: 12s" "plans/accepted.md"))
+                            "Turns: 3" "Elapsed: 12s" "local/plans/accepted.md"))
             (should (string-match-p (regexp-quote needle) text))))))))
   :doc "shows an unbounded Goal budget consistently"
   (mevedel-menu-test--with-buffers

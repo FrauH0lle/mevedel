@@ -186,6 +186,51 @@
             (list :absolute-path path :hash "wrong"))))
       (delete-file path))))
 
+  :doc "resolves the accepted artifact from its relative path after a rename"
+  (let* ((old-dir (make-temp-file "mevedel-plan-old-save-" t))
+         (new-dir (make-temp-file "mevedel-plan-new-save-" t))
+         (relative "local/plans/accepted-1.md")
+         (old-path (file-name-concat old-dir relative))
+         (new-path (file-name-concat new-dir relative))
+         (body "# Accepted")
+         (session (mevedel-session--create :name "renamed"
+                                           :save-path new-dir))
+         (artifact (list :path relative :absolute-path old-path
+                         :hash (mevedel-plan-hash body))))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory old-path) t)
+          (make-directory (file-name-directory new-path) t)
+          (write-region body nil old-path nil 'silent)
+          (copy-file old-path new-path)
+          (should (equal body
+                         (mevedel-plan-handoff--accepted-body
+                          artifact session))))
+      (delete-directory old-dir t)
+      (delete-directory new-dir t)))
+
+  :doc "rejects a relative artifact path outside managed plan storage"
+  (let* ((save-dir (make-temp-file "mevedel-plan-unsafe-save-" t))
+         (outside (make-temp-file "mevedel-plan-unsafe-artifact-"))
+         (body "# Outside")
+         (session (mevedel-session--create :name "unsafe"
+                                           :save-path save-dir))
+         (artifact (list :path "../outside.md"
+                         :absolute-path outside
+                         :hash (mevedel-plan-hash body))))
+    (unwind-protect
+        (progn
+          (write-region body nil outside nil 'silent)
+          (should-error
+           (mevedel-plan-handoff--accepted-body artifact session))
+          (should-error
+           (mevedel-plan-handoff--accepted-body
+            (list :absolute-path outside
+                  :hash (mevedel-plan-hash body))
+            session)))
+      (delete-directory save-dir t)
+      (delete-file outside)))
+
 (mevedel-deftest mevedel-plan-handoff--summary-focus
   (:doc "keeps the exact accepted plan and implementation-only instructions")
   ,test
@@ -455,17 +500,22 @@
   (:doc "copies the accepted artifact and selected settings into the target")
   ,test
   (test)
-  (let* ((path (make-temp-file "mevedel-plan-worktree-plan-"))
+  (let* ((source-save (make-temp-file "mevedel-plan-worktree-source-" t))
+         (path (file-name-concat source-save "local" "plans" "source.md"))
          (source-session
           (mevedel-session--create
-           :name "source" :preset-name 'source-preset
+           :name "source" :save-path source-save
+           :preset-name 'source-preset
            :preset-settings '(:model test)))
-         (target-session (mevedel-session--create :name "target"))
+         (target-session (mevedel-session--create
+                          :name "target"
+                          :save-path (make-temp-file "mevedel-plan-target-" t)))
          (source-buffer (generate-new-buffer " *mevedel-plan-target-source*"))
          (target-buffer (generate-new-buffer " *mevedel-plan-target-data*"))
-         mode)
+         mode archive-relative-path)
     (unwind-protect
         (progn
+          (make-directory (file-name-directory path) t)
           (write-region "# Accepted" nil path nil 'silent)
           (with-current-buffer target-buffer
             (setq-local mevedel--session target-session))
@@ -473,8 +523,9 @@
                       'mevedel-plan-handoff--worktree-target-buffer)
                      (lambda (_) target-buffer))
                     ((symbol-function 'mevedel-plan-archive-accepted)
-                     (lambda (&rest _)
-                       '(:path "plans/accepted.md"
+                     (lambda (_artifact _session relative-path)
+                       (setq archive-relative-path relative-path)
+                       '(:path "local/plans/accepted.md"
                          :absolute-path "/tmp/target-accepted.md"
                          :hash "target-hash")))
                     ((symbol-function 'mevedel-preset-restore-session)
@@ -489,7 +540,7 @@
                             :goal-token-budget 4321)
                           :goal-id "reserved-goal"
                           :accepted
-                          (list :path "plans/source.md"
+                          (list :path "local/plans/source.md"
                                 :absolute-path path
                                 :hash (mevedel-plan-hash "# Accepted"))))
                    (prepared
@@ -497,6 +548,8 @@
                      source-session source-buffer record)))
               (should (eq 'submit (plist-get prepared :step)))
               (should (eq 'full-auto mode))
+              (should (equal "local/plans/accepted.md"
+                             archive-relative-path))
               (should (= 4321
                          (buffer-local-value
                           'mevedel-goal-token-budget target-buffer)))
@@ -513,14 +566,19 @@
                               :absolute-path))))))
       (kill-buffer target-buffer)
       (kill-buffer source-buffer)
-      (delete-file path)))
+      (delete-directory source-save t)
+      (delete-directory (mevedel-session-save-path target-session) t)))
 
   :doc "reuses durable target preparation when source step persistence fails"
-  (let* ((source-path (make-temp-file "mevedel-plan-target-source-"))
-         (target-path (make-temp-file "mevedel-plan-target-accepted-"))
+  (let* ((source-save (make-temp-file "mevedel-plan-target-source-" t))
+         (target-save (make-temp-file "mevedel-plan-target-" t))
+         (source-path (file-name-concat source-save "local" "plans" "source.md"))
+         (target-path (file-name-concat target-save "local" "plans" "accepted.md"))
          (body "# Accepted")
-         (source-session (mevedel-session--create :name "source"))
-         (target-session (mevedel-session--create :name "target"))
+         (source-session (mevedel-session--create
+                          :name "source" :save-path source-save))
+         (target-session (mevedel-session--create
+                          :name "target" :save-path target-save))
          (source-buffer (generate-new-buffer " *mevedel-plan-target-retry-source*"))
          (target-buffer (generate-new-buffer " *mevedel-plan-target-retry-data*"))
          (record
@@ -530,7 +588,7 @@
                               :goal-token-budget 4321)
                 :goal-id "reserved"
                 :accepted
-                (list :path "plans/source.md"
+                (list :path "local/plans/source.md"
                       :absolute-path source-path
                       :hash (mevedel-plan-hash body))))
          (archives 0)
@@ -538,6 +596,8 @@
          (source-saves 0))
     (unwind-protect
         (progn
+          (make-directory (file-name-directory source-path) t)
+          (make-directory (file-name-directory target-path) t)
           (write-region body nil source-path nil 'silent)
           (write-region body nil target-path nil 'silent)
           (with-current-buffer target-buffer
@@ -550,7 +610,7 @@
                     ((symbol-function 'mevedel-plan-archive-accepted)
                      (lambda (&rest _)
                        (cl-incf archives)
-                       (list :path "plans/accepted.md"
+                       (list :path "local/plans/accepted.md"
                              :absolute-path target-path
                              :hash (mevedel-plan-hash body))))
                     ((symbol-function 'mevedel-preset-restore-session)
@@ -578,23 +638,25 @@
           (should (= 1 settings)))
       (kill-buffer target-buffer)
       (kill-buffer source-buffer)
-      (delete-file target-path)
-      (delete-file source-path))))
+      (delete-directory target-save t)
+      (delete-directory source-save t))))
 
 (mevedel-deftest mevedel-plan-handoff--prepare-summary
   (:doc "Worktree generates one plan-free portable handoff without compaction")
   ,test
   (test)
   (let* ((root (make-temp-file "mevedel-plan-summary-root-" t))
-         (path (make-temp-file "mevedel-plan-summary-plan-"))
+         (save-dir (make-temp-file "mevedel-plan-summary-save-" t))
+         (path (file-name-concat save-dir "local" "plans" "accepted.md"))
          (session
           (mevedel-session--create
-           :name "source" :working-directory root))
+           :name "source" :save-path save-dir :working-directory root))
          (buffer (generate-new-buffer " *mevedel-plan-summary-data*"))
          (source-before "Current evidence.\n# Accepted")
          (calls 0) captured dispatched)
     (unwind-protect
         (progn
+          (make-directory (file-name-directory path) t)
           (write-region "# Accepted" nil path nil 'silent)
           (with-current-buffer buffer (insert source-before))
           (cl-letf (((symbol-function 'mevedel--compact-main-target)
@@ -625,10 +687,11 @@
              session buffer
              (list :selection
                    '(:location worktree :context summary
-                     :execution direct :mode ask
-                     :instructions "Use $tdd exactly.")
+                   :execution direct :mode ask
+                   :instructions "Use $tdd exactly.")
                    :accepted
-                   (list :absolute-path path
+                   (list :path "local/plans/accepted.md"
+                         :absolute-path path
                          :hash (mevedel-plan-hash "# Accepted")))))
           (let* ((retry
                   (plist-get (mevedel-session-plan-metadata session)
@@ -663,15 +726,18 @@
               (should (equal source-before (buffer-string))))))
       (kill-buffer buffer)
       (delete-file path)
-      (delete-directory root t)))
+      (delete-directory root t)
+      (delete-directory save-dir t)))
 
   :doc "Here uses handoff semantics through aggressive compaction"
-  (let* ((path (make-temp-file "mevedel-plan-summary-plan-"))
-         (session (mevedel-session--create :name "source"))
+  (let* ((save-dir (make-temp-file "mevedel-plan-summary-save-" t))
+         (path (file-name-concat save-dir "local" "plans" "accepted.md"))
+         (session (mevedel-session--create :name "source" :save-path save-dir))
          (buffer (generate-new-buffer " *mevedel-plan-summary-here*"))
          captured-source captured-focus applied dispatched)
     (unwind-protect
         (progn
+          (make-directory (file-name-directory path) t)
           (write-region "# Accepted" nil path nil 'silent)
           (cl-letf (((symbol-function 'mevedel--compact-main-target)
                      (lambda ()
@@ -701,10 +767,11 @@
              session buffer
              (list :selection
                    '(:location here :context summary
-                     :execution direct :mode ask
-                     :instructions "Use $tdd exactly.")
+                   :execution direct :mode ask
+                   :instructions "Use $tdd exactly.")
                    :accepted
-                   (list :absolute-path path
+                   (list :path "local/plans/accepted.md"
+                         :absolute-path path
                          :hash (mevedel-plan-hash "# Accepted")))))
           (should dispatched)
           (should (equal test-mevedel-plan-handoff--summary applied))
@@ -714,7 +781,7 @@
           (should (string-match-p "# Accepted" captured-focus))
           (should (string-match-p "Use \\$tdd exactly" captured-focus)))
       (kill-buffer buffer)
-      (delete-file path))))
+      (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-retry-plan-implementation
   (:doc "redispatches only when an accepted retry record exists")
@@ -800,7 +867,7 @@
             (setq-local mevedel--session session))
           (cl-letf
               (((symbol-function 'mevedel-plan-handoff--accepted-body)
-                (lambda (_) "# Accepted"))
+                (lambda (&rest _) "# Accepted"))
                ((symbol-function 'mevedel-view--interaction-target-buffer)
                 (lambda (_) view-buffer))
                ((symbol-function 'mevedel-plan-handoff--apply-model-policy)

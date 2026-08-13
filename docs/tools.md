@@ -168,7 +168,13 @@ truncation notices, and persisted tool arguments. Backing paths and helper
 roots stay private. Directory-backed resource searches use the existing
 confined helper boundary with exact read roots; virtual resources stay
 in-process. A mixed local/ordinary `ApplyPatch` remains one proposal and one
-atomic review transaction. See
+atomic review transaction outside standalone/sticky Plan mode. Standalone/sticky
+Plan mode keeps all-local `ApplyPatch` available, including proposals from
+retained agents, but rejects any ordinary, non-local, or bare endpoint before
+local materialization. Mixed local/ordinary and ordinary-only proposals
+therefore fail before either side is touched. Directive Planning remains
+strictly read-only and does not allow `ApplyPatch`, including all-local
+proposals, or `Eval`. See
 [`address-to-resource.md`](address-to-resource.md) for canonical grammar,
 freshness, and lifecycle contracts.
 

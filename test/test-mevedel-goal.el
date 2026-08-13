@@ -59,7 +59,7 @@
   (:doc "reactivates only the matching reserved Goal without scheduling")
   (let* ((goal (mevedel-goal--create
                 :id "reserved" :status 'paused :reason "session resumed"
-                :plan-reference "plans/accepted.md"))
+                :plan-reference "local/plans/accepted.md"))
          (session (mevedel-session--create :name "target" :goal goal))
          saved scheduled)
     (with-temp-buffer
@@ -73,16 +73,16 @@
         (should
          (eq goal
              (mevedel-goal-ensure
-              "Objective" session "plans/accepted.md" "reserved")))))
+              "Objective" session "local/plans/accepted.md" "reserved")))))
     (should saved)
     (should-not scheduled)
     (should (eq 'active (mevedel-goal-status goal)))
     (should-not (mevedel-goal-reason goal))
-    (setf (mevedel-goal-plan-reference goal) "plans/other.md")
+    (setf (mevedel-goal-plan-reference goal) "local/plans/other.md")
     (should-error
      (with-temp-buffer
        (mevedel-goal-ensure
-        "Objective" session "plans/accepted.md" "reserved")))
+        "Objective" session "local/plans/accepted.md" "reserved")))
     (should (eq goal (mevedel-session-goal session)))))
 
 (mevedel-deftest mevedel-goal-active-context

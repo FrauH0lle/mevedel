@@ -363,11 +363,21 @@ transcript views remain inspection-only. A turn blocked on either queue remains
 active and consumes tree capacity. Interrupting that turn cancels only its own
 queued entries.
 
+The retained-agent tree shares the root session's `local://` namespace,
+including `local/plans/` for durable plans, notes, findings, contracts, and
+handoffs. Standalone/sticky Plan mode keeps all-local `ApplyPatch` available to
+retained agents.
+It rejects any ordinary, non-local, or bare endpoint before local
+materialization, including mixed local/ordinary and ordinary-only calls, while
+other edit tools and `Eval` remain unavailable.
+
 Directive planning additionally stamps immutable read-only authority on the
 root request and copies it into every delegated invocation and nested request.
 Those agents retain Plan tool and Bash restrictions after the root workflow
 advances to approval or implementation; mutable session phase is not an
-authority boundary.
+authority boundary. Unlike standalone/sticky Plan mode, directive Planning
+remains strictly read-only: its requests and retained agents cannot use
+`ApplyPatch`, including all-local proposals, or `Eval`.
 
 Delegated invocation/request rules may narrow authority and may allow ordinary
 known-safe commands, but they cannot authorize dangerous or complex Bash, live

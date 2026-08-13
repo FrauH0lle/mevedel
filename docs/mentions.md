@@ -29,6 +29,15 @@ content for an existing filesystem-shaped tool. When both identify a file,
 skill source, or MCP server/URI, they share the same canonical resource
 locator, but they do not share side effects.
 
+The session-owned `local://` namespace, including `local://plans/...`, is
+shared by the parent and retained agents for durable plans, notes, findings,
+contracts, and handoffs. It remains a tool target; `@file` and `@mcp` attach,
+`$skill` invokes, and `@agent` delegates. Standalone/sticky Plan mode permits
+all-local `ApplyPatch` there, while an ordinary, non-local, or bare endpoint is
+denied before the namespace can be materialized. Directive Planning has a
+separate strictly read-only boundary and does not allow `ApplyPatch`, including
+all-local proposals, or `Eval`.
+
 `mevedel-mention-bindings.el` owns the shared atomic binding lifecycle for
 skills, direct references, files, and MCP resources. Kind-specific discovery,
 resolution, content loading, permission checks, and request annotations remain

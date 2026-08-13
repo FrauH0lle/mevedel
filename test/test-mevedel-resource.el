@@ -9,6 +9,7 @@
 (require 'mcp)
 (require 'mcp-hub)
 (require 'mevedel-structs)
+(require 'mevedel-plan)
 (require 'mevedel-resource)
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-persistence)
@@ -329,6 +330,9 @@
             (insert "needle"))
           (with-temp-file (file-name-concat artifact-root "answer.txt")
             (insert "artifact"))
+          (with-temp-buffer
+            (mevedel-plan-write-current
+             "# Managed plan" session (current-buffer)))
           (let ((local-read
                  (mevedel-resource-execute
                   (mevedel-resource-prepare
@@ -339,6 +343,8 @@
                    'read "artifact://" (list :session session))))
                 (grep-path nil))
             (should (string-match-p "local://notes.md"
+                                    (plist-get local-read :result)))
+            (should (string-match-p "local://plans/current.md"
                                     (plist-get local-read :result)))
             (should (string-match-p "artifact://answer.txt"
                                     (plist-get artifact-read :result)))

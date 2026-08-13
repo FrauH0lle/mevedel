@@ -711,7 +711,7 @@
     (let ((session
            (mevedel-session--create
             :name "test" :plan-mode t
-            :plan-metadata '(:path "plans/current.md" :status draft))))
+            :plan-metadata '(:status draft))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
@@ -722,7 +722,7 @@
         (let ((draft (mevedel-view--input-text)))
           (should (string-match-p "Plan feedback:" draft))
           (should (string-match-p "complete replacement" draft))
-          (should (string-match-p "plans/current.md" draft))
+          (should (string-match-p "local/plans/current.md" draft))
           (should-not (string-match-p "old draft" draft)))))))
 
 (mevedel-deftest mevedel-plan-mode--read-worktree-branch
@@ -825,7 +825,7 @@
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-restore-" t))
-         (path (file-name-concat save-dir "plans" "current.md"))
+         (path (file-name-concat save-dir "local" "plans" "current.md"))
          (plan "# Restored plan")
          (hash (mevedel-plan-hash plan))
          (selection '(:location here :context current
@@ -837,7 +837,7 @@
           (mevedel-session--create
            :name "test" :save-path save-dir :plan-mode t
            :plan-metadata
-           (list :path "plans/current.md" :hash hash :status 'proposed
+           (list :path "local/plans/current.md" :hash hash :status 'proposed
                  :proposal-id (list 10 20 hash) :selection selection))))
     (unwind-protect
         (progn
@@ -868,14 +868,14 @@
 
   :doc "demotes persisted proposals without an implementation model snapshot"
   (let* ((save-dir (make-temp-file "mevedel-plan-restore-old-" t))
-         (path (file-name-concat save-dir "plans" "current.md"))
+         (path (file-name-concat save-dir "local" "plans" "current.md"))
          (plan "# Old proposal")
          (hash (mevedel-plan-hash plan))
          (session
           (mevedel-session--create
            :name "test" :save-path save-dir :plan-mode t
            :plan-metadata
-           (list :path "plans/current.md" :hash hash :status 'proposed
+           (list :path "local/plans/current.md" :hash hash :status 'proposed
                  :proposal-id (list 1 2 hash)
                  :selection '(:location here :context current
                               :execution direct :mode ask)))))
@@ -914,13 +914,13 @@
 
   :doc "demotes a proposed artifact whose durable identity no longer agrees"
   (let* ((save-dir (make-temp-file "mevedel-plan-restore-bad-" t))
-         (path (file-name-concat save-dir "plans" "current.md"))
+         (path (file-name-concat save-dir "local" "plans" "current.md"))
          (hash (mevedel-plan-hash "# Original"))
          (session
           (mevedel-session--create
            :name "test" :save-path save-dir :plan-mode t
            :plan-metadata
-           (list :path "plans/current.md" :hash hash :status 'proposed
+           (list :path "local/plans/current.md" :hash hash :status 'proposed
                  :proposal-id (list 1 2 hash)
                  :selection '(:location here :context current
                               :execution direct :mode ask)))))

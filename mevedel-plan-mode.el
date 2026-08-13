@@ -315,7 +315,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
         (insert
          (format
           "Plan feedback:\n\n\n\nRevise the proposal to address this feedback. Emit one complete replacement <proposed_plan> block; the current draft is reference-only.\n\nCurrent plan artifact: %s"
-          (or path "plans/current.md")))
+          (or path "local/plans/current.md")))
         (goto-char start)
         (forward-line 2)))))
 
