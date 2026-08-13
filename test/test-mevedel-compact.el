@@ -1611,6 +1611,9 @@ missing or zero prompt-side usage cannot become the active baseline"
       (insert "Old response.\n")
       (put-text-property start (point) 'gptel 'response))
     (basic-save-buffer)
+    (setf (mevedel-session-workspace-instruction-hashes session)
+          '((("/root" "/workspace/root/AGENTS.md") . "root")
+            (("/root/explorer" "/workspace/nested/AGENTS.md") . "agent")))
     (let* ((record
             (mevedel-agent-record--create
              :id (mevedel-agent-invocation-agent-id invocation)
@@ -1646,7 +1649,10 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should (equal (buffer-string)
                      (with-temp-buffer
                        (insert-file-contents canonical-path)
-                       (buffer-string))))))
+                       (buffer-string))))
+      (should
+       (equal (mevedel-session-workspace-instruction-hashes session)
+              '((("/root" "/workspace/root/AGENTS.md") . "root"))))))
 
   :doc "leaves live and canonical transcripts unchanged on archive failure"
   (progn

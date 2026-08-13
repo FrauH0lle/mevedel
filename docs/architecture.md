@@ -160,12 +160,13 @@ after terminal request cleanup.
 
 ## Workspace context chain
 
-The initial system prompt loads `AGENTS.md` then `AGENTS.local.md` from the
+The request-time system prompt loads `AGENTS.md` then `AGENTS.local.md` from the
 workspace root through the session working directory. A successful `Read` of a
 deeper file queues any newly applicable instruction files as a host-generated
 same-turn reminder. Content hashes deduplicate unchanged files independently
-for `/root` and each retained agent after delivery and survive session resume;
-Rewind and fork start the lazy-delivery state empty.
+for `/root` and each retained agent only while that owner's model-visible
+context remains current. Each `SessionStart` context epoch resets `/root`;
+resume resets every owner, and retained-agent compaction resets that agent.
 
 `M-x mevedel-inspect-effective-prompt` and `/prompt` open the same read-only
 report of the live preset, profile, prompt components, exact final prompt,

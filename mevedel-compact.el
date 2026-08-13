@@ -18,6 +18,7 @@
 (declare-function cl-subseq "cl-extra" (seq start &optional end))
 
 ;; `cl-seq'
+(declare-function cl-delete "cl-seq" (cl-item cl-seq &rest cl-keys))
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
 
@@ -1546,6 +1547,7 @@ pending continuation."
   "Apply agent TARGET compaction with SUMMARY, TAIL-TEXT, and PENDING-TEXT.
 HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
   (let* ((invocation (plist-get target :invocation))
+         (session (plist-get target :session))
          (canonical-path (plist-get target :transcript-path))
          (archive-path (mevedel--compact-agent-archive-path canonical-path))
          (summary (mevedel--compact-append-hook-audits summary hook-audits))
@@ -1565,6 +1567,10 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
       (set-buffer-modified-p t))
     (unless (mevedel-agent-conversation-save invocation)
       (error "Could not persist compacted agent transcript"))
+    (setf (mevedel-session-workspace-instruction-hashes session)
+          (cl-delete (plist-get target :origin)
+                     (mevedel-session-workspace-instruction-hashes session)
+                     :key #'caar :test #'equal))
     (mevedel--compact-commit-execution-row-archive target)
     archive-path))
 
