@@ -69,6 +69,22 @@
   (should (equal (mevedel-plan-hash "# Plan")
                  (mevedel-plan-hash "# Plan\n"))))
 
+(mevedel-deftest mevedel-plan-resource-address
+  (:doc "converts contained plan paths to canonical local resource addresses")
+  ,test
+  (test)
+  (should (equal "local://plans/current.md"
+                 (mevedel-plan-resource-address "local/plans/current.md")))
+  (should (equal "local://plans/accepted-20260813-120000.md"
+                 (mevedel-plan-resource-address
+                  "local/plans/accepted-20260813-120000.md")))
+  (dolist (path '("../plans/current.md"
+                  "local/plans/../current.md"
+                  "plans/current.md"
+                  "/tmp/current.md"
+                  "local/plans/accepted.md"))
+    (should-error (mevedel-plan-resource-address path))))
+
 (mevedel-deftest mevedel-plan-current-path
   (:doc "returns the current artifact path below the session directory")
   ,test

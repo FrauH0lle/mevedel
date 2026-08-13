@@ -68,6 +68,8 @@
 (declare-function mevedel-plan-archive-accepted "mevedel-plan"
                   (artifact session &optional relative-path))
 (declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
+(declare-function mevedel-plan-resource-address "mevedel-plan"
+                  (relative-path))
 
 ;; `mevedel-presets'
 (declare-function mevedel-preset-restore-session "mevedel-presets"
@@ -237,7 +239,8 @@ reservation while its prepared kickoff has not started."
   (mevedel-plan-handoff--append-implementation-input
    (format
     "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state. Preserve its stated outcomes and acceptance criteria while using repository evidence to choose the safest effective mechanics."
-    (plist-get accepted-artifact :absolute-path)
+    (mevedel-plan-resource-address
+     (plist-get accepted-artifact :path))
     plan-markdown)
    selection))
 
@@ -247,7 +250,8 @@ reservation while its prepared kickoff has not started."
   (mevedel-plan-handoff--append-implementation-input
    (format
     "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nGoal kickoff:\nBegin the active Goal. Read the accepted plan supplied above before acting."
-    (plist-get accepted-artifact :absolute-path)
+    (mevedel-plan-resource-address
+     (plist-get accepted-artifact :path))
     plan-markdown)
    selection))
 
@@ -404,7 +408,7 @@ directory so the artifact survives session rename and resume."
                 existing)
             (mevedel-plan-archive-accepted
              source-artifact target-session
-             (file-name-concat "local" "plans" "accepted.md"))))
+             nil)))
          (prepared (copy-tree record)))
     (unless existing
       (setf (mevedel-session-preset-name target-session)

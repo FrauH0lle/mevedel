@@ -30,14 +30,6 @@
     :components ((role :text ,role)
                  workspace-config memory environment skills)))
 
-(defun test-mevedel-system--resource-profile (role)
-  "Return a test profile with ROLE and resource-address guidance."
-  `(:workspace-aware t
-    :components ((role :text ,role)
-                 tool-orchestration
-                 workspace-config memory environment skills)))
-
-
 ;;
 ;;; Built-in profiles
 
@@ -152,51 +144,70 @@
       (mevedel-tool-clear-registry)
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-system-build-prompt
+(mevedel-deftest mevedel-system--resource-metadata
   (:before-each (mevedel-workspace-clear-registry)
-   :after-each (mevedel-workspace-clear-registry)
    :vars* ((root-dir (file-name-as-directory
-                      (make-temp-file "mevedel-sys-" t)))
-           (mevedel-memory-dirs '(".mevedel/memory/")))
-   :after-each (delete-directory root-dir t))
+                      (make-temp-file "mevedel-resource-metadata-" t))))
+   :after-each (progn
+                 (mevedel-workspace-clear-registry)
+                 (delete-directory root-dir t)))
   ,test
   (test)
-  :doc "includes base prompt, memory section, and environment info"
-  (let* ((ws (mevedel-workspace-get-or-create
-              'project root-dir root-dir "sysproj"))
-         (prompt (mevedel-system-build-prompt
-                  (test-mevedel-system--profile "BASE PROMPT CONTENT")
-                  :workspace ws)))
-    (should (string-match-p "BASE PROMPT CONTENT" prompt))
-    (should (string-match-p "Persistent memory" prompt))
-    (should (string-match-p "## Environment" prompt))
-    (should (string-match-p "Emacs version:" prompt))
-    (should (string-match-p (regexp-quote emacs-version) prompt))
-    (should (string-match-p "<env>" prompt)))
+  :doc "returns nil when the request has no matching session"
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project root-dir root-dir "resource-metadata"))
+         (context (mevedel-system-context--create
+                   :workspace workspace
+                   :working-directory root-dir)))
+    (should-not (mevedel-system--resource-metadata context)))
 
+  :doc "returns resource-owned metadata for a matching session"
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project root-dir root-dir "resource-metadata"))
+         (session (mevedel-session-create "main" workspace root-dir))
+         (context (mevedel-system-context--create
+                   :workspace workspace
+                   :working-directory root-dir
+                   :session session))
+         (metadata (mevedel-system--resource-metadata context)))
+    (should (listp metadata))
+    (should (plist-member metadata :roots))
+    (should (plist-member metadata :agents))
+    (should (plist-member metadata :memory-roots))))
+
+(mevedel-deftest mevedel-system--resource-roster
+  (:before-each (mevedel-workspace-clear-registry)
+   :vars* ((root-dir (file-name-as-directory
+                      (make-temp-file "mevedel-resource-roster-" t)))
+           (mevedel-memory-dirs '(".mevedel/memory/")))
+   :after-each (progn
+                 (mevedel-workspace-clear-registry)
+                 (delete-directory root-dir t)))
+  ,test
+  (test)
   :doc "advertises only resource families usable by the request context"
-  (let* ((ws (mevedel-workspace-get-or-create
-              'project root-dir root-dir "sysproj"))
-         (session (mevedel-session-create "main" ws root-dir)))
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project root-dir root-dir "resource-roster"))
+         (session (mevedel-session-create "main" workspace root-dir))
+         (context (mevedel-system-context--create
+                   :workspace workspace
+                   :working-directory root-dir
+                   :session session)))
     (let ((mevedel-skill-dirs nil)
           (mevedel-skills-include-bundled nil))
       (cl-letf (((symbol-function 'mcp-hub-get-servers)
                  (lambda () nil)))
-        (let ((prompt (mevedel-system-build-prompt
-                       (test-mevedel-system--resource-profile "BASE")
-                       :workspace ws
-                       :session session
-                       :refresh-buffer (current-buffer))))
+        (let ((roster (mevedel-system--resource-roster context)))
           (dolist (scheme '("local://" "artifact://"))
-            (should (string-match-p (regexp-quote scheme) prompt)))
+            (should (string-match-p (regexp-quote scheme) roster)))
           (dolist (scheme '("skill://" "agent://" "history://"
                             "memory://" "mcp://"))
-            (should-not (string-match-p (regexp-quote scheme) prompt)))))))
+            (should-not (string-match-p (regexp-quote scheme) roster)))))))
 
   :doc "advertises configured resource families when their targets exist"
-  (let* ((ws (mevedel-workspace-get-or-create
-              'project root-dir root-dir "sysproj"))
-         (session (mevedel-session-create "main" ws root-dir))
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project root-dir root-dir "resource-roster"))
+         (session (mevedel-session-create "main" workspace root-dir))
          (save-path (file-name-as-directory
                      (make-temp-file "mevedel-resource-session-" t)))
          (memory-dir (file-name-concat root-dir ".mevedel" "memory"))
@@ -221,17 +232,66 @@
                 (mevedel-skills-include-bundled nil))
             (cl-letf (((symbol-function 'mcp-hub-get-servers)
                        (lambda () '((:name "docs" :status connected)))))
-              (let ((prompt (mevedel-system-build-prompt
-                             (test-mevedel-system--resource-profile "BASE")
-                             :workspace ws
-                             :session session
-                             :refresh-buffer (current-buffer))))
+              (let ((roster
+                     (mevedel-system--resource-roster
+                      (mevedel-system-context--create
+                       :workspace workspace
+                       :working-directory root-dir
+                       :session session))))
                 (dolist (scheme '("local://" "artifact://" "skill://"
                                   "memory://" "mcp://"))
-                  (should (string-match-p (regexp-quote scheme) prompt)))
+                  (should (string-match-p (regexp-quote scheme) roster)))
                 (dolist (scheme '("agent://" "history://"))
-                  (should-not (string-match-p (regexp-quote scheme) prompt)))))))
-      (delete-directory save-path t)))
+                  (should-not (string-match-p (regexp-quote scheme) roster)))))))
+      (delete-directory save-path t))))
+
+(mevedel-deftest mevedel-system--tool-orchestration-prompt
+  (:before-each (mevedel-workspace-clear-registry)
+   :vars* ((root-dir (file-name-as-directory
+                      (make-temp-file "mevedel-tool-orchestration-" t))))
+   :after-each (progn
+                 (mevedel-workspace-clear-registry)
+                 (delete-directory root-dir t)))
+  ,test
+  (test)
+  :doc "renders the context-specific resource roster in the orchestration prompt"
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project root-dir root-dir "tool-orchestration"))
+         (session (mevedel-session-create "main" workspace root-dir))
+         (context (mevedel-system-context--create
+                   :workspace workspace
+                   :working-directory root-dir
+                   :session session))
+         (prompt (cl-letf (((symbol-function 'mcp-hub-get-servers)
+                            (lambda () nil)))
+                   (mevedel-system--tool-orchestration-prompt context))))
+    (should (string-match-p "Tool orchestration" prompt))
+    (should (string-match-p "local://" prompt))
+    (should (string-match-p "artifact://" prompt))
+    (should-not (string-match-p "{{RESOURCE_ROSTER}}" prompt))))
+
+(mevedel-deftest mevedel-system-build-prompt
+  (:before-each (mevedel-workspace-clear-registry)
+   :vars* ((root-dir (file-name-as-directory
+                      (make-temp-file "mevedel-sys-" t)))
+           (mevedel-memory-dirs '(".mevedel/memory/")))
+   :after-each (progn
+                 (mevedel-workspace-clear-registry)
+                 (delete-directory root-dir t)))
+  ,test
+  (test)
+  :doc "includes base prompt, memory section, and environment info"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj"))
+         (prompt (mevedel-system-build-prompt
+                  (test-mevedel-system--profile "BASE PROMPT CONTENT")
+                  :workspace ws)))
+    (should (string-match-p "BASE PROMPT CONTENT" prompt))
+    (should (string-match-p "Persistent memory" prompt))
+    (should (string-match-p "## Environment" prompt))
+    (should (string-match-p "Emacs version:" prompt))
+    (should (string-match-p (regexp-quote emacs-version) prompt))
+    (should (string-match-p "<env>" prompt)))
 
   :doc "includes AGENTS.md content when present"
   (let* ((agents-md (file-name-concat root-dir "AGENTS.md"))

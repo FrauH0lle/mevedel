@@ -107,6 +107,24 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
   "Return a stable hash for PLAN-MARKDOWN."
   (secure-hash 'sha256 (string-trim-right (or plan-markdown ""))))
 
+(defun mevedel-plan-resource-address (relative-path)
+  "Return the canonical local resource address for RELATIVE-PATH.
+RELATIVE-PATH must name the current plan or an immutable accepted archive
+below `local/plans/'."
+  (unless (and (stringp relative-path)
+               (not (file-name-absolute-p relative-path)))
+    (error "Plan artifact path is not relative"))
+  (let ((tail
+         (cond
+          ((equal relative-path mevedel-plan--relative-current-path)
+           "current.md")
+          ((string-match
+            "\\`local/plans/\\(accepted-[^/]+\\.md\\)\\'"
+            relative-path)
+           (match-string 1 relative-path))
+          (t (error "Plan artifact path is outside managed plan storage")))))
+    (concat "local://plans/" tail)))
+
 (defun mevedel-plan-current-path (&optional session buffer)
   "Return the session-local current plan path for SESSION.
 Materialize the session directory when needed.  BUFFER defaults to the

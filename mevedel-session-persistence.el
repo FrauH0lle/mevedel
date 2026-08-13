@@ -150,10 +150,6 @@
 ;; `mevedel-plan'
 (declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
 
-;; `mevedel-utilities'
-(declare-function mevedel--normalize-message-text
-                  "mevedel-utilities" (text))
-
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders"
 		  (reminders))
@@ -297,6 +293,10 @@
 		  (&optional only-if-missing))
 (declare-function mevedel-transcript-restore-sanitize-bounds
 		  "mevedel-transcript-restore" nil)
+
+;; `mevedel-utilities'
+(declare-function mevedel--normalize-message-text
+                  "mevedel-utilities" (text))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" nil)

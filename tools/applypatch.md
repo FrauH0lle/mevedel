@@ -11,6 +11,17 @@ Resource addresses
   keeps local and ordinary operations in one atomic proposal, and presents
   the authored address in review and results.
 
+Plan-mode boundary
+- Standalone or sticky Plan mode permits only proposals whose every source and
+  destination target is a non-bare `local://` descendant.
+- Ordinary paths, mixed local/ordinary proposals, other-scheme addresses, and
+  malformed or bare endpoints are denied before materialization.
+- Directive Planning remains read-only: do not call `ApplyPatch` there, even
+  for all-local proposals.
+
+Outside Plan mode, mixed local and ordinary operations remain one atomic
+proposal.
+
 The argument must use this grammar:
 
 ```text

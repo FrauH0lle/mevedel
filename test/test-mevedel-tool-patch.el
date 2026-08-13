@@ -455,7 +455,16 @@
       (should (functionp (mevedel-tool-get-paths tool)))
       (should (equal '((patch string :required
                               "A complete *** Begin Patch / *** End Patch patch."))
-                     (mevedel-tool-args tool))))))
+                     (mevedel-tool-args tool)))
+      (dolist (text '("Standalone or sticky Plan mode"
+                      "every source and destination target is a non-bare `local://` descendant"
+                      "Ordinary paths, mixed local/ordinary proposals, other-scheme addresses, and malformed or bare endpoints are denied before materialization"
+                      "Directive Planning remains read-only"
+                      "Outside Plan mode, mixed local and ordinary operations remain one atomic proposal"))
+        (should (string-match-p
+                 (mapconcat #'regexp-quote (split-string text " " t)
+                            "[[:space:]]+")
+                 (mevedel-tool-prompt tool)))))))
 
 ;; Small direct suites keep each helper's contract visible; the integration
 ;; suites above exercise their composition and filesystem behavior.
