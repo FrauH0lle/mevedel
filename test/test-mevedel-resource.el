@@ -353,7 +353,44 @@
                                         (list :session session))
              (lambda (path authored)
                (setq grep-path (list path authored))))
-            (should (equal (list local-root "local://") grep-path))))
+            (should (equal (list local-root "local://") grep-path))
+            ;; A bare listing address is never a patch endpoint.
+            (should-error
+             (mevedel-resource-prepare
+              'apply-patch "local://" (list :session session))
+             :type 'mevedel-resource-error)))
+      (delete-directory save-path t))))
+
+(mevedel-deftest mevedel-resource--session ()
+  ,test
+  (test)
+  :doc "resolves one shared local root for the parent and its retained agents"
+  (let* ((save-path (make-temp-file "mevedel-resource-shared-" t))
+         (local-root (file-name-concat save-path "local"))
+         (parent-session (mevedel-session--create :name "parent"
+                                                  :save-path save-path))
+         (agent-buffer (generate-new-buffer " *mevedel-resource-agent*"))
+         parent-path agent-path)
+    (unwind-protect
+        (progn
+          (make-directory local-root t)
+          (with-temp-file (file-name-concat local-root "shared.md")
+            (insert "shared note"))
+          (mevedel-resource-execute
+           (mevedel-resource-prepare
+            'read "local://shared.md" (list :session parent-session))
+           (lambda (physical _authored) (setq parent-path physical)))
+          ;; A retained agent conversation buffer owns the parent session, so
+          ;; its context resolves the same physical root.
+          (with-current-buffer agent-buffer
+            (setq-local mevedel--session parent-session)
+            (mevedel-resource-execute
+             (mevedel-resource-prepare 'read "local://shared.md" nil)
+             (lambda (physical _authored) (setq agent-path physical))))
+          (should (equal (file-name-concat local-root "shared.md")
+                         parent-path))
+          (should (equal parent-path agent-path)))
+      (kill-buffer agent-buffer)
       (delete-directory save-path t))))
 
 (mevedel-deftest mevedel-resource-skill-provider ()

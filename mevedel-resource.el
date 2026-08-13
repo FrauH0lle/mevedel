@@ -1211,6 +1211,12 @@ errors before any content or handler is reached."
                  (not (eq operation 'read)))
         (signal 'mevedel-resource-error
                 (list "Bare skill:// supports Read only")))
+      ;; A bare directory address names a listing, never a patch endpoint.
+      (when (and (null components)
+                 (memq operation '(apply-patch apply_patch patch)))
+        (signal 'mevedel-resource-error
+                (list (format "Bare %s:// is not a patch target"
+                              (symbol-name scheme)))))
       (cond
        ((memq scheme '(local artifact))
         (setq root (mevedel-resource--root scheme session)
