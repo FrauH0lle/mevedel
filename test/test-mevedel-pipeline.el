@@ -2998,24 +2998,26 @@
            (string-join
             '("*** Begin Patch" "*** Add File: artifact://notes/bad.txt"
               "+bad" "*** End Patch") "\n")))
-         (handler-called nil)
          result)
     (setf (mevedel-session-plan-mode session) t
           (mevedel-session-save-path session) nil)
-    (cl-letf (((symbol-function 'mevedel-tool-patch-handler)
-               (lambda (&rest _args) (setq handler-called t))))
-      (dolist (patch patches)
-        (setq result nil)
-        (with-current-buffer buffer
-          (setq-local default-directory root
-                      mevedel--workspace workspace
-                      mevedel--session session)
-          (mevedel-pipeline-run-tool
-           tool (lambda (value) (setq result value)) (list :patch patch)))
-        (should (string-match-p "Error:" result))))
-    (should-not handler-called)
+    (dolist (patch patches)
+      (setq result nil)
+      (with-current-buffer buffer
+        (setq-local default-directory root
+                    mevedel--workspace workspace
+                    mevedel--session session)
+        (mevedel-pipeline-run-tool
+         tool (lambda (value) (setq result value)) (list :patch patch)))
+      (should (string-match-p "Error:" result))
+      (should (equal "old\n"
+                     (with-temp-buffer
+                       (insert-file-contents ordinary-path)
+                       (buffer-string))))
+      (should-not (file-exists-p (file-name-concat save-path "local")))
+      (should-not (file-exists-p (file-name-concat save-path "tool-results"))))
     (should-not (mevedel-session-save-path session))
-    (should-not (file-exists-p (file-name-concat root "local"))))
+    (should (= 0 (hash-table-count (mevedel-session-touched-files session)))))
 
   )
 

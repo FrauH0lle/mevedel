@@ -66,7 +66,12 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
+(declare-function mevedel-request-directive-uuid
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-request-plan-read-only "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-directive-planning
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -380,6 +385,15 @@ and render-data markers are runtime-only caches for cheap live updates."
            mevedel--agent-invocation
            (mevedel-agent-invocation-plan-read-only
             mevedel--agent-invocation))))
+
+(defun mevedel-plan-directive-p (&optional session request)
+  "Return non-nil when Plan authority belongs to directive planning."
+  (or (and session (mevedel-session-directive-planning session))
+      (let ((request (or request
+                         (and (boundp 'mevedel--current-request)
+                              mevedel--current-request))))
+        (and (mevedel-request-p request)
+             (mevedel-request-directive-uuid request)))))
 
 (defun mevedel-agent-invocation-require-path (invocation)
   "Return INVOCATION's canonical path, or signal an error."

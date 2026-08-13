@@ -138,13 +138,6 @@
 		  (path &optional base-directory write-empty quiet
 			include-original-content))
 
-;; `mevedel-plan'
-(declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
-
-;; `mevedel-utilities'
-(declare-function mevedel--normalize-message-text
-                  "mevedel-utilities" (text))
-
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-extract-render-data
 		  "mevedel-pipeline" (result))
@@ -153,6 +146,13 @@
 		  (buffer &optional successor-execution-ids))
 (defvar mevedel-pipeline--render-data-close)
 (defvar mevedel-pipeline--render-data-open)
+
+;; `mevedel-plan'
+(declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
+
+;; `mevedel-utilities'
+(declare-function mevedel--normalize-message-text
+                  "mevedel-utilities" (text))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders"

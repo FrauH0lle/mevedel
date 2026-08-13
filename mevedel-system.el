@@ -30,6 +30,10 @@
 ;; `mevedel-goal'
 (declare-function mevedel-goal-active-context "mevedel-goal" (session))
 
+;; `mevedel-resource'
+(declare-function mevedel-resource-completion-metadata
+                  "mevedel-resource" (context))
+
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-prompt-section
                   "mevedel-skills-prompt" (session &optional buffer))
@@ -509,6 +513,62 @@ present."
          (mevedel-system--session-matches-context-p session context)
          session)))
 
+(defun mevedel-system--resource-metadata (context)
+  "Return resource metadata for CONTEXT, or nil when unavailable."
+  (when-let* ((session (mevedel-system--context-session context)))
+    (condition-case nil
+        (progn
+          (require 'mevedel-agent-control nil t)
+          (when (require 'mevedel-resource nil t)
+            (mevedel-resource-completion-metadata
+             (list :session session
+                   :workspace (mevedel-system-context-workspace context)))))
+      (error nil))))
+
+(defun mevedel-system--resource-roster (context)
+  "Return the compact resource roster usable in CONTEXT."
+  (let* ((session (mevedel-system--context-session context))
+         (metadata (mevedel-system--resource-metadata context))
+         (retained (catch 'found
+                     (dolist (entry (plist-get metadata :agents))
+                       (when (plist-get entry :record)
+                         (throw 'found t)))))
+         (memory (catch 'found
+                   (dolist (entry (plist-get metadata :memory-roots))
+                     (when (file-directory-p
+                            (plist-get (plist-get entry :root) :dir))
+                       (throw 'found t)))))
+         (lines nil))
+    (when session
+      (push (concat "- `local://` - shared durable space for the parent and "
+                    "retained agents; use it for durable notes, findings, "
+                    "contracts, and handoffs.")
+            lines))
+    (when session
+      (push (concat "- `artifact://` - session-owned persisted tool and "
+                    "execution output namespace; read available results as "
+                    "evidence.")
+            lines))
+    (when (plist-get metadata :skills)
+      (push "- `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]` - an enabled, discoverable skill package; read its files when needed." lines))
+    (when retained
+      (push "- `agent://` - retained agent results for this session." lines)
+      (push "- `history://` - retained agent conversation history for this session." lines))
+    (when memory
+      (push "- `memory://` - existing configured persistent-memory roots." lines))
+    (when (plist-get metadata :mcp-servers)
+      (push "- `mcp://` - configured MCP servers and their resources." lines))
+    (if lines
+        (string-join (nreverse lines) "\n")
+      "No resource address families are currently available in this request.")))
+
+(defun mevedel-system--tool-orchestration-prompt (context)
+  "Return tool orchestration guidance rendered for CONTEXT."
+  (mevedel-system-render-prompt-file
+   "prompts/system/tool-orchestration.md"
+   `(("RESOURCE_ROSTER" .
+      ,(mevedel-system--resource-roster context)))))
+
 (defun mevedel-system--skills-prompt (context)
   "Return dynamic skills prompt text for CONTEXT, or nil."
   (when (require 'mevedel-skills-prompt nil t)
@@ -587,7 +647,7 @@ present."
   :file "prompts/tones/tutor.md")
 
 (mevedel-define-prompt-component tool-orchestration
-  :file "prompts/system/tool-orchestration.md")
+  :producer #'mevedel-system--tool-orchestration-prompt)
 
 (mevedel-define-prompt-component bash-guardian-role
   :file "prompts/permissions/bash-guardian-system.md")

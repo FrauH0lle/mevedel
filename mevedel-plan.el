@@ -107,7 +107,7 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
   "Return a stable hash for PLAN-MARKDOWN."
   (secure-hash 'sha256 (string-trim-right (or plan-markdown ""))))
 
-(defun mevedel-plan-current-path (&optional session buffer relative-path)
+(defun mevedel-plan-current-path (&optional session buffer)
   "Return the session-local current plan path for SESSION.
 Materialize the session directory when needed.  BUFFER defaults to the
 current data buffer."
@@ -122,28 +122,20 @@ current data buffer."
     (unless save-path
       (error "Could not materialize session for plan"))
     (file-name-concat save-path
-                      (or relative-path mevedel-plan--relative-current-path))))
+                      mevedel-plan--relative-current-path)))
 
 (defun mevedel-plan--metadata-path (session)
-  "Return SESSION's recorded current plan path, when available."
+  "Return SESSION's canonical current plan path, when available."
   (require 'mevedel-structs)
-  (let ((metadata (mevedel-session-plan-metadata session)))
-    (or (when-let* ((save-path (mevedel-session-save-path session))
-                    (path (or (plist-get metadata :path)
-                              mevedel-plan--relative-current-path)))
-          (file-name-concat save-path path))
-        (plist-get metadata :absolute-path))))
+  (when-let ((save-path (mevedel-session-save-path session)))
+    (file-name-concat save-path mevedel-plan--relative-current-path)))
 
-(defun mevedel-plan-write-current
-    (plan-markdown session buffer &optional relative-path)
+(defun mevedel-plan-write-current (plan-markdown session buffer)
   "Write PLAN-MARKDOWN to SESSION's current plan artifact for BUFFER.
-RELATIVE-PATH overrides the default path below SESSION's save directory.
 Return an explicit artifact plist containing `:path', `:absolute-path', and
 `:hash'."
   (require 'mevedel-structs)
-  (let* ((relative-path (or relative-path
-                            mevedel-plan--relative-current-path))
-         (path (mevedel-plan-current-path session buffer relative-path))
+  (let* ((path (mevedel-plan-current-path session buffer))
          (plan-markdown (mevedel-plan-validate plan-markdown))
          (hash (mevedel-plan-hash plan-markdown)))
     (make-directory (file-name-directory path) t)
@@ -152,7 +144,8 @@ Return an explicit artifact plist containing `:path', `:absolute-path', and
     (let ((turn (or (mevedel-session-turn-count session) 0))
           (metadata (copy-sequence (or (mevedel-session-plan-metadata session)
                                        nil))))
-      (setq metadata (plist-put metadata :path relative-path))
+      (setq metadata (plist-put metadata :path
+                                mevedel-plan--relative-current-path))
       (setq metadata (plist-put metadata :absolute-path path))
       (setq metadata (plist-put metadata :hash hash))
       (setq metadata (plist-put metadata :status 'presented))
@@ -166,7 +159,7 @@ Return an explicit artifact plist containing `:path', `:absolute-path', and
       (setq metadata (plist-put metadata :accepted-turn nil))
       (setq metadata (plist-put metadata :accepted-at nil))
       (setf (mevedel-session-plan-metadata session) metadata))
-    (list :path relative-path
+    (list :path mevedel-plan--relative-current-path
           :absolute-path path
           :hash hash)))
 
@@ -260,12 +253,12 @@ SKIP-VERIFICATION is non-nil, do not leave verification pending."
 
 (defun mevedel-plan-accept
     (plan-markdown session buffer &optional skip-verification
-                   current-relative-path accepted-relative-path)
+                   accepted-relative-path)
   "Persist and accept PLAN-MARKDOWN for SESSION and BUFFER.
-CURRENT-RELATIVE-PATH and ACCEPTED-RELATIVE-PATH override artifact locations.
+ACCEPTED-RELATIVE-PATH overrides the deterministic accepted artifact path.
 Return `(:current ARTIFACT :accepted ARTIFACT)' for later dispatch."
   (let* ((current (mevedel-plan-write-current
-                   plan-markdown session buffer current-relative-path))
+                   plan-markdown session buffer))
          (accepted (mevedel-plan-archive-accepted
                     current session accepted-relative-path)))
     (mevedel-plan-mark-accepted
