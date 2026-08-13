@@ -28,6 +28,7 @@
 (declare-function cl-oddp "cl-lib" (integer))
 
 ;; `cl-seq'
+(declare-function cl-delete "cl-seq" (cl-item cl-seq &rest cl-keys))
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-position "cl-seq" (cl-item cl-seq &rest cl-keys))
 (declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
@@ -520,6 +521,13 @@ workspace."
 
 (defun mevedel--run-session-start-hooks (source)
   "Run session-start hooks for the current buffer with SOURCE."
+  (when (bound-and-true-p mevedel--session)
+    (setf (mevedel-session-workspace-instruction-hashes mevedel--session)
+          (unless (equal source "resume")
+            (cl-delete
+             "/root"
+             (mevedel-session-workspace-instruction-hashes mevedel--session)
+             :key #'caar :test #'equal))))
   (run-hooks 'mevedel-session-start-hook)
   (when (bound-and-true-p mevedel--session)
     (let ((buffer (current-buffer))

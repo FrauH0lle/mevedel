@@ -257,7 +257,11 @@
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-lifecycle-hooks
-		 (:doc "runs normal and declarative session lifecycle hooks")
+		 ()
+		 ,test
+		 (test)
+
+		 :doc "runs normal and declarative session lifecycle hooks"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-chat-hooks-" t)))
 			(user-dir (file-name-as-directory
@@ -303,7 +307,33 @@
 				 '((:event "SessionStart"
 				    :body "startup context")))))
 		     (delete-directory root t)
-		     (delete-directory user-dir t))))
+		     (delete-directory user-dir t)))
+
+		 :doc "resets workspace-instruction delivery for the affected contexts"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-chat-context-epoch-" t)))
+			(workspace (mevedel-workspace--create
+				    :type 'project :id root :root root
+				    :name "context-epoch"))
+			(session (mevedel-session-create "main" workspace root))
+			(mevedel-session-start-hook nil))
+		   (unwind-protect
+		       (with-temp-buffer
+			 (setq-local mevedel--session session)
+			 (setq-local mevedel--workspace workspace)
+			 (setf (mevedel-session-workspace-instruction-hashes session)
+			       '((("/root" "/workspace/AGENTS.md") . "root")
+			         (("/root/agent" "/workspace/AGENTS.md") . "agent")))
+			 (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+				    (lambda (_event _payload callback &rest _)
+				      (funcall callback nil))))
+			   (mevedel--run-session-start-hooks "compact")
+			   (should
+			    (equal (mevedel-session-workspace-instruction-hashes session)
+				   '((("/root/agent" "/workspace/AGENTS.md") . "agent"))))
+			   (mevedel--run-session-start-hooks "resume"))
+			 (should-not (mevedel-session-workspace-instruction-hashes session)))
+		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-start-hooks-wait
 		 (:doc "waits for asynchronous SessionStart context before returning")
