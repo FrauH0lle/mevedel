@@ -79,13 +79,13 @@
                (mevedel-session--create :name "test" :save-path save-dir)))
           (should (equal (file-name-concat save-dir "local" "plans" "current.md")
                          (mevedel-plan-current-path session)))
-          (should (equal (file-name-concat save-dir "goals" "g1" "current.md")
-                         (mevedel-plan-current-path
-                          session nil "goals/g1/current.md"))))
+          (should-error
+           (mevedel-plan-current-path session nil "goals/g1/current.md")
+           :type 'wrong-number-of-arguments))
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan--metadata-path
-  (:doc "resolves the current artifact from persisted metadata")
+  (:doc "resolves the canonical current artifact despite stale metadata")
   ,test
   (test)
   (let ((save-dir (make-temp-file "mevedel-plan-metadata-path-" t)))
@@ -93,7 +93,8 @@
         (let ((session
                (mevedel-session--create
                 :name "test" :save-path save-dir
-                :plan-metadata '(:path "local/plans/current.md"))))
+                :plan-metadata '(:path "plans/current.md"
+                                 :absolute-path "/tmp/stale-current.md"))))
           (should (equal (file-name-concat save-dir "local" "plans" "current.md")
                          (mevedel-plan--metadata-path session))))
       (delete-directory save-dir t))))
@@ -109,11 +110,17 @@
                   (mevedel-session--create :name "test" :save-path save-dir))
                  (artifact
                   (mevedel-plan-write-current "# Plan" session
-                                              (current-buffer)
-                                              "goals/g1/current.md")))
+                                              (current-buffer))))
             (should (file-exists-p (plist-get artifact :absolute-path)))
-            (should (equal "goals/g1/current.md"
+            (should (equal "local/plans/current.md"
                            (plist-get artifact :path)))
+            (should (equal (file-name-concat save-dir "local" "plans"
+                                             "current.md")
+                           (plist-get artifact :absolute-path)))
+            (should-error
+             (mevedel-plan-write-current "# Plan" session
+                                         (current-buffer) "current.md")
+             :type 'wrong-number-of-arguments)
             (should (equal 'presented
                            (plist-get (mevedel-session-plan-metadata session)
                                       :status)))
@@ -137,7 +144,7 @@
                   (mevedel-session--create :name "test" :save-path save-dir))
                  (artifact
                   (mevedel-plan-write-current
-                   "# Plan" session (current-buffer) "current.md"))
+                   "# Plan" session (current-buffer)))
                  (accepted
                  (mevedel-plan-archive-accepted
                    artifact session "local/plans/cycle-001-plan.md")))
@@ -153,7 +160,7 @@
                      "local/plans/cycle-001-plan.md")))
             (let ((different
                    (mevedel-plan-write-current
-                    "# Different" session (current-buffer) "current.md")))
+                    "# Different" session (current-buffer))))
               (should-error
                (mevedel-plan-archive-accepted
                 different session "local/plans/cycle-001-plan.md")
@@ -166,19 +173,22 @@
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-current-body
-  (:doc "reads the normalized current artifact body")
+  (:doc "reads the canonical current artifact despite stale metadata")
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-body-" t))
-         (path (file-name-concat save-dir "local" "plans" "current.md")))
+         (path (file-name-concat save-dir "local" "plans" "current.md"))
+         (stale-path (file-name-concat save-dir "plans" "current.md")))
     (unwind-protect
         (progn
           (make-directory (file-name-directory path) t)
           (write-region "# Plan" nil path nil 'silent)
+          (make-directory (file-name-directory stale-path) t)
+          (write-region "# Stale" nil stale-path nil 'silent)
           (let ((session
                  (mevedel-session--create
                   :name "test" :save-path save-dir
-                  :plan-metadata '(:path "local/plans/current.md"))))
+                  :plan-metadata '(:path "plans/current.md"))))
             (should (equal "# Plan" (mevedel-plan-current-body session)))))
       (delete-directory save-dir t))))
 
@@ -249,7 +259,12 @@
                                                 (plist-get accepted :path))
                              (plist-get accepted :absolute-path)))
               (should (string-prefix-p "local/plans/accepted-"
-                                       (plist-get accepted :path))))))
+                                       (plist-get accepted :path)))
+              (should-error
+               (mevedel-plan-accept
+                "# Plan\n\nDo it." session (current-buffer) t
+                "goals/g1/current.md" "local/plans/accepted.md")
+               :type 'wrong-number-of-arguments))))
       (delete-directory save-dir t))))
 
 (provide 'test-mevedel-plan)

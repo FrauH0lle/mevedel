@@ -35,11 +35,11 @@
 (declare-function mevedel-plan-accept "mevedel-plan"
 		  (plan-markdown session buffer &optional
 				 skip-verification
-				 current-relative-path
 				 accepted-relative-path))
 (declare-function mevedel-plan-current-body "mevedel-plan"
 		  (&optional session))
 (declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
+(defvar mevedel-plan--relative-current-path)
 
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-selection-valid-p
@@ -304,10 +304,9 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
     (mevedel-plan-handoff-start
      session chat-buffer selection accepted)))
 
-(defun mevedel-plan-mode--feedback-draft (chat-buffer session)
-  "Insert an editable replacement-plan request for CHAT-BUFFER SESSION."
-  (let ((target (mevedel-view--interaction-target-buffer chat-buffer))
-        (path (plist-get (mevedel-session-plan-metadata session) :path)))
+(defun mevedel-plan-mode--feedback-draft (chat-buffer)
+  "Insert an editable replacement-plan request for CHAT-BUFFER."
+  (let ((target (mevedel-view--interaction-target-buffer chat-buffer)))
     (with-current-buffer target
       (mevedel-view--clear-input)
       (goto-char (mevedel-view--input-start))
@@ -315,7 +314,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
         (insert
          (format
           "Plan feedback:\n\n\n\nRevise the proposal to address this feedback. Emit one complete replacement <proposed_plan> block; the current draft is reference-only.\n\nCurrent plan artifact: %s"
-          (or path "local/plans/current.md")))
+          mevedel-plan--relative-current-path))
         (goto-char start)
         (forward-line 2)))))
 
@@ -328,7 +327,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
      plan-markdown chat-buffer session (plist-get outcome :selection)))
    ((eq outcome 'feedback-draft)
     (mevedel-plan-mode--demote-proposal session nil)
-    (mevedel-plan-mode--feedback-draft chat-buffer session))
+    (mevedel-plan-mode--feedback-draft chat-buffer))
    ((eq outcome 'aborted)
     (mevedel-plan-mode--demote-proposal session t))
    ((memq outcome '(invalidated plan-exit superseded)) nil)

@@ -29,6 +29,26 @@ resource URI.
 | Persistent memory | `memory://root`, `memory://ROOT-KEY/RELATIVE-PATH` | yes | yes | yes | no |
 | MCP resource | `mcp://`, `mcp://ENCODED-SERVER`, `mcp://ENCODED-SERVER/ENCODED-URI` | yes | no | no | no |
 
+## Prompt availability
+
+The main, tutor, and built-in agent prompts render a compact request-time
+roster. A valid request session advertises `local://` and `artifact://` as
+normal session capabilities: local state is materialized on its first write,
+and artifact output may arise during the request, so neither family requires
+an existing save path. The remaining families are advertised only when the
+current resource metadata has a usable surface:
+
+- `skill://` requires at least one enabled, discoverable skill;
+- `agent://` and `history://` require at least one retained agent record;
+- `memory://` requires at least one configured memory root directory that
+  exists; and
+- `mcp://` requires at least one configured MCP server.
+
+With no valid request session, the roster contains no session-owned families.
+An omitted family is not usable in that request and must not be inferred from
+the closed family list above. The roster does not change the operation matrix,
+permissions, or lifecycle rules below.
+
 Unsupported scheme/operation pairs fail explicitly. Ordinary target-native
 filesystem paths retain their existing operation behavior. A bare address is a
 listing only where the family defines one; it is never an implicit attachment,

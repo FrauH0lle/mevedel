@@ -90,6 +90,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-plan-read-only
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-plan-directive-p "mevedel-agents"
+                  (&optional session request))
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-defer-steering-p
@@ -115,14 +117,10 @@
                   "mevedel-skills-invoke" (session records))
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-directive-uuid
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-plan-read-only
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-activate-dropped-file-grants
                   "mevedel-structs" (session paths))
-(declare-function mevedel-session-directive-planning
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-input-delivery-paused-p
                   "mevedel-structs" (session))
 (defvar mevedel--current-request)
@@ -187,10 +185,7 @@
           (and (buffer-live-p buffer)
                (buffer-local-value 'mevedel--current-request buffer)))
          (directive-plan-p
-          (or (and (mevedel-request-p request)
-                   (mevedel-request-directive-uuid request))
-              (and session
-                   (mevedel-session-directive-planning session))))
+          (mevedel-plan-directive-p session request))
          (plan-read-only-p
           (or (and session (mevedel-session-plan-mode session))
               (and (mevedel-request-p request)

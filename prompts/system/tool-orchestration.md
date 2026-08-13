@@ -5,11 +5,15 @@ Keep calls sequential when one result determines the next action, when waiting
 or approval is required, or when mutations conflict or depend on each other.
 Inspect every result before continuing.
 
-Resource addresses name targets for filesystem-shaped tools. The supported
-schemes are `local://`, `artifact://`, `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]`,
-`agent://`, `history://`, `memory://`, and `mcp://`; the `skill://` source key is
-part of its canonical identity. `local://` is shared durable space for plans,
-notes, findings, contracts, and handoffs for the parent and retained agents;
-use `SendMessage` for short coordination. An address is a tool target,
-not an attachment, invocation, or delegation: use `@file` and `@mcp` to attach
-content, `$skill` to invoke a skill, and `@agent` to delegate work.
+Resource addresses name targets for filesystem-shaped tools. Pass an advertised
+address directly to `Read`, `Glob`, `Grep`, or permitted `ApplyPatch` as the
+target or pattern argument, subject to that tool's operation rules.
+
+### Available resource addresses
+
+{{RESOURCE_ROSTER}}
+
+Use `SendMessage` for short notifications. Use `Skill(name=...)` and
+`Agent(...)` for model actions. An address is a tool target, not an attachment,
+invocation, or delegation. Emitted `@`/`$` forms are user-composer syntax and
+do not execute; never claim that they did.

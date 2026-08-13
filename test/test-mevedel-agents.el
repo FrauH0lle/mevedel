@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-agents)
+(require 'mevedel-agent-control)
 (require 'mevedel-reminders)
 (require 'mevedel-skills-core)
 (require 'mevedel-system)
@@ -226,6 +227,9 @@
          (agents-md (file-name-concat root-dir "AGENTS.md"))
          (memory-dir (file-name-concat root-dir ".mevedel" "memory"))
          (memory-file (file-name-concat memory-dir "MEMORY.md"))
+         (skill-dir (file-name-concat root-dir ".mevedel" "skills"
+                                      "agent-helper"))
+         (skill-file (file-name-concat skill-dir "SKILL.md"))
          (mevedel-memory-dirs '(".mevedel/memory/"))
          (ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "agent-profiles"))
@@ -234,12 +238,16 @@
     (unwind-protect
         (progn
           (make-directory memory-dir t)
+          (make-directory skill-dir t)
           (write-region "Documented project command." nil agents-md)
           (write-region "Private remembered fact." nil memory-file)
+          (write-region "---\nname: agent-helper\n---\n" nil skill-file)
           (setf (mevedel-session-skills session)
                 (list (mevedel-skill--create
                        :name "agent-helper"
                        :description "helps profile agents"
+                       :source-file skill-file
+                       :source-dir skill-dir
                        :model-invocable-p t
                        :active-p t)))
           (with-temp-buffer
@@ -252,15 +260,52 @@
             (should (string-match-p "Documented project command" prompt))
             (should (string-match-p "## Environment" prompt))
             (should (string-match-p "Tool orchestration" prompt))
-            (dolist (scheme '("local://" "artifact://" "skill://" "agent://"
-                              "history://" "memory://" "mcp://"))
-              (should (string-match-p (regexp-quote scheme) prompt)))
-            (should (string-match-p "shared durable space" prompt))
-            (should (string-match-p "parent and retained agents" prompt))
+            (should (string-match-p "Resource addresses" prompt))
+            (should (string-match-p "Read`, `Glob`, `Grep" prompt))
+            (should (string-match-p "permitted `ApplyPatch`" prompt))
+            (should (string-match-p
+                     (regexp-quote "Skill(name=...)")
+                     prompt))
+            (should (string-match-p
+                     (regexp-quote "Agent(...)")
+                     prompt))
             (should (string-match-p "SendMessage" prompt))
             (should (string-match-p
-                     "not an attachment, invocation, or delegation"
-                     prompt)))
+                     "not an attachment,[[:space:]]+invocation, or delegation"
+                     prompt))
+            (dolist (scheme '("agent://" "history://" "mcp://"))
+              (should-not (string-match-p (regexp-quote scheme) prompt)))
+            (dolist (scheme '("local://" "artifact://"))
+              (should (string-match-p (regexp-quote scheme) prompt)))
+            (dolist (scheme '("skill://" "memory://"))
+              (should (string-match-p (regexp-quote scheme) prompt))))
+          (let* ((save-path (file-name-as-directory
+                             (make-temp-file "mevedel-agent-session-" t)))
+                 (record (mevedel-agent-record--create
+                          :path "/root/reviewer"
+                          :role "reviewer"
+                          :activity 'idle
+                          :conversation-location
+                          "agents/reviewer.chat.org")))
+            (unwind-protect
+                (progn
+                  (setf (mevedel-session-save-path session) save-path
+                        (mevedel-session-agent-registry session)
+                        (list (cons "/root/reviewer" record)))
+                  (with-temp-buffer
+                    (setq-local mevedel--session session)
+                    (setq prompts nil)
+                    (dolist (name '("worker" "explorer" "verifier" "reviewer"))
+                      (setf (alist-get name prompts nil nil #'equal)
+                            (mevedel-agent-system-prompt
+                             (mevedel-agent-freeze
+                              (mevedel-agent-get name))))))
+                  (dolist (prompt (mapcar #'cdr prompts))
+                    (dolist (scheme '("local://" "artifact://" "agent://"
+                                      "history://"))
+                      (should (string-match-p (regexp-quote scheme) prompt)))
+                    (should-not (string-match-p "mcp://" prompt))))
+              (delete-directory save-path t)))
           (dolist (name '("worker" "explorer" "verifier"))
             (should (string-match-p
                      "Reporting style"
@@ -289,7 +334,7 @@
               "agent-helper"
               (alist-get name prompts nil nil #'equal)))))
       (mevedel-workspace-clear-registry)
-      (delete-directory root-dir t)))
+      (delete-directory root-dir t))))
 
   :doc "custom agents declare the same ordered components directly"
   (let* ((root-dir (file-name-as-directory
@@ -321,7 +366,7 @@
             (assoc-delete-all "custom-profile-agent"
                               mevedel-agent--registry))
       (mevedel-workspace-clear-registry)
-      (delete-directory root-dir t))))
+      (delete-directory root-dir t)))
 
 
 (provide 'test-mevedel-agents)

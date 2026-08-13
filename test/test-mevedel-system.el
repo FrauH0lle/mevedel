@@ -30,6 +30,13 @@
     :components ((role :text ,role)
                  workspace-config memory environment skills)))
 
+(defun test-mevedel-system--resource-profile (role)
+  "Return a test profile with ROLE and resource-address guidance."
+  `(:workspace-aware t
+    :components ((role :text ,role)
+                 tool-orchestration
+                 workspace-config memory environment skills)))
+
 
 ;;
 ;;; Built-in profiles
@@ -48,18 +55,24 @@
     (should (string-match-p "automatic compaction" main))
     (should (string-match-p "VERDICT: PASS" main))
     (dolist (prompt (list main tutor))
+      (should (string-match-p "Resource addresses" prompt))
+      (should (string-match-p "Read`, `Glob`, `Grep" prompt))
+      (should (string-match-p "permitted `ApplyPatch`" prompt))
+      (should (string-match-p
+               (regexp-quote "Skill(name=...)")
+               prompt))
+      (should (string-match-p
+               (regexp-quote "Agent(...)")
+               prompt))
+      (should (string-match-p "SendMessage" prompt))
+      (should (string-match-p "short notifications" prompt))
+      (should (string-match-p "not an attachment,[[:space:]]+invocation, or delegation"
+                             prompt))
+      (should (string-match-p "user-composer syntax and[[:space:]]+do not execute"
+                             prompt))
       (dolist (scheme '("local://" "artifact://" "skill://" "agent://"
                         "history://" "memory://" "mcp://"))
-        (should (string-match-p (regexp-quote scheme) prompt)))
-      (should (string-match-p "skill://NAME@SOURCE-KEY" prompt))
-      (should (string-match-p "shared durable space" prompt))
-      (should (string-match-p "parent and retained agents" prompt))
-      (should (string-match-p "SendMessage" prompt))
-      (should (string-match-p "short coordination" prompt))
-      (should (string-match-p "not an attachment, invocation, or delegation"
-                             prompt))
-      (dolist (operation '("@file" "@mcp" "$skill" "@agent"))
-        (should (string-match-p (regexp-quote operation) prompt)))
+        (should-not (string-match-p (regexp-quote scheme) prompt)))
       (should-not (string-match-p "omp://" prompt)))
     (should (string-match-p "NEVER PROVIDE SOLUTIONS" tutor))
     (should (string-match-p "Tutoring style" tutor))
@@ -160,6 +173,65 @@
     (should (string-match-p "Emacs version:" prompt))
     (should (string-match-p (regexp-quote emacs-version) prompt))
     (should (string-match-p "<env>" prompt)))
+
+  :doc "advertises only resource families usable by the request context"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj"))
+         (session (mevedel-session-create "main" ws root-dir)))
+    (let ((mevedel-skill-dirs nil)
+          (mevedel-skills-include-bundled nil))
+      (cl-letf (((symbol-function 'mcp-hub-get-servers)
+                 (lambda () nil)))
+        (let ((prompt (mevedel-system-build-prompt
+                       (test-mevedel-system--resource-profile "BASE")
+                       :workspace ws
+                       :session session
+                       :refresh-buffer (current-buffer))))
+          (dolist (scheme '("local://" "artifact://"))
+            (should (string-match-p (regexp-quote scheme) prompt)))
+          (dolist (scheme '("skill://" "agent://" "history://"
+                            "memory://" "mcp://"))
+            (should-not (string-match-p (regexp-quote scheme) prompt)))))))
+
+  :doc "advertises configured resource families when their targets exist"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj"))
+         (session (mevedel-session-create "main" ws root-dir))
+         (save-path (file-name-as-directory
+                     (make-temp-file "mevedel-resource-session-" t)))
+         (memory-dir (file-name-concat root-dir ".mevedel" "memory"))
+         (skill-dir (file-name-concat root-dir ".mevedel" "skills"
+                                      "prompt-helper"))
+         (skill-file (file-name-concat skill-dir "SKILL.md"))
+         (skill (mevedel-skill--create
+                 :name "prompt-helper"
+                 :description "Prompt helper"
+                 :source-file skill-file
+                 :source-dir skill-dir
+                 :active-p t
+                 :model-invocable-p t)))
+    (unwind-protect
+        (progn
+          (make-directory memory-dir t)
+          (make-directory skill-dir t)
+          (write-region "---\nname: prompt-helper\n---\n" nil skill-file)
+          (setf (mevedel-session-save-path session) save-path
+                (mevedel-session-skills session) (list skill))
+          (let ((mevedel-skill-dirs nil)
+                (mevedel-skills-include-bundled nil))
+            (cl-letf (((symbol-function 'mcp-hub-get-servers)
+                       (lambda () '((:name "docs" :status connected)))))
+              (let ((prompt (mevedel-system-build-prompt
+                             (test-mevedel-system--resource-profile "BASE")
+                             :workspace ws
+                             :session session
+                             :refresh-buffer (current-buffer))))
+                (dolist (scheme '("local://" "artifact://" "skill://"
+                                  "memory://" "mcp://"))
+                  (should (string-match-p (regexp-quote scheme) prompt)))
+                (dolist (scheme '("agent://" "history://"))
+                  (should-not (string-match-p (regexp-quote scheme) prompt)))))))
+      (delete-directory save-path t)))
 
   :doc "includes AGENTS.md content when present"
   (let* ((agents-md (file-name-concat root-dir "AGENTS.md"))

@@ -16,6 +16,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-plan-directive-p "mevedel-agents"
+                  (&optional session request))
 (declare-function mevedel-plan-read-only-request-p "mevedel-agents" ())
 (defvar mevedel--agent-invocation)
 
@@ -40,18 +42,13 @@
                   "mevedel-skills-ui" ())
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-directive-uuid
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-goal-plan-read-path
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-one-shot-mutations-p
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-active-dropped-file-grants
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-directive-planning
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
@@ -1106,17 +1103,6 @@ happen for a non-read-only tool."
         (and (fboundp 'mevedel-plan-mode-active-p)
              (mevedel-plan-mode-active-p owner)))))
 
-(defun mevedel-permission--directive-plan-p
-    (&optional session request)
-  "Return non-nil when Plan authority belongs to directive planning."
-  (or (and session (mevedel-session-directive-planning session))
-      (and (or request
-               (and (boundp 'mevedel--current-request)
-                    mevedel--current-request))
-           (let ((request (or request mevedel--current-request)))
-             (and (mevedel-request-p request)
-                  (mevedel-request-directive-uuid request))))))
-
 (cl-defun mevedel-permission--preflight
     (tool-name &key tool-struct path pattern domain name content request
                invocation-rules request-rules session-rules persistent-rules
@@ -1178,7 +1164,7 @@ PATCH-LOCAL-ONLY-P is true only for a prepared all-local ApplyPatch proposal."
              ((and (mevedel-permission--plan-mode-p session)
                    (or (and (equal tool-name "ApplyPatch")
                             (or (not patch-local-only-p)
-                                (mevedel-permission--directive-plan-p
+                                (mevedel-plan-directive-p
                                  session request)))
                        (and (not (equal tool-name "ApplyPatch"))
                             (or native-edit-p (equal tool-name "Eval")))))
