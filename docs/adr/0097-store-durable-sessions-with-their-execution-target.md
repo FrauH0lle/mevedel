@@ -1,0 +1,5 @@
+# Store durable sessions with their execution target
+
+Status: accepted
+
+Durable session state stays with its workspace on the execution target so another compatible client can resume the same conversation without a client-local mirror or target-to-cache mapping. Transient process spools, publication batches, media copies, and pending recovery may be staged locally, but durability-critical turns are not reported as published and the next turn cannot start until their remote transaction succeeds. A renewable session lease gives one client mutation authority while allowing other clients to inspect the last published state; rebinding through a different client-specific TRAMP spelling uses durable workspace identity, and a changed target incarnation invalidates target-specific grants and cached capabilities. This accepts remote-write latency and unavailability in exchange for portable, co-located session history, and requires serialized publication rather than asynchronous callbacks writing directly through TRAMP.

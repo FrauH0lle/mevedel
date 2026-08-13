@@ -74,7 +74,7 @@ recommends those elements while leaving Codex room to choose the next action.
 
 - Add a memory-verification slash command or skill that consolidates project
   memories and checks whether they are still accurate; explore whether a
-  weekly automated check is useful.
+  weekly automated check is useful. See also "/learn" command
 
 - Warnings in Emacs are quite intrusive. Consider making warnings in mevedel target
   the messages buffer ([mevedel] Something happened, can be colored, see corfu)
@@ -111,7 +111,74 @@ become implemented, obsolete, or unjustified.
   unbounded workspace state without giving users enough information to decide
   whether it is disposable.
 
-## Agents
+## Remote workspaces and collaboration
+
+### Complete the accepted remote-workspace roadmap
+
+- **Source:** Remote-workspace review and use-case discussion on 2026-08-12;
+  the accepted product roadmap is
+  `.scratch/tramp-support/FUTURE-SCOPE-PACKAGES.md`, and the focused first
+  browser-viewer spec is `.scratch/live-collaboration/PRD.md`.
+- **What's owed:** Make these user journeys work through focused feature PRDs:
+  ordinary SSH and already-running container workspaces with minimal setup;
+  target-side session handoff from Desktop to Laptop, including when Desktop
+  itself later becomes the SSH target; discovery, read-only inspection,
+  cooperative control transfer, rejection, timeout, and expired takeover;
+  identity across equivalent connection routes and persistent container
+  replacement; recovery after client or network loss; target-native worktrees
+  and forks; and link-based live collaboration for guests without project
+  access. Keep mounted remote storage as documented local operation, add
+  bootstrap only when target provisioning demonstrates a need, and treat
+  Remote Mevedel and Managed Workspace as separate future products.
+- **Why deferred:** The execution-target and Portable Workspace implementation
+  is still landing. Each remaining capability has a distinct authority,
+  security, dependency, and acceptance surface and should not expand that PRD.
+- **Status check:** The execution-target PRD covers the core remote workspace
+  and target-side portability foundation. The first live-collaboration PRD
+  specifies a native view-only browser guest; relay, client-side encryption,
+  steering, Remote Mevedel, and managed provisioning remain later slices.
+- **Blast radius:** Execution-target identity, readiness and bootstrap,
+  durability and leases, session discovery and control transfer, worktree
+  workflows, live session projection, browser rendering, transport, and
+  bearer-capability security.
+
+## Skills
+
+### Add required skill attachments inside skill bodies
+
+- **Source:** `mevedel-skills-core.el`, `mevedel-skills-invoke.el`,
+  `mevedel-skills-plan.el`; skill-composition discussion on 2026-08-10.
+- **What's owed:** Add an authored `!$skill` marker that guarantees the named
+  skill is prepared and attached as instruction context rather than relying on
+  the model to call `Skill`. Reuse the existing `[skill:NAME -- attached]`
+  placeholder and hidden attachment reminder. A user-origin parent may attach
+  a user-invocable child even when the child has
+  `disable-model-invocation: true`; a model-origin parent may not launder that
+  authority, and a required model-disabled dependency therefore makes the
+  parent effectively model-disabled. Unsatisfied, disabled, unauthorized, or
+  cyclic dependencies fail atomically before dispatch. Resolve dependencies
+  eagerly when the session skill set refreshes, then reload bound bodies at
+  invocation. Resolve qualified names exactly; resolve unqualified names from
+  the parent's skill root or plugin first, then only from a unique global raw
+  name. Dormant path-scoped dependencies attach one-shot without becoming
+  active. Keep inline `!$skill` argument-free; allow the full-line form
+  `!$skill -- RAW ARGUMENTS`, where everything after `--` through end of line
+  is the child argument string. Deduplicate identical source/argument pairs
+  and reject conflicting arguments for one source.
+- **Why deferred:** The feature was intentionally paused before settling the
+  trust grammar: escaping and Markdown/quote handling, whether only literal
+  author-written markers may activate recursively, and how generated text,
+  hooks, permissions, audit data, and UI inspection interact with attachment
+  dependencies still need design.
+- **Status check:** Skill bodies and generated output are currently never
+  rescanned as user skill mentions. A wrapper can ask the model to invoke
+  model-visible children, as `grill-with-docs` does, but cannot reach a child
+  protected by `disable-model-invocation: true`.
+- **Blast radius:** Skill discovery and hot reload, effective roster
+  visibility, invocation preparation, attachment staging, source binding,
+  invocation records and replay, skill inspection UI, permissions/hooks, and
+  parser/security tests. A loose origin or generated-text rule could let a
+  model or untrusted input bypass a user-only skill restriction.
 
 ## Request lifecycle
 
