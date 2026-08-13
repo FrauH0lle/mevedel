@@ -82,13 +82,13 @@ The effective context window comes from:
 
 1. The active model's `:context-window` property, converted from
    thousands of tokens to raw tokens.
-2. `mevedel-compact-context-limit` when model metadata is absent.
+2. `mevedel-model-context-limit` when model metadata is absent.
 3. A 128000 token fallback.
 
 Usable context is:
 
 ```
-reserve = min(max(mevedel-compact-reserve-tokens,
+reserve = min(max(mevedel-model-reserve-tokens,
                   effective max output tokens),
               context-window / 2)
 usable = context-window - reserve
@@ -446,12 +446,16 @@ content.
 
 ## Defcustoms
 
-All are in `mevedel-compact.el`:
+Model context budgeting lives in `mevedel-models.el`, because every
+model-facing workload shares it:
+
+- `mevedel-model-context-limit` (default `nil`, fallback for missing model metadata)
+- `mevedel-model-reserve-tokens` (default `20000`)
+
+The rest are in `mevedel-compact.el`:
 
 - `mevedel-compact-auto` (default `t`)
-- `mevedel-compact-context-limit` (default `nil`, fallback for missing model metadata)
 - `mevedel-compact-token-threshold` (default `0.80`)
-- `mevedel-compact-reserve-tokens` (default `20000`)
 - `mevedel-compact-image-token-estimate` (default `1844`)
 - `mevedel-compact-tail-turns` (default `2`)
 - `mevedel-compact-tail-budget` (default `0.25`)

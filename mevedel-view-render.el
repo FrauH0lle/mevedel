@@ -1161,7 +1161,7 @@ real user message."
                         :start turn-start
                         :end (caddr (car current-segs)))
                   turns))
-          (push (list :role 'user
+          (push (list :role 'task-background
                       :segments (list seg)
                       :start seg-start
                       :end (caddr seg))
@@ -3304,25 +3304,12 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
           (let ((inhibit-read-only t)
                 (insert-start (point)))
             (pcase role
+              ('task-background
+               (mevedel-view--render-task-background
+                segments data-buf turn-source))
               ('user
-               (if (eq (caar segments) 'task-background)
-                   (let ((text
-                          (with-current-buffer data-buf
-                            (buffer-substring-no-properties
-                             (cadar segments) (caddar segments)))))
-                     (setq text
-                           (replace-regexp-in-string
-                            "\\`<task-background>[ \t]*\n\\|\n?</task-background>[ \t]*\n?\\'"
-                            "" text))
-                     (mevedel-view--insert-rendered-tool
-                      (list :header "Task background"
-                            :body text
-                            :body-mode 'markdown-mode
-                            :vtype 'task-background
-                            :initially-collapsed-p t)
-                      turn-source))
-                 (mevedel-view--render-user-turn
-                  segments data-buf directive)))
+               (mevedel-view--render-user-turn
+                segments data-buf directive))
               ('assistant
                (mevedel-view--render-assistant-turn
                 segments data-buf
@@ -4026,6 +4013,24 @@ buffer for gptel, but the view must not render them as `You' turns."
                      (goto-char (plist-get block :close-end)))
                  (setq ok nil))))
            (and found ok)))))
+
+(defun mevedel-view--render-task-background (segments data-buf turn-source)
+  "Render the advisory task-background SEGMENTS of DATA-BUF at TURN-SOURCE.
+The block is folded like a tool result rather than shown as parent
+dialogue, because the following Agent Task is the authoritative one."
+  (let ((text
+         (with-current-buffer data-buf
+           (buffer-substring-no-properties
+            (cadar segments) (caddar segments)))))
+    (mevedel-view--insert-rendered-tool
+     (list :header "Task background"
+           :body (replace-regexp-in-string
+                  "\\`<task-background>[ \t]*\n\\|\n?</task-background>[ \t]*\n?\\'"
+                  "" text)
+           :body-mode 'markdown-mode
+           :vtype 'task-background
+           :initially-collapsed-p t)
+     turn-source)))
 
 (defun mevedel-view--render-user-turn (segments data-buf &optional directive)
   "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."

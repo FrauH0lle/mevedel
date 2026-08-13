@@ -89,23 +89,6 @@
                     "frozen untrusted evidence"))
       (should (string-match-p text input)))))
 
-(mevedel-deftest mevedel-context-summary--model-max-output-tokens ()
-  ,test
-  (test)
-  :doc "prefers the explicit policy output limit"
-  (should (= 321 (mevedel-context-summary--model-max-output-tokens
-                  '(:max-tokens 321)))))
-
-(mevedel-deftest mevedel-context-summary-usable-tokens ()
-  ,test
-  (test)
-  :doc "caps the reserve for a small model context"
-  (let ((model (make-symbol "small-model"))
-        (mevedel-compact-reserve-tokens 20000))
-    (put model :context-window 8)
-    (should (= 4000 (mevedel-context-summary-usable-tokens
-                     (list :model model :max-tokens nil))))))
-
 (mevedel-deftest mevedel-context-summary--estimated-tokens ()
   ,test
   (test)
@@ -174,7 +157,7 @@
                  (should (eq workload 'summarization))
                  '(:backend summary-backend :model summary-model
                    :effort high)))
-              ((symbol-function 'mevedel-context-summary-usable-tokens)
+              ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-get-preset)
                (lambda (&rest _) '(:description "test")))
@@ -248,7 +231,7 @@
                         gptel-reasoning-effort nil
                         mevedel-model-workloads nil)
             (cl-letf (((symbol-function
-                        'mevedel-context-summary-usable-tokens)
+                        'mevedel-model-usable-input-tokens)
                        (lambda (_policy) 100000))
                       ((symbol-function 'gptel-get-preset)
                        (lambda (&rest _) '(:description "test")))
@@ -271,7 +254,7 @@
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (&rest _)
                  '(:backend test-backend :model test-model)))
-              ((symbol-function 'mevedel-context-summary-usable-tokens)
+              ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-get-preset)
                (lambda (&rest _) '(:description "test")))
@@ -292,7 +275,7 @@
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (&rest _)
                  '(:backend test-backend :model test-model)))
-              ((symbol-function 'mevedel-context-summary-usable-tokens)
+              ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 1))
               ((symbol-function 'gptel-request)
                (lambda (&rest _) (setq request-called t))))
@@ -308,7 +291,7 @@
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (&rest _)
                  '(:backend test-backend :model test-model)))
-              ((symbol-function 'mevedel-context-summary-usable-tokens)
+              ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-get-preset)
                (lambda (&rest _) '(:description "test")))
@@ -336,7 +319,7 @@
                (lambda (&rest _)
                  '(:backend summary-provider :model summary-model
                    :effort high)))
-              ((symbol-function 'mevedel-context-summary-usable-tokens)
+              ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-backend-name)
                (lambda (_backend) "summary-provider"))
@@ -374,7 +357,7 @@
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (&rest _)
                  '(:backend test-backend :model test-model)))
-              ((symbol-function 'mevedel-context-summary-usable-tokens)
+              ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-get-preset)
                (lambda (&rest _) '(:description "test")))
@@ -396,7 +379,55 @@
         (funcall provider-callback
                  test-mevedel-context-summary--handoff nil)))
     (should (equal outcomes '(aborted)))
-    (should-not (buffer-live-p request-buffer))))
+    (should-not (buffer-live-p request-buffer)))
+
+  :doc "settles in the caller's buffer, not the provider's response buffer"
+  (let ((caller (generate-new-buffer " *summary-caller*"))
+        (provider (generate-new-buffer " *summary-provider*"))
+        provider-callback settle-buffer)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                     (lambda (&rest _) '(:backend b :model m :effort nil)))
+                    ((symbol-function 'mevedel-model-usable-input-tokens)
+                     (lambda (_policy) 100000))
+                    ((symbol-function 'gptel-get-preset)
+                     (lambda (&rest _) '(:description "test")))
+                    ((symbol-function 'gptel-request)
+                     (lambda (_prompt &rest args)
+                       (setq provider-callback (plist-get args :callback))
+                       'request-fsm)))
+            (with-current-buffer caller
+              (mevedel-context-summary-generate
+               "evidence" 'handoff
+               (lambda (_result) (setq settle-buffer (current-buffer)))))
+            ;; gptel runs response callbacks in its own process buffer.
+            (with-current-buffer provider
+              (funcall provider-callback
+                       test-mevedel-context-summary--handoff nil)))
+          (should (eq caller settle-buffer)))
+      (kill-buffer caller)
+      (kill-buffer provider)))
+
+  :doc "settles a failed policy resolution instead of signalling"
+  (let (result)
+    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (&rest _) (error "No summarization provider"))))
+      (mevedel-context-summary-generate
+       "evidence" 'handoff (lambda (value) (setq result value))))
+    (should (eq 'error (plist-get result :outcome)))
+    (should (string-match-p "No summarization provider"
+                            (plist-get result :error))))
+
+  :doc "accepts required headings quoted inside a fenced code block"
+  (let ((quoted
+         (replace-regexp-in-string
+          "## Relevant Files"
+          "## Relevant Files\n```markdown\n## Not A Heading\n```"
+          test-mevedel-context-summary--handoff t t)))
+    (should (equal quoted
+                   (mevedel-context-summary--validate-output
+                    quoted 'handoff)))))
 
 (provide 'test-mevedel-context-summary)
 

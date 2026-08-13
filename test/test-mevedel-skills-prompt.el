@@ -50,7 +50,7 @@
     (should (string-match-p "^- s2: d2$" listing)))
 
   :doc "budget shortens descriptions before omitting skill names"
-  (let* ((mevedel-compact-context-limit 25)
+  (let* ((mevedel-model-context-limit 25)
          (mevedel-skills-listing-budget 1.0)
          (mevedel-skills-listing-max-entry-chars 250)
          (long "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
@@ -67,7 +67,7 @@
     (should (<= (length listing) (mevedel-skills--listing-budget-chars))))
 
   :doc "omits whole entries only when name-only roster does not fit"
-  (let* ((mevedel-compact-context-limit 25)
+  (let* ((mevedel-model-context-limit 25)
          (mevedel-skills-listing-budget 1.0)
          (skills (mapcar
                   (lambda (name)
@@ -85,7 +85,7 @@
   ,test
   (test)
   :doc "fires once when roster descriptions are shortened"
-  (let* ((mevedel-compact-context-limit 25)
+  (let* ((mevedel-model-context-limit 25)
          (mevedel-skills-listing-budget 1.0)
          (mevedel-skills-listing-max-entry-chars 250)
          (session (mevedel-skills-test--make-session))
@@ -105,7 +105,7 @@
     (should-not (funcall (mevedel-reminder-trigger reminder) session)))
 
   :doc "reports omitted entries when names alone do not fit"
-  (let* ((mevedel-compact-context-limit 25)
+  (let* ((mevedel-model-context-limit 25)
          (mevedel-skills-listing-budget 1.0)
          (session (mevedel-skills-test--make-session))
          (reminder (mevedel-reminders-make-skills-roster-budget)))

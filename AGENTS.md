@@ -101,7 +101,7 @@ Data model
   mevedel-directive.el        directive lifecycle, plan invalidation, rewind
   mevedel-turn.el             canonical success/failure turn settlement
   mevedel-workspace.el        workspace detection and registry
-  mevedel-models.el           model tier/provider resolution
+  mevedel-models.el           model tier/provider resolution, context budget
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
   mevedel-prompt-submission.el accepted prompt + lifecycle-context transaction
   mevedel-bash-analysis.el    conservative shell parsing and normalized command facts

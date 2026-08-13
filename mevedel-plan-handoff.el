@@ -474,12 +474,119 @@ directory so the artifact survives session rename and resume."
         source)
      source)))
 
+(defun mevedel-plan-handoff--advance-record
+    (session record step &optional summary)
+  "Store RECORD advanced to STEP as SESSION's retry state and return it.
+SUMMARY, when given, becomes the cached handoff summary.  Any recorded
+failure is cleared, because reaching STEP supersedes it."
+  (let ((prepared (copy-tree record)))
+    (when summary
+      (setq prepared (plist-put prepared :summary summary)))
+    (setq prepared (plist-put prepared :step step))
+    (cl-remf prepared :failure)
+    (mevedel-plan--metadata-put session :implementation-retry prepared)
+    prepared))
+
+(defun mevedel-plan-handoff--prepare-worktree-summary
+    (session chat-buffer record target focus source-transform)
+  "Generate one non-mutating Worktree handoff summary for SESSION RECORD.
+TARGET is the active main compaction target, read but never mutated.
+FOCUS carries the authoritative plan; SOURCE-TRANSFORM filters the
+projected evidence.  CHAT-BUFFER is left unchanged."
+  (unless (plist-get target :eligible-p)
+    (user-error "Current buffer is not the active persisted segment"))
+  (let* ((limit (or (mevedel--compact-find-boundary)
+                    (user-error "Not enough conversation content to summarize")))
+         (source
+          (funcall source-transform
+                   (plist-get
+                    (mevedel--compact-evidence-selection target limit t)
+                    :content)))
+         settled)
+    (when (string-blank-p source)
+      (user-error "Not enough conversation content to summarize"))
+    (require 'mevedel-context-summary)
+    (let ((cancel
+           (mevedel-context-summary-generate
+            source 'handoff
+            (lambda (result)
+              (setq settled t)
+              (setq-local mevedel--compaction-cancel nil)
+              (pcase (plist-get result :outcome)
+                ('success
+                 (mevedel-plan-handoff--advance-record
+                  session record 'prepare-worktree
+                  (mevedel-plan-handoff--portable-paths
+                   (plist-get result :summary) session))
+                 (mevedel-plan-handoff--persist session chat-buffer)
+                 (mevedel-plan-handoff--dispatch-accepted
+                  session chat-buffer))
+                ('aborted
+                 (mevedel-plan-handoff--implementation-failed
+                  session chat-buffer "Summary generation aborted"))
+                ('error
+                 (mevedel-plan-handoff--implementation-failed
+                  session chat-buffer
+                  (format "Summary generation failed: %s"
+                          (plist-get result :error))))))
+            :session session
+            :focus focus)))
+      (unless settled
+        (setq-local mevedel--compaction-cancel cancel)))))
+
+(defun mevedel-plan-handoff--portable-paths (summary session)
+  "Return SUMMARY with SESSION's working directory prefix removed."
+  (string-replace
+   (file-name-as-directory
+    (expand-file-name (mevedel-session-working-directory session)))
+   "" summary))
+
+(defun mevedel-plan-handoff--prepare-here-summary
+    (session chat-buffer record target focus source-transform)
+  "Aggressively compact CHAT-BUFFER into a Here handoff for SESSION RECORD.
+TARGET is the active main compaction target; its apply step is wrapped so
+each transition is recorded before it runs.  FOCUS carries the
+authoritative plan; SOURCE-TRANSFORM filters the projected evidence."
+  (let ((apply-function (plist-get target :apply)))
+    (setq target
+          (plist-put
+           target :apply
+           (lambda (active-target summary &rest args)
+             (mevedel-plan-handoff--advance-record
+              session record 'submit summary)
+             (condition-case apply-error
+                 (apply apply-function active-target summary args)
+               (error
+                (mevedel-plan-handoff--advance-record
+                 session record 'prepare-summary summary)
+                (signal (car apply-error) (cdr apply-error)))))))
+    (mevedel--compact-run
+     :aggressive t
+     :focus focus
+     :prepared-summary (plist-get record :summary)
+     :purpose 'handoff
+     :source-transform source-transform
+     :summary-ready
+     (lambda (summary)
+       (mevedel-plan-handoff--advance-record
+        session record 'prepare-summary summary)
+       (mevedel-plan-handoff--persist session chat-buffer)
+       summary)
+     :target target
+     :callback
+     (lambda (err)
+       (if err
+           (mevedel-plan-handoff--implementation-failed
+            session chat-buffer (format "%s" err))
+         (mevedel-plan-handoff--dispatch-accepted session chat-buffer))))))
+
 (defun mevedel-plan-handoff--prepare-summary (session chat-buffer record)
-  "Aggressively compact CHAT-BUFFER and cache the result in SESSION RECORD."
+  "Generate the implementation handoff for SESSION RECORD from CHAT-BUFFER.
+Worktree keeps CHAT-BUFFER intact and makes one attempt; Here compacts
+CHAT-BUFFER under the ordinary compaction retry policy."
   (require 'mevedel-compact)
   (with-current-buffer chat-buffer
     (let* ((selection (plist-get record :selection))
-           (worktree-p (eq (plist-get selection :location) 'worktree))
            (plan
             (mevedel-plan-handoff--accepted-body (plist-get record :accepted)
                                                  session))
@@ -490,116 +597,19 @@ directory so the artifact survives session rename and resume."
             (lambda (source)
               (mevedel-plan-handoff--summary-source
                source previous-summary plan))))
-      (if worktree-p
-          (let ((cached (plist-get record :summary)))
-            (if cached
-                (let ((prepared (copy-tree record)))
-                  (setq prepared
-                        (plist-put prepared :step 'prepare-worktree))
-                  (cl-remf prepared :failure)
-                  (mevedel-plan--metadata-put
-                   session :implementation-retry prepared)
-                  (mevedel-plan-handoff--persist session chat-buffer)
-                  (mevedel-plan-handoff--dispatch-accepted
-                   session chat-buffer))
-              (unless (plist-get target :eligible-p)
-                (user-error "Current buffer is not the active persisted segment"))
-              (let ((limit (mevedel--compact-find-boundary)))
-                (unless limit
-                  (user-error "Not enough conversation content to summarize"))
-                (let* ((source
-                        (plist-get
-                         (mevedel--compact-evidence-selection target limit t)
-                         :content))
-                       (source (funcall source-transform source))
-                       settled)
-                  (when (string-blank-p source)
-                    (user-error "Not enough conversation content to summarize"))
-                  (require 'mevedel-context-summary)
-                  (let ((cancel
-                         (mevedel-context-summary-generate
-                          source 'handoff
-                          (lambda (result)
-                            (setq settled t
-                                  mevedel--compaction-cancel nil)
-                            (pcase (plist-get result :outcome)
-                              ('success
-                               (let* ((summary
-                                       (string-replace
-                                        (file-name-as-directory
-                                         (expand-file-name
-                                          (mevedel-session-working-directory
-                                           session)))
-                                        "" (plist-get result :summary)))
-                                      (prepared (copy-tree record)))
-                                 (setq prepared
-                                       (plist-put prepared :summary summary))
-                                 (setq prepared
-                                       (plist-put prepared :step
-                                                  'prepare-worktree))
-                                 (cl-remf prepared :failure)
-                                 (mevedel-plan--metadata-put
-                                  session :implementation-retry prepared)
-                                 (mevedel-plan-handoff--persist
-                                  session chat-buffer)
-                                 (mevedel-plan-handoff--dispatch-accepted
-                                  session chat-buffer)))
-                              ('aborted
-                               (mevedel-plan-handoff--implementation-failed
-                                session chat-buffer
-                                "Summary generation aborted"))
-                              ('error
-                               (mevedel-plan-handoff--implementation-failed
-                                session chat-buffer
-                                (format "Summary generation failed: %s"
-                                        (plist-get result :error))))))
-                          :session session
-                          :focus focus)))
-                    (unless settled
-                      (setq-local mevedel--compaction-cancel cancel)))))))
-        (let ((apply-function (plist-get target :apply)))
-          (setq target
-                (plist-put
-                 target :apply
-                 (lambda (active-target summary &rest args)
-                   (let ((prepared (copy-tree record)))
-                     (setq prepared (plist-put prepared :summary summary))
-                     (setq prepared (plist-put prepared :step 'submit))
-                     (cl-remf prepared :failure)
-                     (mevedel-plan--metadata-put
-                      session :implementation-retry prepared)
-                     (condition-case apply-error
-                         (apply apply-function active-target summary args)
-                       (error
-                        (setq prepared
-                              (plist-put prepared :step 'prepare-summary))
-                        (mevedel-plan--metadata-put
-                         session :implementation-retry prepared)
-                        (signal (car apply-error) (cdr apply-error))))))))
-          (mevedel--compact-run
-           :aggressive t
-           :focus focus
-           :prepared-summary (plist-get record :summary)
-           :purpose 'handoff
-           :source-transform source-transform
-           :summary-ready
-           (lambda (summary)
-             (let ((prepared (copy-tree record)))
-               (setq prepared (plist-put prepared :summary summary))
-               (setq prepared (plist-put prepared :step 'prepare-summary))
-               (cl-remf prepared :failure)
-               (mevedel-plan--metadata-put
-                session :implementation-retry prepared)
-               (mevedel-plan-handoff--persist session chat-buffer)
-               summary))
-           :target target
-           :callback
-           (lambda (err)
-             (if err
-                 (mevedel-plan-handoff--implementation-failed
-                  session chat-buffer (format "%s" err))
-               (mevedel-plan-handoff--dispatch-accepted
-                session chat-buffer)))))))))
+      (cond
+       ((not (eq (plist-get selection :location) 'worktree))
+        (mevedel-plan-handoff--prepare-here-summary
+         session chat-buffer record target focus source-transform))
+       ;; A cached Worktree summary is already portable and validated.
+       ((plist-get record :summary)
+        (mevedel-plan-handoff--advance-record
+         session record 'prepare-worktree)
+        (mevedel-plan-handoff--persist session chat-buffer)
+        (mevedel-plan-handoff--dispatch-accepted session chat-buffer))
+       (t
+        (mevedel-plan-handoff--prepare-worktree-summary
+         session chat-buffer record target focus source-transform))))))
 
 (defun mevedel-plan-handoff--implementation-failed
     (session chat-buffer reason)

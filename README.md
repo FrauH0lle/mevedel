@@ -993,6 +993,8 @@ Useful commands:
 | `mevedel-eval-expression-display-limit`    | Lines of an `Eval` expression to show in the confirmation prompt.        |
 | `mevedel-model-tiers`                      | Default named provider/effort tier map inherited by session presets.     |
 | `mevedel-model-workloads`                  | Default tier/provider/effort policy per model workload.                  |
+| `mevedel-model-context-limit`              | Fallback context window in tokens when model metadata is absent.         |
+| `mevedel-model-reserve-tokens`             | Token headroom reserved below the model context window.                  |
 | `mevedel-preset-extra-tool-specs`          | Add active or deferred tool specs to built-in presets.                   |
 | `mevedel-hook-rules`                       | Trusted user-level declarative hook rules.                               |
 | `mevedel-hooks-require-project-trust`      | Require explicit trust before project hook files run.                    |
@@ -1080,11 +1082,9 @@ summary prompt, and segment-rotation contract.
 | Custom Variable                   | Variable Description                                      |
 |-----------------------------------|-----------------------------------------------------------|
 | `mevedel-compact-auto`            | Whether persisted sessions auto-compact before requests.  |
-| `mevedel-compact-context-limit`   | Optional context-window override in tokens.               |
 | `mevedel-compact-token-threshold` | Absolute token count or fraction of usable context.       |
 | `mevedel-compact-tail-turns`      | Target recent complete turns to preserve verbatim.        |
 | `mevedel-compact-tail-budget`     | Fraction of usable context reserved for preserved tail.   |
-| `mevedel-compact-reserve-tokens`  | Token headroom reserved below the model context window.   |
 | `mevedel-compact-tail-tool-output-max` | Per-tool-result character cap in the preserved tail. |
 | `mevedel-compact-body-tool-output-max` | Per-tool-result character cap in compaction input.   |
 | `mevedel-compact-file-reference-reminder-limit` | Maximum compacted file refs cited in reminders. |

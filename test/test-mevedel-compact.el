@@ -450,7 +450,7 @@ falls back to the fresh visible prompt and never cumulative tool-loop usage"
   (with-temp-buffer
     (insert (make-string 400 ?x))
     (let* ((gptel-model nil)
-           (mevedel-compact-context-limit 258000)
+           (mevedel-model-context-limit 258000)
            (chat-buffer (current-buffer))
            (fsm (gptel-make-fsm
                  :info (list :buffer chat-buffer
@@ -479,7 +479,7 @@ zero and over-window provider values use a fresh visible-prompt estimate"
     (with-temp-buffer
       (insert (make-string 400 ?x))
       (let* ((gptel-model nil)
-             (mevedel-compact-context-limit 258000)
+             (mevedel-model-context-limit 258000)
              (chat-buffer (current-buffer))
              (fsm (gptel-make-fsm
                    :info (list :buffer chat-buffer
@@ -501,7 +501,7 @@ missing or zero prompt-side usage cannot become the active baseline"
     (with-temp-buffer
       (insert (make-string 400 ?x))
       (let* ((gptel-model nil)
-             (mevedel-compact-context-limit 258000)
+             (mevedel-model-context-limit 258000)
              (chat-buffer (current-buffer))
              (fsm (gptel-make-fsm
                    :info (list :buffer chat-buffer :tokens (car case)))))
@@ -806,7 +806,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                          (funcall (plist-get args :callback) :skip))))
               (with-current-buffer prompt-buf
                 (let ((mevedel-compact-token-threshold 0.5)
-                      (mevedel-compact-context-limit 200)
+                      (mevedel-model-context-limit 200)
                       (gptel-backend nil)
                       (gptel-model nil)
                       (gptel-max-tokens nil)
@@ -848,7 +848,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                          (funcall (plist-get args :callback) :skip))))
               (with-current-buffer prompt-buf
                 (let ((mevedel-compact-token-threshold 0.5)
-                      (mevedel-compact-context-limit 200)
+                      (mevedel-model-context-limit 200)
                       (gptel-backend nil)
                       (gptel-model nil)
                       (gptel-max-tokens nil)
@@ -898,7 +898,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                                 :mevedel-compaction-target-policy)))))
               (with-current-buffer prompt-buf
                 (let ((mevedel-compact-token-threshold 0.8)
-                      (mevedel-compact-reserve-tokens 0)
+                      (mevedel-model-reserve-tokens 0)
                       (gptel-backend nil)
                       (gptel-model 'mevedel-target-model)
                       (gptel-max-tokens 150)
@@ -1139,7 +1139,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                     ((symbol-function 'mevedel--compact-run)
                      (lambda (&rest _args) (setq ran t))))
             (let ((mevedel-compact-token-threshold 0.5)
-                  (mevedel-compact-context-limit 200))
+                  (mevedel-model-context-limit 200))
               (mevedel--compact-handle-wait fsm)))
           (should (= sent 1))
           (should-not ran))
@@ -1200,7 +1200,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                     ((symbol-function 'mevedel--compact-run)
                      (lambda (&rest _args) (setq ran t))))
             (let ((mevedel-compact-token-threshold 0.5)
-                  (mevedel-compact-context-limit 200)
+                  (mevedel-model-context-limit 200)
                   (mevedel-compact-image-token-estimate 10))
               (mevedel--compact-handle-wait fsm)))
           (should (= sent 1))
@@ -1239,8 +1239,8 @@ missing or zero prompt-side usage cannot become the active baseline"
                        (setq ran t)
                        (funcall (plist-get args :callback) :skip))))
             (let ((mevedel-compact-token-threshold 0.5)
-                  (mevedel-compact-context-limit 200)
-                  (mevedel-compact-reserve-tokens 0))
+                  (mevedel-model-context-limit 200)
+                  (mevedel-model-reserve-tokens 0))
               (mevedel--compact-handle-wait fsm)))
           (should ran)
           (should (= sent 1)))
@@ -1272,7 +1272,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                        (setq ran t)
                        (funcall (plist-get args :callback) :skip))))
             (let ((mevedel-compact-token-threshold 0.5)
-                  (mevedel-compact-context-limit 200))
+                  (mevedel-model-context-limit 200))
               (mevedel--compact-handle-wait fsm)))
           (should ran)
           (should (= sent 1)))
@@ -2112,7 +2112,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (put 'mevedel-agent-target-model :context-window 0.4)
         (put 'mevedel-agent-summary-model :context-window 2)
         (let ((mevedel-compact-token-threshold 0.5)
-              (mevedel-compact-reserve-tokens 0)
+              (mevedel-model-reserve-tokens 0)
               (mevedel-compact-tail-turns 1)
               (mevedel-compact-tail-budget 1.0)
               (mevedel-compact-warn-on-completion t)
@@ -2288,7 +2288,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (put 'mevedel-agent-target-model :context-window 0.4)
         (put 'mevedel-agent-summary-model :context-window 2)
         (let ((mevedel-compact-token-threshold 0.5)
-              (mevedel-compact-reserve-tokens 0)
+              (mevedel-model-reserve-tokens 0)
               (mevedel-compact-tail-turns 1)
               (mevedel-compact-tail-budget 1.0)
               (gptel-backend nil)
@@ -2444,7 +2444,7 @@ missing or zero prompt-side usage cannot become the active baseline"
           (put 'mevedel-small-agent-model :context-window 0.4)
           (put 'mevedel-agent-summary-model :context-window 0.4)
           (let ((mevedel-compact-token-threshold 0.5)
-                (mevedel-compact-reserve-tokens 0))
+                (mevedel-model-reserve-tokens 0))
             (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                        (lambda (&rest _)
                          (error "Summarizer policy must not be resolved")))
@@ -2521,7 +2521,7 @@ missing or zero prompt-side usage cannot become the active baseline"
       (put 'mevedel-small-agent-model :context-window 0.4)
       (put 'mevedel-agent-summary-model :context-window 0.4)
       (let ((mevedel-compact-token-threshold 0.5)
-            (mevedel-compact-reserve-tokens 0)
+            (mevedel-model-reserve-tokens 0)
             (mevedel-compact-tail-turns 10)
             (mevedel-compact-tail-budget 1.0))
         (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
@@ -2866,7 +2866,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                     ((symbol-function 'display-warning) #'ignore)
                     ((symbol-function 'gptel-request)
                      (lambda (&rest _) (setq request-called t))))
-            (let ((mevedel-compact-reserve-tokens 0))
+            (let ((mevedel-model-reserve-tokens 0))
               (mevedel--compact-run
                :aggressive t
                :pending-start (point-max)
@@ -3093,6 +3093,31 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should-not mevedel--compaction-in-flight)
       (should-not mevedel--compaction-cancel)
       (should (= mevedel--compact-failure-count 0))))
+
+  :doc "settles a synchronous generator failure as a retryable attempt"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let ((attempts 0) result)
+      (insert "Prompt\n")
+      (insert (propertize "Response\n" 'gptel 'response))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback nil)))
+                ((symbol-function 'mevedel-context-summary-generate)
+                 (lambda (&rest _)
+                   (cl-incf attempts)
+                   (error "Summarization provider is unavailable")))
+                ((symbol-function 'run-at-time)
+                 (lambda (_delay _repeat function &rest args)
+                   (apply function args)))
+                ((symbol-function 'display-warning) #'ignore)
+                ((symbol-function 'message) #'ignore))
+        (mevedel--compact-run
+         :aggressive t
+         :pending-start (point-max)
+         :callback (lambda (err) (setq result err))))
+      (should (= 3 attempts))
+      (should (string-match-p "Summarization provider is unavailable" result))
+      (should-not mevedel--compaction-in-flight)))
 
   :doc "request failures retain three identical attempts"
   (test-mevedel-compact--with-persisted-buffer (chat-buf session)
@@ -3415,24 +3440,13 @@ missing or zero prompt-side usage cannot become the active baseline"
       '(:backend target-backend :model target-model :effort high :max-tokens 300
         :request-params (:temperature 0.5))))))
 
-(mevedel-deftest mevedel--compact-policy-usable-tokens ()
-  ,test
-  (test)
-  :doc "uses the policy model and response reserve"
-  (put 'mevedel-policy-model :context-window 0.2)
-  (let ((mevedel-compact-reserve-tokens 20))
-    (should
-     (= 180
-        (mevedel--compact-policy-usable-tokens
-         '(:backend nil :model mevedel-policy-model :max-tokens 10))))))
-
 (mevedel-deftest mevedel--compact-policy-threshold-tokens ()
   ,test
   (test)
   :doc "applies the configured ratio to the policy's usable context"
   (put 'mevedel-policy-model :context-window 0.2)
   (let ((mevedel-compact-token-threshold 0.5)
-        (mevedel-compact-reserve-tokens 20))
+        (mevedel-model-reserve-tokens 20))
     (should
      (= 90
         (mevedel--compact-policy-threshold-tokens
@@ -3445,7 +3459,7 @@ missing or zero prompt-side usage cannot become the active baseline"
   (put 'mevedel-admission-target :context-window 0.2)
   (put 'mevedel-admission-summary :context-window 0.1)
   (let ((mevedel-compact-token-threshold 0.5)
-        (mevedel-compact-reserve-tokens 0)
+        (mevedel-model-reserve-tokens 0)
         (summary-policy
          '(:backend nil :model mevedel-admission-summary :max-tokens 0))
         (target-policy
@@ -3625,15 +3639,15 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should-error (mevedel--compact-threshold-tokens) :type 'user-error)))
 
   :doc "float threshold applies to usable context"
-  (let ((mevedel-compact-context-limit 200000)
-        (mevedel-compact-reserve-tokens 20000)
+  (let ((mevedel-model-context-limit 200000)
+        (mevedel-model-reserve-tokens 20000)
         (mevedel-compact-token-threshold 0.8)
         (gptel-max-tokens nil))
     (should (= (mevedel--compact-threshold-tokens) 144000)))
 
   :doc "reserve is capped on small context windows"
-  (let ((mevedel-compact-context-limit 8000)
-        (mevedel-compact-reserve-tokens 20000)
+  (let ((mevedel-model-context-limit 8000)
+        (mevedel-model-reserve-tokens 20000)
         (mevedel-compact-token-threshold 0.8)
         (gptel-max-tokens nil))
     (should (= (mevedel--compact-usable-tokens) 4000))
@@ -3830,7 +3844,7 @@ missing or zero prompt-side usage cannot become the active baseline"
       (let ((a3-start (point)))
         (insert "a3\n")
         (put-text-property a3-start (point) 'gptel 'response))
-      (let ((mevedel-compact-context-limit 200000)
+      (let ((mevedel-model-context-limit 200000)
             (mevedel-compact-tail-turns 2)
             (mevedel-compact-tail-budget 0.25))
         (should (= (mevedel--compact-tail-start (point-max) nil)
@@ -3851,8 +3865,8 @@ missing or zero prompt-side usage cannot become the active baseline"
       (let ((a3-start (point)))
         (insert (make-string 40 ?b) "\n")
         (put-text-property a3-start (point) 'gptel 'response))
-      (let ((mevedel-compact-context-limit 100)
-            (mevedel-compact-reserve-tokens 20)
+      (let ((mevedel-model-context-limit 100)
+            (mevedel-model-reserve-tokens 20)
             (mevedel-compact-tail-turns 2)
             (mevedel-compact-tail-budget 0.01))
         (should (= (mevedel--compact-tail-start (point-max) nil)
@@ -3869,8 +3883,8 @@ missing or zero prompt-side usage cannot become the active baseline"
       (let ((a2-start (point)))
         (insert (make-string 40 ?b) "\n")
         (put-text-property a2-start (point) 'gptel 'response))
-	  (let ((mevedel-compact-context-limit 100)
-	        (mevedel-compact-reserve-tokens 20)
+	  (let ((mevedel-model-context-limit 100)
+	        (mevedel-model-reserve-tokens 20)
 	        (mevedel-compact-tail-turns 2)
 	        (mevedel-compact-tail-budget 0.01))
 	    (should (= (mevedel--compact-tail-start (point-max) nil)
@@ -3897,7 +3911,7 @@ missing or zero prompt-side usage cannot become the active baseline"
       (let ((a3-start (point)))
         (insert "a3\n")
         (put-text-property a3-start (point) 'gptel 'response))
-      (let ((mevedel-compact-context-limit 200000)
+      (let ((mevedel-model-context-limit 200000)
             (mevedel-compact-tail-turns 2)
             (mevedel-compact-tail-budget 0.25))
         (should (= (mevedel--compact-tail-start (point-max) nil)
@@ -3925,7 +3939,7 @@ missing or zero prompt-side usage cannot become the active baseline"
       (let ((response-start (point)))
         (insert "a3\n")
         (put-text-property response-start (point) 'gptel 'response))
-      (let ((mevedel-compact-context-limit 200000)
+      (let ((mevedel-model-context-limit 200000)
             (mevedel-compact-tail-turns 2)
             (mevedel-compact-tail-budget 0.25))
         (should (= boundary-start

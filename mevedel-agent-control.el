@@ -930,6 +930,15 @@ it queued for ordinary parent delivery."
          (format "interrupted by %s" caller-path)))
       (list :path path :previous-activity activity))))
 
+(defun mevedel-agent-control--summary-metadata (result)
+  "Return disclosable provider metadata from context-summary RESULT."
+  (list :backend
+        (when-let* ((backend (plist-get result :backend)))
+          (or (ignore-errors (gptel-backend-name backend))
+              (format "%s" backend)))
+        :model (plist-get result :model)
+        :effort (plist-get result :effort)))
+
 (cl-defun mevedel-agent-control-spawn
     (session task-name message callback
              &key role agent context model effort model-policy
@@ -984,18 +993,16 @@ idempotent cancellation thunk for the unpublished preparation transaction."
            (unless settled
              (setq settled t)
              (funcall callback outcome)))
-         (fail (err)
+         (fail (message)
            (unless settled
              (unless committed
                (mevedel-agent-control--rollback session record))
-             (settle (list :outcome 'error
-                           :error (error-message-string err)))))
+             (settle (list :outcome 'error :error message))))
          (start-provider (prepared)
            (unless (or settled cancelled)
              (if (not (eq (plist-get prepared :outcome) 'success))
-                 (fail (list 'error
-                             (or (plist-get prepared :error)
-                                 "Agent task preparation failed")))
+                 (fail (or (plist-get prepared :error)
+                           "Agent task preparation failed"))
                (condition-case err
                    (progn
                      (unless
@@ -1030,52 +1037,43 @@ idempotent cancellation thunk for the unpublished preparation transaction."
                      (settle (list :outcome 'success
                                    :record record
                                    :summary-metadata summary-metadata)))
-                 (error (fail err))))))
+                 (error (fail (error-message-string err)))))))
+         (summarize-then-start (prepared)
+           ;; The hook-accepted task is the only focus input, so generation
+           ;; can only start once preparation has produced it.
+           (condition-case err
+               (progn
+                 (require 'mevedel-context-summary)
+                 (setq
+                  summary-cancel
+                  (mevedel-context-summary-generate
+                   summary-evidence 'handoff
+                   (lambda (result)
+                     (unless (or settled cancelled)
+                       (pcase (plist-get result :outcome)
+                         ('success
+                          (setq context-snapshot
+                                (mevedel-agent-runtime-task-background
+                                 (plist-get result :summary))
+                                summary-metadata
+                                (mevedel-agent-control--summary-metadata
+                                 result))
+                          (start-provider prepared))
+                         ('aborted
+                          (mevedel-agent-control--rollback session record)
+                          (settle '(:outcome aborted)))
+                         (_
+                          (fail (or (plist-get result :error)
+                                    "Agent context summary failed"))))))
+                   :session session
+                   :focus (plist-get (plist-get prepared :turn) :prompt))))
+             (error (fail (error-message-string err)))))
          (prepared (result)
            (unless (or settled cancelled)
-             (if (not (eq context 'summary))
-                 (start-provider result)
-               (if (not (eq (plist-get result :outcome) 'success))
-                   (start-provider result)
-                 (condition-case err
-                     (progn
-                       (require 'mevedel-context-summary)
-                       (setq
-                        summary-cancel
-                        (mevedel-context-summary-generate
-                         summary-evidence 'handoff
-                         (lambda (summary-result)
-                           (unless (or settled cancelled)
-                             (pcase (plist-get summary-result :outcome)
-                               ('success
-                                (setq context-snapshot
-                                      (mevedel-agent-runtime-task-background
-                                       (plist-get summary-result :summary))
-                                      summary-metadata
-                                      (list
-                                       :backend
-                                       (when-let* ((backend
-                                                    (plist-get summary-result
-                                                               :backend)))
-                                         (or (ignore-errors
-                                               (gptel-backend-name backend))
-                                             (format "%s" backend)))
-                                       :model (plist-get summary-result :model)
-                                       :effort
-                                       (plist-get summary-result :effort)))
-                                (start-provider result))
-                               ('aborted
-                                (mevedel-agent-control--rollback session record)
-                                (settle '(:outcome aborted)))
-                               (_
-                                (fail
-                                 (list
-                                  'error
-                                  (or (plist-get summary-result :error)
-                                      "Agent context summary failed")))))))
-                         :session session
-                         :focus (plist-get (plist-get result :turn) :prompt))))
-                   (error (fail err))))))))
+             (if (and (eq context 'summary)
+                      (eq (plist-get result :outcome) 'success))
+                 (summarize-then-start result)
+               (start-provider result)))))
       (condition-case err
           (progn
             (require 'mevedel-compact)
@@ -1091,7 +1089,7 @@ idempotent cancellation thunk for the unpublished preparation transaction."
              (mevedel-agent-record-path record) #'prepared
              :skill-permission-rules skill-permission-rules
              :cancelled-p (lambda () cancelled)))
-        (error (fail err)))
+        (error (fail (error-message-string err))))
       (lambda ()
         (unless settled
           (setq cancelled t)

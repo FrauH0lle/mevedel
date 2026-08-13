@@ -11,9 +11,6 @@
 (eval-when-compile (require 'cl-lib))
 (require 'subr-x)
 
-;; `cl-seq'
-(declare-function cl-every "cl-seq" (predicate sequence &rest sequences))
-
 ;; `mevedel-tool-media'
 (declare-function mevedel-tool-media-extract
                   "mevedel-tool-media"
@@ -1463,7 +1460,7 @@ allows native media references to resolve to textual kind, MIME, and path
 placeholders.  SKILL-PROVENANCE is the already selected list of prior skill
 invocation descriptions."
   (unless (and (listp ranges)
-               (cl-every
+               (seq-every-p
                 (lambda (range)
                   (and (consp range)
                        (integer-or-marker-p (car range))
@@ -1490,7 +1487,7 @@ invocation descriptions."
                        ((`(,call ,result)
                          (mevedel-transcript--summary-tool-parts
                           text tool-output-max tool-results-dir
-                          (mevedel-transcript--tool-id-in-range start end))))
+                         (mevedel-transcript--tool-id-in-range start end))))
                      (push
                       (mevedel-transcript--summary-evidence-item
                        "tool-call" call)
