@@ -125,7 +125,35 @@
       (should (equal "context" (mevedel-goal-active-context session))))
     (should (equal "unbounded" (cdr (assoc "token-budget" replacements))))
     (should (equal "unbounded"
-                   (cdr (assoc "tokens-remaining" replacements)))))))
+                   (cdr (assoc "tokens-remaining" replacements)))))
+  (let* ((root (make-temp-file "mevedel-goal-plan-address-" t))
+         (relative "local/plans/accepted-20260813-120000.md")
+         (plan-file (file-name-concat root relative))
+         (session (mevedel-session--create :name "main" :save-path root))
+         (goal (mevedel-goal--create
+                :id "goal-1" :objective "Ship" :status 'active
+                :tokens-used 0 :time-used-seconds 0 :turns-run 0
+                :plan-reference relative
+                :created-at "now" :updated-at "now"))
+         replacements)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory plan-file) t)
+          (write-region "accepted" nil plan-file nil 'silent)
+          (setf (mevedel-session-goal session) goal
+                (mevedel-session-plan-metadata session)
+                (list :accepted-path relative
+                      :accepted-hash (mevedel-plan-hash "accepted")))
+          (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+                     (lambda (_path values) (setq replacements values)
+                       "context")))
+            (should (equal "context" (mevedel-goal-active-context session))))
+          ;; Goal context names the plan by address, never by storage path.
+          (let ((line (cdr (assoc "plan-reference-line" replacements))))
+            (should (string-match-p
+                     "local://plans/accepted-20260813-120000\\.md" line))
+            (should-not (string-match-p (regexp-quote root) line))))
+      (delete-directory root t)))))
 
 (mevedel-deftest mevedel-goal-capture-request
   (:doc "attributes root requests and excludes child and compaction requests")

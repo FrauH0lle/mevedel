@@ -29,6 +29,8 @@
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
+(declare-function mevedel-plan-resource-address "mevedel-plan"
+                  (relative-path))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-save
@@ -216,7 +218,12 @@ reactivated without scheduling because its caller owns the prepared kickoff."
   (error "%s" reason))
 
 (defun mevedel-goal--resolve-plan-reference (goal session)
-  "Return GOAL's validated accepted-plan path in SESSION, or nil."
+  "Return GOAL's validated accepted-plan resource address in SESSION, or nil.
+
+The artifact is validated through its private session-owned path, but the
+returned value is the model-facing `local://plans/...' address so Goal context
+never discloses session storage paths."
+  (require 'mevedel-plan)
   (when-let* ((reference (mevedel-goal-plan-reference goal)))
     (unless (mevedel-goal--valid-plan-reference-p reference)
       (mevedel-goal--pause-for-integrity
@@ -241,7 +248,12 @@ reactivated without scheduling because its caller owns the prepared kickoff."
           (mevedel-goal--pause-for-integrity
            goal session
            "Accepted-plan artifact no longer matches its accepted hash")))
-      path)))
+      (condition-case nil
+          (mevedel-plan-resource-address reference)
+        (error
+         (mevedel-goal--pause-for-integrity
+          goal session
+          "Accepted-plan reference is outside managed plan storage"))))))
 
 (defun mevedel-goal-active-context (session)
   "Render request-local active Goal context for SESSION, or nil."
@@ -249,7 +261,7 @@ reactivated without scheduling because its caller owns the prepared kickoff."
               ((eq (mevedel-goal-status goal) 'active)))
     (let* ((budget (mevedel-goal-token-budget goal))
            (used (mevedel-goal-tokens-used goal))
-           (plan-path (mevedel-goal--resolve-plan-reference goal session)))
+           (plan-address (mevedel-goal--resolve-plan-reference goal session)))
       (require 'mevedel-system)
       (mevedel-system-render-prompt-file
        "prompts/goals/active-context.md"
@@ -263,9 +275,9 @@ reactivated without scheduling because its caller owns the prepared kickoff."
                                    "unbounded"))
          ("turns-run" . ,(number-to-string (mevedel-goal-turns-run goal)))
          ("plan-reference-line" .
-          ,(if plan-path
+          ,(if plan-address
                (format "Accepted plan: %s. Its outcomes, constraints, and achievement criteria are binding except where amended by the current objective; its implementation mechanics are revisable."
-                       plan-path)
+                       plan-address)
              "")))))))
 
 

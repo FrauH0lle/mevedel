@@ -521,7 +521,7 @@
                           :save-path (make-temp-file "mevedel-plan-target-" t)))
          (source-buffer (generate-new-buffer " *mevedel-plan-target-source*"))
          (target-buffer (generate-new-buffer " *mevedel-plan-target-data*"))
-         mode archive-relative-path)
+         mode archive-arity)
     (unwind-protect
         (progn
           (make-directory (file-name-directory path) t)
@@ -532,8 +532,8 @@
                       'mevedel-plan-handoff--worktree-target-buffer)
                      (lambda (_) target-buffer))
                     ((symbol-function 'mevedel-plan-archive-accepted)
-                     (lambda (_artifact _session relative-path)
-                       (setq archive-relative-path relative-path)
+                     (lambda (&rest args)
+                       (setq archive-arity (length args))
                        '(:path "local/plans/accepted-20260813-120000.md"
                          :absolute-path "/tmp/target-accepted.md"
                          :hash "target-hash")))
@@ -557,7 +557,7 @@
                      source-session source-buffer record)))
               (should (eq 'submit (plist-get prepared :step)))
               (should (eq 'full-auto mode))
-              (should-not archive-relative-path)
+              (should (= 2 archive-arity))
               (should (equal "local/plans/accepted-20260813-120000.md"
                              (plist-get
                               (plist-get prepared :target-accepted) :path)))
