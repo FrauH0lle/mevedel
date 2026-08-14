@@ -19,6 +19,8 @@
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-directory-p
                   "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-list-directory
+                  "mevedel-session-control-fs" (directory regexp))
 (declare-function mevedel-session-control-fs-make-directory
                   "mevedel-session-control-fs" (path &optional parents))
 (declare-function mevedel-session-control-fs-path-exists-p
@@ -82,11 +84,18 @@ requester after the owner has released its lease."
   :type 'string
   :group 'mevedel)
 
+(defun mevedel-session-transfer--path (directory name)
+  "Return transfer subdirectory NAME below lease DIRECTORY without creating it.
+
+Reads use this: an absent mailbox holds no requests, and a poll that created
+target directories would mutate the session on behalf of an observer."
+  (mevedel-session-control-fs-physical-path directory)
+  (mevedel-session-control-fs-physical-path
+   (file-name-concat directory name)))
+
 (defun mevedel-session-transfer--directory (directory name)
   "Ensure and return transfer subdirectory NAME below lease DIRECTORY."
-  (mevedel-session-control-fs-physical-path directory)
-  (let ((path (file-name-concat directory name)))
-    (setq path (mevedel-session-control-fs-physical-path path))
+  (let ((path (mevedel-session-transfer--path directory name)))
     (cond
      ((mevedel-session-control-fs-directory-p path) path)
      ((mevedel-session-control-fs-path-exists-p path)
@@ -280,20 +289,30 @@ requester after the owner has released its lease."
 
 (defun mevedel-session-transfer--current-request
     (directory lease session-id &optional now)
-  "Read DIRECTORY's current-generation request for SESSION-ID, or nil."
-  (let ((generation (plist-get lease :generation))
-        (now (or now (mevedel-session-durability--target-time directory))))
-    (when-let ((path (mevedel-session-transfer--request-path
-                      directory generation)))
-      (when (mevedel-session-control-fs-path-exists-p path)
-        (let ((request (mevedel-session-durability--read-plist path)))
-          (unless (mevedel-session-transfer--valid-request-p request now)
-            (error "Invalid portable control-transfer request: %s" path))
-          (and (equal generation (plist-get request :generation))
-               (equal session-id (plist-get request :session-id))
-               (equal (plist-get lease :client-id)
-                      (plist-get request :owner-client-id))
-               request))))))
+  "Read DIRECTORY's newest live request for SESSION-ID, or nil.
+
+The owner's lease generation legitimately advances while a request is
+pending: settling the durable mutation latch and publication both rotate
+the continuously owned lease.  The newest request at or below LEASE's
+generation is therefore the live one; it must still name LEASE's client
+as its owner, so a request left over from an earlier ownership cannot
+cross a release."
+  (let* ((generation (plist-get lease :generation))
+         (now (or now (mevedel-session-durability--target-time directory)))
+         (path
+          (car (sort (mevedel-session-control-fs-list-directory
+                      (mevedel-session-transfer--path directory "requests")
+                      "\\`request-[0-9]\\{20\\}\\.el\\'")
+                     #'string>))))
+    (when path
+      (let ((request (mevedel-session-durability--read-plist path)))
+        (unless (mevedel-session-transfer--valid-request-p request now)
+          (error "Invalid portable control-transfer request: %s" path))
+        (and (<= (plist-get request :generation) generation)
+             (equal session-id (plist-get request :session-id))
+             (equal (plist-get lease :client-id)
+                    (plist-get request :owner-client-id))
+             request)))))
 
 (defun mevedel-session-transfer--set-state
     (session state request &optional decision)

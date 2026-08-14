@@ -661,6 +661,44 @@ need proof on a real connection rather than on a local temporary directory."
         (ignore-errors
           (funcall original-signal-process (- group-id) 'KILL)))
       (delete-directory root t)))
+  :doc "bounds a timed-out child whose stop escalation never settles"
+  (let* ((root (make-temp-file "mevedel-remote-wedged-" t))
+         (pid-file (expand-file-name "group.pid" root))
+         (remote-root
+          (format "/mevedelmock:%s:%s/" (system-name) root))
+         (original-signal-process (symbol-function 'signal-process))
+         (mevedel-execution--child-kill-delay 0.02)
+         (mevedel-execution--remote-control-timeout 0.02)
+         (mevedel-sandbox-mode 'off)
+         group-id)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          ;; A wedged transport can strand the TERM/KILL escalation; the
+          ;; timed-out one-shot must still settle within its bounded
+          ;; watchdog window instead of spinning forever.
+          (cl-letf (((symbol-function 'mevedel-execution--start-stop)
+                     #'ignore))
+            (let ((result
+                   (mevedel-execution-run-one-shot
+                    :name "mevedel-test-remote-wedged"
+                    :command
+                    '("sh" "-c"
+                      "ps -o pgid= -p $$ | tr -d ' ' > group.pid; sleep 30")
+                    :workdir remote-root
+                    :writable-roots (list remote-root)
+                    :timeout 0.05)))
+              (setq group-id
+                    (string-to-number
+                     (string-trim
+                      (with-temp-buffer
+                        (insert-file-contents pid-file)
+                        (buffer-string)))))
+              (should (plist-get result :timed-out-p))
+              (should (eq 'unknown (plist-get result :termination))))))
+      (when (and group-id (> group-id 0))
+        (ignore-errors
+          (funcall original-signal-process (- group-id) 'KILL)))
+      (delete-directory root t)))
   :doc "runs the Bubblewrap and FD grant wrappers in the target path domain"
   (let* ((root (make-temp-file "mevedel-remote-bwrap-" t))
          (external-root (make-temp-file "mevedel-remote-grant-" t))
@@ -1805,19 +1843,37 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
              (new-session (buffer-local-value 'mevedel--session restored))
              (new-target (mevedel-session-execution-target new-session)))
         (should (buffer-live-p restored))
-        ;; Replacement is detected by observing the target, which readiness
-        ;; probing does; resume only seeds the acknowledged baseline.
+        ;; Resume with an acquired lease settles the replacement as one
+        ;; transaction: it probes the fresh target, revokes exact
+        ;; target-scoped grants, commits a sidecar naming the new
+        ;; incarnation, and acknowledges the observation.  The restored
+        ;; session therefore carries the new incarnation with no pending
+        ;; replacement and no surviving grants.
+        (should-not
+         (mevedel-execution-target-incarnation-changed-p new-target))
+        (should-not (equal old-incarnation
+                           (mevedel-execution-target-incarnation new-target)))
+        (should-not (mevedel-session-resource-grants new-session))
+        ;; A fresh probe of the same replacement target observes no
+        ;; further change.
         (should (eq 'ready
                     (plist-get
                      (mevedel-execution-target-probe new-target t 'off)
                      :status)))
-        (should (mevedel-execution-target-incarnation-changed-p new-target))
-        (should (equal old-incarnation
-                       (mevedel-execution-target-incarnation new-target)))
-        (should (mevedel-session-resource-grants new-session))
+        (should-not
+         (mevedel-execution-target-incarnation-changed-p new-target))
+        ;; The committed sidecar records the new incarnation, so a later
+        ;; client resumes against the acknowledged replacement.
+        (let* ((publication
+                (mevedel-session-publication-read
+                 (mevedel-session-save-path new-session)))
+               (sidecar
+                (mevedel-session-persistence-load-sidecar
+                 (plist-get publication :sidecar))))
+          (should (equal (mevedel-execution-target-incarnation new-target)
+                         (plist-get sidecar :target-incarnation))))
         (with-current-buffer restored
           (should (mevedel-request-p (mevedel-request-begin new-session)))
-          (should-not (mevedel-session-resource-grants new-session))
           (mevedel-request-end t)
           (set-buffer-modified-p nil))
         (cons restored new-session)))))
@@ -2002,7 +2058,15 @@ work in flight genuinely unprovable rather than merely finished."
           (test-mevedel-execution-remote--cleanup-target-group
            root group-id child-pid child-start-time)))
       (when session
-        (mevedel-execution-teardown-session session))
+        (mevedel-execution-teardown-session session)
+        ;; Mutation admission materialized the session and acquired its
+        ;; lease; releasing it also cancels the renewal timer that would
+        ;; otherwise keep running target I/O into later journeys.
+        (ignore-errors
+          (when (and (mevedel-session-save-path session)
+                     (mevedel-session-durability-lease-owned-p session))
+            (mevedel-session-durability-lease-release
+             (mevedel-session-save-path session) session))))
       (when (buffer-live-p root-buffer)
         (with-current-buffer root-buffer
           (set-buffer-modified-p nil))
@@ -2266,8 +2330,20 @@ work in flight genuinely unprovable rather than merely finished."
                     (message "mevedel: real remote %s cold entry" method)
                     (test-mevedel-execution-remote--exercise-cold-entry
                      session root-buffer workspace)))))
-      (when session
-        (mevedel-execution-teardown-session session))
+      ;; Replacement and cold entry rebind the buffer to fresh session
+      ;; objects.  Each holds its own lease and renewal timer, so the live
+      ;; one must be released here or its timer keeps running target I/O
+      ;; into every later journey in this Emacs process.
+      (let ((live-session
+             (and (buffer-live-p root-buffer)
+                  (buffer-local-value 'mevedel--session root-buffer))))
+        (dolist (entry (delete-dups (delq nil (list session live-session))))
+          (mevedel-execution-teardown-session entry)
+          (ignore-errors
+            (when (and (mevedel-session-save-path entry)
+                       (mevedel-session-durability-lease-owned-p entry))
+              (mevedel-session-durability-lease-release
+               (mevedel-session-save-path entry) entry)))))
       (when (buffer-live-p root-buffer)
         (with-current-buffer root-buffer
           (set-buffer-modified-p nil))

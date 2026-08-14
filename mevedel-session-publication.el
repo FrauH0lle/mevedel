@@ -568,12 +568,18 @@ the target's fixed cache or mutates the publication accumulator."
 
 (defun mevedel-session-publication--publish-batch (session batch)
   "Publish every staged artifact in BATCH while SESSION remains owner."
-  (dolist (artifact (plist-get batch :artifacts))
-    (unless (mevedel-session-durability--renew-publication-lease session)
-      (user-error "Portable session lease was lost during publication"))
-    (mevedel-session-publication--publish-artifact artifact)
-    (unless (mevedel-session-durability--renew-publication-lease session)
-      (user-error "Portable session lease was lost during publication")))
+  (let ((artifacts (plist-get batch :artifacts)))
+    (dolist (artifact artifacts)
+      (unless (mevedel-session-durability--renew-publication-lease session)
+        (user-error "Portable session lease was lost during publication"))
+      (mevedel-session-publication--publish-artifact artifact))
+    ;; Ownership is proved immediately before every write and once after the
+    ;; last one.  Renewing after each write as well only repeated the next
+    ;; iteration's proof, with no target write in between, and a renewal is
+    ;; itself several target round trips.
+    (when artifacts
+      (unless (mevedel-session-durability--renew-publication-lease session)
+        (user-error "Portable session lease was lost during publication"))))
   batch)
 
 (defun mevedel-session-publication--drain (session batches)

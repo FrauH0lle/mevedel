@@ -269,6 +269,48 @@
         (mevedel-session-durability-lease-release session-dir owner))
       (when (file-directory-p root)
         (delete-directory root t))))
+  :doc "a pending request survives the owner's own generation rotation"
+  (let* ((root (make-temp-file "mevedel-control-drift-" t))
+         (session-dir (file-name-concat root "session"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id root :root root :name "drift"))
+         (owner (mevedel-session-create "main" workspace))
+         (owner-id (make-string 64 ?a))
+         (requester-id (make-string 64 ?b))
+         (now 0.0))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path owner) session-dir
+          (mevedel-session-session-id owner) "drift-session")
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-durability--target-time)
+                   (lambda (&rest _) now)))
+          (let ((mevedel-session-durability--client-id owner-id)
+                (mevedel-session-transfer-prompt-timeout 1))
+            (should
+             (mevedel-session-durability-lease-acquire
+              session-dir "owner" owner))
+            (let ((mevedel-session-durability--client-id requester-id))
+              (should (mevedel-session-transfer-request owner)))
+            ;; Settling the durable mutation latch rotates the owner's
+            ;; lease generation past the pending request.
+            (should
+             (mevedel-session-durability-set-unsettled-mutation owner t))
+            (should
+             (mevedel-session-durability-set-unsettled-mutation owner nil))
+            (should (eq 'requested
+                        (plist-get (mevedel-session-transfer-poll owner)
+                                   :state)))
+            (setq now 2.0)
+            (should (eq 'quiescing
+                        (plist-get (mevedel-session-transfer-poll owner)
+                                   :state)))))
+      (mevedel-session-durability--cancel-renewal owner)
+      (let ((mevedel-session-durability--client-id owner-id))
+        (ignore-errors
+          (mevedel-session-durability-lease-release session-dir owner)))
+      (when (file-directory-p root)
+        (delete-directory root t))))
   :doc "rejects portable lease and transfer APIs for file sessions"
   (let* ((root (make-temp-file "mevedel-file-transfer-" t))
          (workspace

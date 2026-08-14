@@ -44,6 +44,19 @@
 (declare-function mevedel-session-persistence-read
                   "mevedel-session-persistence" (file))
 
+(defun test-mevedel-skills-ui--materialize-workspace (session tempdir)
+  "Give SESSION an isolated workspace root below TEMPDIR with an identity.
+A save on a manually materialized session reads the project-owned
+workspace identity from the workspace root, so the root must be a real
+per-test directory rather than the shared synthetic helper path."
+  (require 'mevedel-workspace-identity)
+  (let ((root (file-name-as-directory
+               (file-name-concat tempdir "workspace"))))
+    (make-directory root t)
+    (setf (mevedel-workspace-root (mevedel-session-workspace session)) root)
+    (mevedel-workspace-identity-ensure root)
+    root))
+
 
 ;;
 ;;; Module ownership
@@ -537,6 +550,7 @@ spanning lines")))
          start-source)
     (unwind-protect
         (progn
+          (test-mevedel-skills-ui--materialize-workspace session tempdir)
           (setf (mevedel-session-save-path session) save-path)
           (setf (mevedel-session-session-id session) "clear-test")
           (setf (mevedel-session-current-segment session) 1)
@@ -588,6 +602,7 @@ spanning lines")))
          (seg1 (file-name-concat save-path "segment-0001.chat.org")))
     (unwind-protect
         (progn
+          (test-mevedel-skills-ui--materialize-workspace session tempdir)
           (setf (mevedel-session-save-path session) save-path)
           (setf (mevedel-session-session-id session) "clear-stale-test")
           (setf (mevedel-session-current-segment session) 1)
@@ -638,6 +653,7 @@ spanning lines")))
          (seg1 (file-name-concat save-path "segment-0001.chat.org")))
     (unwind-protect
         (progn
+          (test-mevedel-skills-ui--materialize-workspace session tempdir)
           (setf (mevedel-session-save-path session) save-path)
           (setf (mevedel-session-session-id session) "clear-direct-stale-test")
           (setf (mevedel-session-current-segment session) 1)

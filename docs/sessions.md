@@ -193,10 +193,13 @@ client-specific TRAMP spelling or Emacs build details.  Resume restores the
 persisted baseline and compares it with the fresh observation before readiness
 and authority admission, so a reboot or replacement target cannot inherit old
 grants.  A replacement probe stages the observation without changing that
-durable baseline.  Request admission first revokes exact session and
-workspace grants, then commits a sidecar marker containing the new incarnation
-and no exact session grants; only that successful commit acknowledges the
-replacement.  Publication failure leaves admission blocked and retryable.
+durable baseline.  The fence then runs as one transaction: it first revokes
+exact session and workspace grants, then commits a sidecar marker containing
+the new incarnation and no exact session grants; only that successful commit
+acknowledges the replacement.  Resume with an acquired lease runs that
+transaction immediately, so a restored session already carries the
+acknowledged new incarnation; request admission runs it for replacements
+observed later.  Publication failure leaves admission blocked and retryable.
 
 The unsettled-mutation latch is
 [`ADR 0098`](adr/0098-store-unsettled-mutation-in-the-session-lease.md); the
@@ -262,7 +265,14 @@ before falling back to its captured committed manifest; readers never treat
 the fixed caches as authority.
 
 Cooperative control transfer uses immutable generation-specific request and
-decision records below `.lease/requests/`. Granting a request does not move
+decision records below `.lease/requests/`. A request names the lease
+generation at which it was filed; the owner's generation legitimately
+advances while it is pending (settling the durable mutation latch and
+publication both rotate the continuously owned lease), so the owner polls
+the newest request at or below its current generation and pairs the
+decision with the request's own generation. A request must still name the
+current lease's client as its owner, so one left over from an earlier
+ownership cannot cross a release. Granting a request does not move
 authority: the owner drains existing work, commits one final publication, and
 releases with a short requester-only fence. New mutation admission is refused
 while draining; the named requester acquires only after observing the released

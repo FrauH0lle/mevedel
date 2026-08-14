@@ -15,6 +15,7 @@
 (require 'mevedel-execution-target)
 (require 'mevedel-session-control-transfer)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-transfer)
 (require 'mevedel-session-publication)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-recovery)
@@ -66,6 +67,36 @@
     (write-region "ok\n" nil path nil 'silent)
     path))
 
+(defun test-mevedel-execution-remote-client--transfer-facts (session)
+  "Return one bounded diagnostic line describing SESSION's transfer state."
+  (condition-case err
+      (let* ((bound (mevedel-session-lease session))
+             (directory (mevedel-session-durability--lease-path
+                         (mevedel-session-save-path session)))
+             (head (mevedel-session-durability--lease-head directory))
+             (now (mevedel-session-durability--target-time directory))
+             (generation (plist-get head :generation)))
+        (format
+         (concat "bound-gen=%S bound-state=%S head-gen=%S head-status=%S "
+                 "head-mine=%S head-expires=%S now=%S request-p=%S "
+                 "decision-p=%S cached-state=%S")
+         (plist-get bound :generation)
+         (plist-get bound :state)
+         generation
+         (plist-get head :status)
+         (equal mevedel-session-durability--client-id
+                (plist-get head :client-id))
+         (plist-get head :expires-at)
+         now
+         (and generation
+              (mevedel-session-control-fs-path-exists-p
+               (mevedel-session-transfer--request-path directory generation)))
+         (and generation
+              (mevedel-session-control-fs-path-exists-p
+               (mevedel-session-transfer--decision-path directory generation)))
+         (plist-get (mevedel-session-control-transfer session) :state)))
+    (error (format "facts-error=%s" (error-message-string err)))))
+
 (defun test-mevedel-execution-remote-client--target-process-live-p
     (root pid)
   "Return non-nil when PID is still live on target ROOT."
@@ -87,9 +118,13 @@
       (mevedel-execution-start-bash
        (lambda (value) (setq result value))
        :session session :owner "accept-owner"
+       ;; The workload must outlive both clients' slow cold startups so
+       ;; the owner provably observes `quiescing' while work is still
+       ;; live; the owner stops it explicitly, and the crash scenarios
+       ;; kill it by PID.
        :command
        (list "bash" "-c"
-             "sleep 30 & child=$!; printf '%s\\n' \"$child\" > \"$1\"; wait \"$child\""
+             "sleep 300 & child=$!; printf '%s\\n' \"$child\" > \"$1\"; wait \"$child\""
              "mevedel-long-owner" pid-file)
        :workdir root :writable-roots (list root) :yield-time-ms 250))
     (with-timeout (20 (ert-fail "Long owner mutation did not yield"))
@@ -264,14 +299,22 @@
                       ;; round trip is enough.
                       (let ((state nil))
                         (with-timeout
-                            (30 (ert-fail "Owner never began quiescing"))
+                            (30 (ert-fail
+                                 (format
+                                  "Owner never began quiescing: %s"
+                                  (test-mevedel-execution-remote-client--transfer-facts
+                                   session))))
                           (while (not (eq state 'quiescing))
                             (accept-process-output nil 0.5)
                             (setq state
                                   (plist-get
                                    (mevedel-session-control-transfer-poll
                                     session buffer nil)
-                                   :state))))
+                                   :state))
+                            (test-mevedel-execution-remote-client--stage
+                             "owner-poll state=%S %s" state
+                             (test-mevedel-execution-remote-client--transfer-facts
+                              session))))
                         (should (eq 'quiescing state)))
                       (test-mevedel-execution-remote-client--mark
                        root "a-still-running")
