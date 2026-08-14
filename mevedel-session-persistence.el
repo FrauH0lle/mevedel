@@ -151,6 +151,8 @@
                   "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-native-root
                   "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-observe-incarnation
+                  "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-prepare-incarnation-acknowledgement
                   "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-probe
@@ -2284,6 +2286,26 @@ Returns SESSION's `save-path' (allocated or existing)."
 (defvar mevedel-session-persistence--checking-incarnation nil
   "Non-nil while publishing a replacement target incarnation.")
 
+(defun mevedel-session-persistence--observe-target-incarnation
+    (target sandbox-mode)
+  "Refresh TARGET's incarnation observation and return its readiness.
+
+Admission needs the replacement fingerprint, not the whole readiness suite:
+environment, capabilities, and sandbox facts are fixed for the life of a
+connection, while the fingerprint is one target command.  A first probe or a
+reconnect still runs the full probe, because a new connection may be a new
+target.  A failed observation falls back to the full probe, which settles a
+blocked readiness the caller reports."
+  (require 'mevedel-execution-target)
+  (let ((readiness (mevedel-execution-target-probe target nil sandbox-mode)))
+    (if (not (eq 'ready (plist-get readiness :status)))
+        readiness
+      (condition-case nil
+          (progn
+            (mevedel-execution-target-observe-incarnation target)
+            readiness)
+        (error (mevedel-execution-target-probe target t sandbox-mode))))))
+
 (defun mevedel-session-persistence--check-target-incarnation
     (session buffer)
   "Fence and publish a replacement execution target for SESSION.
@@ -2311,8 +2333,8 @@ every durable mutation boundary; unchanged targets take no durability I/O."
         (unless (mevedel-execution-target-incarnation-changed-p target)
           (if (mevedel-execution-target-remote-p target)
               (let ((readiness
-                     (or (mevedel-execution-target-probe
-                          target t (mevedel-session-sandbox-mode session))
+                     (or (mevedel-session-persistence--observe-target-incarnation
+                          target (mevedel-session-sandbox-mode session))
                          (mevedel-execution-target-readiness target))))
                 (unless (eq 'ready (plist-get readiness :status))
                   (user-error "Execution target is not ready: %s"

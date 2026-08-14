@@ -155,6 +155,27 @@ before the operation ran."
    "esac\n")
   "Target-side descriptor-relative control filesystem script.")
 
+(defvar mevedel-session-control-fs--programs (make-hash-table :test #'equal)
+  "Resolved target `bash' and `stat' paths, keyed by TRAMP prefix.
+
+Locating a program on a remote target costs one `test -x' per `exec-path'
+entry, and the durability layer inhibits the remote file-name cache, so
+resolving them per operation tripled the cost of every lease, transfer, and
+recovery round trip.  A stale entry cannot mis-target an operation: the
+script proves its own parent directory, and a moved interpreter fails the
+operation, which drops the entry.")
+
+(defun mevedel-session-control-fs--programs (remote)
+  "Return a cons of target `bash' and `stat' paths for REMOTE."
+  (let ((key (or remote "")))
+    (or (gethash key mevedel-session-control-fs--programs)
+        (let ((bash (executable-find "bash" remote))
+              (stat (executable-find "stat" remote)))
+          (unless (and bash stat)
+            (error "Portable control filesystem requires bash and stat"))
+          (puthash key (cons bash stat)
+                   mevedel-session-control-fs--programs)))))
+
 (defun mevedel-session-control-fs--connection-directory (path)
   "Return an always-present directory on PATH's target for process dispatch.
 
@@ -177,10 +198,9 @@ because the descriptor, not an earlier observation, is the authority."
          (remote (file-remote-p parent))
          (default-directory
           (mevedel-session-control-fs--connection-directory parent))
-         (bash (executable-find "bash" remote))
-         (stat (executable-find "stat" remote)))
-    (unless (and bash stat)
-      (error "Portable control filesystem requires bash and stat"))
+         ;; The script resolves `stat' itself through the target PATH; this
+         ;; only proves both programs are present before dispatching.
+         (bash (car (mevedel-session-control-fs--programs remote))))
     (let ((input (and content (make-temp-file ".mevedel-control-fs-input-")))
           (output (generate-new-buffer " *mevedel-control-fs-output*")))
       (when (eq coding-system 'no-conversion)
@@ -219,6 +239,11 @@ because the descriptor, not an earlier observation, is the authority."
                  ((and (integerp status) (memq status '(77 78)))
                   (signal 'mevedel-session-control-fs-absent (list path)))
                  (t
+                  ;; The resolved interpreters are the only cached input to
+                  ;; this call, so a failure that is not a name conflict or
+                  ;; an absent name retries their lookup.
+                  (remhash (or remote "")
+                           mevedel-session-control-fs--programs)
                   ;; A refused or failed target operation is a filesystem
                   ;; failure: callers classify publication and recovery
                   ;; retries by that condition.

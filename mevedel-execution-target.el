@@ -396,6 +396,28 @@ targets do not need the full command probe merely to detect replacement."
       (mevedel-execution-target--record-incarnation target incarnation)))
   target)
 
+(defun mevedel-execution-target-observe-incarnation (target)
+  "Refresh TARGET's incarnation observation with one target command.
+
+Mutation admission only needs to know whether the target was replaced.  A
+full readiness probe re-derives environment, capabilities, and sandbox facts
+that are fixed for the life of the connection, at a cost of roughly fifteen
+synchronous round trips; this observation costs one.  TARGET must already
+carry a readiness result, because the fingerprint command runs through the
+Bash capability that probe established."
+  (if (mevedel-execution-target-remote-p target)
+      (let ((bash (mevedel-execution-target-capability target 'bash)))
+        (unless bash
+          (error "Target readiness has not established a Bash capability"))
+        (mevedel-execution-target--record-incarnation
+         target
+         (with-timeout (mevedel-execution-target--probe-timeout
+                        (signal 'mevedel-execution-target-error
+                                (list "Target incarnation probe timed out")))
+           (mevedel-execution-target--probe-incarnation target bash))))
+    (mevedel-execution-target-refresh-incarnation target))
+  target)
+
 (defun mevedel-execution-target-seed-incarnation (target incarnation)
   "Seed TARGET with persisted INCARNATION without detecting replacement."
   (unless (and (stringp incarnation) (not (string-blank-p incarnation)))

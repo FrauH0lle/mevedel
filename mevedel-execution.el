@@ -938,10 +938,35 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
                          #'mevedel-execution--force-kill record)))
     t))
 
+(defun mevedel-execution--settle-timed-out (record)
+  "Forcibly settle timed-out RECORD when its escalation never finished.
+A remote child that is still unaccounted for at this point has an
+unprovable outcome and is recorded as such before settlement."
+  (unless (mevedel-execution--record-finished-p record)
+    (when (and (file-remote-p
+                (or (mevedel-execution--record-workdir record) ""))
+               (not (eq 'unknown
+                        (mevedel-execution--record-termination record))))
+      (mevedel-execution--mark-unknown
+       record
+       '(mevedel-execution-error
+         "Timed-out child did not settle within the bounded escalation")))
+    (mevedel-execution--finish-record
+     record (or (mevedel-execution--record-exit-code record) -1)
+     (mevedel-execution--record-error-data record))))
+
 (defun mevedel-execution--time-out (record)
   "Mark RECORD timed out and terminate its process group."
   (when (mevedel-execution--begin-stop record 'timed-out)
-    (setf (mevedel-execution--record-timed-out-p record) t)))
+    (setf (mevedel-execution--record-timed-out-p record) t)
+    ;; A raw one-shot caller waits synchronously on this record, so a
+    ;; wedged transport inside the TERM/KILL escalation must not leave
+    ;; that wait unbounded.  Settle with what is known once the bounded
+    ;; escalation window has passed.
+    (unless (mevedel-execution--record-execution-id record)
+      (run-at-time (+ (* 2 mevedel-execution--child-kill-delay)
+                      (* 4 mevedel-execution--remote-control-timeout))
+                   nil #'mevedel-execution--settle-timed-out record))))
 
 (defun mevedel-execution--settle-managed-main-exit (record)
   "Clean remaining descendants, or settle RECORD after its shell exits."
