@@ -108,8 +108,12 @@
          (original-run-at-time (symbol-function 'run-at-time))
          (mevedel-sandbox-mode 'off)
          yield initial final repeated unchanged id)
-    (unwind-protect
-        (let ((mevedel-execution-mailbox-delivery-function nil))
+    ;; This case runs without a mailbox consumer on purpose, and settlement
+    ;; reports that whenever it lands, including from a timer after the
+    ;; assertions; the assertions themselves are the point.
+    (mevedel-test--with-captured-diagnostics nil
+      (unwind-protect
+          (let ((mevedel-execution-mailbox-delivery-function nil))
           (cl-letf (((symbol-function 'run-at-time)
                      (lambda (time repeat function &rest args)
                        (if (eq function #'mevedel-execution--yield-managed)
@@ -147,8 +151,8 @@
             (setq unchanged
                   (test-mevedel-execution--observe session id))
             (should (equal "done" (plist-get unchanged :output)))))
-      (mevedel-execution-teardown-session session)
-      (delete-directory root t)))
+        (mevedel-execution-teardown-session session)
+        (delete-directory root t))))
   :doc "exposes the exact Bash command in every observation"
   (let* ((root (make-temp-file "mevedel-managed-command-" t))
          (session (test-mevedel-execution--session root))
@@ -816,7 +820,10 @@
          (owner "explorer--rejected")
          (mevedel-sandbox-mode 'off)
          events initial final id)
-    (unwind-protect
+    ;; The mailbox deliberately rejects delivery here, and settlement
+    ;; reports that it found no consumer.
+    (mevedel-test--with-captured-diagnostics nil
+     (unwind-protect
         (let ((mevedel-execution-event-functions
                (list
                 (lambda (event)
@@ -847,7 +854,8 @@
            session owner id (lambda (value) (setq final value)))
           (should (equal "unclaimed" (plist-get final :output)))
           (should-not (mevedel-execution-owner-live-p session owner)))
-      (delete-directory root t)))
+       (mevedel-execution-teardown-session session)
+       (delete-directory root t))))
   :doc "a reentrant mailbox observer cannot claim or redeliver the terminal result"
   (let* ((root (make-temp-file "mevedel-managed-reentrant-claim-" t))
          (session (test-mevedel-execution--session root))
@@ -922,6 +930,10 @@
            (cl-find-if
             (lambda (event) (eq (plist-get event :delivery) 'mailbox))
             events)))
+      ;; Settle inside the case: a session left running reports its
+      ;; completion later, into whatever test happens to be running.
+      (mevedel-test--with-captured-diagnostics nil
+        (mevedel-execution-teardown-session session))
       (delete-directory root t)))
   :doc "bad outcome resolvers cannot block final delivery or handle cleanup"
   (dolist (resolver
@@ -935,15 +947,17 @@
              session root '("sh" "-c" "sleep .05; exit 1")
              :outcome-function resolver))
            (id (plist-get (plist-get initial :facts) :execution-id))
-           final)
+           final diagnostics)
       (unwind-protect
           (progn
-            (test-mevedel-execution--wait
-             (lambda ()
-               (mevedel-execution--record-finished-p
-                (mevedel-execution--owned-yielded-record
-                 session "main" id))))
-            (setq final (test-mevedel-execution--observe session id))
+            (mevedel-test--with-captured-diagnostics diagnostics
+              (test-mevedel-execution--wait
+               (lambda ()
+                 (mevedel-execution--record-finished-p
+                  (mevedel-execution--owned-yielded-record
+                   session "main" id))))
+              (setq final (test-mevedel-execution--observe session id)))
+            (should (string-match-p "outcome resolver failed" diagnostics))
             (should (eq 'failure
                         (plist-get (plist-get final :facts) :outcome)))
             (should (plist-get final :claimed-final-p))

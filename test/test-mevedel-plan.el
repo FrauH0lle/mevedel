@@ -57,7 +57,7 @@
   ,test
   (test)
   (let ((session
-         (mevedel-session--create :name "test" :plan-metadata '(:old t))))
+         (mevedel-session--create :authority-mode 'pid-lock :name "test" :plan-metadata '(:old t))))
     (mevedel-plan--metadata-put session :new 1)
     (should (equal '(:old t :new 1)
                    (mevedel-session-plan-metadata session)))))
@@ -92,7 +92,8 @@
   (let ((save-dir (make-temp-file "mevedel-plan-path-" t)))
     (unwind-protect
         (let ((session
-               (mevedel-session--create :name "test" :save-path save-dir)))
+               (mevedel-session--create
+                :authority-mode 'pid-lock :name "test" :save-path save-dir)))
           (should (equal (file-name-concat save-dir "local" "plans" "current.md")
                          (mevedel-plan-current-path session)))
           (should (equal (file-name-concat save-dir "goals" "g1" "current.md")
@@ -120,6 +121,7 @@
   (test)
   (let ((session
          (mevedel-session--create
+          :authority-mode 'pid-lock
           :name "test"
           :save-path "/ssh:box:/srv/project/.mevedel/sessions/main/")))
     (should
@@ -138,7 +140,7 @@
   ,test
   (test)
   (let* ((session
-          (mevedel-session--create :name "test" :save-path "/tmp/session/"))
+          (mevedel-session--create :authority-mode 'pid-lock :name "test" :save-path "/tmp/session/"))
          (body "# Accepted")
          (artifact
           (list :path "plans/accepted.md" :hash (mevedel-plan-hash body))))
@@ -160,6 +162,7 @@
     (unwind-protect
         (let ((session
                (mevedel-session--create
+                :authority-mode 'pid-lock
                 :name "test" :save-path save-dir
                 :plan-metadata '(:path "plans/current.md"
                                  :absolute-path "/tmp/stale-current.md"))))
@@ -175,7 +178,7 @@
     (unwind-protect
         (with-temp-buffer
           (let* ((session
-                  (mevedel-session--create :name "test" :save-path save-dir))
+                  (mevedel-session--create :authority-mode 'pid-lock :name "test" :save-path save-dir))
                  (artifact
                   (mevedel-plan-write-current "# Plan" session
                                               (current-buffer)
@@ -211,7 +214,7 @@
     (unwind-protect
         (with-temp-buffer
           (let* ((session
-                  (mevedel-session--create :name "test" :save-path save-dir))
+                  (mevedel-session--create :authority-mode 'pid-lock :name "test" :save-path save-dir))
                  (artifact
                   (mevedel-plan-write-current
                    "# Plan" session (current-buffer)))
@@ -263,6 +266,7 @@
           (write-region "# Poisoned cache" nil path nil 'silent)
           (let ((session
                  (mevedel-session--create
+                  :authority-mode 'pid-lock
                   :name "test" :save-path save-dir
                   :plan-metadata '(:path "current.md"))))
             (cl-letf (((symbol-function
@@ -283,6 +287,7 @@
          (path (file-name-concat save-dir "local" "plans" "current.md"))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "test" :save-path save-dir
            :plan-metadata '(:path "local/plans/current.md"))))
     (unwind-protect
@@ -305,7 +310,7 @@
   (:doc "records current and accepted artifact descriptors")
   ,test
   (test)
-  (let ((session (mevedel-session--create :name "test" :turn-count 3)))
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test" :turn-count 3)))
     (mevedel-plan-mark-accepted
      session '(:path "current.md" :hash "current-h")
      '(:path "accepted.md" :hash "h"))
@@ -325,6 +330,7 @@
     (unwind-protect
         (with-temp-buffer
           (let ((session (mevedel-session--create
+                          :authority-mode 'pid-lock
                           :name "test"
                           :save-path save-dir
                           :permission-mode 'full-auto

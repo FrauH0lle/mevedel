@@ -44,6 +44,41 @@
 ;; `org-agenda'
 (defvar org-agenda-file-menu-enabled)
 
+(mevedel-deftest mevedel ()
+  ,test
+  (test)
+  :doc "uses persisted entry choices for restore and explicit new sessions"
+  (let* ((root (make-temp-file "mevedel-entry-command-" t))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id root :root root :name "entry"))
+         (restored (generate-new-buffer " *mevedel-entry-command*"))
+         (entry restored)
+         displayed
+         started)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-workspace)
+              (lambda () workspace))
+             ((symbol-function 'mevedel-session-persistence-choose-entry)
+              (lambda (&rest _) entry))
+             ((symbol-function 'mevedel--display-chat-buffer)
+              (lambda (buffer) (setq displayed buffer)))
+             ((symbol-function 'mevedel--start-chat)
+              (lambda (&rest arguments) (setq started arguments))))
+          (mevedel)
+          (should (eq restored displayed))
+          (should-not started)
+          (setq entry 'new
+                displayed nil)
+          (mevedel)
+          (should (equal (list workspace root t nil) started))
+          (should-not displayed))
+      (when (buffer-live-p restored)
+        (kill-buffer restored))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
 ;; `org-element'
 (defvar org-element-cache-persistent)
 (defvar org-element-use-cache)
@@ -92,7 +127,8 @@
 			      #'ignore)
 			     ((symbol-function 'mevedel-view-stream-uninstall)
 			      #'ignore))
-		     (mevedel-uninstall))
+		     (mevedel-test--with-captured-diagnostics nil
+		       (mevedel-uninstall)))
 		   (should called))
 
 		 :doc "force-tears down executions"
@@ -106,7 +142,8 @@
 			     ((symbol-function 'mevedel-skills-uninstall-slash-commands) #'ignore)
 			     ((symbol-function 'mevedel-pipeline-uninstall-tool-result-scrubber) #'ignore)
 			     ((symbol-function 'mevedel-view-stream-uninstall) #'ignore))
-		     (mevedel-uninstall))
+		     (mevedel-test--with-captured-diagnostics nil
+		       (mevedel-uninstall)))
 		   (should torn-down)))
 
 
@@ -169,11 +206,12 @@
 				     ((symbol-function
 				       'mevedel--chat-buffer-init-common)
 				      #'ignore))
-			     (let ((gptel-org-branching-context t))
-			       (mevedel--chat-buffer-setup
-				(current-buffer) workspace "main" root))))
+			     (mevedel--chat-buffer-setup
+			      (current-buffer) workspace "main" root)))
 				 (should (derived-mode-p 'org-mode))
 				 (should-not gptel-org-convert-response)
+				 (should (local-variable-p
+					  'gptel-org-branching-context))
 				 (should-not gptel-org-branching-context)
 				 (should (equal '(property-drawer)
 						gptel-org-ignore-elements))
@@ -222,15 +260,18 @@
                                    "/ssh:user@host:/srv/project/"))
                           (session (mevedel-session--create
                                     :execution-target target))
-                          seen)
+                          seen diagnostics)
                      (setq-local mevedel--session session)
                      (cl-letf (((symbol-function
                                  'mevedel--probe-session-target)
                                 (lambda (actual refresh)
                                   (setq seen (list actual refresh))
                                   '(:status ready))))
-                       (should (equal '(:status ready)
-                                      (mevedel-retry-target-readiness))))
+                       (mevedel-test--with-captured-diagnostics diagnostics
+                         (should (equal '(:status ready)
+                                        (mevedel-retry-target-readiness)))))
+                     (should (string-match-p "mevedel: execution target"
+                                             diagnostics))
                      (should (equal (list session t) seen))))
 
                  :doc "requires explicit acknowledgement after unknown loss"
@@ -255,7 +296,8 @@
                                  'mevedel-execution-acknowledge-unknown)
                                 (lambda (actual)
                                   (setq acknowledged actual))))
-                       (mevedel-retry-target-readiness))
+                       (mevedel-test--with-captured-diagnostics nil
+                         (mevedel-retry-target-readiness)))
                      (should (eq session acknowledged))))
 
                  :doc "acknowledges a restored durable latch without process state"
@@ -278,7 +320,8 @@
                                  'mevedel-execution-acknowledge-unknown)
                                 (lambda (actual)
                                   (setq acknowledged actual))))
-                       (mevedel-retry-target-readiness))
+                       (mevedel-test--with-captured-diagnostics nil
+                         (mevedel-retry-target-readiness)))
                      (should (eq session acknowledged))))
 
                  :doc "keeps unknown loss blocked when acknowledgement is declined"
@@ -1175,7 +1218,7 @@
 
   :doc "queues only top-level directives in stable source order"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "batch" :root nil :name "batch"))
+                     :type 'file :id "batch" :root nil :name "batch"))
          captured-records captured-workspace captured-current captured-total)
     (with-temp-buffer
       (insert "root one detail\nroot two\n")
@@ -1199,7 +1242,8 @@
                            captured-workspace owner
                            captured-current current
                            captured-total total))))
-          (mevedel-process-directives)
+          (mevedel-test--with-captured-diagnostics nil
+            (mevedel-process-directives))
           (should
            (equal '("Root one" "Root two")
                   (mapcar #'mevedel-directive-request captured-records)))
@@ -1216,7 +1260,7 @@
   :doc "defers the next directive until terminal request cleanup can finish"
   (let* ((buf (generate-new-buffer " *mevedel-directives-sequential*"))
          (workspace (mevedel-workspace--create
-                     :type 'test :id "batch" :root nil :name "batch"))
+                     :type 'file :id "batch" :root nil :name "batch"))
          (record1 (mevedel-directive--create
                    :id "one" :request "first" :anchor '(:state attached)))
          (record2 (mevedel-directive--create
@@ -1247,13 +1291,15 @@
                        (setq scheduled-fn function
                              scheduled-args args)
                        'timer)))
-            (mevedel--process-directives-sequentially
-             (list record1 record2) workspace 1 2)
+            (mevedel-test--with-captured-diagnostics nil
+              (mevedel--process-directives-sequentially
+               (list record1 record2) workspace 1 2))
             (should (equal '(1) calls))
             (should (eq scheduled-fn #'mevedel--process-directives-sequentially))
             (should (equal (list (list record2) workspace 2 2)
                            scheduled-args))
-            (apply scheduled-fn scheduled-args)
+            (mevedel-test--with-captured-diagnostics nil
+              (apply scheduled-fn scheduled-args))
             (should (equal '(2 1) calls))))
       (when (buffer-live-p buf)
         (kill-buffer buf))))
@@ -1261,7 +1307,7 @@
   :doc "implements only eligible initial work and reports every skipped item"
   (let* ((buf (generate-new-buffer " *mevedel-directive-batch-state*"))
          (workspace (mevedel-workspace--create
-                     :type 'test :id "batch" :root nil :name "batch"))
+                     :type 'file :id "batch" :root nil :name "batch"))
          (attempted-success
           (mevedel-directive--create
            :id "success" :request "Success" :anchor '(:state attached)
@@ -1360,7 +1406,7 @@
   (dolist (terminal '("model failure" abort))
     (let* ((buf (generate-new-buffer " *mevedel-directive-batch-stop*"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id "batch" :root nil :name "batch"))
+                       :type 'file :id "batch" :root nil :name "batch"))
            (first (mevedel-directive--create
                    :id "one" :request "One" :anchor '(:state attached)))
            (second (mevedel-directive--create
@@ -1457,6 +1503,8 @@
 				      (lambda (&rest _) nil))
 				     ((symbol-function 'display-buffer)
 				      (lambda (&rest _) nil))
+				     ((symbol-function 'gptel--save-state)
+				      #'ignore)
 				     ((symbol-function 'gptel--apply-preset)
 				      (lambda (&rest _) nil))
                                      ((symbol-function
@@ -1797,7 +1845,8 @@
                                                :position)))
                                (with-current-buffer captured-chat
                                  (goto-char response-start)
-                                 (insert "Because.\n")))
+                                 (insert (propertize "Because.\n"
+                                                     'gptel 'response))))
                              (funcall
                               (plist-get (gptel-fsm-info captured-fsm)
                                          :mevedel-request-callback)
@@ -1836,8 +1885,14 @@
                                 (list
                                  (mevedel-directive-attempt--create
                                   :sequence 2
+                                  :action 'implement
                                   :directive-request "Explain it"
-                                  :outcome 'success))
+                                  :request "Implement it"
+                                  :result "Done."
+                                  :outcome 'success
+                                  :patch ""
+                                  :capture 'complete
+                                  :captured-at "2026-08-01T01:00:00+0200"))
                                 (mevedel-directive-state record) 'implemented)
                                (mevedel--discuss-directive-turn
                                 directive "Anything else?" 1 nil)
@@ -1847,7 +1902,8 @@
                                        :position)))
                                  (with-current-buffer captured-chat
                                    (goto-char response-start)
-                                   (insert "No.\n")))
+                                   (insert (propertize "No.\n"
+                                                       'gptel 'response))))
                                (funcall
                                 (plist-get (gptel-fsm-info captured-fsm)
                                            :mevedel-request-callback)
@@ -1868,7 +1924,11 @@
                                (should (string-search "Because."
                                                       (buffer-string)))
                                (should (string-search "No."
-                                                      (buffer-string))))))
+                                                      (buffer-string))))
+                             (with-current-buffer captured-chat
+                               (mevedel-request-end)
+                               (mevedel-session-persistence-save
+                                mevedel--session captured-chat))))
                      (when (buffer-live-p buf)
                        (kill-buffer buf))
                      (when (buffer-live-p captured-chat)
@@ -1937,7 +1997,8 @@
                                (goto-char
                                 (plist-get (gptel-fsm-info captured-fsm)
                                            :position))
-                               (insert "Hint.\n"))
+                               (insert (propertize "Hint.\n"
+                                                   'gptel 'response)))
                              (funcall
                               (plist-get (gptel-fsm-info captured-fsm)
                                          :mevedel-request-callback)
@@ -1967,7 +2028,7 @@
                  :doc "discards synthetic source context when startup is quit"
                  (let* ((workspace
                          (mevedel-workspace--create
-                          :type 'test :id "source-missing" :root "/tmp"
+                          :type 'file :id "source-missing" :root "/tmp"
                           :name "source-missing"))
                         (record
                          (mevedel-directive--create
@@ -2064,7 +2125,7 @@
                  :doc "preserves prior state and an unrelated active request on pre-reservation errors"
                  (let* ((workspace
                          (mevedel-workspace--create
-                          :type 'test :id "pre-reservation" :root "/tmp"
+                          :type 'file :id "pre-reservation" :root "/tmp"
                           :name "pre-reservation"))
                         (source (generate-new-buffer " *directive-source*"))
                         (chat (generate-new-buffer " *directive-chat*"))
@@ -2115,7 +2176,7 @@
 
                  :doc "reuses the directive session even when another is current"
                  (let* ((workspace (mevedel-workspace--create
-                                    :type 'test :id "bound" :root "/tmp"
+                                    :type 'file :id "bound" :root "/tmp"
                                     :name "bound"))
                         (bound-session (mevedel-session-create "bound" workspace))
                         (other-session (mevedel-session-create "other" workspace))
@@ -2353,7 +2414,18 @@
 					       :description "retained"
 					       :transcript-status 'running))
 				  (record (mevedel-agent-record--create
+					   :id "explorer-1"
 					   :path "/root/explorer"
+					   :parent-path "/root"
+					   :role "explorer"
+					   :conversation-location
+					   "agents/explorer-1.chat.org"
+					   :configuration
+					   (mevedel-agent-configuration--create
+					    :agent (mevedel-agent--create
+						    :name "explorer"
+						    :description "retained"
+						    :tools nil))
 					   :activity 'running
 					   :invocation invocation))
 				  interrupted
@@ -2469,7 +2541,7 @@
   (test)
   :doc "resumes the bound persisted session on demand"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "resume" :root "/tmp" :name "resume"))
+                     :type 'file :id "resume" :root "/tmp" :name "resume"))
          (record (mevedel-directive--create
                   :id "directive" :request "Request"
                   :anchor '(:state attached) :session-id "saved-id"))
@@ -2489,7 +2561,7 @@
 
   :doc "requires explicit rebind and leaves historical links unchanged"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "rebind" :root "/tmp" :name "rebind"))
+                     :type 'file :id "rebind" :root "/tmp" :name "rebind"))
          (attempt
           (mevedel-directive-attempt--create
            :checkpoint '(:session-id "lost-id" :turn 3)))
@@ -2516,7 +2588,7 @@
 
   :doc "keeps an unavailable binding when rebind is declined"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "decline" :root "/tmp" :name "decline"))
+                     :type 'file :id "decline" :root "/tmp" :name "decline"))
          (record (mevedel-directive--create
                   :id "directive" :request "Request"
                   :anchor '(:state attached) :session-id "lost-id")))
@@ -2659,7 +2731,7 @@
     (mevedel--instruction-current-state-key :global))
    :doc "dispatches ordinary implementation with complete discussion feedback")
   (let ((workspace (mevedel-workspace--create
-                    :type 'test :id "implement-discussion" :root "/tmp"
+                    :type 'file :id "implement-discussion" :root "/tmp"
                     :name "implement-discussion"))
         (mevedel-action-preset-alist
          '((implement . (:system "test"))))
@@ -2701,7 +2773,7 @@
   (test)
   :doc "uses ordinary implementation authority and accepts child-only feedback"
   (let ((workspace (mevedel-workspace--create
-                    :type 'test :id "changes" :root "/tmp" :name "changes"))
+                    :type 'file :id "changes" :root "/tmp" :name "changes"))
         (mevedel-action-preset-alist '((implement . implement-preset)))
         captured)
     (with-temp-buffer

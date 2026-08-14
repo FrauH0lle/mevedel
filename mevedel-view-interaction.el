@@ -50,6 +50,8 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-control-transfer
+                  "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -65,7 +67,8 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view--display-fragment-keymap "mevedel-view"
-		  (&rest maps))
+			  (&rest maps))
+(declare-function mevedel-view--full-rerender "mevedel-view" nil)
 (declare-function mevedel-view--status-anchor "mevedel-view" nil)
 (declare-function mevedel-view--zone-separator "mevedel-view" (label))
 (defvar mevedel-view--interaction-marker)
@@ -80,12 +83,46 @@
                   "mevedel-view-composer" (&optional session))
 (declare-function mevedel-view--session "mevedel-view-composer" nil)
 (defvar mevedel-view--prompt-hook-pending)
+(defvar mevedel-session--read-only-mode)
+
+;; `mevedel-session-control-transfer'
+(declare-function mevedel-session-control-transfer-decide
+                  "mevedel-session-control-transfer" (session decision))
+(declare-function mevedel-session-control-transfer-descriptor
+                  "mevedel-session-control-transfer" (session read-only-p))
+(declare-function mevedel-session-control-transfer-poll
+                  "mevedel-session-control-transfer"
+                  (session buffer read-only-p))
+(declare-function mevedel-session-control-transfer-register-drain
+                  "mevedel-session-control-transfer" (session predicate))
+(declare-function mevedel-session-control-transfer-register-observer
+                  "mevedel-session-control-transfer" (session observer))
+(declare-function mevedel-session-control-transfer-request
+                  "mevedel-session-control-transfer" (session))
+(declare-function mevedel-session-control-transfer-unregister-drain
+                  "mevedel-session-control-transfer" (session predicate))
+(declare-function mevedel-session-control-transfer-unregister-observer
+                  "mevedel-session-control-transfer" (session observer))
+(declare-function mevedel-session-control-transfer-register-root-buffer
+                  "mevedel-session-control-transfer" (session buffer))
+(declare-function mevedel-session-control-transfer-register-presentation
+                  "mevedel-session-control-transfer" (session buffer))
+(declare-function mevedel-session-control-transfer-unregister-root-buffer
+                  "mevedel-session-control-transfer" (session buffer))
+(declare-function mevedel-session-control-transfer-unregister-presentation
+                  "mevedel-session-control-transfer" (session buffer))
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--debug-log "mevedel-view-render"
                   (event &rest data))
 (declare-function mevedel-view--debug-state "mevedel-view-render"
                   (&optional data-buf start end))
+
+;; `mevedel-view-history'
+(declare-function mevedel-view-history-load "mevedel-view-history"
+                  (&optional session))
+(declare-function mevedel-view-history-save "mevedel-view-history"
+                  (&optional view-buffer))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--render-request-progress
@@ -113,6 +150,167 @@
 (defvar-local mevedel-view--interaction-telemetry-opened nil
   "Hash table of interaction lifecycle metadata retained across redraws.")
 
+(defvar-local mevedel-view--control-transfer-timer nil
+  "Timer polling cooperative lease-transfer records for this view.")
+
+(defvar-local mevedel-view--control-transfer-drain-session nil
+  "Session owning this view's registered control-transfer drain.")
+
+(defvar-local mevedel-view--control-transfer-drain-token nil
+  "Registered control-transfer drain predicate for this view.")
+
+(defvar-local mevedel-view--session-observer-session nil
+  "Session whose semantic events this view observes.")
+
+(defvar-local mevedel-view--session-observer nil
+  "Unregister token for this view's semantic session observer.")
+
+(defun mevedel-view-interaction--session-event (view event &rest args)
+  "Apply semantic session EVENT to VIEW, when it remains live."
+  (when (buffer-live-p view)
+    (with-current-buffer view
+      (pcase event
+        ('save-history
+         (require 'mevedel-view-history)
+         (mevedel-view-history-save))
+        ('load-history
+         (require 'mevedel-view-history)
+         (mevedel-view-history-load (car args)))
+        ('rerender
+         (mevedel-view--full-rerender))
+        ('rebase-data-sources
+         (require 'mevedel-view-render)
+         (mevedel-view--rebase-data-sources (car args)))
+        ('reset-agent-ephemeral-state
+         (when (fboundp 'mevedel-view-reset-agent-ephemeral-state)
+           (mevedel-view-reset-agent-ephemeral-state)))
+        ('refresh-status
+         (when-let ((data (mevedel-view--control-transfer-data-buffer)))
+           (with-current-buffer data
+             (when (and buffer-file-name (file-exists-p buffer-file-name))
+               (setq buffer-file-truename (file-truename buffer-file-name))
+               (set-visited-file-modtime))
+             (when (boundp 'mevedel-session--save-failed)
+               (setq mevedel-session--save-failed nil)))
+           (force-mode-line-update t)))
+        ('rename
+         (let* ((new-data-name (car args))
+                (new-view-name
+                 (if (string-match "\\*$" new-data-name)
+                     (replace-match ":view*" t t new-data-name)
+                   (concat new-data-name ":view"))))
+           (rename-buffer new-view-name t)))))))
+
+(defun mevedel-view--control-transfer-data-buffer ()
+  "Return the live data buffer for the current view, or nil."
+  (and (boundp 'mevedel--data-buffer)
+       (buffer-live-p mevedel--data-buffer)
+       mevedel--data-buffer))
+
+(defun mevedel-view--control-transfer-refresh (&optional view)
+  "Poll transfer state and refresh VIEW's interaction zone.
+
+The timer passes its owning view explicitly; it must not depend on the
+ambient current buffer, which may be an unrelated buffer when a timer fires."
+  (when (buffer-live-p (or view (current-buffer)))
+    (require 'mevedel-session-control-transfer)
+    (with-current-buffer (or view (current-buffer))
+      (when-let ((data (mevedel-view--control-transfer-data-buffer)))
+        (let* ((session (buffer-local-value 'mevedel--session data))
+               (read-only-p
+                (with-current-buffer data
+                  (bound-and-true-p mevedel-session--read-only-mode))))
+          (when session
+            (when (and read-only-p
+                       (ignore-errors
+                         (mevedel-session-control-transfer-poll
+                          session data t)))
+              ;; The coordinator enables writes only after the target
+              ;; incarnation check and committed transcript restore.
+              (mevedel-view--full-rerender))
+            (when (not read-only-p)
+              (ignore-errors
+                (mevedel-session-control-transfer-poll
+                 session data nil))))
+          (mevedel-view--interaction-rebuild))))))
+
+(defun mevedel-view-control-transfer-grant ()
+  "Grant the currently displayed cooperative control-transfer request."
+  (interactive)
+  (require 'mevedel-session-control-transfer)
+  (let ((data (mevedel-view--control-transfer-data-buffer)))
+    (unless data (user-error "No active mevedel session"))
+    (with-current-buffer data
+      (mevedel-session-control-transfer-decide mevedel--session 'grant))
+    (mevedel-view--interaction-rebuild)))
+
+(defun mevedel-view-control-transfer-keep ()
+  "Reject the currently displayed cooperative control-transfer request."
+  (interactive)
+  (require 'mevedel-session-control-transfer)
+  (let ((data (mevedel-view--control-transfer-data-buffer)))
+    (unless data (user-error "No active mevedel session"))
+    (with-current-buffer data
+      (mevedel-session-control-transfer-decide mevedel--session 'reject))
+    (mevedel-view--interaction-rebuild)))
+
+(defun mevedel-view-control-transfer-request ()
+  "Request control of the current read-only portable session."
+  (interactive)
+  (require 'mevedel-session-control-transfer)
+  (let ((data (mevedel-view--control-transfer-data-buffer)))
+    (unless data (user-error "No active mevedel session"))
+    (with-current-buffer data
+      (mevedel-session-control-transfer-request mevedel--session))
+    (message "mevedel: control-transfer request recorded; wait for release")
+    (mevedel-view--interaction-rebuild)))
+
+(defvar-keymap mevedel-view--control-transfer-map
+  :doc "Keymap for cooperative lease-transfer controls."
+  "g" #'mevedel-view-control-transfer-grant
+  "k" #'mevedel-view-control-transfer-keep
+  "r" #'mevedel-view-control-transfer-request
+  "RET" #'mevedel-view-control-transfer-grant
+  "<return>" #'mevedel-view-control-transfer-grant
+  "<mouse-1>" #'mevedel-view-control-transfer-grant)
+
+(defvar-keymap mevedel-view--control-transfer-request-map
+  :doc "Keymap for requesting cooperative control from read-only mode."
+  "r" #'mevedel-view-control-transfer-request
+  "RET" #'mevedel-view-control-transfer-request
+  "<return>" #'mevedel-view-control-transfer-request
+  "<mouse-1>" #'mevedel-view-control-transfer-request)
+
+(defun mevedel-view-interaction-teardown ()
+  "Cancel timers owned by the current view before it is destroyed."
+  (when (and mevedel-view--session-observer-session
+             mevedel-view--session-observer)
+    (mevedel-session-control-transfer-unregister-observer
+     mevedel-view--session-observer-session
+     mevedel-view--session-observer)
+    (setq mevedel-view--session-observer-session nil
+          mevedel-view--session-observer nil))
+  (when (and (boundp 'mevedel--data-buffer)
+             (buffer-live-p mevedel--data-buffer)
+             (not mevedel-view--agent-transcript-p))
+    (let ((session (buffer-local-value 'mevedel--session
+                                       mevedel--data-buffer)))
+      (when session
+        (mevedel-session-control-transfer-unregister-presentation
+         session (current-buffer))
+        (mevedel-session-control-transfer-unregister-root-buffer
+         session mevedel--data-buffer))))
+  (when (and mevedel-view--control-transfer-drain-session
+             mevedel-view--control-transfer-drain-token)
+    (mevedel-session-control-transfer-unregister-drain
+     mevedel-view--control-transfer-drain-session
+     mevedel-view--control-transfer-drain-token)
+    (setq mevedel-view--control-transfer-drain-session nil
+          mevedel-view--control-transfer-drain-token nil))
+  (when (timerp mevedel-view--control-transfer-timer)
+    (cancel-timer mevedel-view--control-transfer-timer)
+    (setq mevedel-view--control-transfer-timer nil)))
+
 (defvar-keymap mevedel-view--pending-plan-map
   :doc "Keymap on the pending Plan segment in the interaction counter."
   "RET" #'mevedel-view--show-pending-plan
@@ -123,12 +321,42 @@
 
 (defun mevedel-view-interaction-initialize ()
   "Initialize interaction descriptor state in the current view buffer."
+  (require 'mevedel-session-control-transfer)
   (setq-local mevedel-view--interaction-descriptors
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--interaction-overlays
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--interaction-telemetry-opened
-              (make-hash-table :test #'equal)))
+              (make-hash-table :test #'equal))
+  (mevedel-view-interaction-teardown)
+  (when (and (boundp 'mevedel--data-buffer)
+             (buffer-live-p mevedel--data-buffer)
+             (not mevedel-view--agent-transcript-p))
+    (let ((session (buffer-local-value 'mevedel--session
+                                       mevedel--data-buffer))
+          (view (current-buffer)))
+      (when session
+        (mevedel-session-control-transfer-register-root-buffer
+         session mevedel--data-buffer)
+        (mevedel-session-control-transfer-register-presentation
+         session view)
+        (setq-local mevedel-view--session-observer-session session
+                    mevedel-view--session-observer
+                    (mevedel-session-control-transfer-register-observer
+                     session
+                     (let ((view (current-buffer)))
+                       (lambda (event &rest args)
+                         (apply #'mevedel-view-interaction--session-event
+                                view event args))))
+                    mevedel-view--control-transfer-drain-session session
+                    mevedel-view--control-transfer-drain-token
+                    (mevedel-session-control-transfer-register-drain
+                     session
+                     (lambda ()
+                       (mevedel-view-interaction-transfer-drain-p view))))))
+    (setq-local mevedel-view--control-transfer-timer
+                (run-at-time 1 1 #'mevedel-view--control-transfer-refresh
+                             (current-buffer)))))
 
 (defun mevedel-view--interaction-telemetry-close (id)
   "Record and forget telemetry lifetime ID."
@@ -163,6 +391,25 @@ VIEW-BUFFER defaults to the current buffer."
                     (> (hash-table-count
                         mevedel-view--interaction-descriptors)
                        0)))))))
+
+(defun mevedel-view-interaction-transfer-drain-p (&optional view-buffer)
+  "Return non-nil when VIEW-BUFFER has a prompt that must drain.
+
+The transfer control itself is deliberately excluded: it remains visible
+while the owner waits for the other, settlement-blocking interactions."
+  (let ((view (or view-buffer (current-buffer))))
+    (and (buffer-live-p view)
+         (with-current-buffer view
+           (or (bound-and-true-p mevedel-view--prompt-hook-pending)
+               (and (hash-table-p mevedel-view--interaction-descriptors)
+                    (catch 'pending
+                      (maphash
+                       (lambda (_id descriptor)
+                         (when (mevedel-view--interaction-pauses-active-work-p
+                                descriptor)
+                           (throw 'pending t)))
+                       mevedel-view--interaction-descriptors)
+                      nil)))))))
 
 (defun mevedel-view--interaction-pauses-active-work-p (descriptor)
   "Return non-nil when interaction DESCRIPTOR pauses active work."
@@ -568,10 +815,23 @@ OVERLAY is stored on the text as the descriptor's callback handle."
   "Rebuild interaction-zone descriptors from live preview and queue state.
 This deletes only interaction UI overlays and never settles callbacks."
   (unless mevedel-view--agent-transcript-p
+    (require 'mevedel-session-control-transfer)
     (unwind-protect
         (progn
           (mevedel-view--interaction-clear-for-rebuild)
           (when-let* ((session (mevedel-view--session)))
+            (when-let ((descriptor
+                        (mevedel-session-control-transfer-descriptor
+                         session
+                         (bound-and-true-p mevedel-session--read-only-mode))))
+              (mevedel-view--interaction-register
+               (append descriptor
+                       (list :id 'control-transfer
+                             :keymap
+                             (if (eq (plist-get descriptor :action) 'grant)
+                                 mevedel-view--control-transfer-map
+                               mevedel-view--control-transfer-request-map)
+                             :origin "/root"))))
             (when (mevedel-session-pending-plan-approval session)
               (require 'mevedel-plan-mode)
               (mevedel-plan-approval-render session))

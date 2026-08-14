@@ -46,6 +46,7 @@
                       :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "test" :save-path save-dir :permission-mode 'full-auto
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
@@ -133,6 +134,7 @@
                        :hash "hash")))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "test"
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
@@ -171,11 +173,13 @@
                       :hash (mevedel-plan-hash body))))
          (source-session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "source" :save-path source-save :permission-mode 'ask
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
          (target-session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "target" :session-id "target" :save-path target-save
            :working-directory default-directory :permission-mode 'full-auto))
          (source-buffer (generate-new-buffer " *plan-goal-source*"))
@@ -243,6 +247,7 @@
                       :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "main" :save-path save-dir :goal goal
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
@@ -302,6 +307,7 @@
                       :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "main" :save-path save-dir :goal goal
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
@@ -357,6 +363,7 @@
                       :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "main" :save-path save-dir
            :pending-follow-ups
            '((:input "steer first" :queued-at-goal-id "reserved"))
@@ -436,6 +443,7 @@
                       :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "test" :save-path save-dir
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
@@ -584,6 +592,7 @@
                       :hash (mevedel-plan-hash body))))
          (source-session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "source" :save-path source-save :permission-mode 'ask
            :preset-name 'source-preset
            :preset-settings '((mevedel-model-tiers . ((fast . source))))
@@ -591,6 +600,7 @@
            (list :status 'accepted :implementation-retry record)))
          (target-session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "target" :session-id "target-id" :save-path target-save
            :working-directory target-directory :permission-mode 'ask))
          (source-buffer (generate-new-buffer " *plan-worktree-source*"))
@@ -732,6 +742,7 @@
                       :hash (mevedel-plan-hash body))))
          (source-session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "source" :save-path source-save
            :working-directory source-directory :permission-mode 'ask
            :preset-name 'source-preset
@@ -740,6 +751,7 @@
            (list :status 'accepted :implementation-retry record)))
          (target-session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "target" :session-id "summary-target-id"
            :save-path target-save :working-directory target-directory
            :permission-mode 'ask))

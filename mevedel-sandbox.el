@@ -127,7 +127,12 @@ remote target is left untouched."
   "Most recently prepared child-confinement facts.")
 
 (defconst mevedel-sandbox--marker-script
-  "printf '%s\\n' \"$1\"; shift; exec \"$@\""
+  (concat
+   "if [ \"${MEVEDEL_SANDBOX_GRANT_FAILURE-}\" = 1 ]; then "
+   "printf '%s\\n' \"$1\"; "
+   "printf '%s\\n' 'mevedel: exact filesystem grant changed before launch' >&2; "
+   "exit 125; "
+   "fi; printf '%s\\n' \"$1\"; shift; exec \"$@\"")
   "Shell wrapper that records entry into the requested process boundary.")
 
 (defconst mevedel-sandbox--probe-output-limit (* 64 1024)
@@ -830,8 +835,8 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
             :command
             (mevedel-sandbox--fd-backed-command
              (cons executable arguments)
-             (append (plist-get ancestor-mounts :paths)
-                     (plist-get post-protection-mounts :paths))
+             (append (plist-get ancestor-mounts :grants)
+                     (plist-get post-protection-mounts :grants))
              canonical-workdir)
             :original-command command
             :marker marker

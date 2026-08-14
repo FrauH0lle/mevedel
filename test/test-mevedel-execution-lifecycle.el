@@ -13,6 +13,7 @@
 (require 'mevedel-execution-target)
 (require 'mevedel-pipeline)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-publication)
 (require 'mevedel-session-persistence)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-view-stream)
@@ -733,7 +734,7 @@
             (setq buffer-file-name transcript)
             (insert archive))
           (should
-           (mevedel-session-durability-publish
+           (mevedel-session-publication-publish
             session
             (list
              (list :path transcript :content archive)

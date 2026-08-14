@@ -1291,6 +1291,50 @@ a broad read grant keeps an inaccessible descendant masked"
      (mevedel-sandbox-launch-failed-p
       preparation '(:exit-code -1 :timed-out-p t :output "")))))
 
+(mevedel-deftest mevedel-sandbox--marker-script-grant-failure ()
+  ,test
+  (test)
+  :doc "exact-grant failure marker:
+the real marker script emits its private marker, refuses the child, and blocks
+best-effort fallback after an exact-grant replacement"
+  (let* ((root (make-temp-file "mevedel-sandbox-marker-" t))
+         (side-effect (file-name-concat root "executed"))
+         (marker "MEVEDEL_SANDBOX_STARTED_test")
+         (output-buffer (generate-new-buffer " *mevedel-sandbox-marker*"))
+         exit-code child-result preparation fallback-called)
+    (unwind-protect
+        (progn
+          (let ((process-environment
+                 (cons "MEVEDEL_SANDBOX_GRANT_FAILURE=1"
+                       process-environment)))
+            (setq exit-code
+                  (call-process
+                   "sh" nil output-buffer nil
+                   "-c" mevedel-sandbox--marker-script
+                   "mevedel-sandbox" marker
+                   "sh" "-c"
+                   (format ": > %s" (shell-quote-argument side-effect)))))
+          (setq child-result
+                (list :exit-code exit-code
+                      :timed-out-p nil
+                      :output (with-current-buffer output-buffer
+                                (buffer-string)))
+                preparation (list :state 'confined :marker marker
+                                  :fallback-p t))
+          (should (= 125 exit-code))
+          (should
+           (member marker
+                   (split-string (plist-get child-result :output) "\n" t)))
+          (should-not (file-exists-p side-effect))
+          (should-not
+           (mevedel-sandbox-launch-failed-p preparation child-result))
+          (when (mevedel-sandbox-launch-failed-p preparation child-result)
+            (setq fallback-called t))
+          (should-not fallback-called))
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-sandbox-strip-marker ()
   ,test
   (test)

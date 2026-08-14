@@ -17,6 +17,7 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-execution-target)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-publication)
 (require 'mevedel-session-persistence)
 (require 'mevedel-telemetry)
 (require 'mevedel-view)
@@ -215,7 +216,7 @@
         (progn
           (cl-letf
               (((symbol-function
-                 'mevedel-session-durability-append-diagnostic)
+                 'mevedel-session-publication-append-diagnostic)
                 (lambda (_session path content)
                   (push (list path content) calls)
                   t)))
@@ -250,11 +251,9 @@
         (progn
           (write-region "not a directory" nil blocked nil 'silent)
           (setf (mevedel-session-save-path session) blocked)
-          (cl-letf (((symbol-function 'display-warning)
-                     (lambda (_type message &rest _)
-                       (setq warning message))))
+          (mevedel-test--with-captured-diagnostics warning
             (mevedel-hooks--log session entry))
-          (should warning)
+          (should (string-match-p "persistence failed" warning))
           (should (equal (list entry)
                          (mevedel-session-hook-log-pending session)))
           (setf (mevedel-session-save-path session) restored)
@@ -484,10 +483,17 @@
 			 (with-temp-file (file-name-concat root ".mevedel" "hooks.json")
 			   (insert "{\"hooks\":{\"PermissionDenied\":[{\"matcher\":\"*\","
 				   "\"hooks\":[{\"type\":\"command\",\"command\":\"echo deny\"}]}]}}"))
-			 (should-not
-			  (assq 'PermissionRequest
-				(mevedel-hooks-effective-rules session workspace)))
-			 (mevedel-hooks-trust-project workspace)
+			 ;; Untrusted project configs are reported as they are
+			 ;; skipped, which is the behavior under test here.
+			 (let (diagnostics)
+			   (mevedel-test--with-captured-diagnostics diagnostics
+			     (should-not
+			      (assq 'PermissionRequest
+				    (mevedel-hooks-effective-rules
+				     session workspace))))
+			   (should (string-match-p "is not trusted" diagnostics)))
+			 (mevedel-test--with-captured-diagnostics nil
+			   (mevedel-hooks-trust-project workspace))
 			 (let* ((rules (mevedel-hooks-effective-rules session workspace))
 				(defcustom-handler
 				 (car (mevedel-hooks--matching-handlers
@@ -529,7 +535,8 @@
 			  (assq 'SessionStart
 				(mevedel-hooks-effective-rules session workspace)))
 			 (delete-file (file-name-concat root ".mevedel" "hooks.json"))
-			 (mevedel-hooks-trust-project workspace)
+			 (mevedel-test--with-captured-messages nil
+			   (mevedel-hooks-trust-project workspace))
 			 (should-not
 			  (assq 'PermissionDenied
 				(mevedel-hooks-effective-rules session workspace))))
@@ -570,12 +577,16 @@
                         "\"}]}]}}")))
              (commands
               ()
-              (mapcar (lambda (handler)
-                        (plist-get handler :command))
-                      (mevedel-hooks--matching-handlers
-                       'PreToolUse
-                       '(:tool-name "Bash")
-                       (mevedel-hooks-effective-rules session workspace)))))
+              ;; Resolution reports every untrusted project config it
+              ;; skips; this probe runs before and after trust is given.
+              (mevedel-test--with-captured-diagnostics nil
+                (mapcar (lambda (handler)
+                          (plist-get handler :command))
+                        (mevedel-hooks--matching-handlers
+                         'PreToolUse
+                         '(:tool-name "Bash")
+                         (mevedel-hooks-effective-rules
+                          session workspace))))))
           (setenv "HOME" home)
           (let ((global-agents (file-name-concat home ".agents"))
                 (global-mevedel user-dir)
@@ -608,7 +619,8 @@
                       "echo global-mevedel-json"
                       "echo plugin")
                     (commands)))
-            (mevedel-hooks-trust-project workspace)
+            (mevedel-test--with-captured-messages nil
+              (mevedel-hooks-trust-project workspace))
             (should
              (equal '("echo global-agents-el"
                       "echo global-agents-json"
@@ -683,7 +695,8 @@
                 ((:matcher "Bash"
                   :hooks ((:type command :command "echo project"))))))
              (current-buffer)))
-          (mevedel-hooks-trust-project workspace)
+          (mevedel-test--with-captured-messages nil
+            (mevedel-hooks-trust-project workspace))
           (let ((handlers (mevedel-hooks--matching-handlers
                            'PreToolUse
                            '(:tool-name "Bash")
@@ -886,7 +899,7 @@
          :function mevedel-hooks-test--native-rewrite-fn
          :source native)
         (:type elisp
-         :function mevedel-hooks-test--declarative-capture-fn))))))
+         :function mevedel-hooks-test--declarative-capture-fn)))))
 
   :doc "preserves buffer-local hook order and the global inheritance marker"
   (let ((mevedel-pre-tool-use-functions
@@ -900,7 +913,7 @@
                 (mevedel-hooks--handlers-for-event
                  'PreToolUse '(:tool-name "Bash") nil))
         '(mevedel-hooks-test--declarative-capture-fn
-          mevedel-hooks-test--native-rewrite-fn)))))
+          mevedel-hooks-test--native-rewrite-fn))))))
 
 (mevedel-deftest mevedel-hooks--event-json
 		 (:doc "serializes Lisp booleans and nil optional fields as JSON values")

@@ -730,7 +730,7 @@ description: present
                       (lambda (type message &rest args)
                         (when (eq type 'mevedel)
                           (push message warnings))
-                        (apply display-warning-orig type message args))))
+                        nil)))
             (let* ((skills (mevedel-skills-scan dir '(".")))
                    (names (mapcar #'mevedel-skill-name skills)))
               (should (member "intact" names))
@@ -769,7 +769,7 @@ allowed-tools:
                       (lambda (type message &rest args)
                         (when (eq type 'mevedel)
                           (push message warnings))
-                        (apply display-warning-orig type message args))))
+                        nil)))
             (let* ((skills (mevedel-skills-scan dir '(".")))
                    (known (cl-find "known-tools" skills
                                    :key #'mevedel-skill-name :test #'equal)))
@@ -810,7 +810,7 @@ allowed-tools:
                    ((symbol-function 'display-warning)
                     (lambda (type message &rest args)
                       (when (eq type 'mevedel) (push message warnings))
-                      (apply display-warning-orig type message args))))
+                        nil)))
           (mevedel-skills-test--write-skill
            dir "ok-rules"
            "name: ok-rules
@@ -1576,7 +1576,7 @@ paths:
   (test)
   :doc "flips dormant skills whose patterns match path"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "a" :root "/tmp/a" :name "a"
+              :type 'file :id "a" :root "/tmp/a" :name "a"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))

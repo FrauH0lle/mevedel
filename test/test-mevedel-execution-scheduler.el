@@ -22,7 +22,9 @@
   (mevedel-session-create
    "scheduler"
    (mevedel-workspace--create
-    :type 'test :id root :root root :name "scheduler")))
+    ;; A real workspace category: starting a mutation resolves the session's
+    ;; durable authority from it.
+    :type 'file :id root :root root :name "scheduler")))
 
 (defun test-mevedel-execution-scheduler--wait (predicate &optional timeout)
   "Wait up to TIMEOUT seconds for PREDICATE."

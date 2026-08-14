@@ -77,7 +77,7 @@ signal after recording."
                         'done)
     (should (equal '((a . done)) (car outcomes)))
     (should (equal '(b) (car rendered)))
-    (should (= 1 (length (mevedel-session-permission-queue session))))))
+    (should (= 1 (length (mevedel-session-permission-queue session)))))
 
   :doc "pop keeps the head available when settlement fails"
   (let* ((session (test-mevedel-queue--session))
@@ -90,7 +90,7 @@ signal after recording."
     (let ((entry (car (mevedel-session-permission-queue session))))
       (mevedel-queue--pop spec entry 'done)
       (should (eq entry (car (mevedel-session-permission-queue session))))
-      (should-not (car (mevedel-queue--ensure-settled-cell entry)))))
+      (should-not (car (mevedel-queue--ensure-settled-cell entry))))))
 
 (mevedel-deftest mevedel-queue--abort-all
   (:doc "shared queue abort contract")

@@ -28,7 +28,7 @@
            (moved-path (file-name-concat root "moved.txt"))
            (added-path (file-name-concat root "nested" "new.txt"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "patch"
+                       :type 'file :id root :root root :name "patch"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session--create
                      :name "patch" :workspace workspace

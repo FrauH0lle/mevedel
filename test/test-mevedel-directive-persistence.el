@@ -35,7 +35,7 @@
   :doc "round trips source-missing and archived records without source buffers"
   (let* ((directory (make-temp-file "mevedel-source-persist-" t))
          (workspace (mevedel-workspace--create
-                     :type 'test :id directory :root directory
+                     :type 'file :id directory :root directory
                      :name "persist"))
          (missing (mevedel-directive--create
                    :id "missing" :request "request"

@@ -71,12 +71,16 @@
 (declare-function mevedel-permission-queue-abort-all
                   "mevedel-permission-queue" (&optional session))
 
+;; `mevedel-view-interaction'
+(declare-function mevedel-view-interaction-teardown
+                  "mevedel-view-interaction" ())
+
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
 
 ;; `mevedel-session-durability'
-(declare-function mevedel-session-durability-status
+(declare-function mevedel-session-publication-status
                   "mevedel-session-durability" (session))
 
 ;; `mevedel-structs'
@@ -709,8 +713,8 @@ new view buffer is created."
     (message
      (concat
       "mevedel: session publication is pending; run "
-      "mevedel-session-durability-retry-publication or "
-      "mevedel-session-durability-abandon-publication first"))
+      "mevedel-session-publication-retry or "
+      "mevedel-session-publication-abandon first"))
     nil)
    ((and mevedel--session
          (not
@@ -747,6 +751,7 @@ it.  The reference is cleared before killing so the data buffer's own
 kill hook sees nil and exits without re-entering this function."
   (unless (mevedel-view-agent-handle-view-kill)
     (let ((view-buffer (current-buffer)))
+      (mevedel-view-interaction-teardown)
       (mevedel-view--interaction-clear)
       (when-let* ((db mevedel--data-buffer)
                   (_ (buffer-live-p db)))
@@ -778,6 +783,7 @@ Kills the associated view buffer."
               (_ (buffer-live-p vb)))
     (with-current-buffer vb
       (mevedel-view-agent-cleanup-parent vb)
+      (mevedel-view-interaction-teardown)
       (mevedel-view--interaction-clear))
     (kill-buffer vb)))
 
@@ -849,7 +855,7 @@ Kills the associated view buffer."
             (and session workspace
                  (progn
                    (require 'mevedel-session-durability)
-                   (mevedel-session-durability-status session))))
+                   (mevedel-session-publication-status session))))
            (pending-publication
             (plist-get durability :pending-publication))
            (lease-state (plist-get durability :lease-state))

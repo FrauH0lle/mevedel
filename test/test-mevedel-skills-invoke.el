@@ -141,7 +141,7 @@
   (test)
   :doc "drain commits non-policy context and clears the buffer-local stash"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "d" :root "/tmp/d" :name "d"
+              :type 'file :id "d" :root "/tmp/d" :name "d"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -169,7 +169,7 @@
 
   :doc "drain is a no-op when no stash present"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "d" :root "/tmp/d" :name "d"
+              :type 'file :id "d" :root "/tmp/d" :name "d"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -332,7 +332,7 @@
   (test)
   :doc "$ARGUMENTS substitutes the full raw argument string"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :type 'file :id "s" :root "/tmp/s" :name "s"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -358,7 +358,7 @@
 
   :doc "${CLAUDE_SESSION_ID} and ${CLAUDE_SKILL_DIR} substitute"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :type 'file :id "s" :root "/tmp/s" :name "s"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -373,7 +373,7 @@
 
   :doc "${CLAUDE_SESSION_ID} prefers stable session id over session name"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :type 'file :id "s" :root "/tmp/s" :name "s"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -392,7 +392,7 @@
 
   :doc "${MEVEDEL_*} aliases mirror Claude-compatible substitutions"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :type 'file :id "s" :root "/tmp/s" :name "s"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -415,7 +415,7 @@
 
   :doc "literal substitutions do not rewrite user-supplied arguments"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :type 'file :id "s" :root "/tmp/s" :name "s"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -456,7 +456,7 @@ ARGUMENTS: foo bar"
 
   :doc "escaped literal variables stay literal and do not suppress append-fallback"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :type 'file :id "s" :root "/tmp/s" :name "s"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -534,7 +534,7 @@ ARGUMENTS: hello"
   ;; Literal variable substitutions run AFTER the placeholder check so they
   ;; don't suppress the append.
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :type 'file :id "s" :root "/tmp/s" :name "s"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1061,7 +1061,7 @@ allowed-tools:
   ;; consult invocation/request skill buckets so a skill with
   ;; `allowed-tools: [Bash(gh *)]' actually authorizes `gh' calls.
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "b" :root "/tmp/b" :name "b"
+              :type 'file :id "b" :root "/tmp/b" :name "b"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1086,7 +1086,7 @@ allowed-tools:
   :doc "session deny beats invocation/request skill allow on Bash"
   ;; A session deny still wins over a skill-bucket allow.
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "b2" :root "/tmp/b2" :name "b2"
+              :type 'file :id "b2" :root "/tmp/b2" :name "b2"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1373,7 +1373,7 @@ allowed-tools:
          (native-skill-dir (file-name-concat root "skill"))
          (remote-skill-dir (file-name-concat remote-root "skill"))
          (workspace (mevedel-workspace--create
-                     :type 'test :id "remote-skill" :root remote-root
+                     :type 'file :id "remote-skill" :root remote-root
                      :name "remote-skill"
                      :file-cache (mevedel-file-cache--create
                                   :table (make-hash-table :test #'equal)
@@ -1422,7 +1422,7 @@ allowed-tools:
          (remote-root (format "/mevedelmock:%s:%s"
                               (system-name) target-root))
          (workspace (mevedel-workspace--create
-                     :type 'test :id remote-root :root remote-root
+                     :type 'file :id remote-root :root remote-root
                      :name "remote-discovery"
                      :file-cache (mevedel-test-file-cache-create)))
          (mevedel-skills-include-bundled nil)
@@ -1490,7 +1490,7 @@ allowed-tools:
                               (system-name) root))
          (foreign-root (format "/mevedelmock:foreign:%s" root))
          (workspace (mevedel-workspace--create
-                     :type 'test :id "remote-origin" :root remote-root
+                     :type 'file :id "remote-origin" :root remote-root
                      :name "remote-origin"
                      :file-cache (mevedel-file-cache--create
                                   :table (make-hash-table :test #'equal)
@@ -1545,7 +1545,7 @@ allowed-tools:
          (remote-root (format "/mevedelmock:%s:%s"
                               (system-name) root))
          (workspace (mevedel-workspace--create
-                     :type 'test :id "remote-elisp" :root remote-root
+                     :type 'file :id "remote-elisp" :root remote-root
                      :name "remote-elisp"
                      :file-cache (mevedel-file-cache--create
                                   :table (make-hash-table :test #'equal)
@@ -1582,7 +1582,7 @@ allowed-tools:
   (test)
   :doc "inline skill yields :status ok :kind inline with prepared body"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "i" :root "/tmp/i" :name "i"
+              :type 'file :id "i" :root "/tmp/i" :name "i"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1603,7 +1603,7 @@ allowed-tools:
 
   :doc "user origin installs the pending stash"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :type 'file :id "s" :root "/tmp/s" :name "s"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1632,7 +1632,7 @@ allowed-tools:
 
   :doc "UserPromptExpansion can rewrite user-origin inline skill output"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "slash-expansion" :root "/tmp/slash-expansion"
+              :type 'file :id "slash-expansion" :root "/tmp/slash-expansion"
               :name "slash-expansion"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
@@ -1666,7 +1666,7 @@ allowed-tools:
 
   :doc "malformed UserPromptExpansion decision does not abort user skill"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "slash-expansion-malformed"
+              :type 'file :id "slash-expansion-malformed"
               :root "/tmp/slash-expansion-malformed"
               :name "slash-expansion-malformed"
               :file-cache (mevedel-file-cache--create
@@ -1695,7 +1695,7 @@ allowed-tools:
 
   :doc "UserPromptExpansion can block user-origin inline skill output"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "slash-expansion-block"
+              :type 'file :id "slash-expansion-block"
               :root "/tmp/slash-expansion-block"
               :name "slash-expansion-block"
               :file-cache (mevedel-file-cache--create
@@ -1725,7 +1725,7 @@ allowed-tools:
 
   :doc "user-origin preparation failure leaves the pending stash empty"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "slash-fail" :root "/tmp/slash-fail"
+              :type 'file :id "slash-fail" :root "/tmp/slash-fail"
               :name "slash-fail"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
@@ -1756,7 +1756,7 @@ allowed-tools:
 
   :doc "model inline origin installs additive context but ignores policy"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "t" :root "/tmp/t" :name "t"
+              :type 'file :id "t" :root "/tmp/t" :name "t"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -2158,7 +2158,7 @@ allowed-tools:
   (test)
   :doc "unknown skill returns an error"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "u" :root "/tmp/u" :name "u"
+              :type 'file :id "u" :root "/tmp/u" :name "u"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -2175,7 +2175,7 @@ allowed-tools:
   :doc "known inline skill is dispatched and body returned"
   (let* ((dir (make-temp-file "mevedel-skills-test-" t))
          (ws (mevedel-workspace--create
-              :type 'test :id dir :root dir :name "h"
+              :type 'file :id dir :root dir :name "h"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -2327,7 +2327,7 @@ description: Yell
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (ws (mevedel-workspace--create
-              :type 'test :id "collision" :root "/tmp/collision"
+              :type 'file :id "collision" :root "/tmp/collision"
               :name "collision"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
@@ -2805,7 +2805,7 @@ spanning lines")))
          (skill-dir (file-name-concat root ".mevedel/skills"))
          (mevedel-skill-dirs '(".mevedel/skills"))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "refresh-bound"
+              :type 'file :id root :root root :name "refresh-bound"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -3246,7 +3246,7 @@ spanning lines")))
   (test)
   :doc "returns only active, model-invocable skills"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "l" :root "/tmp/l" :name "l"
+              :type 'file :id "l" :root "/tmp/l" :name "l"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))

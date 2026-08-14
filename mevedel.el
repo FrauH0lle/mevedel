@@ -6,7 +6,7 @@
 ;; Author: FrauH0lle
 ;; Version: 0.5.0
 ;; Keywords: convenience, tools, llm, gptel, gptel-agent
-;; Package-Requires: ((emacs "30.2") (gptel "0.9.9.5") (gptel-agent "0.0.1"))
+;; Package-Requires: ((emacs "30.2") (gptel "0.9.9.5") (gptel-agent "0.0.1") (web-server "0.1.2"))
 ;; URL: https://github.com/FrauH0lle/mevedel
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -77,6 +77,13 @@
 (require 'mevedel-compact)
 (require 'mevedel-side-conversation)
 (require 'mevedel-view-agent)
+(require 'mevedel-session-control-fs)
+(require 'mevedel-session-durability)
+(require 'mevedel-session-recovery)
+(require 'mevedel-session-transfer)
+(require 'mevedel-session-publication)
+(require 'mevedel-session-save-as)
+(require 'mevedel-session-control-transfer)
 (require 'mevedel-view-interaction)
 (require 'mevedel-view-render)
 (require 'mevedel-view-composer)
@@ -100,6 +107,9 @@
 (require 'mevedel-menu)
 (require 'mevedel-hooks)
 (require 'mevedel-chat)
+(require 'mevedel-collaboration-projection)
+(require 'mevedel-collaboration-transport)
+(require 'mevedel-collaboration)
 (require 'mevedel-worktree)
 
 ;; `cl-seq'
@@ -121,6 +131,7 @@
 (declare-function mevedel--directive-bound-session-buffer
                   "mevedel-chat" (record workspace))
 (declare-function mevedel--discuss-directive-prompt "mevedel-chat" (content))
+(declare-function mevedel--display-chat-buffer "mevedel-chat" (chat-buffer))
 (declare-function mevedel--dispatch-directive-implementation
                   "mevedel-chat"
                   (directive record action prompt-fn callback))
@@ -161,6 +172,10 @@
 (declare-function mevedel-preset-apply
                   "mevedel-presets" (name &optional buffer))
 (defvar mevedel-action-preset-alist)
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-choose-entry
+                  "mevedel-session-persistence" (workspace))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills-install-hot-reload
@@ -622,10 +637,11 @@ the command will resize the directive in the following manner:
 (defun mevedel (&optional arg)
   "Start or switch to a chat session in the current project.
 
-Without prefix ARG:
-- No sessions exist: create \"main\" silently.
-- One session exists: switch to it.
-- Multiple sessions: prompt with `completing-read'.
+Without prefix ARG, discover persisted workspace sessions first.  The entry
+chooser offers a new session, ordinary resume, read-only inspection of an
+active writer, or confirmed takeover of an expired lease.  With no persisted
+sessions, retain the live-buffer behavior: create \"main\", switch to the sole
+live session, or prompt among multiple live sessions.
 
 With prefix ARG (\\[universal-argument]):
 - Prompt for a working directory under the current project.
@@ -635,8 +651,18 @@ With prefix ARG (\\[universal-argument]):
   (let* ((workspace (mevedel-workspace))
          (working-directory (if arg
                                 (mevedel--read-session-directory workspace)
-                              (mevedel-workspace-root workspace))))
-    (mevedel--start-chat workspace working-directory arg arg)))
+                              (mevedel-workspace-root workspace)))
+         (entry
+          (unless arg
+            (require 'mevedel-session-persistence)
+            (mevedel-session-persistence-choose-entry workspace))))
+    (cond
+     ((bufferp entry)
+      (mevedel--display-chat-buffer entry))
+     ((eq entry 'new)
+      (mevedel--start-chat workspace working-directory t nil))
+     (t
+      (mevedel--start-chat workspace working-directory arg arg)))))
 
 ;;;###autoload
 (defun mevedel-in-directory (directory &optional arg)

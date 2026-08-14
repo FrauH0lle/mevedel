@@ -52,8 +52,14 @@
                   "mevedel-permissions" (path access grants))
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-control-transfer
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-assert-new-mutation-authority
+                  "mevedel-session-persistence" (session))
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-forwarded-audit-p
@@ -208,6 +214,14 @@ ENTRY plist keys:
     (unless (mevedel-agent-path-p origin)
       (error "Invalid permission queue origin: %S" origin)))
   (let ((session (or session (mevedel-permission-queue--current-session))))
+    ;; A permission entry without a request id starts new work.  Entries
+    ;; attached to an already-live request are allowed to settle while the
+    ;; owner drains for cooperative transfer.
+    (when (and session
+               (plist-get (mevedel-session-control-transfer session) :state)
+               (not (plist-get entry :request-id)))
+      (require 'mevedel-session-persistence)
+      (mevedel-session-persistence-assert-new-mutation-authority session))
     (mevedel-permission-queue--log 'permission-enqueued entry session)
     (let* ((release
             (and session

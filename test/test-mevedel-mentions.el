@@ -141,7 +141,7 @@ Returns (buffer . overlay)."
 
   :doc "dispatch restores a stashed reference and reads its current contents"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "restore-ref" :root "/tmp"
+                     :type 'file :id "restore-ref" :root "/tmp"
                      :name "restore-ref"))
          (cell (mevedel-test--make-ref-buffer
                 "alpha body\n" "alpha body" workspace))
@@ -179,9 +179,9 @@ Returns (buffer . overlay)."
   (test)
   :doc "limits a live query to its explicit workspace"
   (let* ((workspace-a (mevedel-workspace--create
-                       :type 'test :id "query-a" :root "/tmp" :name "query-a"))
+                       :type 'file :id "query-a" :root "/tmp" :name "query-a"))
          (workspace-b (mevedel-workspace--create
-                       :type 'test :id "query-b" :root "/tmp" :name "query-b"))
+                       :type 'file :id "query-b" :root "/tmp" :name "query-b"))
          (first (mevedel-test--make-ref-buffer
                  "first query body\n" "first query body" workspace-a))
          (second (mevedel-test--make-ref-buffer
@@ -256,10 +256,10 @@ Returns (buffer . overlay)."
 
   :doc "binds from the session workspace rather than the current buffer"
   (let* ((workspace-a (mevedel-workspace--create
-                       :type 'test :id "prepare-a" :root "/tmp"
+                       :type 'file :id "prepare-a" :root "/tmp"
                        :name "prepare-a"))
          (workspace-b (mevedel-workspace--create
-                       :type 'test :id "prepare-b" :root "/tmp"
+                       :type 'file :id "prepare-b" :root "/tmp"
                        :name "prepare-b"))
          (first (mevedel-test--make-ref-buffer
                  "first body\n" "first body" workspace-a))
@@ -284,7 +284,7 @@ Returns (buffer . overlay)."
          (working-directory (file-name-concat root "package"))
          (elsewhere (make-temp-file "mevedel-file-binding-cwd-" t))
          (workspace (mevedel-workspace--create
-                     :type 'test :id root :root root :name "file-binding"))
+                     :type 'file :id root :root root :name "file-binding"))
          (session (mevedel-session-create
                    "main" workspace working-directory))
          (default-directory elsewhere)
@@ -323,7 +323,7 @@ Returns (buffer . overlay)."
   :doc "binds self-delimited file mentions before prose punctuation"
   (let* ((root (make-temp-file "mevedel-file-punctuation-" t))
          (workspace (mevedel-workspace--create
-                     :type 'test :id root :root root :name "punctuation"))
+                     :type 'file :id root :root root :name "punctuation"))
          (session (mevedel-session-create "main" workspace))
          (braced "@file:{notes file.txt}")
          (ranged "@file:notes.txt#L2")
@@ -548,10 +548,10 @@ Returns (buffer . overlay)."
 
   :doc "unbound ID form never resolves from another session workspace"
   (let* ((workspace-a (mevedel-workspace--create
-                       :type 'test :id "dispatch-a" :root "/tmp"
+                       :type 'file :id "dispatch-a" :root "/tmp"
                        :name "dispatch-a"))
          (workspace-b (mevedel-workspace--create
-                       :type 'test :id "dispatch-b" :root "/tmp"
+                       :type 'file :id "dispatch-b" :root "/tmp"
                        :name "dispatch-b"))
          (other (mevedel-test--make-ref-buffer
                  "other workspace body\n" "other workspace body" workspace-b))
@@ -964,7 +964,10 @@ Returns (buffer . overlay)."
 
   :doc "permission deny yields denial placeholder"
   (let* ((tmp (make-temp-file "mevedel-file-" nil ".txt" "hello world\n"))
-         (ws (mevedel-workspace--create :type 'project :id "mention-deny"
+         ;; A session permission rule is durable state, so its authority
+         ;; comes from the workspace category rather than a materialized
+         ;; project session this mention test does not need.
+         (ws (mevedel-workspace--create :type 'file :id "mention-deny"
                                         :root temporary-file-directory
                                         :name "mention-deny"))
          (session (mevedel-session-create "main" ws))
@@ -1038,7 +1041,7 @@ Returns (buffer . overlay)."
   (let* ((ws-root (make-temp-file "mevedel-ws-" t))
          (outside-dir (make-temp-file "mevedel-outside-" t))
          (tmp (expand-file-name "outside.txt" outside-dir))
-         (ws (mevedel-workspace--create :type 'project :id "mention-drop-deny"
+         (ws (mevedel-workspace--create :type 'file :id "mention-drop-deny"
                                         :root ws-root
                                         :name "mention-drop-deny"))
          (session (mevedel-session-create "main" ws))
@@ -1188,7 +1191,7 @@ Returns (buffer . overlay)."
   :doc "current permission denial of a bound path warns and exposes no contents"
   (let* ((tmp (make-temp-file "mevedel-bound-deny-" nil ".txt" "secret\n"))
          (workspace (mevedel-workspace--create
-                     :type 'test :id "bound-deny"
+                     :type 'file :id "bound-deny"
                      :root temporary-file-directory :name "bound-deny"))
          (session (mevedel-session-create "main" workspace))
          (token "@file:visible.txt")
@@ -1517,7 +1520,7 @@ Returns (buffer . overlay)."
   (let* ((root (make-temp-file "mevedel file capf-" t))
          (path (expand-file-name "target file.txt" root))
          (workspace (mevedel-workspace--create
-                     :type 'test :id root :root root :name "file-capf")))
+                     :type 'file :id root :root root :name "file-capf")))
     (with-temp-file path (insert "target\n"))
     (unwind-protect
         (with-temp-buffer
@@ -1712,7 +1715,7 @@ Returns (buffer . overlay)."
   (test)
   :doc "uses explicit insertion and media callbacks and defers dedup changes"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "expand-buffer" :root "/tmp"
+                     :type 'file :id "expand-buffer" :root "/tmp"
                      :name "expand-buffer"))
          (session (mevedel-session-create "main" workspace))
          (mevedel-mention-handlers
@@ -1743,7 +1746,7 @@ Returns (buffer . overlay)."
   (test)
   :doc "records accepted expansion hashes at the current session turn"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "commit-expansion" :root "/tmp"
+                     :type 'file :id "commit-expansion" :root "/tmp"
                      :name "commit-expansion"))
          (session (mevedel-session-create "main" workspace))
          (key (cons 'ref "uuid")))
@@ -1761,7 +1764,7 @@ Returns (buffer . overlay)."
   (test)
   :doc "expands a bound reference into one model-ready steering prompt"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "steering-mention" :root "/tmp"
+                     :type 'file :id "steering-mention" :root "/tmp"
                      :name "steering-mention"))
          (cell (mevedel-test--make-ref-buffer
                 "steering reference body\n"
@@ -1904,7 +1907,7 @@ Returns (buffer . overlay)."
 
   :doc "MCP dedup uses locator and current content hash"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "mcp-dedup" :root "/tmp"
+                     :type 'file :id "mcp-dedup" :root "/tmp"
                      :name "mcp-dedup"))
          (session (mevedel-session-create "main" workspace))
          (chat (generate-new-buffer " *mevedel-mcp-dedup-chat*"))
@@ -1971,10 +1974,10 @@ Returns (buffer . overlay)."
 
   :doc "reference queries expand only from the session workspace"
   (let* ((workspace-a (mevedel-workspace--create
-                       :type 'test :id "transform-query-a" :root "/tmp"
+                       :type 'file :id "transform-query-a" :root "/tmp"
                        :name "transform-query-a"))
          (workspace-b (mevedel-workspace--create
-                       :type 'test :id "transform-query-b" :root "/tmp"
+                       :type 'file :id "transform-query-b" :root "/tmp"
                        :name "transform-query-b"))
          (first (mevedel-test--make-ref-buffer
                  "first query body\n" "first query body" workspace-a))
@@ -2059,9 +2062,11 @@ Returns (buffer . overlay)."
           (with-current-buffer chat
             (setq-local mevedel--session session))
           (with-temp-buffer
-            (let ((gptel-model model)
-                  (gptel-context nil)
-                  (gptel-use-context nil))
+            ;; The expansion makes these buffer-local; let-binding them here
+            ;; would make Emacs warn about exactly that.
+            (setq-local gptel-context nil)
+            (setq-local gptel-use-context nil)
+            (let ((gptel-model model))
               (insert (propertize (format "look @file:%s" tmp)
                                   'gptel 'prompt))
               (mevedel--transform-expand-mentions fsm)
@@ -2072,9 +2077,9 @@ Returns (buffer . overlay)."
                              gptel-context))
               (should (eq gptel-use-context 'system))))
           (with-temp-buffer
-            (let ((gptel-model model)
-                  (gptel-context nil)
-                  (gptel-use-context nil))
+            (setq-local gptel-context nil)
+            (setq-local gptel-use-context nil)
+            (let ((gptel-model model))
               (insert (propertize (format "again @file:%s" tmp)
                                   'gptel 'prompt))
               (mevedel--transform-expand-mentions fsm)

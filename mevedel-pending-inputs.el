@@ -98,6 +98,10 @@
                   (input &optional before-send on-block dispatch after-insert))
 (declare-function mevedel-view-refresh-input-prompt
                   "mevedel-view-composer" ())
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-assert-new-mutation-authority
+                  "mevedel-session-persistence" (session))
 (defvar mevedel--data-buffer)
 (defvar mevedel-view--pending-input-edit)
 
@@ -398,6 +402,8 @@
          (context (plist-get state :context))
          (session (mevedel-pending-inputs--session context))
          (category (plist-get state :category)))
+    (require 'mevedel-session-persistence)
+    (mevedel-session-persistence-assert-new-mutation-authority session)
     (when (plist-get state :saving)
       (user-error "Pending-input preparation is still running"))
     (condition-case err
@@ -453,6 +459,8 @@
                              :key (lambda (entry) (plist-get entry :id))
                              :test #'equal))
          (target (and index (+ index offset))))
+    (require 'mevedel-session-persistence)
+    (mevedel-session-persistence-assert-new-mutation-authority session)
     (unless (and target (>= target 0) (< target (length entries)))
       (user-error "Pending input is already at the category boundary"))
     (cl-rotatef (nth index entries) (nth target entries))
@@ -523,6 +531,8 @@
                  current
                  (append original-grants staged-grants)
                  :test #'equal)))))))
+    (require 'mevedel-session-persistence)
+    (mevedel-session-persistence-assert-new-mutation-authority session)
     (unless (eq (plist-get item :category) 'follow-up)
       (user-error "Pending input is already steering"))
     (when (plist-get entry :scope)

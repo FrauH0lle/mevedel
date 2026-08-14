@@ -277,7 +277,7 @@
     (with-current-buffer view-buf
       (should (string-match-p
                "Budget: 3 tokens / unbounded"
-               (mevedel-menu--goal-description)))))
+               (mevedel-menu--goal-description))))))
 
 (mevedel-deftest mevedel-menu--preset-description ()
   ,test
@@ -388,7 +388,8 @@
   (mevedel-menu-test--with-buffers
     (setf (mevedel-session-goal session) (mevedel-goal--create :status 'paused))
     (with-current-buffer view-buf (should (mevedel-menu--goal-clearable-p)))
-    (with-current-buffer data-buf (setq-local mevedel--current-request t))
+    (with-current-buffer data-buf (setq-local mevedel--current-request
+                  (mevedel-request--create :session mevedel--session)))
     (with-current-buffer view-buf
       (should-not (mevedel-menu--goal-clearable-p)))))
 
@@ -509,7 +510,8 @@
   :doc "shows running request state"
   (mevedel-menu-test--with-buffers
     (with-current-buffer data-buf
-      (setq-local mevedel--current-request t))
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :session mevedel--session)))
     (with-current-buffer view-buf
       (should (string-match-p "running" (mevedel-menu--header)))))
 
@@ -537,7 +539,10 @@
           (should (string-match-p "ready" header))
           (should (string-match-p "sandbox bubblewrap" header))
           (should (string-match-p "Persistence.*lease owned" header))
-          (should (string-match-p "publication pending" header)))))))
+          (should (string-match-p "publication pending" header))))
+      ;; The header is what this case is about; leaving the publication
+      ;; pending would make buffer teardown refuse to save and warn.
+      (setf (mevedel-session-pending-publication remote-session) nil))))
 
 (mevedel-deftest mevedel-menu--worktree-label ()
   ,test
@@ -1116,7 +1121,8 @@
   :doc "running session cannot send"
   (mevedel-menu-test--with-buffers
     (with-current-buffer data-buf
-      (setq-local mevedel--current-request t))
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :session mevedel--session)))
     (with-current-buffer view-buf
       (should (mevedel-menu--send-inapt-p)))))
 
@@ -1131,7 +1137,8 @@
   :doc "running session can abort"
   (mevedel-menu-test--with-buffers
     (with-current-buffer data-buf
-      (setq-local mevedel--current-request t))
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :session mevedel--session)))
     (with-current-buffer view-buf
       (should-not (mevedel-menu--abort-inapt-p)))))
 

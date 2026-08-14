@@ -566,7 +566,7 @@ fire-count and payload."
 		 (with-current-buffer agent-buf
 			   (should (eq gptel-include-reasoning t))))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
-		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf)))))
+		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf))))
 
 		 :doc "freezes the invocation agent spec when buffer registry is missing"
 		 (let* ((parent-buf (generate-new-buffer " *mev-agent-parent*"))
@@ -626,7 +626,7 @@ fire-count and payload."
 			 (should (member "Bash" (mapcar #'gptel-tool-name
 							 captured-tools))))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
-		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf))))
+		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf)))))
 
 
 (mevedel-deftest mevedel-agent-exec--invocation-from-info ()

@@ -147,8 +147,12 @@
                     session buffer)))
               (should (file-directory-p
                        (file-name-concat save-path "agents")))
-              (should (file-exists-p
-                       (file-name-concat save-path ".lock")))
+              ;; A project workspace is portable: it takes a renewable
+              ;; lease instead of the file-workspace PID lock.
+              (should (file-directory-p
+                       (file-name-concat save-path ".lease")))
+              (should-not (file-exists-p
+                           (file-name-concat save-path ".lock")))
               (should-not (file-exists-p
                            (file-name-concat save-path "session.meta.el")))
               (should

@@ -20,9 +20,9 @@
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
 
-;; `mevedel-session-durability'
-(declare-function mevedel-session-durability-append-diagnostic
-                  "mevedel-session-durability" (session path content))
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-append-diagnostic
+                  "mevedel-session-publication" (session path content))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
@@ -135,7 +135,8 @@
         (if (mevedel-permission-log--remote-p session)
             (progn
               (require 'mevedel-session-durability)
-              (mevedel-session-durability-append-diagnostic
+              (require 'mevedel-session-publication)
+              (mevedel-session-publication-append-diagnostic
                session file content))
           (make-directory (file-name-directory file) t)
           (write-region content nil file t 'silent)

@@ -137,7 +137,7 @@
 (declare-function mevedel-verify "mevedel-review" (&optional instructions))
 
 ;; `mevedel-session-durability'
-(declare-function mevedel-session-durability-status
+(declare-function mevedel-session-publication-status
                   "mevedel-session-durability" (session))
 
 ;; `mevedel-skills-ui'
@@ -317,8 +317,9 @@
   (when (and session (mevedel-session-workspace session))
     (require 'mevedel-execution-target)
     (require 'mevedel-session-durability)
+    (require 'mevedel-session-publication)
     (let* ((target (mevedel-session-execution-target session))
-           (status (mevedel-session-durability-status session))
+           (status (mevedel-session-publication-status session))
            (path (plist-get status :authoritative-state-path))
            (lease (or (plist-get status :lease-state)
                       (if (and target

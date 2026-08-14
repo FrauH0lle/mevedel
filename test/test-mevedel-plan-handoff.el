@@ -358,7 +358,7 @@
           (should-not
            (plist-member (gptel-fsm-info fsm)
                          :mevedel-plan-handoff-source-buffer)))
-      (kill-buffer chat-buffer))))
+      (kill-buffer chat-buffer)))
 
   :doc "provider failure and abort retain the exact prepared handoff"
   (dolist (case '((error "Provider overloaded")
@@ -416,7 +416,7 @@
     (should
      (eq retry
          (plist-get (mevedel-session-plan-metadata session)
-                    :implementation-retry))))
+                    :implementation-retry)))))
 
 (mevedel-deftest mevedel-plan-handoff--goal-handoff-complete
   (:doc "restores retry state when its durable cleanup fails")

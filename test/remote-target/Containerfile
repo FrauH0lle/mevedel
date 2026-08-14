@@ -14,4 +14,4 @@ RUN apt-get update \
 
 EXPOSE 22
 
-ENTRYPOINT ["/usr/sbin/sshd", "-D", "-e", "-o", "PasswordAuthentication=no", "-o", "PermitRootLogin=no", "-o", "StrictModes=no"]
+ENTRYPOINT ["/bin/sh", "-c", "chown -R mevedel:mevedel /workspace && exec /usr/sbin/sshd -D -e -o PasswordAuthentication=no -o PermitRootLogin=no -o StrictModes=no"]

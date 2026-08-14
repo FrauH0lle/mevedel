@@ -9,6 +9,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-execution-target)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-publication)
 (require 'mevedel-structs)
 (require 'mevedel-utilities)
 (require 'gptel)
@@ -1110,7 +1111,7 @@
         (progn
           (cl-letf
               (((symbol-function
-                 'mevedel-session-durability-append-diagnostic)
+                 'mevedel-session-publication-append-diagnostic)
                 (lambda (_session path content)
                   (push (list path content) calls)
                   t))

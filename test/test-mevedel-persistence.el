@@ -25,7 +25,7 @@
          (source (file-name-concat root "source.el"))
          (snapshot (file-name-concat root "instructions.el"))
          (workspace (mevedel-workspace--create
-                     :type 'test :id root :root root :name "test"))
+                     :type 'file :id root :root root :name "test"))
          source-buffer directive child id)
     (unwind-protect
         (progn
@@ -166,7 +166,7 @@
          (source (file-name-concat root "source.el"))
          (snapshot (file-name-concat root "instructions.el"))
          (workspace (mevedel-workspace--create
-                     :type 'test :id root :root root :name "test"))
+                     :type 'file :id root :root root :name "test"))
          source-buffer id)
     (unwind-protect
         (progn
@@ -219,7 +219,7 @@
                 (make-temp-file "mevedel-old-directive-shape-" t)))
          (snapshot (file-name-concat root "instructions.el"))
          (workspace (mevedel-workspace--create
-                     :type 'test :id root :root root :name "test")))
+                     :type 'file :id root :root root :name "test")))
     (unwind-protect
         (progn
           (with-temp-file snapshot

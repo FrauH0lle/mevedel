@@ -30,6 +30,14 @@
 ;; `mevedel-chat'
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration-status
+                  "mevedel-collaboration" nil)
+(declare-function mevedel-collaboration-stop
+                  "mevedel-collaboration" nil)
+(declare-function mevedel-collaboration-view
+                  "mevedel-collaboration" nil)
+
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
                   "mevedel-cockpit" (&optional context))
@@ -725,8 +733,19 @@ Routes through the lifecycle-aware permission transition path."
   (require 'mevedel-system)
   (mevedel-inspect-effective-prompt))
 
+(defun mevedel-cmd--collab (args)
+  "Run the `/collab' command described by ARGS."
+  (require 'mevedel-collaboration)
+  (pcase (string-trim (or args ""))
+    ("view" (mevedel-collaboration-view) nil)
+    ("status" (mevedel-collaboration-status) nil)
+    ("stop" (mevedel-collaboration-stop) nil)
+    ("" (message "Usage: /collab [view|status|stop]") nil)
+    (_ (message "Usage: /collab [view|status|stop]") nil)))
+
 (defvar mevedel-slash-commands
   '(("btw"     . mevedel-cmd--btw)
+    ("collab"  . mevedel-cmd--collab)
     ("tokens"  . mevedel-cmd--tokens)
     ("model"   . mevedel-cmd--model)
     ("compact" . mevedel-cmd--compact)
@@ -752,7 +771,7 @@ Handlers have access to the buffer-local `mevedel--session'.")
 
 (defun mevedel-skills-local-command-active-request-p (name args)
   "Return non-nil when local command NAME with ARGS may run mid-request."
-  (or (member name '("btw" "ps" "stop"))
+  (or (member name '("btw" "collab" "ps" "stop"))
       (and (string= name "goal")
            (member (car (split-string (or args "") "[ \t\n]+" t))
                    '("pause" "edit")))))

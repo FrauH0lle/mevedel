@@ -17,7 +17,7 @@
                   "mevedel-execution-target" (target))
 
 ;; `mevedel-session-durability'
-(declare-function mevedel-session-durability-logical-path-p
+(declare-function mevedel-session-publication-logical-path-p
                   "mevedel-session-durability" (path))
 
 ;; `mevedel-session-persistence'
@@ -118,7 +118,7 @@ or committed; fixed session-cache existence is ignored."
       (if (and root (string-prefix-p root expanded))
           (let ((logical (substring expanded (length root))))
             (require 'mevedel-session-durability)
-            (when (and (mevedel-session-durability-logical-path-p logical)
+            (when (and (mevedel-session-publication-logical-path-p logical)
                        (mevedel-session-persistence-artifact-present-p
                         session logical))
               (cons session logical)))

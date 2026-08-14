@@ -109,6 +109,8 @@
 (declare-function mevedel-session-persistence-publish-text
                   "mevedel-session-persistence"
                   (session path content &optional coding))
+(declare-function mevedel-session-persistence-assert-new-mutation-authority
+                  "mevedel-session-persistence" (session))
 
 ;; `mevedel-specialist-nudges'
 (declare-function mevedel-specialist-nudges-apply
@@ -2678,6 +2680,9 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
 delivery: %S"
                        result)
                :warning))))))
+    (when (and session (not (mevedel-tool-read-only-p tool)))
+      (require 'mevedel-session-persistence)
+      (mevedel-session-persistence-assert-new-mutation-authority session))
     (when request
       (mevedel-request-push-canceller
        request

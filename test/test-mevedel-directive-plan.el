@@ -148,7 +148,7 @@
            :plan '(:status draft :action implement :invalidated t)))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id "restore" :root "/tmp" :name "restore"
+           :type 'file :id "restore" :root "/tmp" :name "restore"
            :directives (list cancelled invalidated)))
          (session
           (mevedel-session--create

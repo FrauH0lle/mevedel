@@ -8,6 +8,8 @@
 
 (require 'mevedel-agents)
 (require 'mevedel-agent-control)
+(require 'mevedel-execution-target)
+(require 'mevedel-hooks)
 (require 'mevedel-reminders)
 (require 'mevedel-skills-core)
 (require 'mevedel-system)
@@ -386,6 +388,47 @@
                               mevedel-agent--registry))
       (mevedel-workspace-clear-registry)
       (delete-directory root-dir t)))
+
+(mevedel-deftest mevedel-define-agent/command-hook-source/test
+  (:before-each (test-mevedel-agents--restore-builtins)
+   :after-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "runs user-loaded agent command hooks from their stable local origin"
+  (let* ((name "command-hook-source-agent")
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-agent-command-hook-" t)))
+         (remote-root (format "/mevedelmock:agent-hook:%s" root)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("agent-hook")
+          (mevedel-define-agent command-hook-source-agent
+            :description "command hook source test"
+            :hooks ((PreToolUse
+                     ((:matcher "Bash"
+                       :hooks ((:type command :command "true")))))))
+          (let* ((rules
+                  (mevedel-agent-hook-rules
+                   (mevedel-agent-get name)))
+                 (group (cadr (assq 'PreToolUse rules)))
+                 (handler (car (plist-get group :hooks)))
+                 (target (mevedel-execution-target-create remote-root))
+                 (session
+                  (mevedel-session--create
+                   :name "main" :execution-target target))
+                 (directory
+                  (mevedel-hooks--command-default-directory
+                   handler
+                   (list :cwd remote-root :workspace-root remote-root)
+                   session)))
+            (should (eq 'user (plist-get handler :source)))
+            (should (equal user-emacs-directory
+                           (plist-get handler :source-root)))
+            (should (equal (file-name-as-directory user-emacs-directory)
+                           directory))
+            (should-not (file-remote-p directory))))
+      (setq mevedel-agent--registry
+            (assoc-delete-all name mevedel-agent--registry))
+      (delete-directory root t))))
 
 
 (provide 'test-mevedel-agents)

@@ -6,6 +6,7 @@
 
 (require 'mevedel-permissions)
 (require 'mevedel-execution-target)
+(require 'mevedel-session-control-fs)
 (require 'mevedel-session-durability)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
@@ -1586,17 +1587,21 @@
          (workspace (mevedel-workspace--create
                      :type 'project :id "test" :root root
                      :name "test" :file-cache nil))
-         (target (mevedel-execution-target-create root))
-         (session (mevedel-session--create
-                   :name "test" :workspace workspace
-                   :execution-target target
-                   :save-path (file-name-concat root ".mevedel/sessions/test")))
          (mevedel-session-durability--client-id (make-string 64 ?a))
          (qualified "/mevedelmock:alias-a:/srv/shared/key")
          (local-file (file-name-concat project-dir
-                                      ".mevedel/permissions.el")))
+                                      ".mevedel/permissions.el"))
+         target session)
     (unwind-protect
+        ;; The target records its support tier at construction, so it must be
+        ;; built while the mock method is supported.
         (mevedel-test--with-local-shell-tramp '("alias-a")
+          (setq target (mevedel-execution-target-create root)
+                session (mevedel-session--create
+                         :name "test" :workspace workspace
+                         :execution-target target
+                         :save-path (file-name-concat
+                                     root ".mevedel/sessions/test")))
           (make-directory (mevedel-session-save-path session) t)
           (puthash (mevedel-execution-target-identity target) t
                    mevedel-session-durability--disclosed-targets)
@@ -2120,7 +2125,7 @@ must restore the prior value to avoid cross-test pollution."
                    (make-temp-file "mevedel-perm-outside-" t)))
          (path (file-name-concat outside "secret.txt"))
          (workspace (mevedel-workspace--create
-                     :type 'test :id "root" :root root
+                     :type 'file :id "root" :root root
                      :name "root" :file-cache nil))
          (session (mevedel-session--create
                    :name "test" :workspace workspace
@@ -2182,7 +2187,7 @@ must restore the prior value to avoid cross-test pollution."
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-perm-frozen-" t)))
          (workspace (mevedel-workspace--create
-                     :type 'test :id root :root root :name "frozen"
+                     :type 'file :id root :root root :name "frozen"
                      :file-cache nil))
          (session (mevedel-session--create
                    :name "frozen" :workspace workspace

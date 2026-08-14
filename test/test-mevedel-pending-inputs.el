@@ -13,6 +13,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-cockpit)
+(require 'mevedel-file-state)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-session-persistence)
@@ -32,7 +33,7 @@
   `(mevedel-view-test--with-buffers
      (let* ((workspace
              (mevedel-workspace--create
-              :type 'test :id "pending-inputs"
+              :type 'file :id "pending-inputs"
               :root "/tmp/pending-inputs"
               :name "pending-inputs"))
             (session (mevedel-session-create "main" workspace)))
@@ -158,7 +159,8 @@
                    (mevedel-view--input-prompt-string)))
           (should-error (mevedel-view-send) :type 'user-error)
           (should-error (mevedel-view-send-follow-up) :type 'user-error)
-          (mevedel-pending-inputs-cancel-edit))
+          (mevedel-test--with-captured-messages nil
+            (mevedel-pending-inputs-cancel-edit)))
         (with-current-buffer view-buf
           (should
            (equal-including-properties
@@ -201,7 +203,8 @@
         (mevedel-pending-inputs-test--replace-composer
          view-buf "edited first")
         (with-current-buffer view-buf
-          (mevedel-pending-inputs-save-edit))
+          (mevedel-test--with-captured-messages nil
+            (mevedel-pending-inputs-save-edit)))
         (with-current-buffer view-buf
           (should (equal "> retained\nmultiline"
                          (mevedel-view--input-text))))
@@ -232,7 +235,8 @@
           (mevedel-pending-inputs-edit))
         (mevedel-pending-inputs-test--replace-composer view-buf "/review")
         (with-current-buffer view-buf
-          (mevedel-pending-inputs-save-edit)
+          (mevedel-test--with-captured-messages nil
+            (mevedel-pending-inputs-save-edit))
           (should mevedel-view--pending-input-edit)
           (should (equal "/review" (mevedel-view--input-text))))
         (should (eq entry
@@ -266,7 +270,8 @@
           (cl-letf (((symbol-function
                       'mevedel-agent-control-root-waiting-p)
                      (lambda (_session) nil)))
-            (mevedel-pending-inputs-save-edit)))
+            (mevedel-test--with-captured-messages nil
+              (mevedel-pending-inputs-save-edit))))
         (let ((replacement
                (car (mevedel-session-pending-steering session))))
           (should (equal (plist-get entry :id)
@@ -299,7 +304,8 @@
         (mevedel-pending-inputs-test--replace-composer
          view-buf "edited for review")
         (with-current-buffer view-buf
-          (mevedel-pending-inputs-save-edit)))
+          (mevedel-test--with-captured-messages nil
+            (mevedel-pending-inputs-save-edit))))
       (let ((replacement
              (car (mevedel-session-pending-steering session))))
         (should (equal "edited for review"
@@ -327,7 +333,8 @@
         (mevedel-pending-inputs-test--replace-composer
          view-buf "still editing")
         (with-current-buffer view-buf
-          (mevedel-pending-inputs-save-edit)
+          (mevedel-test--with-captured-messages nil
+            (mevedel-pending-inputs-save-edit))
           (should mevedel-view--pending-input-edit)
           (should (equal "still editing" (mevedel-view--input-text))))
         (should (eq entry
@@ -353,7 +360,8 @@
         (mevedel-pending-inputs-test--replace-composer
          view-buf "discard me")
         (with-current-buffer view-buf
-          (mevedel-pending-inputs-cancel-edit)
+          (mevedel-test--with-captured-messages nil
+            (mevedel-pending-inputs-cancel-edit))
           (should-not mevedel-view--pending-input-edit))
         (should (eq entry
                     (car
@@ -520,7 +528,8 @@
                  (mevedel-pending-inputs-open))))
           (with-current-buffer cockpit
             (mevedel-cockpit-goto-id (plist-get steering :id))
-            (mevedel-pending-inputs-make-follow-up))))
+            (mevedel-test--with-captured-messages nil
+              (mevedel-pending-inputs-make-follow-up)))))
       (should-not (mevedel-session-pending-steering session))
       (let ((converted
              (cadr (mevedel-session-pending-follow-ups session))))
@@ -641,14 +650,17 @@
           (with-current-buffer data-buf
             (setq mevedel--current-request nil))
           (with-current-buffer view-buf
-            (funcall
-             dispatch
-             (mevedel-prompt-submission-create
-              :input "stay follow-up" :display-text "stay follow-up"
-              :session session
-              :outcome
-              '(:model-input "stay follow-up"
-                :transcript-input "stay follow-up"))))))
+            ;; The race is reported to the user; the assertions below own
+            ;; the durable outcome it echoes.
+            (mevedel-test--with-captured-messages nil
+              (funcall
+               dispatch
+               (mevedel-prompt-submission-create
+                :input "stay follow-up" :display-text "stay follow-up"
+                :session session
+                :outcome
+                '(:model-input "stay follow-up"
+                  :transcript-input "stay follow-up")))))))
       (should (equal (list follow-up)
                      (mevedel-session-pending-follow-ups session)))
       (should-not (mevedel-session-pending-steering session)))))
@@ -753,10 +765,13 @@
                       mevedel-cockpit--context)))
             (mevedel-cockpit-goto-id (plist-get failed :id))
             (should-error
-             (mevedel-pending-inputs-resume-after-failure)
+             (mevedel-test--with-captured-messages nil
+               (mevedel-pending-inputs-resume-after-failure))
              :type 'user-error)
-            (mevedel-pending-inputs-make-follow-up)
-            (mevedel-pending-inputs-resume-after-failure))))
+            (mevedel-test--with-captured-messages nil
+              (mevedel-pending-inputs-make-follow-up))
+            (mevedel-test--with-captured-messages nil
+              (mevedel-pending-inputs-resume-after-failure)))))
       (should-not
        (mevedel-session-pending-input-failure-paused session))
       (let ((entries (mevedel-session-pending-follow-ups session)))
@@ -783,7 +798,8 @@
                        (lambda (&rest _) t)))
               (mevedel-pending-inputs-execute-deletions))
             (should-not (mevedel-cockpit-surface-items))
-            (mevedel-pending-inputs-resume-after-failure))))
+            (mevedel-test--with-captured-messages nil
+              (mevedel-pending-inputs-resume-after-failure)))))
       (should-not
        (mevedel-session-pending-input-failure-paused session)))))
 
@@ -800,7 +816,8 @@
       (with-current-buffer view-buf
         (cl-letf (((symbol-function 'yes-or-no-p)
                    (lambda (text) (setq prompt text) t)))
-          (mevedel-pending-inputs-clear)))
+          (mevedel-test--with-captured-messages nil
+            (mevedel-pending-inputs-clear))))
       (should (string-match-p "1 steering and 1 follow-up" prompt))
       (should-not (mevedel-session-pending-steering session))
       (should-not (mevedel-session-pending-follow-ups session)))))

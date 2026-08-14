@@ -294,6 +294,8 @@
                      ((equal program "env")
                       "HOME=/home/user\0PROJECT_ROOT=/srv/project\0")
                      ((equal args '("-r")) "6.8.0-target\n")
+                     ((string-suffix-p "bash" program)
+                      "boot=fixture\nmachine=fixture\npid1-start=1\nhostname=fixture\n")
                      (t "Linux\n"))))
                  0)))
       (let ((readiness (mevedel-execution-target-probe target)))
@@ -330,9 +332,11 @@
                (lambda (program _in destination _display &rest _args)
                  (should-not (getenv "MEVEDEL_CLIENT_SECRET"))
                  (with-current-buffer destination
-                   (insert (if (equal program "env")
-                               "HOME=/home/user\0"
-                             "Linux\n")))
+                   (insert (cond
+                            ((equal program "env") "HOME=/home/user\0")
+                            ((string-suffix-p "bash" program)
+                             "boot=fixture\nmachine=fixture\npid1-start=1\nhostname=fixture\n")
+                            (t "Linux\n"))))
                  0)))
       (should
        (eq 'ready
@@ -348,9 +352,11 @@
               ((symbol-function 'process-file)
                (lambda (program _in destination _display &rest _args)
                  (with-current-buffer destination
-                   (insert (if (equal program "env")
-                               "HOME=/root\0"
-                             "Linux\n")))
+                   (insert (cond
+                            ((equal program "env") "HOME=/root\0")
+                            ((string-suffix-p "bash" program)
+                             "boot=fixture\nmachine=fixture\npid1-start=1\nhostname=fixture\n")
+                            (t "Linux\n"))))
                  0)))
       (let ((readiness (mevedel-execution-target-probe target)))
         (should (eq 'blocked (plist-get readiness :status)))
@@ -368,9 +374,11 @@
               ((symbol-function 'process-file)
                (lambda (program _in destination _display &rest _args)
                  (with-current-buffer destination
-                   (insert (if (equal program "env")
-                               "PATH=/usr/bin\0"
-                             "Linux\n")))
+                   (insert (cond
+                            ((equal program "env") "PATH=/usr/bin\0")
+                            ((string-suffix-p "bash" program)
+                             "boot=fixture\nmachine=fixture\npid1-start=1\nhostname=fixture\n")
+                            (t "Linux\n"))))
                  0)))
       (let ((readiness (mevedel-execution-target-probe target)))
         (should (eq 'blocked (plist-get readiness :status)))
@@ -391,7 +399,9 @@
                  (with-current-buffer destination
                    (cond
                     ((equal program "env") (insert "HOME=\0"))
-                    ((equal program "uname") (insert "Linux\n"))))
+                    ((equal program "uname") (insert "Linux\n"))
+                    ((string-suffix-p "bash" program)
+                     (insert "boot=fixture\nmachine=fixture\npid1-start=1\nhostname=fixture\n"))))
                  (if (equal program "/usr/bin/setsid") 1 0))))
       (let ((message
              (progn
@@ -413,9 +423,11 @@
                  (unless program
                    (error "Missing probe program"))
                  (with-current-buffer destination
-                   (insert (if (equal program "env")
-                               "HOME=/root\0"
-                             "Linux\n")))
+                   (insert (cond
+                            ((equal program "env") "HOME=/root\0")
+                            ((string-suffix-p "bash" program)
+                             "boot=fixture\nmachine=fixture\npid1-start=1\nhostname=fixture\n")
+                            (t "Linux\n"))))
                  0)))
       (let ((readiness (mevedel-execution-target-probe target)))
         (should (equal '(bash)
@@ -433,7 +445,9 @@
                  (with-current-buffer destination
                    (cond
                     ((equal program "env") (insert "HOME=/root\0"))
-                    ((equal program "uname") (insert "Linux\n"))))
+                    ((equal program "uname") (insert "Linux\n"))
+                    ((string-suffix-p "bash" program)
+                     (insert "boot=fixture\nmachine=fixture\npid1-start=1\nhostname=fixture\n"))))
                  (if (equal program "/usr/bin/setsid") 1 0))))
       (let ((readiness (mevedel-execution-target-probe target)))
         (should (eq 'blocked (plist-get readiness :status)))
@@ -550,9 +564,11 @@
               ((symbol-function 'process-file)
                (lambda (program _in destination _display &rest _args)
                  (with-current-buffer destination
-                   (insert (if (equal program "env")
-                               "HOME=/home/user\0"
-                             "Linux\n")))
+                   (insert (cond
+                            ((equal program "env") "HOME=/home/user\0")
+                            ((string-suffix-p "bash" program)
+                             "boot=fixture\nmachine=fixture\npid1-start=1\nhostname=fixture\n")
+                            (t "Linux\n"))))
                  0))
               ((symbol-function 'mevedel-sandbox-probe)
                (lambda (&optional _workdir)
@@ -572,9 +588,11 @@
               ((symbol-function 'process-file)
                (lambda (program _in destination _display &rest _args)
                  (with-current-buffer destination
-                   (insert (if (equal program "env")
-                               "HOME=/home/user\0"
-                             "Linux\n")))
+                   (insert (cond
+                            ((equal program "env") "HOME=/home/user\0")
+                            ((string-suffix-p "bash" program)
+                             "boot=fixture\nmachine=fixture\npid1-start=1\nhostname=fixture\n")
+                            (t "Linux\n"))))
                  0))
               ((symbol-function 'mevedel-sandbox-probe)
                (lambda (&optional _workdir)
@@ -692,7 +710,7 @@
       (should-not
        (mevedel-execution-target-incarnation-changed-p target))
       (should-not
-       (mevedel-execution-target-observed-incarnation target)))))
+       (mevedel-execution-target-observed-incarnation target))))
 
   :doc "reprobes when a failed initial connection later becomes live"
   (let ((target (mevedel-execution-target-create
@@ -734,7 +752,7 @@
       (should (eq 'ready
                   (plist-get (mevedel-execution-target-probe target)
                              :status)))
-      (should (= 4 probes))))
+      (should (= 4 probes)))))
 
 (mevedel-deftest mevedel-execution-target-seed-incarnation ()
   ,test
@@ -802,6 +820,151 @@
       (should (equal first
                      (mevedel-execution-target--probe-incarnation
                       target "bash"))))))
+
+(mevedel-deftest mevedel-execution-target--local-incarnation ()
+  ,test
+  (test)
+  :doc "keeps the local incarnation stable across repeated reads"
+  (should (equal (mevedel-execution-target--local-incarnation)
+                 (mevedel-execution-target--local-incarnation)))
+  :doc "matches the live local shell probe"
+  (progn
+    (skip-unless (and (eq system-type 'gnu/linux)
+                      (executable-find "bash")))
+    (let ((target (mevedel-execution-target-create default-directory)))
+      (should (equal
+              (mevedel-execution-target--local-incarnation)
+              (mevedel-execution-target--probe-incarnation target "bash")))))
+  :doc "refreshes a local replacement before a cached readiness result"
+  (let ((incarnation "first-incarnation"))
+    (cl-letf (((symbol-function
+                'mevedel-execution-target--local-incarnation)
+               (lambda () incarnation)))
+      (let ((target (mevedel-execution-target-create default-directory)))
+        (setf (mevedel-execution-target-readiness target)
+              '(:status ready :sandbox-mode nil))
+        (setq incarnation "replacement-incarnation")
+        (mevedel-execution-target-probe target)
+        (should (mevedel-execution-target-incarnation-changed-p target))
+        (should (equal "replacement-incarnation"
+                       (mevedel-execution-target-observed-incarnation
+                        target))))))
+  :doc "uses the same canonical bytes for local and target probes"
+  (let* ((boot "boot-fixture")
+         (machine "machine-fixture")
+         (start "123456")
+         (hostname "target-fixture")
+         (payload
+          (mevedel-execution-target--incarnation-payload
+           boot machine start hostname)))
+    (cl-letf (((symbol-function
+                'mevedel-execution-target--read-local-identity)
+               (lambda (path)
+                 (pcase path
+                   ("/proc/sys/kernel/random/boot_id" boot)
+                   ("/etc/machine-id" machine)
+                   (_ nil))))
+              ((symbol-function
+                'mevedel-execution-target--local-pid1-start-time)
+               (lambda () start))
+              ((symbol-function 'mevedel-execution-target--local-hostname)
+               (lambda () hostname))
+              ((symbol-function
+                'mevedel-execution-target--process-output)
+               (lambda (&rest _args) payload)))
+      (let ((target (mevedel-execution-target-create
+                     "/ssh:user@target-fixture:/workspace/")))
+        (should (equal
+                 (mevedel-execution-target--local-incarnation)
+                 (mevedel-execution-target--probe-incarnation
+                  target "bash"))))))
+  :doc "accepts a boot-id-only observation and matches the target probe"
+  (let* ((boot "boot-only")
+         (hostname "target-fixture")
+         (payload
+          (mevedel-execution-target--incarnation-payload
+           boot "machine-fixture" nil hostname)))
+    (cl-letf (((symbol-function
+                'mevedel-execution-target--read-local-identity)
+               (lambda (path)
+                 (pcase path
+                   ("/proc/sys/kernel/random/boot_id" boot)
+                   ("/etc/machine-id" "machine-fixture")
+                   (_ nil))))
+              ((symbol-function
+                'mevedel-execution-target--local-pid1-start-time)
+               (lambda () nil))
+              ((symbol-function 'mevedel-execution-target--local-hostname)
+               (lambda () hostname))
+              ((symbol-function
+                'mevedel-execution-target--process-output)
+               (lambda (&rest _args) payload)))
+      (let ((target (mevedel-execution-target-create
+                     "/ssh:user@target-fixture:/workspace/")))
+        (should (equal
+                 (mevedel-execution-target--local-incarnation)
+                 (mevedel-execution-target--probe-incarnation
+                  target "bash"))))))
+  :doc "accepts a PID1-start-only observation and matches the target probe"
+  (let* ((start "pid1-only")
+         (hostname "target-fixture")
+         (payload
+          (mevedel-execution-target--incarnation-payload
+           nil "machine-fixture" start hostname)))
+    (cl-letf (((symbol-function
+                'mevedel-execution-target--read-local-identity)
+               (lambda (path)
+                 (pcase path
+                   ("/proc/sys/kernel/random/boot_id" nil)
+                   ("/etc/machine-id" "machine-fixture")
+                   (_ nil))))
+              ((symbol-function
+                'mevedel-execution-target--local-pid1-start-time)
+               (lambda () start))
+              ((symbol-function 'mevedel-execution-target--local-hostname)
+               (lambda () hostname))
+              ((symbol-function
+                'mevedel-execution-target--process-output)
+               (lambda (&rest _args) payload)))
+      (let ((target (mevedel-execution-target-create
+                     "/ssh:user@target-fixture:/workspace/")))
+        (should (equal
+                 (mevedel-execution-target--local-incarnation)
+                 (mevedel-execution-target--probe-incarnation
+                  target "bash"))))))
+  :doc "fails closed when both strong local incarnation sources are absent"
+  (cl-letf (((symbol-function
+              'mevedel-execution-target--read-local-identity)
+             (lambda (path)
+               (pcase path
+                 ("/proc/sys/kernel/random/boot_id" nil)
+                 ("/etc/machine-id" "machine-only")
+                 (_ nil))))
+            ((symbol-function
+              'mevedel-execution-target--local-pid1-start-time)
+             (lambda () nil))
+            ((symbol-function 'mevedel-execution-target--local-hostname)
+             (lambda () "hostname-only")))
+    (let ((target (mevedel-execution-target-create "/srv/project/")))
+      (should-not (mevedel-execution-target--local-incarnation))
+      (should-error
+       (mevedel-execution-target-refresh-incarnation target)))))
+
+(mevedel-deftest mevedel-execution-target-restore-incarnation ()
+  ,test
+  (test)
+  :doc "retains a changed local observation when restoring a persisted baseline"
+  (cl-letf (((symbol-function
+              'mevedel-execution-target--local-incarnation)
+             (lambda () "live-incarnation")))
+    (let ((target (mevedel-execution-target-create "/srv/project/")))
+      (mevedel-execution-target-restore-incarnation
+       target "persisted-incarnation")
+      (should (equal "persisted-incarnation"
+                     (mevedel-execution-target-incarnation target)))
+      (should (equal "live-incarnation"
+                     (mevedel-execution-target-observed-incarnation target)))
+      (should (mevedel-execution-target-incarnation-changed-p target)))))
 
 (mevedel-deftest mevedel-execution-target-readiness-message ()
   ,test

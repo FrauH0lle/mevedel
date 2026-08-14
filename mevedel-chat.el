@@ -225,6 +225,8 @@
                   "mevedel-session-persistence" (workspace session-id))
 (declare-function mevedel-session-persistence-save
 		  "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence-assert-new-mutation-authority
+                  "mevedel-session-persistence" (session))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills--release-on-kill
@@ -352,6 +354,14 @@
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--full-rerender "mevedel-view-render" ())
+
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration--safe-accepted-prompt
+                  "mevedel-collaboration" (data-buffer))
+(declare-function mevedel-collaboration--safe-post-response
+                  "mevedel-collaboration" (start end))
+(declare-function mevedel-collaboration--safe-post-stream
+                  "mevedel-collaboration" nil)
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-post-tool "mevedel-view-stream"
@@ -483,7 +493,11 @@ render immediately, so this never delays tool-call feedback."
             #'mevedel-view-stream-pre-tool nil t)
   (add-hook 'gptel-post-tool-call-functions
             #'mevedel-view-stream-post-tool nil t)
-  (add-hook 'gptel-post-stream-hook #'mevedel-view-stream-schedule nil t))
+  (add-hook 'gptel-post-stream-hook #'mevedel-view-stream-schedule nil t)
+  (add-hook 'gptel-post-stream-hook
+            #'mevedel-collaboration--safe-post-stream nil t)
+  (add-hook 'gptel-post-response-functions
+            #'mevedel-collaboration--safe-post-response nil t))
 
 (defun mevedel--chat-buffer (session-name &optional create workspace working-directory)
   "Get or create the mevedel chat buffer SESSION-NAME for WORKSPACE.
@@ -1806,7 +1820,10 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 				chat-buffer)
 			    gptel-display-buffer-action))
 
-	  (with-current-buffer chat-buffer
+	(with-current-buffer chat-buffer
+	  (require 'mevedel-session-persistence)
+	  (mevedel-session-persistence-assert-new-mutation-authority
+	   mevedel--session)
 	    (mevedel-preset-apply
 	     (alist-get mevedel-default-chat-preset mevedel-action-preset-alist))
 	    (mevedel-request-begin mevedel--session directive-uuid)
@@ -1836,6 +1853,14 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
                       execution-session-id))
               fsm)))
       (t
+       ;; Restore authoritative directive state before a view redraw can
+       ;; replace its source presentation.
+       (when cleanup-record
+         (setf (mevedel-directive-state cleanup-record)
+               cleanup-prior-state))
+       (when (overlay-buffer directive)
+         (mevedel--set-directive-status directive cleanup-prior-state)
+         (mevedel--update-instruction-overlay directive t))
        (when (buffer-live-p cleanup-chat-buffer)
          (with-current-buffer cleanup-chat-buffer
            (when (and (markerp cleanup-turn-start)
@@ -1843,7 +1868,15 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
              (let ((inhibit-read-only t))
                (delete-region cleanup-turn-start (point-max))))
            (when cleanup-request-reserved-p
-             (mevedel-request-end))
+             (condition-case cleanup-error
+                 (mevedel-request-end)
+               (error
+                (setq mevedel--current-request nil)
+                (display-warning
+                 'mevedel
+                 (format "Directive request cleanup failed: %s"
+                         (error-message-string cleanup-error))
+                 :warning))))
            (when cleanup-request-context-set-p
              (setq mevedel--current-directive-uuid nil
                    mevedel--directive-read-only-request-p nil)
@@ -1858,12 +1891,6 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
        (when cleanup-planning-session
          (setf (mevedel-session-directive-planning cleanup-planning-session)
                nil))
-       (when cleanup-record
-         (setf (mevedel-directive-state cleanup-record)
-               cleanup-prior-state))
-       (when (overlay-buffer directive)
-         (mevedel--set-directive-status directive cleanup-prior-state)
-         (mevedel--update-instruction-overlay directive t))
        (when (markerp cleanup-turn-start)
          (set-marker cleanup-turn-start nil))
        (when (buffer-live-p transient-buffer)
@@ -2152,6 +2179,7 @@ with NO-SPINNER forwarded when non-nil."
         (insert (mevedel-pipeline--format-render-data-block
                  (list :kind 'user-display :text display-text)))
         (add-text-properties start (point) '(gptel ignore)))))
+  (mevedel-collaboration--safe-accepted-prompt (current-buffer))
   (let ((data-turn-start (copy-marker (point) nil)))
     (when-let* ((view (and (boundp 'mevedel--view-buffer)
                            mevedel--view-buffer))

@@ -9,6 +9,7 @@
 (require 'gptel)
 (require 'mevedel-execution-target)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-publication)
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
 (require 'mevedel-view-render)
@@ -23,7 +24,7 @@
   "Return a test session rooted below ROOT."
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "telemetry"
+           :type 'file :id root :root root :name "telemetry"
            :file-cache (mevedel-file-cache--create
                         :table (make-hash-table :test #'equal)
                         :order nil :total-bytes 0)))
@@ -131,12 +132,13 @@
            "/ssh:telemetry-host:/workspace/"))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "main" :execution-target target :save-path root))
          calls)
     (unwind-protect
         (cl-letf
             (((symbol-function
-               'mevedel-session-durability-append-diagnostic)
+               'mevedel-session-publication-append-diagnostic)
               (lambda (_session path content)
                 (push (list path content) calls)
                 t)))
@@ -260,8 +262,8 @@
 
 (mevedel-deftest mevedel-telemetry-detailed-p
   (:doc "is session-scoped and active only while a profiler run exists")
-  (let ((session (mevedel-session--create :name "main"))
-        (other (mevedel-session--create :name "other")))
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "main"))
+        (other (mevedel-session--create :authority-mode 'pid-lock :name "other")))
     (let ((mevedel-telemetry--profiler-session session)
           (mevedel-telemetry--profiler-run-id "run-1"))
       (should (mevedel-telemetry-detailed-p session))

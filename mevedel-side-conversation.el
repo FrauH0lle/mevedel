@@ -13,6 +13,9 @@
   (require 'gptel-request nil t)
   (require 'mevedel-structs))
 
+(declare-function mevedel-session-persistence-assert-new-mutation-authority
+                  "mevedel-session-persistence" (session))
+
 ;; `gptel'
 (declare-function gptel-abort "ext:gptel-request" (buf))
 (declare-function gptel-context--collect "ext:gptel-context"
@@ -579,6 +582,9 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
                (buffer-live-p data-buffer))
       (with-current-buffer data-buffer
         (when mevedel--session
+          (require 'mevedel-session-persistence)
+          (mevedel-session-persistence-assert-new-mutation-authority
+           mevedel--session)
           (let ((request (mevedel-request-begin mevedel--session)))
             (setf (mevedel-request-fsm request) fsm
                   (mevedel-request-one-shot-mutations-p request) t

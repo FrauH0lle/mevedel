@@ -379,7 +379,7 @@
   :doc "records read interaction and refreshes workspace cache"
   (let* ((tmp (make-temp-file "mevedel-ia-" nil ".txt" "hello"))
          (ws (mevedel-workspace--create
-              :type 'test :id "record-access"
+              :type 'file :id "record-access"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))
@@ -402,7 +402,7 @@
   :doc "records modify interaction and preserves existing read-turn"
   (let* ((tmp (make-temp-file "mevedel-ia-" nil ".txt" "hello"))
          (ws (mevedel-workspace--create
-              :type 'test :id "record-access-2"
+              :type 'file :id "record-access-2"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))
@@ -443,7 +443,7 @@
   :doc "returns nil for never-read file"
   (let* ((tmp (make-temp-file "mevedel-dedup-" nil ".txt" "hello"))
          (ws (mevedel-workspace--create
-              :type 'test :id "dedup-never"
+              :type 'file :id "dedup-never"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))
@@ -459,7 +459,7 @@
   :doc "returns non-nil when file and range match and mtime unchanged"
   (let* ((tmp (make-temp-file "mevedel-dedup-" nil ".txt" "hello"))
          (ws (mevedel-workspace--create
-              :type 'test :id "dedup-hit"
+              :type 'file :id "dedup-hit"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))
@@ -477,7 +477,7 @@
   :doc "returns nil when range differs"
   (let* ((tmp (make-temp-file "mevedel-dedup-" nil ".txt" "hello"))
          (ws (mevedel-workspace--create
-              :type 'test :id "dedup-range"
+              :type 'file :id "dedup-range"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))
@@ -499,7 +499,7 @@
   :doc "returns nil when mtime advances after record"
   (let* ((tmp (make-temp-file "mevedel-dedup-" nil ".txt" "hello"))
          (ws (mevedel-workspace--create
-              :type 'test :id "dedup-mtime"
+              :type 'file :id "dedup-mtime"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))
@@ -528,7 +528,7 @@
   :doc "returns nil when tool-driven modify happened after read"
   (let* ((tmp (make-temp-file "mevedel-dedup-" nil ".txt" "hello"))
          (ws (mevedel-workspace--create
-              :type 'test :id "dedup-post-modify"
+              :type 'file :id "dedup-post-modify"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))

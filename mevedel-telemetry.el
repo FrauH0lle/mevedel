@@ -33,9 +33,9 @@
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-probe "mevedel-sandbox" ())
 
-;; `mevedel-session-durability'
-(declare-function mevedel-session-durability-append-diagnostic
-                  "mevedel-session-durability" (session path content))
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-append-diagnostic
+                  "mevedel-session-publication" (session path content))
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x))
@@ -310,7 +310,8 @@ symbol instead of their printed representation."
         (if (mevedel-telemetry--remote-p session)
             (progn
               (require 'mevedel-session-durability)
-              (mevedel-session-durability-append-diagnostic
+              (require 'mevedel-session-publication)
+              (mevedel-session-publication-append-diagnostic
                session file content))
           (make-directory (file-name-directory file) t)
           (write-region content nil file t 'silent)
@@ -490,6 +491,7 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
              (let ((file (expand-file-name relative directory)))
                (when (and (file-regular-p file) (file-readable-p file))
                  (with-temp-buffer
+                   (set-buffer-multibyte nil)
                    (insert-file-contents-literally file)
                    (secure-hash
                     'sha256
@@ -520,6 +522,7 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
                          "git" "-C" root "rev-parse" "HEAD")))))
       (list :file-hash
           (with-temp-buffer
+            (set-buffer-multibyte nil)
             (insert-file-contents-literally file)
             (secure-hash 'sha256 (current-buffer)))
             :file-bytes (file-attribute-size (file-attributes file))

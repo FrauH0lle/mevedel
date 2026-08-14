@@ -241,6 +241,13 @@ Use `:body-properties-owned` only when the producer supplies complete per-span
 Interaction keybindings are active only when point is on the interaction text;
 composer input must never settle or cycle interaction prompts.
 
+Portable sessions also render cooperative lease-transfer controls in this zone.
+The owner sees the requester label with `Grant` and `Keep` actions; a granted
+transfer remains quiescing until current requests, executions, prompts, pending
+inputs, and publication work drain, then the final save releases the owner to
+read-only. A read-only client sees `Request control`; its composer remains
+untouched while the polling timer waits for the named successor fence to clear.
+
 The interaction separator is virtual chrome. Task rows, aggregate agent
 status rows, interaction bodies, and request progress are view-owned UI
 chrome; they do not belong to the model-visible transcript. The input
@@ -379,6 +386,39 @@ as an `Executions` fragment. Activating it opens the execution cockpit. The
 main cockpit exposes the same surface as `Processes`, and `/ps` opens it
 directly. Execution start and settlement reconcile this fragment through the
 normal managed-zone path, preserving composer text, point, and windows.
+
+## Read-only browser collaboration
+
+`/collab view` starts or redisplays the one process-wide browser room for the
+current session and copies its bearer link to the kill ring. `/collab status`
+reports the room and guest state without printing the credential, and
+`/collab stop` ends the room. A second session cannot replace an active room.
+Killing the data buffer, ending its session, or exiting Emacs also tears down
+the listener and guest.
+
+The browser is an observer of the canonical data buffer. It receives visible
+user and assistant text plus tool records whose start and settlement state are
+explicitly published, never hidden audit or render data, permission controls,
+composer input, or mutation commands. A tool record keeps one stable identity
+from running through its settled canonical result. Snapshot and incremental
+updates are ordered and bounded by browser acknowledgements carrying an
+unpredictable per-frame token; a slow, non-reading, or forged-ack guest is
+disconnected without blocking the host.
+
+Before a connection upgrades it is bounded: 64 KiB of headers, a rearmed
+two-second idle deadline, a fixed ten-second total deadline, and at most eight
+incomplete connections per room. Those bounds are released only when the
+socket actually upgrades, not when its headers end, because an ordinary HTTP
+request can keep the connection open past its header terminator. Room stop
+closes every tracked incomplete connection, and an upgraded socket's request
+record is dropped when that socket dies.
+
+Starting a room confirms that visible text, paths, and tool results may contain
+credentials or secrets. Without `mevedel-collaboration-public-base-url`, the
+generated HTTP/WebSocket link is loopback-only. A configured value must be an
+exact credential-free HTTPS origin for an operator-managed tunnel; mevedel does
+not start that tunnel, and its local hop remains plaintext to the tunnel
+operator. Anyone holding the URL fragment bearer credential can read the room.
 
 ## Managed-zone chrome
 

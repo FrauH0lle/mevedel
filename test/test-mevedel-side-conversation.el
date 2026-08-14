@@ -38,7 +38,7 @@
   :doc "rejects /btw before the parent has accepted a prompt"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw-empty" :root "/tmp" :name "btw-empty"))
+           :type 'file :id "btw-empty" :root "/tmp" :name "btw-empty"))
          (session (mevedel-session-create "main" workspace)))
     (mevedel-view-test--with-buffers
       (with-current-buffer data-buf
@@ -53,7 +53,7 @@
   :doc "rejects /btw during a directive-owned active request"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw-directive" :root "/tmp"
+           :type 'file :id "btw-directive" :root "/tmp"
            :name "btw-directive"))
          (session (mevedel-session-create "main" workspace)))
     (mevedel-view-test--with-buffers
@@ -101,7 +101,7 @@
          context-buffer
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-async-context"))
+           :type 'file :id root :root root :name "btw-async-context"))
          (session (mevedel-session-create "main" workspace))
          formatter-callback
          formatter-contexts
@@ -244,7 +244,7 @@
          (context-file (file-name-concat root "context.txt"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-async-draft"))
+           :type 'file :id root :root root :name "btw-async-draft"))
          (session (mevedel-session-create "main" workspace))
          formatter-callback
          side-view)
@@ -299,7 +299,7 @@
            (media-file (file-name-concat root "image.png"))
            (workspace
             (mevedel-workspace--create
-             :type 'test :id root :root root :name "btw-async-failure"))
+             :type 'file :id root :root root :name "btw-async-failure"))
            (session (mevedel-session-create "main" workspace))
            formatter-callback
            frozen-path
@@ -366,7 +366,7 @@
          (media-file (file-name-concat root "image.png"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-async-close"))
+           :type 'file :id root :root root :name "btw-async-close"))
          (session (mevedel-session-create "main" workspace))
          formatter-callback
          frozen-path
@@ -417,7 +417,7 @@
          (media-file (file-name-concat root "image.png"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-create-failure"))
+           :type 'file :id root :root root :name "btw-create-failure"))
          (session (mevedel-session-create "main" workspace))
          (before
           (directory-files temporary-file-directory t
@@ -460,7 +460,7 @@
   :doc "opens a paired ephemeral side while hiding inherited context"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw" :root "/tmp" :name "btw"))
+           :type 'file :id "btw" :root "/tmp" :name "btw"))
          (session (mevedel-session-create "main" workspace))
          side-view)
     (setf (mevedel-session-plan-mode session) t)
@@ -508,7 +508,7 @@
   :doc "preserves a materialized list-valued gptel system prompt"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw-system-list" :root "/tmp"
+           :type 'file :id "btw-system-list" :root "/tmp"
            :name "btw-system-list"))
          (session (mevedel-session-create "main" workspace))
          side-view)
@@ -547,7 +547,7 @@
   :doc "submits an inline prompt and independent multi-turn follow-up"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw-multi" :root "/tmp" :name "btw-multi"))
+           :type 'file :id "btw-multi" :root "/tmp" :name "btw-multi"))
          (session (mevedel-session-create "main" workspace))
          side-view
          requests)
@@ -592,7 +592,7 @@
          (changed-file (file-name-concat root "changed.txt"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-context"))
+           :type 'file :id root :root root :name "btw-context"))
          (session (mevedel-session-create "main" workspace))
          side-view
          requests)
@@ -663,7 +663,7 @@
          (second-media-file (file-name-concat root "second.png"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-media"))
+           :type 'file :id root :root root :name "btw-media"))
          (session (mevedel-session-create "main" workspace))
          side-view
          frozen-paths
@@ -733,7 +733,7 @@
          (path (file-name-concat root "context.txt"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-tools"))
+           :type 'file :id root :root root :name "btw-tools"))
          (session (mevedel-session-create "main" workspace))
          side-view result request)
     (unwind-protect
@@ -812,7 +812,7 @@
          (path (file-name-concat root "secret.txt"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-file-deny"))
+           :type 'file :id root :root root :name "btw-file-deny"))
          (session (mevedel-session-create "main" workspace root))
          side-view
          request)
@@ -867,7 +867,7 @@
          (target (file-name-concat root "must-not-exist.txt"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-close-pending"))
+           :type 'file :id root :root root :name "btw-close-pending"))
          (session (mevedel-session-create "main" workspace root))
          side-view side-data side-session fsm result
          (callback-count 0)
@@ -939,7 +939,7 @@
          (pid-file (file-name-concat root "child.pid"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-close-bash"))
+           :type 'file :id root :root root :name "btw-close-bash"))
          (session (mevedel-session-create "main" workspace root))
          (mevedel-execution--child-kill-delay 0.05)
          side-view side-data side-session fsm result pid)
@@ -1032,7 +1032,7 @@
          (target (file-name-concat root "approved.txt"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-bash-once"))
+           :type 'file :id root :root root :name "btw-bash-once"))
          (session (mevedel-session-create "main" workspace root))
          side-view side-data side-session fsm result)
     (setf (mevedel-session-permission-mode session) 'full-auto
@@ -1127,7 +1127,7 @@
          (path (file-name-concat root "target.txt"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-patch-review"
+           :type 'file :id root :root root :name "btw-patch-review"
            :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session-create "main" workspace root))
          (patch
@@ -1214,7 +1214,7 @@
   :doc "settles a side request when an earlier terminal handler fails"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw-terminal" :root "/tmp"
+           :type 'file :id "btw-terminal" :root "/tmp"
            :name "btw-terminal"))
          (session (mevedel-session-create "main" workspace))
          side-view
@@ -1259,7 +1259,7 @@
   :doc "cuts an active parent at complete context and freezes request locals"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw-active" :root "/tmp" :name "btw-active"))
+           :type 'file :id "btw-active" :root "/tmp" :name "btw-active"))
          (session (mevedel-session-create "main" workspace))
          (frozen-memory "/tmp/mevedel-btw-frozen-memory/")
          (frozen-temp "/tmp/mevedel-btw-frozen-temp/")
@@ -1448,7 +1448,7 @@
          (path (file-name-concat root "context.txt"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "btw-hooks"))
+           :type 'file :id root :root root :name "btw-hooks"))
          (session (mevedel-session-create "main" workspace))
          (mevedel-hook-rules
           '((PreToolUse
@@ -1570,7 +1570,7 @@
   :doc "excludes a pending TOOL confirmation while retaining completed prose"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw-pending-tool" :root "/tmp"
+           :type 'file :id "btw-pending-tool" :root "/tmp"
            :name "btw-pending-tool"))
          (session (mevedel-session-create "main" workspace))
          side-view)
@@ -1630,7 +1630,7 @@
   :doc "reuses one side and preserves both drafts when inline delivery is refused"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw-drafts" :root "/tmp" :name "btw-drafts"))
+           :type 'file :id "btw-drafts" :root "/tmp" :name "btw-drafts"))
          (session (mevedel-session-create "main" workspace))
          side-view)
     (mevedel-view-test--with-buffers
@@ -1680,7 +1680,7 @@
   :doc "aborts a response in place and preserves the side draft"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw-abort" :root "/tmp" :name "btw-abort"))
+           :type 'file :id "btw-abort" :root "/tmp" :name "btw-abort"))
          (session (mevedel-session-create "main" workspace))
          side-view)
     (mevedel-view-test--with-buffers
@@ -1752,7 +1752,7 @@
   :doc "accepts compacted context without projecting its inherited indicator"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw-compact" :root "/tmp" :name "btw-compact"))
+           :type 'file :id "btw-compact" :root "/tmp" :name "btw-compact"))
          (session (mevedel-session-create "main" workspace))
          side-view)
     (mevedel-view-test--with-buffers
@@ -1781,7 +1781,7 @@
   :doc "discards the side with its parent without listing or persisting it"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "btw-close" :root "/tmp" :name "btw-close"))
+           :type 'file :id "btw-close" :root "/tmp" :name "btw-close"))
          (session (mevedel-session-create "main" workspace))
          side-view side-data side-session)
     (mevedel-view-test--with-buffers

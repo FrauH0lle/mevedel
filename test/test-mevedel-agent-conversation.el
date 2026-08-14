@@ -549,8 +549,11 @@
 		 :doc "drops redundant saved system prompts and restores the frozen prompt"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-agent-hydrate-" t)))
+			;; Hydration reads the fixed transcript path this test
+			;; stages; a portable project session would require a
+			;; published artifact instead.
 			(workspace (mevedel-workspace--create
-				    :type 'project :id root :root root :name "agent"))
+				    :type 'file :id root :root root :name "agent"))
 			(session (mevedel-session-create "main" workspace root))
 			(parent-buffer (generate-new-buffer " *mev-agent-parent*"))
 			(transcript-dir (file-name-as-directory

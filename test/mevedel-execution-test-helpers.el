@@ -14,9 +14,13 @@
 (require 'subr-x)
 
 (defun test-mevedel-execution--workspace (root)
-  "Return a test workspace rooted at ROOT."
+  "Return an execution workspace rooted at ROOT.
+
+TRAMP roots model project workspaces so remote sessions use portable authority;
+local test roots model file workspaces so they retain PID-lock authority."
   (mevedel-workspace--create
-   :type 'test :id root :root root :name "execution"
+   :type (if (file-remote-p root) 'project 'file)
+   :id root :root root :name "execution"
    :file-cache (mevedel-file-cache--create
                 :table (make-hash-table :test #'equal)
                 :order nil :total-bytes 0)))

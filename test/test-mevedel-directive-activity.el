@@ -20,7 +20,7 @@
 (defun mevedel-directive-activity-test--fixture ()
   "Return workspace, source buffer, overlay, and durable record."
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "inspector" :root "/tmp"
+                     :type 'file :id "inspector" :root "/tmp"
                      :name "inspector"))
          (source (generate-new-buffer " *directive-inspector-source*")))
     (with-current-buffer source

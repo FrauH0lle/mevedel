@@ -349,6 +349,7 @@
          (content "committed\nsecond\nthird\n")
          (target (mevedel-execution-target-create remote-root))
          (session (mevedel-session--create
+                   :authority-mode 'portable
                    :name "remote-view" :execution-target target
                    :save-path save-path))
          opened)
@@ -406,6 +407,7 @@
          (native-fixed (file-name-concat local-root "session" logical))
          (target (mevedel-execution-target-create remote-root))
          (session (mevedel-session--create
+                   :authority-mode 'portable
                    :name "remote-view" :execution-target target
                    :save-path save-path)))
     (unwind-protect

@@ -8,6 +8,7 @@
 
 (require 'mevedel-sandbox)
 (require 'mevedel-sandbox-grants)
+(require 'cl-lib)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -100,7 +101,9 @@
     '(:arguments
       ("--ro-bind-fd" "20" "/target/a"
        "--bind-fd" "21" "/target/b")
-      :paths ("/source/a" "/source/b"))
+      :grants
+      ((:path "/target/a" :source-path "/source/a" :access read)
+       (:path "/target/b" :source-path "/source/b" :access write)))
     (mevedel-sandbox--additional-filesystem-mounts
      '(:file-system
        ((:path "/target/a" :source-path "/source/a" :access read)
@@ -115,13 +118,129 @@
   (let ((command '("printf" "ok")))
     (should (eq command (mevedel-sandbox--fd-backed-command command nil))))
   :doc "one grant:
-`mevedel-sandbox--fd-backed-command' opens the path before executing the command"
-  (let ((wrapped
-         (mevedel-sandbox--fd-backed-command
-          '("printf" "ok") '("/source"))))
-    (should (equal (executable-find "bash") (car wrapped)))
-    (should (string-match-p "exec 10<\"\\$1\"" (nth 3 wrapped)))
-    (should (equal '("/source" "printf" "ok") (last wrapped 3)))))
+`mevedel-sandbox--fd-backed-command' opens and verifies the target identity"
+  (let* ((source (make-temp-file "mevedel-sandbox-fd-source-"))
+         (grant (list :source-path source
+                      :identity (mevedel-sandbox--target-identity source)))
+         (wrapped
+          (mevedel-sandbox--fd-backed-command
+           '("printf" "ok") (list grant))))
+    (unwind-protect
+        (progn
+          (should (equal (executable-find "bash") (car wrapped)))
+          (should (string-match-p "exec 10<\"\\$1\"" (nth 3 wrapped)))
+          (should (string-match-p "stat -Lc" (nth 3 wrapped)))
+          (should (equal (list source
+                               (mevedel-sandbox--grant-identity grant)
+                               "printf" "ok")
+                         (last wrapped 4))))
+      (delete-file source))))
+
+(mevedel-deftest mevedel-sandbox--fd-backed-command-race ()
+  ,test
+  (test)
+  :doc "replacement before launch:
+the target-side identity check rejects a replaced exact grant"
+  (let* ((root (make-temp-file "mevedel-sandbox-fd-race-" t))
+         (original (file-name-concat root "original"))
+         (replacement (file-name-concat root "replacement"))
+         (link (file-name-concat root "link"))
+         (executed (file-name-concat root "executed"))
+         (grant nil)
+         (wrapped nil)
+         (output-buffer (generate-new-buffer " *mevedel-sandbox-fd-race*")))
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (unwind-protect
+        (progn
+          (with-temp-file original (insert "original"))
+          (with-temp-file replacement (insert "replacement"))
+          (make-symbolic-link "original" link)
+          (setq grant (list :source-path link
+                            :identity
+                            (mevedel-sandbox--target-identity original))
+                wrapped
+                (mevedel-sandbox--fd-backed-command
+                 `("sh" "-c"
+                   ,(format
+                     "test -z \"$MEVEDEL_SANDBOX_GRANT_FAILURE\" && : > %s"
+                     (shell-quote-argument executed)))
+                 (list grant)))
+          (delete-file link)
+          (make-symbolic-link "replacement" link)
+          (should
+           (= 1
+              (apply #'call-process
+                     (car wrapped) nil output-buffer nil (cdr wrapped)))))
+          (should-not (file-exists-p executed))
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-sandbox--fd-backed-command-exec ()
+  ,test
+  (test)
+  :doc "normal and symlink grants:
+the verified descriptor is available to the child process"
+  (let* ((root (make-temp-file "mevedel-sandbox-fd-exec-" t))
+         (source (file-name-concat root "source"))
+         (link (file-name-concat root "link"))
+         (grant nil)
+         (wrapped nil)
+         (output-buffer (generate-new-buffer " *mevedel-sandbox-fd-exec*")))
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (unwind-protect
+        (progn
+          (with-temp-file source (insert "granted"))
+          (setq grant (list :source-path source
+                            :identity
+                            (mevedel-sandbox--target-identity source))
+                wrapped
+                (mevedel-sandbox--fd-backed-command
+                 '("sh" "-c" "cat /proc/self/fd/10")
+                 (list grant)))
+          (should
+           (= 0
+              (apply #'call-process
+                     (car wrapped) nil output-buffer nil (cdr wrapped))))
+          (with-current-buffer output-buffer
+            (should (equal "granted" (buffer-string))))
+          (with-current-buffer output-buffer
+            (erase-buffer))
+          (make-symbolic-link "source" link)
+          (setq grant (list :source-path link
+                            :identity
+                            (mevedel-sandbox--target-identity source))
+                wrapped
+                (mevedel-sandbox--fd-backed-command
+                 '("sh" "-c" "cat /proc/self/fd/10")
+                 (list grant)))
+          (should
+           (= 0
+              (apply #'call-process
+                     (car wrapped) nil output-buffer nil (cdr wrapped))))
+          (with-current-buffer output-buffer
+            (should (equal "granted" (buffer-string)))))
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-sandbox--fd-backed-command-missing-stat ()
+  ,test
+  (test)
+  :doc "missing target stat:
+exact-grant preparation refuses when the target cannot inspect descriptors"
+  (let* ((source (make-temp-file "mevedel-sandbox-fd-stat-"))
+         (grant (list :source-path source
+                      :identity (mevedel-sandbox--target-identity source))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (name &rest _arguments)
+                     (unless (equal name "stat") "/bin/bash"))))
+          (should-error
+           (mevedel-sandbox--fd-backed-command
+            '("true") (list grant))
+           :type 'mevedel-sandbox-policy-error))
+      (delete-file source))))
 
 (mevedel-deftest mevedel-sandbox--open-granted-paths ()
   ,test

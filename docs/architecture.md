@@ -15,6 +15,24 @@ flowchart TD
     C --> H[Persistent memory and session files]
 ```
 
+The read-only browser collaboration slice is composed of the
+`mevedel-collaboration.el` room/public-command facade,
+`mevedel-collaboration-projection.el` canonical record projection, and
+`mevedel-collaboration-transport.el` loopback GNU ELPA `web-server` protocol.
+Together they serve the packaged `collaboration/` HTML, CSS, and JavaScript
+assets. The room has one authenticated guest, fragment bearer authentication,
+an exact Origin allowlist, bounded snapshot and ACK-window output queues. Each
+sequenced frame carries a fresh unpredictable acknowledgement token, and the
+transport advances only for an exact sequence/token pair. It also has
+deterministic session/buffer/Emacs teardown. It is an observer only: its
+post-stream and post-response hooks are failure-isolated so projection or
+transport errors cannot settle a model request. Tool starts publish a stable
+running record immediately and replace it with the settled canonical result;
+the projection never infers running state from empty output. A configured
+public HTTPS origin is operator-managed; without one, generated links are
+loopback-only. See
+`docs/adr/0099-project-live-collaboration-from-host-authoritative-state.md`.
+
 ## Key data structures
 
 Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
@@ -64,11 +82,11 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   transient `telemetry-pending` queue and flush to the diagnostic stream; the
   queue is never persisted as resumable state. A transient side conversation
   may point `audit-session` at its durable parent for redacted audit events and
-  shared remote mutation authority; its runtime queues and unsanitized logs
+  shared target mutation authority; its runtime queues and unsanitized logs
   remain side-owned. The transient
   `execution-state` slot is opaque outside
   `mevedel-execution.el`; process records, timers, spools, and process groups
-  never enter the general session model or persisted sidecar. Remote lease
+  never enter the general session model or persisted sidecar. Portable lease
   generations persist only the boolean unsettled-mutation safety latch needed
   when those transient records disappear.
 - **`mevedel-goal`**: identity, objective, lifecycle status and reason,
@@ -213,11 +231,20 @@ Bash scheduler. The Bash adapter also captures its analyzed exit-outcome
 resolver at spawn, so later observations derive the same canonical facts
 without moving command semantics into the process module.
 
-`mevedel-session-durability.el` owns remote mutation leases and serializes
-authoritative session publication.  `mevedel-session-persistence.el` remains
-the session codec and workflow layer above that boundary.
+`mevedel-session-durability.el` owns portable project lease and storage
+primitives.  `mevedel-session-recovery.el` owns specialized recovery markers,
+`mevedel-session-transfer.el` owns cooperative control-transfer records, and
+`mevedel-session-publication.el` serializes immutable authoritative
+publication and diagnostics.  `mevedel-session-save-as.el` owns the portable
+Save As transaction and live-session adoption.  Project sessions use the same
+authority profile on local and TRAMP targets: a renewable `.lease/` and an
+immutable publication head.  File-workspace sessions use the explicit
+`pid-lock` profile and `.lock` instead.  The persisted session profile, not
+`file-remote-p`, selects every acquire, release, sweep, and cleanup path;
+mixed control artifacts fail closed.  `mevedel-session-persistence.el`
+remains the session codec and workflow layer above that boundary.
 
-Before a mutating managed Bash child can start remotely, the execution module
+Before a mutating managed Bash child can start on a portable project target, the execution module
 asserts the durable parent's current lease and commits its unsettled-mutation
 latch. Proven terminal settlement clears the latch only after all armed records
 sharing that authority have settled. Process records remain transient; restore

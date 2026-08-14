@@ -550,10 +550,13 @@
   (dolist (resolver
            (list (lambda (_exit-code _termination) (error "Resolver failed"))
                  (lambda (_exit-code _termination) 'invalid)))
-    (should (eq 'success
-                (mevedel-execution--resolve-outcome resolver 0 'exited)))
-    (should (eq 'failure
-                (mevedel-execution--resolve-outcome resolver 1 'exited)))))
+    ;; Each bad resolver is reported once; the fallback outcome is what
+    ;; these cases assert.
+    (mevedel-test--with-captured-diagnostics nil
+      (should (eq 'success
+                  (mevedel-execution--resolve-outcome resolver 0 'exited)))
+      (should (eq 'failure
+                  (mevedel-execution--resolve-outcome resolver 1 'exited))))))
 
 (mevedel-deftest mevedel-execution--cancel-observer ()
   ,test
