@@ -51,13 +51,17 @@ user authority may still permit a matching command."
 (defconst mevedel-bash-analysis--allowed-node-types
   '("program" "list" "pipeline" "command" "command_name" "word"
     "string" "string_content" "raw_string" "number" "concatenation"
+    "variable_assignment" "variable_name"
     "test_command" "binary_expression" "unary_expression" "test_operator"
     "&&" "||" ";" "|" "\"" "'" "[" "]" "=" "!=")
   "Tree-sitter Bash node types accepted as plain command syntax.
-The `test_command' entries cover single-bracket predicates such as
-\"[ 1 = 2 ]\", which the conservative scanner also accepts.  The `[[' and
-`]]' tokens are deliberately absent, so the extended form stays
-unsupported alongside negation and pattern operators.")
+
+A `VAR=value cmd' prefix and a single-bracket `[ ... ]' test are plain
+commands to the conservative scanner, so the grammar has to read them the same
+way -- otherwise installing the grammar reclassifies them as complex and the
+two analyzers disagree about the same string.  Double-bracket `[[ ... ]]' is
+deliberately absent: it changes quoting and globbing, so it stays complex
+alongside negation and pattern operators.")
 
 (defconst mevedel-bash-analysis--treesit-command-node-types
   '("command" "test_command")
@@ -535,7 +539,11 @@ quotes or escaped with a backslash do not close the substitution."
          supported)))
 
 (defun mevedel-bash-analysis--treesit-command-texts (node)
-  "Return command source strings below NODE in source order."
+  "Return command source strings below NODE in source order.
+
+A `test_command' is a command here too: it is one invocation with its own exit
+status, and leaving it out would make `[ 1 = 2 ]' analyze as a program with no
+commands at all."
   (if (member (treesit-node-type node)
               mevedel-bash-analysis--treesit-command-node-types)
       (list (treesit-node-text node t))

@@ -187,6 +187,32 @@ cat file"
       (should (equal 'treesit (plist-get analysis :parser)))
       (should (equal '(("pwd") ("cat" "README.md"))
                      (plist-get analysis :commands)))))
+  :doc "tree-sitter agreement:
+`mevedel-bash-analysis-analyze' reads a construct the same way either parser does"
+  ;; Installing the grammar must not reclassify a command.  These two are the
+  ;; ones the grammar sees as their own node types where the scanner sees
+  ;; plain words, so they are where the analyzers drift apart first.
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    (dolist (source '("NODE_ENV=test npm run test" "[ 1 = 2 ]"))
+      (let ((grammar (mevedel-bash-analysis-analyze source))
+            (scanner (cl-letf (((symbol-function 'treesit-language-available-p)
+                                (lambda (_language) nil)))
+                       (mevedel-bash-analysis-analyze source))))
+        (should (equal 'treesit (plist-get grammar :parser)))
+        (should (equal (plist-get scanner :class)
+                       (plist-get grammar :class)))
+        (should (equal (plist-get scanner :commands)
+                       (plist-get grammar :commands))))))
+  :doc "tree-sitter double brackets:
+`mevedel-bash-analysis-analyze' keeps `[[' complex, unlike `['"
+  ;; It changes quoting and globbing, so the single-bracket allowance below
+  ;; must not extend to it.
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    (should (equal 'complex
+                   (plist-get (mevedel-bash-analysis-analyze "[[ -f x ]]")
+                              :class))))
   :doc "tree-sitter complex syntax:
 `mevedel-bash-analysis-analyze' rejects redirection structurally"
   (progn
