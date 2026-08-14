@@ -14,6 +14,7 @@
 (require 'ring)
 (require 'subr-x)
 (require 'mevedel-utilities)
+(require 'mevedel-transport)
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-copy-text
@@ -303,7 +304,10 @@ files are renamed to `.bad', warned about once, and ignored."
                     (session (mevedel-view-history--session))
                     (path (mevedel-view-history--path session)))
           (condition-case err
-              (progn
+              ;; Directory, ignore entry, read-merge-write: one transaction
+              ;; of target commands, held so a foreign timer cannot send its
+              ;; own in between and take the reply.
+              (mevedel-transport-with-exclusive-connection
                 (make-directory (file-name-directory path) t)
                 (require 'mevedel-workspace)
                 (mevedel-workspace-ensure-generated-state-ignored

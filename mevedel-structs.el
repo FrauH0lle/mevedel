@@ -429,6 +429,16 @@ workspace."
   worktree-base-commit ; full HEAD commit used to create a Worktree Fork
   prompt-index      ; alist: (segment-number . list of prompt plists) for picker
   file-snapshots    ; alist: (turn-number . file-map alist) for file-history restore
+  ;; Transient cache of the committed sidecar's `:first-user-message'.  The
+  ;; field never changes once a session has a first turn, and reading it back
+  ;; out of the published sidecar costs a target round trip plus a SHA-256
+  ;; verification on every save.
+  persisted-first-user-message
+  ;; Non-nil once this process has ensured the session directory tree and the
+  ;; workspace ignore entries.  Re-ensuring them on every save costs target
+  ;; round trips for directories that were created by an earlier save in the
+  ;; same process.
+  durable-tree-ensured
   ;; Sub-agent transcript index.  Alist of
   ;; (AGENT-ID . PLIST) where PLIST has :agent-type, :description,
   ;; :path (relative to save-path), :status (running | completed |

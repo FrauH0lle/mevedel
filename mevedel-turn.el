@@ -75,6 +75,10 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk))
+
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 
@@ -303,6 +307,27 @@ Signal when the request is missing or its reservation is not the next turn."
   (dolist (step steps)
     (funcall (mevedel--safe-fsm-handler step) fsm)))
 
+(defun mevedel--turn-buffer (fsm)
+  "Return FSM's live chat buffer, or nil."
+  (when-let* ((info (condition-case nil (gptel-fsm-info fsm) (error nil)))
+              (buffer (plist-get info :buffer))
+              ((buffer-live-p buffer)))
+    buffer))
+
+(defun mevedel--defer-turn-steps (fsm steps)
+  "Run FSM through STEPS once no remote operation is in flight.
+
+Each step re-derives its own buffer from FSM, so waiting costs the chain no
+context.  Settlement keeps the request open until the chain finishes, so a
+Goal continuation or a user send still observes the workflow as busy while
+this waits."
+  (require 'mevedel-transport)
+  (let ((buffer (mevedel--turn-buffer fsm)))
+    (mevedel-transport-run-when-idle
+     (list 'turn-settlement (or buffer fsm))
+     (and buffer (buffer-local-value 'default-directory buffer))
+     (lambda () (mevedel--run-turn-steps fsm steps)))))
+
 (defun mevedel--turn-publication-pending-p (fsm)
   "Return non-nil when FSM's session has failed critical publication."
   (when-let* ((info (condition-case nil
@@ -320,9 +345,21 @@ Signal when the request is missing or its reservation is not the next turn."
     (funcall function fsm)))
 
 (defun mevedel--complete-turn (fsm)
-  "Run the canonical successful top-level turn transaction for FSM."
+  "Run the canonical successful top-level turn transaction for FSM.
+
+The commit is the single-use reservation fence and runs here, synchronously:
+it touches no target and nothing may settle if the reservation is wrong.  The
+remaining steps publish, so they run once the transport is idle.  gptel drives
+this from its process sentinel, which Emacs may dispatch from inside an
+unrelated remote operation; publishing from there desynchronizes the
+connection and the transaction commits against answers belonging to another
+command.
+
+The whole chain defers as one unit rather than step by step, because its order
+is load-bearing: `mevedel--turn-end-request\=' follows the autosave, and
+inverting them drops the turn's file-history checkpoints."
   (mevedel--turn-commit fsm)
-  (mevedel--run-turn-steps
+  (mevedel--defer-turn-steps
    fsm
    (list (lambda (machine)
            (mevedel--turn-record-settlement machine 'success))
@@ -343,9 +380,12 @@ Signal when the request is missing or its reservation is not the next turn."
             #'mevedel-view--schedule-follow-up-drain machine)))))
 
 (defun mevedel--fail-turn (fsm status)
-  "Run failure cleanup for FSM with terminal STATUS."
+  "Run failure cleanup for FSM with terminal STATUS.
+
+Deferred for the same reason as `mevedel--complete-turn\=': the failure chain
+also autosaves, and it reaches here from the same process sentinel."
   (mevedel--turn-commit fsm)
-  (mevedel--run-turn-steps
+  (mevedel--defer-turn-steps
    fsm
    (append
     (list (lambda (machine)

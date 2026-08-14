@@ -29,6 +29,9 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-execution-test-helpers"))
 
+;; `tramp'
+(declare-function tramp-cleanup-all-connections "tramp-cmds" ())
+
 
 ;;
 ;;; Ownership and teardown
@@ -205,6 +208,10 @@
         (when (mevedel-session-save-path session)
           (mevedel-session-durability-lease-release
            (mevedel-session-save-path session) session)))
+      ;; This teardown performs target I/O, so it reopens the connection that
+      ;; `mevedel-test--with-local-shell-tramp' already closed.  Close it after
+      ;; the last target work instead of leaving it for later tests.
+      (tramp-cleanup-all-connections)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution-teardown-session ()

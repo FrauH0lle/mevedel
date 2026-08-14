@@ -23,19 +23,15 @@
 (defvar remote-file-name-inhibit-cache)
 
 ;; `mevedel-session-control-fs'
-(declare-function mevedel-session-control-fs-create-file
-                  "mevedel-session-control-fs"
-                  (path content &optional coding-system))
-(declare-function mevedel-session-control-fs-make-directory
-                  "mevedel-session-control-fs" (path &optional parents))
 (declare-function mevedel-session-control-fs-physical-path
                   "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-program-value
+                  "mevedel-session-control-fs" (result))
 (declare-function mevedel-session-control-fs-read-file
                   "mevedel-session-control-fs"
                   (path &optional coding-system))
-(declare-function mevedel-session-control-fs-write-file
-                  "mevedel-session-control-fs"
-                  (path content &optional coding-system))
+(declare-function mevedel-session-control-fs-run-program
+                  "mevedel-session-control-fs" (operations))
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability--assert-no-pid-lock
@@ -201,6 +197,23 @@
   (and (mevedel-session-durability--valid-relative-path-p path)
        (string-prefix-p ".publications/" path)))
 
+(defun mevedel-session-publication--within-p (path directory)
+  "Return non-nil when canonical PATH lies strictly below canonical DIRECTORY.
+
+Both arguments have already been through the control filesystem's canonical
+spelling, which expands them and collapses any `..', so containment is a
+pathname question and this answers exactly that.
+
+`file-in-directory-p' answers a different question -- whether the two names
+*resolve* into each other -- by calling `file-truename' on both.  On a target
+that is several round trips per artifact, measured at roughly a fifth of a
+remote turn's processor time, and it reports a resolution the target is free
+to change before the operation runs.  The spelling that matters is proved
+target-side instead, in the same process that performs the operation."
+  (let ((directory (file-name-as-directory directory)))
+    (and (string-prefix-p directory path)
+         (> (length path) (length directory)))))
+
 (defun mevedel-session-publication--publication-path (session-dir relative)
   "Return RELATIVE below SESSION-DIR's physical publication root."
   (mevedel-session-control-fs-physical-path session-dir)
@@ -216,9 +229,9 @@
     (mevedel-session-control-fs-physical-path path)
     (unless (and (not (equal (directory-file-name root)
                              (directory-file-name session-root)))
-                 (file-in-directory-p root session-root))
+                 (mevedel-session-publication--within-p root session-root))
       (error "Session publication root escapes session storage: %s" root))
-    (unless (file-in-directory-p path root)
+    (unless (mevedel-session-publication--within-p path root)
       (error "Session publication path escapes immutable storage: %s" path))
     path))
 
@@ -267,6 +280,77 @@ elsewhere on the same execution target receive nil."
     (set-buffer-multibyte nil)
     (insert-file-contents-literally path)
     (secure-hash 'sha256 (current-buffer))))
+
+(defun mevedel-session-publication--content-sha256 (artifact)
+  "Return the digest ARTIFACT's staged bytes will have once written.
+
+Encoding mirrors `mevedel-session-publication--stage-artifacts' exactly, so
+this answers what the manifest would record without staging anything."
+  (let ((content (plist-get artifact :content)))
+    (secure-hash
+     'sha256
+     (if (multibyte-string-p content)
+         (encode-coding-string
+          content (or (plist-get artifact :coding) 'utf-8-unix))
+       content))))
+
+(defun mevedel-session-publication--comparable-p (session)
+  "Return non-nil when SESSION's captured manifest can answer for its bytes.
+
+A queued or retained batch, or pending recovery, means the session owes the
+target a transaction whatever any comparison says."
+  (and (mevedel-session-publication session)
+       (null (mevedel-session-publication-queue session))
+       (null (mevedel-session-publication-uncommitted-batches session))
+       (null (mevedel-session-pending-publication session))))
+
+(defun mevedel-session-publication--artifact-committed-p
+    (session entries artifact)
+  "Return non-nil when ARTIFACT matches SESSION's committed manifest ENTRIES.
+
+An artifact outside the session directory is an ordinary fenced write that
+never enters the snapshot, so it can never be answered from a manifest."
+  (let* ((normalized
+          (mevedel-session-publication--artifact-for-session session artifact))
+         (logical (plist-get normalized :logical))
+         (entry (and logical (cdr (assoc logical entries)))))
+    (and entry
+         (equal (plist-get entry :sha256)
+                (mevedel-session-publication--content-sha256 normalized)))))
+
+(defun mevedel-session-publication-committed-p (session artifacts)
+  "Return non-nil when SESSION already committed ARTIFACTS byte for byte.
+
+Only the captured manifest is consulted, so the answer costs no target I/O."
+  (and (mevedel-session-publication--comparable-p session)
+       (let ((entries
+              (plist-get (mevedel-session-publication session) :artifacts)))
+         (cl-every
+          (lambda (artifact)
+            (mevedel-session-publication--artifact-committed-p
+             session entries artifact))
+          artifacts))))
+
+(defun mevedel-session-publication-prune-committed (session artifacts)
+  "Return ARTIFACTS without those SESSION already committed byte for byte.
+
+The manifest overlays the previous one, so an omitted artifact keeps its
+existing entry and the resulting logical snapshot is unchanged.  Publication
+proves ownership once per artifact written, so dropping bytes the target
+already holds removes whole ownership round trips rather than only writes.
+The commit marker always survives: it is the transaction's commit point, not
+a payload."
+  (if (not (mevedel-session-publication--comparable-p session))
+      artifacts
+    (let ((entries
+           (plist-get (mevedel-session-publication session) :artifacts)))
+      (seq-filter
+       (lambda (artifact)
+         (or (plist-get artifact :commit-marker)
+             (plist-get artifact :replace)
+             (not (mevedel-session-publication--artifact-committed-p
+                   session entries artifact))))
+       artifacts))))
 
 (defun mevedel-session-publication--validate-manifest (manifest path)
   "Return MANIFEST when it has the publication schema, else error at PATH."
@@ -444,39 +528,96 @@ local `:source' files."
    (cl-remove (car entry) entries :key #'car :test #'equal)
    (list entry)))
 
-(defun mevedel-session-publication--new-generation-directory (root)
-  "Create and return one fresh immutable generation directory below ROOT."
-  (catch 'directory
-    (dotimes (_ 8)
-      (let ((path
-             (file-name-concat
-              root
-              (format "generation-%s"
-                      (substring
-                       (secure-hash
-                        'sha256
+(defun mevedel-session-publication--generation-name ()
+  "Return a fresh unique immutable generation directory name."
+  (format "generation-%s"
+          (substring
+           (secure-hash 'sha256
                         (format "%S" (list (current-time)
-                                            (random most-positive-fixnum))))
-                       0 20)))))
-        (when (mevedel-session-control-fs-make-directory path)
-          (throw 'directory (file-name-as-directory path)))))
-    (error "Could not create a fresh session publication directory: %s"
-           root)))
+                                           (random most-positive-fixnum))))
+           0 20)))
 
-(defun mevedel-session-publication--write-immutable-artifact
+(defun mevedel-session-publication--immutable-entry
     (directory artifact index session-dir)
-  "Write ARTIFACT number INDEX below DIRECTORY and return its manifest entry."
+  "Return ARTIFACT number INDEX's manifest entry and bytes below DIRECTORY.
+
+The digest is taken from the staged source, which is what the manifest
+records, and the bytes are returned for the caller to write."
   (let* ((source (plist-get artifact :source))
          (target (file-name-concat directory (format "%06d.data" index))))
-    (with-temp-buffer
-      (set-buffer-multibyte nil)
-      (insert-file-contents-literally source)
-      (unless (mevedel-session-control-fs-create-file
-               target (buffer-string) 'no-conversion)
-        (error "Could not create immutable publication artifact: %s" target)))
-    (list (plist-get artifact :logical)
-          :published (file-relative-name target session-dir)
-          :sha256 (mevedel-session-publication--file-sha256 source))))
+    (list :path target
+          :content (with-temp-buffer
+                     (set-buffer-multibyte nil)
+                     (insert-file-contents-literally source)
+                     (buffer-string))
+          :entry (list (plist-get artifact :logical)
+                       :published (file-relative-name target session-dir)
+                       :sha256
+                       (mevedel-session-publication--file-sha256 source)))))
+
+(defun mevedel-session-publication--write-generation
+    (root artifacts session-dir entries)
+  "Create one fresh generation below ROOT holding ARTIFACTS and its manifest.
+
+Return a cons of the generation directory and the overlaid manifest ENTRIES.
+The directory, every immutable artifact, and the manifest are one target
+process: they all land inside the single directory this call creates, so one
+pinned parent covers the whole generation.  The manifest is the last operation
+in the program, which keeps it the last byte written inside the generation.
+A name that already exists ends the program before anything is written, so a
+collision simply picks another name."
+  (catch 'written
+    (dotimes (_ 8)
+      (let* ((directory
+              (file-name-as-directory
+               (file-name-concat
+                root (mevedel-session-publication--generation-name))))
+             (payloads
+              (cl-loop for artifact in artifacts
+                       for index from 1
+                       collect (mevedel-session-publication--immutable-entry
+                                directory artifact index session-dir)))
+             (overlaid entries)
+             manifest manifest-path operations results)
+        (dolist (payload payloads)
+          (setq overlaid
+                (mevedel-session-publication--overlay-entry
+                 overlaid (plist-get payload :entry))))
+        (setq manifest (list :sidecar "session.meta.el" :artifacts overlaid)
+              manifest-path (file-name-concat directory "manifest.el"))
+        (mevedel-session-publication--validate-manifest manifest manifest-path)
+        (setq operations
+              (append
+               ;; The generations root may already exist; the generation
+               ;; itself must not, which is the collision signal below.
+               (list (list :op 'make-directory
+                           :path (directory-file-name
+                                  (file-name-as-directory root))
+                           :optional t)
+                     (list :op 'make-directory
+                           :path (directory-file-name directory)))
+               (mapcar (lambda (payload)
+                         (list :op 'create
+                               :path (plist-get payload :path)
+                               :content (plist-get payload :content)
+                               :coding 'no-conversion))
+                       payloads)
+               (list (list :op 'create :path manifest-path
+                           :content
+                           (mevedel-session-durability--record-bytes
+                            manifest)))))
+        (setq results (mevedel-session-control-fs-run-program operations))
+        (cond
+         ;; A taken generation name simply picks another one.
+         ((eq 'conflict (plist-get (nth 1 results) :status)) nil)
+         (t
+          ;; The optional root ensure is allowed to report a conflict.
+          (dolist (result (cdr results))
+            (unless (eq 'ok (plist-get result :status))
+              (mevedel-session-control-fs-program-value result)))
+          (throw 'written (cons directory overlaid))))))
+    (error "Could not create a fresh session publication directory: %s"
+           root)))
 
 (defun mevedel-session-publication--commit-marker-publication
     (session batches marker)
@@ -497,24 +638,14 @@ local `:source' files."
                    (lambda (batch) (plist-get batch :artifacts))
                    batches))))
          (root (file-name-concat session-dir ".publications"))
-         directory)
-    (mevedel-session-control-fs-physical-path root)
-    (mevedel-session-control-fs-make-directory root t)
+         written directory)
     (mevedel-session-control-fs-physical-path root)
     ;; Immutable generations grow until session-directory cleanup.
-    (setq directory
-          (mevedel-session-publication--new-generation-directory root))
-    (cl-loop
-     for artifact in artifacts
-     for index from 1
-     do
-     (setq entries
-           (mevedel-session-publication--overlay-entry
-            entries
-            (mevedel-session-publication--write-immutable-artifact
-             directory artifact index session-dir))))
-    (let* ((manifest (list :sidecar "session.meta.el" :artifacts entries))
-           (manifest-path (file-name-concat directory "manifest.el"))
+    (setq written (mevedel-session-publication--write-generation
+                   root artifacts session-dir entries)
+          directory (car written)
+          entries (cdr written))
+    (let* ((manifest-path (file-name-concat directory "manifest.el"))
            (head (file-relative-name manifest-path session-dir))
            (raw (list :head head
                       :sidecar "session.meta.el"
@@ -522,10 +653,6 @@ local `:source' files."
            (captured
             (mevedel-session-publication--capture-publication
              session-dir raw)))
-      (mevedel-session-publication--validate-manifest manifest manifest-path)
-      (unless (mevedel-session-durability--create-plist manifest-path manifest)
-        (error "Could not create session publication manifest: %s"
-               manifest-path))
       (unless (mevedel-session-durability-commit-publication-head session head)
         (user-error "Portable session lease was lost before publication commit"))
       (setf (mevedel-session-publication session) captured)
@@ -551,20 +678,48 @@ the target's fixed cache or mutates the publication accumulator."
             (when (and source (file-exists-p source))
               (throw 'source source))))))))
 
+(defvar mevedel-session-publication--ensured-directories nil
+  "Cons cell collecting directories this publication created, or nil.
+
+Every artifact write ensures its own parent, and a publication writes several
+artifacts into the same few directories.  Re-creating a directory that this
+transaction already created is one target process for a known answer.  A
+caller that spans one transaction binds this to a fresh `(list nil)'; outside
+such a binding every call reaches the target.")
+
 (defun mevedel-session-publication--publish-artifact (artifact)
-  "Publish staged ARTIFACT through a nearby target temporary file."
+  "Publish staged ARTIFACT through a nearby target temporary file.
+
+Ensuring the parent and writing the bytes are one target process.  The ensure
+is optional so an existing directory does not end the program, which is what
+lets both share one round trip."
   (let* ((path (plist-get artifact :path))
          (source (plist-get artifact :source))
-         (directory (file-name-directory (expand-file-name path))))
+         (directory (file-name-directory (expand-file-name path)))
+         (ensure (not (member directory
+                              (car mevedel-session-publication--ensured-directories))))
+         (content (with-temp-buffer
+                    (set-buffer-multibyte nil)
+                    (insert-file-contents-literally source)
+                    (buffer-string)))
+         results)
     (mevedel-session-control-fs-physical-path directory)
     (mevedel-session-control-fs-physical-path path)
-    (mevedel-session-control-fs-make-directory directory t)
-    (with-temp-buffer
-      (set-buffer-multibyte nil)
-      (insert-file-contents-literally source)
-      (mevedel-session-control-fs-write-file
-       (mevedel-session-control-fs-physical-path path)
-       (buffer-string) 'no-conversion))))
+    (setq results
+          (mevedel-session-control-fs-run-program
+           (append
+            (when ensure
+              (list (list :op 'make-directory
+                          :path (directory-file-name directory)
+                          :optional t)))
+            (list (list :op 'write
+                        :path (mevedel-session-control-fs-physical-path path)
+                        :content content
+                        :coding 'no-conversion)))))
+    (when (and ensure mevedel-session-publication--ensured-directories)
+      (push directory
+            (car mevedel-session-publication--ensured-directories)))
+    (mevedel-session-control-fs-program-value (car (last results)))))
 
 (defun mevedel-session-publication--publish-batch (session batch)
   "Publish every staged artifact in BATCH while SESSION remains owner."
@@ -585,6 +740,7 @@ the target's fixed cache or mutates the publication accumulator."
 (defun mevedel-session-publication--drain (session batches)
   "Publish BATCHES and any batches queued reentrantly for SESSION."
   (let ((remaining batches)
+        (mevedel-session-publication--ensured-directories (list nil))
         current
         committed
         result)

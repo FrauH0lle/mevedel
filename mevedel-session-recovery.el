@@ -65,6 +65,15 @@
 (declare-function mevedel-session-durability-lease-owned-p
                   "mevedel-session-durability" (session))
 
+(defvar mevedel-session-recovery--mutation-cache nil
+  "Cons cell collecting sessions whose marker was read this mutation, or nil.
+
+One durable save consults the target recovery marker at the mutation gate and
+again when publication begins.  Nothing between those two points can install a
+marker, so the second read is a target round trip for an answer already held.
+A caller that spans one mutation binds this to a fresh `(list nil)'; outside
+such a binding every call reads the target.")
+
 
 (defun mevedel-session-recovery-refresh-session-buffers (session)
   "Refresh SESSION's registered root and notify visible projections.
@@ -285,7 +294,11 @@ The marker is authoritative across client loss.  Existing local recovery
 state is preserved while the target marker is attached to the pending record,
 so a later explicit abandonment can remove both sources safely."
   (when (and (mevedel-session-durability--portable-session-p session)
-             (mevedel-session-save-path session))
+             (mevedel-session-save-path session)
+             (not (memq session
+                        (car mevedel-session-recovery--mutation-cache))))
+    (when mevedel-session-recovery--mutation-cache
+      (push session (car mevedel-session-recovery--mutation-cache)))
     (when-let ((recovery
                 (mevedel-session-recovery-read
                  (mevedel-session-save-path session))))

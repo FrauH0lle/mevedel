@@ -65,13 +65,13 @@
 
 ;; `profiler'
 (declare-function profiler-cpu-profile "profiler" ())
+(declare-function profiler-fixup-profile "profiler" (profile))
 (declare-function profiler-memory-profile "profiler" ())
 (declare-function profiler-report-setup-buffer "profiler" (profile))
 (declare-function profiler-start "profiler" (mode))
 (declare-function profiler-stop "profiler" ())
-(declare-function profiler-write-profile
-                  "profiler" (profile filename &optional confirm))
 (defvar profiler-cpu-log)
+(defvar profiler-max-stack-depth)
 (defvar profiler-memory-log)
 
 
@@ -98,6 +98,18 @@
 This turns hidden compaction, file-conflict, and edit confirmations into an
 explicit reproduction failure instead of unmeasured user-wait time."
   :type 'boolean
+  :group 'mevedel)
+
+(defcustom mevedel-telemetry-profiler-stack-depth 64
+  "Backtrace depth captured by a mevedel profiler run.
+
+The native default of 16 truncates before a mevedel frame is reached: a turn
+runs through the view, the FSM, gptel, and a TRAMP handler before it costs
+anything measurable, so a truncated sample records that the time went to
+`file-attributes' without recording which mevedel call site asked for it.
+Attribution is the whole point of these artifacts.  Deeper samples make the
+profile file larger and cost a little more per sample."
+  :type 'integer
   :group 'mevedel)
 
 
@@ -193,12 +205,31 @@ they never move backwards within the process."
       (file-name-concat save-path mevedel-telemetry-file-name))))
 
 (defun mevedel-telemetry-profiler-directory (session)
-  "Return the active profiler diagnostics directory for SESSION, or nil."
+  "Return the active profiler diagnostics directory for SESSION, or nil.
+
+For a session saved on a target this is a local directory under
+`temporary-file-directory', not `diagnostics/run-*' under the session.  A
+profile measures this Emacs, and writing one to the target costs megabytes of
+base64 through the connection -- the `ssh' method has no out-of-band copy at
+any size -- for an artifact no resume consults.  The cost is real and the
+portability is not: another client resuming the session simply finds no
+diagnostics for a run profiled here.
+
+The run identifier already carries a timestamp and a hash, so naming the
+directory after it is unique per run without keeping any state to remember it
+by, and every caller derives the same answer."
   (when (and (eq session mevedel-telemetry--profiler-session)
-             mevedel-telemetry--profiler-run-id
-             (mevedel-session-save-path session))
-    (file-name-concat (mevedel-session-save-path session)
-                      "diagnostics" mevedel-telemetry--profiler-run-id)))
+             mevedel-telemetry--profiler-run-id)
+    (let ((save-path (mevedel-session-save-path session)))
+      (when save-path
+        (if (file-remote-p save-path)
+            (file-name-concat
+             temporary-file-directory
+             (format "mevedel-profiler-%s"
+                     mevedel-telemetry--profiler-run-id))
+          (file-name-concat
+           save-path "diagnostics"
+           mevedel-telemetry--profiler-run-id))))))
 
 (defun mevedel-telemetry--truncate-string (value)
   "Return VALUE bounded to `mevedel-telemetry-max-string-length'."
@@ -580,6 +611,9 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
                    (secure-hash 'sha1
                                 (format "%s:%s" (emacs-pid) (float-time)))
                    0 8)))
+    ;; The C log fixes its backtrace width when the profiler starts, so this
+    ;; has to be set before the call, not around the report.
+    (setq profiler-max-stack-depth mevedel-telemetry-profiler-stack-depth)
     (profiler-start mode)
     (setq mevedel-telemetry--profiler-session session)
     (mevedel-telemetry--install-prompt-guard)
@@ -593,7 +627,15 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
              (or (mevedel-session-session-id session) "pending"))))
 
 (defun mevedel-telemetry--write-profiler-artifacts (directory)
-  "Write compact native profiler profiles and reports below DIRECTORY."
+  "Write compact native profiler profiles and reports below DIRECTORY.
+
+`profiler-write-profile' is four lines around a `write-file' that visits its
+output, which drags `set-visited-file-name' and a version-control refresh onto
+a diagnostics artifact nobody tracks.  A Git probe there is several round trips
+on a target, and a failure aborts the whole stop and loses the profile.  The
+`print' it wraps is the part that matters, so it is inlined here and written
+the way the report two lines below already is.  Nothing below visits a file,
+so version control never hears about any of it."
   (cl-labels
       ((write-one
         (mode profile)
@@ -606,7 +648,11 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
                (report-buffer (profiler-report-setup-buffer profile)))
           (unwind-protect
               (progn
-                (profiler-write-profile profile profile-file nil)
+                (with-temp-buffer
+                  (let (print-level print-length)
+                    (print (profiler-fixup-profile profile) (current-buffer)))
+                  (write-region (point-min) (point-max)
+                                profile-file nil 'silent))
                 (with-current-buffer report-buffer
                   (write-region (point-min) (point-max)
                                 report-file nil 'silent))
@@ -623,13 +669,13 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
                         :report-bytes report-bytes)))
             (when (buffer-live-p report-buffer)
               (kill-buffer report-buffer))))))
-    (let ((artifacts
-           (delq nil
-                 (list
-                  (when profiler-cpu-log
-                    (write-one 'cpu (profiler-cpu-profile)))
-                  (when profiler-memory-log
-                    (write-one 'memory (profiler-memory-profile)))))))
+    (let* ((artifacts
+            (delq nil
+                  (list
+                   (when profiler-cpu-log
+                     (write-one 'cpu (profiler-cpu-profile)))
+                   (when profiler-memory-log
+                     (write-one 'memory (profiler-memory-profile)))))))
       (unless artifacts
         (error "No profiler samples were recorded"))
       artifacts)))
@@ -659,17 +705,21 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
                  :modes (mapcar (lambda (artifact)
                                   (plist-get artifact :mode))
                                 artifacts)
-                 :profile-relative-paths
+                 ;; Absolute, and on this client: for a session saved on a
+                 ;; target, a path relative to the session directory would
+                 ;; send a reader looking on the wrong machine.
+                 :artifacts-directory directory
+                 :artifacts-local
+                 (not (file-remote-p (mevedel-session-save-path session)))
+                 :profile-file-names
                  (mapcar (lambda (artifact)
-                           (file-relative-name
-                            (plist-get artifact :profile-file)
-                            (mevedel-session-save-path session)))
+                           (file-name-nondirectory
+                            (plist-get artifact :profile-file)))
                          artifacts)
-                 :report-relative-paths
+                 :report-file-names
                  (mapcar (lambda (artifact)
-                           (file-relative-name
-                            (plist-get artifact :report-file)
-                            (mevedel-session-save-path session)))
+                           (file-name-nondirectory
+                            (plist-get artifact :report-file)))
                          artifacts)
                  :profile-bytes-total
                  (apply #'+ (mapcar (lambda (artifact)

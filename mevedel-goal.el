@@ -63,6 +63,10 @@
 (declare-function mevedel-tools--buffer-local-agent-invocation
                   "mevedel-tools" (buffer))
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk))
+
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--run-follow-up-drain
                   "mevedel-view-composer" (data-buffer))
@@ -341,11 +345,23 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
       'dispatched))))
 
 (defun mevedel-goal--scheduled-continuation (session buffer prompt-submission)
-  "Run a scheduled continuation for SESSION in BUFFER."
+  "Run a scheduled continuation for SESSION in BUFFER.
+
+Continuation admits a new turn, which is target I/O, and it runs from a timer.
+A timer fires wherever the main loop is waiting, so it waits for an idle
+transport rather than nesting inside a remote operation already in flight."
   (when (and (buffer-live-p buffer)
              (eq session (buffer-local-value 'mevedel--session buffer)))
-    (with-current-buffer buffer
-      (mevedel-goal-continue-if-idle session buffer prompt-submission))))
+    (require 'mevedel-transport)
+    (mevedel-transport-run-when-idle
+     (list 'goal-continuation buffer)
+     (buffer-local-value 'default-directory buffer)
+     (lambda ()
+       (when (and (buffer-live-p buffer)
+                  (eq session (buffer-local-value 'mevedel--session buffer)))
+         (with-current-buffer buffer
+           (mevedel-goal-continue-if-idle
+            session buffer prompt-submission)))))))
 
 (defun mevedel-goal--schedule-continuation
     (&optional session buffer prompt-submission)

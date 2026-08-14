@@ -139,6 +139,20 @@
 		  (namespace))
 
 ;;
+;;; Customization
+
+(defcustom mevedel-view-control-transfer-poll-seconds 5
+  "Seconds between cooperative control-transfer polls in a view.
+
+Each poll reads the durable lease head, the target clock, and the transfer
+mailbox.  On a remote target that is several synchronous round trips through
+the one connection every interval, competing with the work the user asked
+for, so the interval trades handoff latency against connection time."
+  :type 'number
+  :group 'mevedel)
+
+
+;;
 ;;; State
 
 (defvar-local mevedel-view--interaction-descriptors nil
@@ -355,7 +369,9 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
                      (lambda ()
                        (mevedel-view-interaction-transfer-drain-p view))))))
     (setq-local mevedel-view--control-transfer-timer
-                (run-at-time 1 1 #'mevedel-view--control-transfer-refresh
+                (run-at-time mevedel-view-control-transfer-poll-seconds
+                             mevedel-view-control-transfer-poll-seconds
+                             #'mevedel-view--control-transfer-refresh
                              (current-buffer)))))
 
 (defun mevedel-view--interaction-telemetry-close (id)

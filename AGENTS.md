@@ -27,6 +27,20 @@ state, or workflows.
 - Call out destructive effects in the handoff, but do not preserve the old
   behavior merely to avoid a break.
 
+## ADRS ARE REVISABLE
+
+An accepted ADR records why a decision was made at the time. It is not a
+boundary on later work. When evidence changes the trade, change the ADR.
+
+- Amend an ADR in the same change that changes the behavior it describes. An
+  ADR documenting a design the code no longer has is worse than no ADR.
+- Supersede instead of amending when the decision itself is reversed: keep the
+  old record, mark it superseded, and name the ADR replacing it.
+- State what moved the decision — a measurement, a failure, a constraint that
+  turned out not to hold. "We changed our minds" is not a reason; "the profile
+  put this at 21% and the check was redundant with the target-side proof" is.
+- Do not defer to an ADR you disagree with. Argue with it, in it.
+
 ## Documentation map
 
 This file is the entry point. Detail docs live in `docs/` and are loaded
@@ -107,6 +121,7 @@ Data model
   mevedel-prompt-submission.el accepted prompt + lifecycle-context transaction
   mevedel-bash-analysis.el    conservative shell parsing and normalized command facts
   mevedel-bash-policy.el      argument-aware read-only command policies
+  mevedel-transport.el        remote reentrancy detection and idle-transport deferral
   mevedel-execution-target.el immutable local/TRAMP target, path domains, readiness
   mevedel-execution.el        bounded child-process lifecycle and session state
   mevedel-execution-scheduler.el fair session-scoped Bash admission

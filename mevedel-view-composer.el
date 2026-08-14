@@ -327,6 +327,10 @@
 (declare-function mevedel--normalize-message-text "mevedel-utilities"
 		  (text))
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk))
+
 ;; `mevedel-view'
 (declare-function mevedel-view--abort-data-buffer
                   "mevedel-view" (data-buffer))
@@ -3025,9 +3029,20 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                      nil after-insert))))))))))))
 
 (defun mevedel-view--run-follow-up-drain (data-buffer)
-  "Drain one pending follow-up for DATA-BUFFER if it is live."
+  "Drain one pending follow-up for DATA-BUFFER if it is live.
+
+The drain admits a new mutation, which is target I/O.  It is scheduled from a
+timer, and a timer fires wherever the main loop happens to be waiting -- inside
+an unrelated remote operation started by redisplay or another package included
+-- so it waits for an idle transport rather than nesting."
   (when (buffer-live-p data-buffer)
-    (mevedel-view--drain-follow-up data-buffer)))
+    (require 'mevedel-transport)
+    (mevedel-transport-run-when-idle
+     (list 'follow-up-drain data-buffer)
+     (buffer-local-value 'default-directory data-buffer)
+     (lambda ()
+       (when (buffer-live-p data-buffer)
+         (mevedel-view--drain-follow-up data-buffer))))))
 
 (defun mevedel-view--schedule-late-follow-up-drain ()
   "Schedule a fallback follow-up drain after request cleanup."
