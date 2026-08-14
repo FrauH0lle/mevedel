@@ -127,7 +127,7 @@
   (test)
   :doc "renders canonical active model-invocable skills and concise contract"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "r" :root "/tmp/r" :name "r"
+              :type 'file :id "r" :root "/tmp/r" :name "r"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -173,7 +173,7 @@
 
   :doc "omits section when no active model-invocable skills exist"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "r2" :root "/tmp/r2" :name "r2"
+              :type 'file :id "r2" :root "/tmp/r2" :name "r2"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -189,7 +189,7 @@
   (test)
   :doc "initial snapshot is silent, later additions are reported once"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "r3" :root "/tmp/r3" :name "r3"
+              :type 'file :id "r3" :root "/tmp/r3" :name "r3"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -216,7 +216,7 @@
 
   :doc "removed skills are listed by name only"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "r4" :root "/tmp/r4" :name "r4"
+              :type 'file :id "r4" :root "/tmp/r4" :name "r4"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -289,7 +289,7 @@
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (ws (mevedel-workspace--create
-              :type 'test :id "p" :root "/tmp/p" :name "p"
+              :type 'file :id "p" :root "/tmp/p" :name "p"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))

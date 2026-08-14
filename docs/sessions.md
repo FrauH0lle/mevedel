@@ -79,13 +79,15 @@ Layout:
 .mevedel/workspace-id                 ; project-owned portable workspace identity
 .mevedel/sessions/main-2026-04-23T14-30-a9f2/
   session.meta.el                    ; non-authoritative current sidecar cache
-  .lock                              ; local-only PID lock
-  .lease/                            ; remote-only portable lease generations
+  .lease/                            ; project-session portable lease generations
     00000000000000000001.el         ; current renewable ownership record
   .publications/
     generation-a1b2c3/
       000001.data                   ; immutable artifact bytes
       manifest.el                  ; logical path -> bytes + SHA-256
+  .recovery/                       ; target-side project recovery only
+    recovery-a1b2c3...el            ; marker, written after recovery bytes
+    a1b2c3.../                      ; manual repair material
   segment-0001.chat.org              ; finalized at compact #1
   segment-0002.chat.org              ; finalized at compact #2
   segment-0003.chat.org              ; current/live
@@ -102,6 +104,14 @@ Layout:
     plans/accepted-*.md              ; immutable accepted plans
   agents/                            ; sub-agent transcript .chat.org files
 ```
+
+Project sessions use the portable authority profile on both local and TRAMP
+targets: `.lease/` and immutable `.publications/` are authoritative, while
+the familiar sidecar and segment paths are only fixed caches.  File-workspace
+sessions use the separate `pid-lock` profile and `.lock`; they do not create a
+lease or publication tree.  A session directory containing both control
+artifacts, or a persisted authority profile that disagrees with its workspace
+category, is rejected rather than guessed.
 
 The data buffer is locked to `org-mode` so `gptel-org--save-state`
 can round-trip text-property bounds via `GPTEL_BOUNDS`. The sidecar
@@ -172,21 +182,48 @@ to the opened workspace and discards copied session permission rules, resource
 grants, and additional roots.  The next save records the opened workspace's
 identity.  Superseded sidecar shapes are not migrated.
 
-The top-level `:target-incarnation` records a remote host/container fingerprint
-without embedding its client-specific TRAMP spelling; local sessions store
-`nil`.  Resume seeds a fresh remote execution target with that persisted
-baseline before readiness probing, so reconnection can detect that the alias
-now resolves to a replacement host or container.  A replacement probe stages
-the observation without changing that durable baseline.  Request admission
-first revokes exact session and workspace grants, then commits a sidecar marker
-containing the new incarnation and no exact session grants; only that successful
-commit acknowledges the replacement.  Publication failure leaves admission
-blocked and retryable.
+The package release is `0.5.0`; its persisted session format is independently
+`v0.5.2`.  The top-level `:authority-mode` and execution-target incarnation are
+required by that session format:
+project sessions persist `portable`, while file-workspace sessions
+persist `pid-lock`.  Portable project sessions always persist a non-empty
+`:target-incarnation`, including local sessions; the local and TRAMP probes use
+one canonical boot-id, machine-id, PID-1 start, and hostname payload, without
+client-specific TRAMP spelling or Emacs build details.  Resume restores the
+persisted baseline and compares it with the fresh observation before readiness
+and authority admission, so a reboot or replacement target cannot inherit old
+grants.  A replacement probe stages the observation without changing that
+durable baseline.  Request admission first revokes exact session and
+workspace grants, then commits a sidecar marker containing the new incarnation
+and no exact session grants; only that successful commit acknowledges the
+replacement.  Publication failure leaves admission blocked and retryable.
 
-### Remote durability publication
+The unsettled-mutation latch is
+[`ADR 0098`](adr/0098-store-unsettled-mutation-in-the-session-lease.md); the
+one portable authority profile is
+[`ADR 0100`](adr/0100-portable-project-session-authority.md).
 
-Remote session state remains authoritative under the target workspace's
-`.mevedel/` directory.  Before the first target-side state write in a live
+Portable control roots are physical target directories, not ordinary
+pathname-checked caches. Lease generations, transfer requests and fences, and
+specialized recovery markers are read and mutated through a pinned target-side
+parent descriptor; symlinked roots or final entries fail closed. One target
+process performs each control operation: it opens the parent directory, proves
+the opened directory is the requested physical path, and then works only
+through that descriptor. Control operations therefore cost one target process
+each, which dominates durable session work over a real remote connection.
+Portable lease expiry and transfer deadlines use the target filesystem clock at
+whole-second resolution, so clients with skewed wall clocks cannot change one
+another's authority and lease durations are configured in whole seconds.  A
+client reclaims its own expired lease without a prompt, because renewal cannot
+run inside blocking target I/O and confirming a takeover from oneself is
+meaningless; the generation compare-and-set still refuses the reclaim when
+another client claimed the lease meanwhile.  Taking over another client's
+expired lease still requires explicit confirmation.
+
+### Portable project durability publication
+
+Portable project session state remains authoritative under the target
+workspace's `.mevedel/` directory.  Before the first target-side state write in a live
 Emacs client, mevedel discloses the exact state directory, the stored data
 categories, and that mevedel does not encrypt them.  Acceptance is remembered
 once per execution target for that Emacs process; another client or restart
@@ -224,12 +261,31 @@ The live owning session may resolve its newest retained local staged source
 before falling back to its captured committed manifest; readers never treat
 the fixed caches as authority.
 
+Cooperative control transfer uses immutable generation-specific request and
+decision records below `.lease/requests/`. Granting a request does not move
+authority: the owner drains existing work, commits one final publication, and
+releases with a short requester-only fence. New mutation admission is refused
+while draining; the named requester acquires only after observing the released
+successor, then reloads the committed sidecar and transcript before its buffer
+becomes writable. A failed refresh releases the new lease and leaves the
+requester read-only. Transfer state is transient session state and is not
+serialized in the sidecar.
+
+Without a prefix, `M-x mevedel` lists persisted workspace sessions before
+creating a buffer. Each candidate is labeled `Resume`, `Join read-only`, or
+`Take over` from its current authority state, alongside `Start new session`.
+Joining an active writer opens only its last committed publication and exposes
+`Request control` in the view. Expired takeover still requires the ordinary
+explicit confirmation. Starting an independent session while another writer
+is active warns that both sessions share project files and points to a
+Worktree Fork for isolation.
+
 A failure before the manifest-head compare-and-set retains the current and
 previously retained staged sources as one transient local recovery, surfaces
 `Publication pending` in session status, and blocks request and mutation
-admission until `mevedel-session-durability-retry-publication` succeeds or the
+admission until `mevedel-session-publication-retry` succeeds or the
 user explicitly runs
-`mevedel-session-durability-abandon-publication`.  Once the compare-and-set
+`mevedel-session-publication-abandon`.  Once the compare-and-set
 succeeds, the transaction is durable even if the final `publishing` to
 `active` lease normalization fails: the client fails closed with visible lease
 loss, consumes the transaction sources, and does not create recovery or
@@ -239,6 +295,22 @@ turn the only local recovery into an unreachable temporary directory.
 If publication is queued reentrantly while a live publisher is being released,
 lease release converts the queued and preceding uncommitted batches into the
 same pending-recovery state instead of deleting their staged sources.
+
+An incomplete portable-project Rewind rollback has a stronger recovery boundary. Before
+the failure is reported, its local repair directory is copied into a unique
+directory below the session's target-side `.recovery/` control tree and a
+`recovery-*.el` marker is atomically written last. The marker makes manual
+recovery durable across client loss: restore, lease takeover, and every later
+mutation admission refresh it and remain blocked until the user explicitly
+abandons the recovery. Any client that can inspect the session can therefore
+find the named target-side bytes. The client-local directory is removed only
+after the marker is installed; if target installation fails, it is retained
+and the warning reports both the failed target install and its exact local
+path. Target recovery is not a publication artifact: `.recovery/` is excluded
+from immutable publications, Rewind materialization, forks, and Save As
+clones. Explicit abandonment is destructive and removes the target marker and
+bytes (or the retained local fallback) while holding the session lease. A
+successful rollback leaves no recovery tree.
 
 Critical publication changes the owned generation to `publishing` and reserves
 a one-hour ownership window before each artifact.  Timer callbacks perform no
@@ -261,14 +333,14 @@ pin-free and crash recovery straightforward at the cost of storage proportional
 to all committed snapshots; garbage collection and read pins remain deferred
 until real storage use justifies them.
 
-Terminal retained-agent state in an already-materialized remote session uses
+Terminal retained-agent state in an already-materialized portable project session uses
 the same seam: finalization first updates the in-memory transcript metadata and
 registry, then publishes the agent transcript followed by the session sidecar
 as one batch.  A mid-batch failure therefore leaves one retryable recovery and
 blocks later mutation.  The first root turn remains the deliberate exception:
 while the session is only shallowly materialized, an agent transcript may be
 saved but no early sidecar is created; the root turn's DONE publication remains
-the first authoritative sidecar boundary. A remote mutating process may still
+the first authoritative sidecar boundary. A mutating process on the target may still
 arm the portable lease during that shallow interval. If the client disappears,
 the lease latch survives but the no-head session remains intentionally absent
 from resume listings; ordinary session close and Emacs exit therefore refuse to
@@ -276,8 +348,9 @@ discard the live handle until the process settles or the reconnected user
 explicitly acknowledges its unknown outcome.
 
 Local Fork and Rewind retain their same-filesystem directory transactions and
-rollback trees.  Remote lifecycle commits use the immutable publication head
-instead.  A remote fork acquires one fresh child lease in hidden staging,
+rollback trees.  Portable project lifecycle commits use the immutable
+publication head instead.  A portable project fork acquires one fresh child
+lease in hidden staging,
 publishes a complete `:replace t` child snapshot, then moves the staged tree
 with its `.lease/` and `.publications/` control state while the bounded lease is
 reserved.  The child's save path changes immediately and restore retains that
@@ -286,7 +359,7 @@ The replacement manifest contains only the selected transcript, accepted-plan
 evidence, retained agent transcripts, and file-history artifacts resolved from
 the Source's committed manifest, never its fixed caches.
 
-Remote Rewind does not rename or exchange the session directory.  It
+Portable project Rewind does not rename or exchange the session directory.  It
 materializes only logical committed artifacts, excludes `.lease/` and
 `.publications/` by construction, restores project files under a bounded lease
 reservation, then commits the complete rewound snapshot with one `:replace t`
@@ -295,24 +368,31 @@ revalidates the same authority before rolling project files back.  Incomplete
 rollback fails closed visibly and retains recovery bytes; the control trees
 and current lease generation are never copied, moved, or replaced.
 
-Remote Rename reserves the owned lease while moving the whole session tree,
+Portable project Rename reserves the owned lease while moving the whole session tree,
 immediately retargets the bound session to the moved `.lease/`, refreshes its
 captured immutable paths, and commits the renamed sidecar against the same
 generation and head.  Failure before that head compare-and-set moves the tree
 and in-memory paths back under revalidated authority; failure after it leaves
 the committed rename installed and reports lease loss.
 
-Remote Save As similarly keeps the parent lease through the directory copy,
-deletes copied `.lock` and `.lease/` authority, claims a fresh child lease, and
-binds the live session to that child before rewriting metadata.  The parent is
-released only after the handoff cleanup.  The fresh child lease keeps a nil
-head.  After validating every copied immutable artifact, Save As seeds only the
-live child's transient merge base; its rewritten sidecar marker then overlays
-that base and performs the child's first head compare-and-set.  No stale parent
-sidecar becomes discoverable between those steps.  A pre-commit failure
-releases the child, restores the parent binding, and removes the unpublished
-clone; a post-commit lease-normalization failure keeps the committed child and
-fails closed visibly.
+Portable project Save As captures the parent's current committed publication
+through the `mevedel-session-save-as.el` transaction while holding its lease.
+That module materializes only the manifest's logical artifacts in hidden child
+staging, acquires a fresh child lease before writing them, commits one complete
+replacement publication, and moves the staged child into discoverability
+before releasing the parent.  The child therefore starts with
+one publication and no copied lease, publication-history, recovery, lock, or
+staging controls; work is proportional to current logical state rather than
+the parent's retained history.  Its in-memory session is built by the same
+explicit slot policy as every Save As path: logical containers are deep-copied,
+the workspace and immutable execution-target identity are shared, and all
+request, queue, publication, transfer, and lease runtime is reset.  Pre-commit
+failure removes staging and leaves
+the parent unchanged.  Once the marker commits, later finalization failure
+retains the independently resumable child and reports the failure instead of
+rolling it back. If the final staging-directory rename itself fails, session
+listing recognizes that hidden committed child by its verified publication;
+the live buffers and lease stay attached to that recoverable path.
 
 Pending input is live-session state, not sidecar state. Same-turn steering,
 queued follow-ups, their category order and edit state, session-local IDs,
@@ -431,7 +511,7 @@ back into live session state on resume.  Pre-materialization entries wait in
 a transient session queue and flush with the other diagnostic logs.  Failed
 hook, repair, permission, and telemetry appends stay queued and retry after
 the next successful session save; they never block critical publication.
-Remote hook and repair appends share the session publication serializer and
+Portable project hook and repair appends share the session publication serializer and
 replace their target logs atomically, while failed diagnostic staging is
 discarded and the in-memory entries remain queued.
 
@@ -502,21 +582,24 @@ operation.
 Rewind is an in-place logical transaction. It discards the selected turn and
 every later transcript and session artifact, restores every captured
 working-tree file to immediately before the selected turn, and keeps the same
-session identity, name, directory, working directory, and lineage.  Locally,
-the transaction stages and swaps a session directory with a rollback tree.
-Remotely, it leaves the directory and control state in place and commits one
-complete replacement manifest through the owned lease head.
+session identity, name, directory, working directory, and lineage.
+File-workspace sessions stage and swap a session directory with a rollback
+tree.  Portable project sessions leave the directory and control state in
+place and commit one complete replacement manifest through the owned lease
+head.
 The impact lists the discarded prompt suffix in order, including ordinary chat
 and complete directive turns, alongside restored files and every known gap.
 External working-tree changes to captured files are overwritten. Git HEAD and
 the index are not changed, so the impact identifies staged files whose index
 content will diverge from the restored working tree. Failure before the commit
 point rolls back both session and file changes, including a live transcript
-already replaced during local publication. Remote rollback first revalidates
+already replaced during local publication. Portable project rollback first
+revalidates
 the same lease authority and never substitutes fixed session caches for the
 captured manifest. A failed rollback reports every inconsistent path and
-retains its temporary recovery directory; a successful Rewind removes those
-rollback bytes. Every settled model turn, including the first, owns a durable pre-turn
+promotes its temporary repair directory to the target-side specialized
+recovery marker and bytes described above; a successful Rewind removes those
+rollback bytes and does not create a recovery tree. Every settled model turn, including the first, owns a durable pre-turn
 checkpoint. The impact marks coverage as complete or lists known gaps; gaps do
 not disable Rewind and are never presented as restored paths. Rewind creates
 neither a child session nor a redo variant. Existing
@@ -701,14 +784,14 @@ exact entries to `.git/info/exclude` instead of ignoring the whole
 
 ### Locking
 
-Local `.lock` files prevent concurrent edits. Same-host active lock →
+File-workspace `.lock` files prevent concurrent edits. Same-host active lock →
 break / read-only / abort prompt; same-host stale lock → prompt to
 break; cross-host → break / read-only / abort prompt. Same-host locks
 are stale when their PID is dead or when the live process start time
 proves PID reuse. If the process start time or lock timestamp cannot be
 verified, the lock stays active.
 
-Remote sessions never use client PIDs as liveness authority.  Their `.lease/`
+Portable project sessions never use client PIDs as liveness authority.  Their `.lease/`
 directory contains portable generation records with an opaque client id,
 renewal and expiry times, and a diagnostic buffer name.  A new owner
 exclusively creates the next generation in `claiming`, then activates it only
@@ -728,12 +811,18 @@ cannot commit over a newer owner.  The current head can be read uncached before
 a session object exists without acquiring or mutating the lease.
 
 Each generation also carries the required boolean `:unsettled-mutation` latch.
-Managed remote mutation sets it before child launch. Renewal, publishing,
+Managed mutation on a portable project target sets it before child launch.
+Renewal, publishing,
 release, and takeover preserve it. Proven settlement clears it by updating the
 exact owned generation only after no other armed mutating record remains; an
 unprovable result keeps it set. A restored owner therefore blocks mutation
 without reconstructing process records, and explicit acknowledgement must
 durably clear the owned generation before transient blocking state is removed.
+
+The target-side `.recovery/` marker is independent of lease liveness. Releasing
+or losing a client lease never deletes it, and a successor refreshes it after
+takeover before mutation admission. This preserves manual repair material
+until the successor explicitly confirms destructive abandonment.
 
 The persisted states are `claiming`, `active`, `publishing`, `released`, and
 `aborted`.  Unexpired claiming, active, and publishing records fence other
@@ -754,9 +843,9 @@ registered during the Emacs invocation before releasing live-session locks.
 Cleanup uses `:updated-at` when available, otherwise the sidecar or session
 directory modification time. It skips active locks and is throttled to once per
 workspace per Emacs invocation. Expired session cleanup removes its `local/`
-scratch directory with the rest of the session. Remote session stores are
-never auto-cleaned; their portable lease protocol has no deletion claim in
-v1. `nil` disables local cleanup.
+scratch directory with the rest of the session. Portable project session
+stores are never auto-cleaned; their portable lease protocol has no deletion
+claim in v1. `nil` disables local cleanup.
 
 ## Defcustoms
 
@@ -766,7 +855,8 @@ All in `mevedel-session-persistence.el`:
 - `mevedel-session-max-age-days` (default 30)
 - `mevedel-file-history-max-snapshot-bytes` (default 1 MB)
 - `mevedel-session-lease-seconds` (in `mevedel-session-durability.el`,
-  default 90)
+  default 90; renewal runs from a timer that cannot fire inside blocking
+  target I/O, so the owner reclaims its own expired lease)
 - `mevedel-session-lease-renewal-seconds` (in
   `mevedel-session-durability.el`, default 30)
 - `mevedel-session-publication-lease-seconds` (in

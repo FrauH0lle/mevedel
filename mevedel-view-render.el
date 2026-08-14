@@ -934,11 +934,15 @@ through font-lock refontification cycles.  Returns S."
 (defmacro mevedel-view--with-render-temp-buffer (&rest body)
   "Run BODY in a temporary buffer with user mode hooks suppressed."
   (declare (indent 0) (debug t))
+  ;; Modes chatter while they set themselves up (`sh-mode' announces its
+  ;; indentation setup, `python-mode' guesses its offset).  Rendering must
+  ;; not push that into the echo area.
   `(let ((change-major-mode-after-body-hook nil)
          (after-change-major-mode-hook nil)
          (hack-local-variables-hook nil)
          (enable-local-variables nil)
          (font-lock-mode-hook nil)
+         (inhibit-message t)
          (org-mode-hook nil))
      (with-temp-buffer
        (delay-mode-hooks

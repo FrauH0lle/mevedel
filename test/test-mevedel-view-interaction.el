@@ -61,7 +61,20 @@
     (should-not (eq mevedel-view--interaction-descriptors
                     mevedel-view--interaction-overlays))
     (should (= 0 (hash-table-count mevedel-view--interaction-descriptors)))
-    (should (= 0 (hash-table-count mevedel-view--interaction-overlays)))))
+    (should (= 0 (hash-table-count mevedel-view--interaction-overlays)))
+    (mevedel-view-interaction-teardown)))
+
+(mevedel-deftest mevedel-view-control-transfer-keymaps ()
+  ,test
+  (test)
+  :doc "binds owner and read-only transfer controls to their displayed action"
+  (should (eq (lookup-key mevedel-view--control-transfer-map (kbd "RET"))
+              #'mevedel-view-control-transfer-grant))
+  (should (eq (lookup-key mevedel-view--control-transfer-request-map (kbd "RET"))
+              #'mevedel-view-control-transfer-request))
+  (should-not
+   (eq (lookup-key mevedel-view--control-transfer-request-map (kbd "RET"))
+       #'mevedel-view-control-transfer-grant)))
 
 (mevedel-deftest mevedel-view--show-pending-plan
   (:doc "uses the clicked view and focuses hidden or visible approvals")
@@ -1107,7 +1120,7 @@
                (should (plist-get descriptor :activate)))
              mevedel-view--interaction-descriptors)
             (should (memq 'plan kinds))
-            (should (memq 'permission kinds)))))))
+            (should (memq 'permission kinds))))))
 
   :doc "nested authority prompt stays root-owned and preserves the active composer"
   (mevedel-view-test--with-buffers
@@ -1338,7 +1351,7 @@
                         (intern (format "%s-entry" kind))))
             (funcall (overlay-get current 'mevedel-view-interaction-activate)
                      'kept)))
-        (should (equal kinds (mapcar #'car callbacks)))))))
+        (should (equal kinds (mapcar #'car callbacks))))))))
 
 (provide 'test-mevedel-view-interaction)
 ;;; test-mevedel-view-interaction.el ends here

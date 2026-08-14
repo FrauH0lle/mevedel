@@ -54,6 +54,10 @@
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 (defvar mevedel--pending-model-input)
 
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration--safe-accepted-prompt
+                  "mevedel-collaboration" (data-buffer))
+
 ;; `mevedel-directive'
 (declare-function mevedel-directive-actions "mevedel-directive" (directive))
 
@@ -241,7 +245,9 @@
 (declare-function mevedel-request-assert-target-ready
                   "mevedel-structs" (session))
 (declare-function mevedel-request-begin "mevedel-structs"
-		  (session &optional directive-uuid))
+                  (session &optional directive-uuid))
+(declare-function mevedel-session-persistence-assert-new-mutation-authority
+                  "mevedel-session-persistence" (session))
 (declare-function mevedel-request-end "mevedel-structs" nil)
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x) t)
@@ -2307,6 +2313,8 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
               mevedel-view--pending-skill-submission
               (buffer-local-value 'mevedel--compaction-in-flight
                                   mevedel--data-buffer))))
+    (require 'mevedel-session-persistence)
+    (mevedel-session-persistence-assert-new-mutation-authority session)
     (if (not occupied)
         (mevedel-view-send)
       (when (buffer-local-value 'mevedel-session--read-only-mode
@@ -2496,6 +2504,9 @@ their local dispatch path."
          (input (if (and session (not mevedel-view--composer-scope))
                     (mevedel-view--bind-input-mentions session)
                   (mevedel-view--input-text))))
+    (when session
+      (require 'mevedel-session-persistence)
+      (mevedel-session-persistence-assert-new-mutation-authority session))
     (when (string-empty-p input)
       (user-error "Nothing to send"))
     (if mevedel-view--composer-scope
@@ -2871,6 +2882,7 @@ replaces INPUT only in the temporary request prompt."
         ;; buffer-local so it is readable from `--render-incremental'
         ;; without switching buffers.
         (setq data-turn-start (copy-marker (point) nil)))
+      (mevedel-collaboration--safe-accepted-prompt data-buffer)
       (when submission
         (mevedel-prompt-submission-commit submission))
       (when after-insert
@@ -2929,12 +2941,15 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                  (not (buffer-local-value 'mevedel--current-request
                                           data-buffer)))
         (with-current-buffer view-buffer
-          (when (and (not mevedel-view--agent-transcript-p)
+	  (when (and (not mevedel-view--agent-transcript-p)
                      (not mevedel-view--prompt-hook-pending)
                      (not mevedel-view--pending-skill-submission)
                      (not (mevedel-view--follow-up-auto-drain-blocked-p
                            session))
                      (string-empty-p (mevedel-view--input-text)))
+            (require 'mevedel-session-persistence)
+            (mevedel-session-persistence-assert-new-mutation-authority
+             session)
             (when-let* ((queue (mevedel-view--pending-follow-ups session)))
               (let* ((workflow (mevedel-session-directive-planning session))
                      (entry
@@ -2958,7 +2973,7 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                          (mevedel-view--activate-dropped-file-grants
                           dropped-file-grants session)))
                       (after-insert
-                      (lambda ()
+                       (lambda ()
                          (when (fboundp 'mevedel-telemetry-record)
                            (mevedel-telemetry-record
                             session 'user-message-dequeued

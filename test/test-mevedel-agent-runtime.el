@@ -1026,7 +1026,7 @@
           (mevedel-session-create
            "main"
            (mevedel-workspace--create
-            :type 'test :id root :root root :name "interrupt")
+            :type 'file :id root :root root :name "interrupt")
            root))
          (invocation (mevedel-agent-runtime-test--invocation child))
          (active-path (file-name-concat root "active"))

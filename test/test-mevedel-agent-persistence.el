@@ -64,7 +64,10 @@
   (mevedel-session-create
    "main"
    (mevedel-workspace--create
-    :type 'project
+    ;; These fixtures stage conversations at their fixed paths, which is the
+    ;; pid-lock reading; portable project sessions require published
+    ;; artifacts and are covered by the session persistence suites.
+    :type 'file
     :id "agent-persistence"
     :root (or root temporary-file-directory)
     :name "agent-persistence")))
@@ -490,13 +493,17 @@
             (plist-get (plist-get (car raw) :configuration)
                        :request-locals)))
       (setcdr (assq 'gptel-backend locals) "Missing Backend")
-      (should-not (mevedel-agent-persistence-deserialize-registry raw)))
+      (mevedel-test--with-captured-diagnostics nil
+        (should-not
+         (mevedel-agent-persistence-deserialize-registry raw))))
     (let* ((raw (mevedel-agent-persistence-serialize-registry source))
            (locals
             (plist-get (plist-get (car raw) :configuration)
                        :request-locals)))
       (setcdr (assq 'gptel-tools locals) '(("missing" "tool")))
-      (should-not (mevedel-agent-persistence-deserialize-registry raw))))
+      (mevedel-test--with-captured-diagnostics nil
+        (should-not
+         (mevedel-agent-persistence-deserialize-registry raw)))))
 
   :doc "drops an identity whose trusted reminder key has invalid arguments"
   (let* ((source (mevedel-agent-persistence-test--session))
@@ -507,7 +514,9 @@
          (agent-data
           (plist-get (plist-get (car raw) :configuration) :agent)))
     (setf (plist-get agent-data :reminders) '((verifier-read-only 1)))
-    (should-not (mevedel-agent-persistence-deserialize-registry raw)))
+    (mevedel-test--with-captured-diagnostics nil
+      (should-not
+       (mevedel-agent-persistence-deserialize-registry raw))))
 
   :doc "drops malformed identities and every descendant of a rejected parent"
   (let* ((source (mevedel-agent-persistence-test--session))
@@ -535,10 +544,12 @@
     (let ((raw (mevedel-agent-persistence-serialize-registry source)))
       (setf (plist-get (cadr raw) :conversation-location)
             "../escape.chat.org")
-      (should
-       (equal '("/root/valid")
-              (mapcar #'car
-                      (mevedel-agent-persistence-deserialize-registry raw))))))
+      (mevedel-test--with-captured-diagnostics nil
+        (should
+         (equal '("/root/valid")
+                (mapcar #'car
+                        (mevedel-agent-persistence-deserialize-registry
+                         raw)))))))
 
   :doc "propagates unexpected decoder bugs instead of dropping identities"
   (let* ((source (mevedel-agent-persistence-test--session))
@@ -593,8 +604,11 @@
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace
                         (mevedel-session-workspace session)))
-          (should (= 1 (mevedel-agent-persistence-restore-tree
-                        session root-buffer nil)))
+          ;; The escaping identity is dropped with a warning; the
+          ;; surviving registry is what this case asserts.
+          (mevedel-test--with-captured-diagnostics nil
+            (should (= 1 (mevedel-agent-persistence-restore-tree
+                          session root-buffer nil))))
           (should (equal '("/root/valid")
                          (mapcar #'car
                                  (mevedel-session-agent-registry session))))
@@ -645,8 +659,9 @@
                              hydrated-buffer
                              (generate-new-buffer " *agent-published*"))
                        hydrated-buffer)))
-            (should (= 0 (mevedel-agent-persistence-restore-tree
-                          session root-buffer nil))))
+            (mevedel-test--with-captured-messages nil
+              (should (= 0 (mevedel-agent-persistence-restore-tree
+                            session root-buffer nil)))))
           (should (equal relative (nth 2 seen)))
           (should-not (nth 3 seen))
           (should (eq hydrated-buffer
@@ -684,8 +699,9 @@
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace
                         (mevedel-session-workspace session)))
-          (should (= 0 (mevedel-agent-persistence-restore-tree
-                        session root-buffer t)))
+          (mevedel-test--with-captured-messages nil
+            (should (= 0 (mevedel-agent-persistence-restore-tree
+                          session root-buffer t))))
           (should (eq 'idle (mevedel-agent-record-activity record)))
           (should-not (mevedel-agent-record-invocation record))
           (should-not (mevedel-agent-record-blockers record))

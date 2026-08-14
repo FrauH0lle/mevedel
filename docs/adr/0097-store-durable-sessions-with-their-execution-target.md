@@ -25,9 +25,10 @@ immutable copies and their SHA-256 values below `.publications/`, writes the
 manifest last, and commits only by changing the lease head.  Readers therefore
 observe the complete old or new logical snapshot; they validate the manifest
 and sidecar eagerly and verify other artifact bytes only when selected.  A
-replacement marker starts from an empty logical snapshot.  Save As may validate
-a copied manifest as a transient merge base for a fresh nil-head child, but the
-rewritten child sidecar still performs that child's first durable commit.
+replacement marker starts from an empty logical snapshot.  Portable Save As
+materializes the parent's allowlisted logical artifacts without copying its
+manifest or control history, then the rewritten child sidecar performs that
+child's first durable commit.
 
 Serialized publication uses a bounded publishing lease synchronously renewed
 before and checked after every artifact rather than target I/O from timer

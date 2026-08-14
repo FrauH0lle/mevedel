@@ -670,7 +670,10 @@ owned by its initiating request; yielding detaches it from later request aborts
 without changing its session, model owner, sandbox boundary, working directory,
 or resource grants. Shell-native background operators are rejected because
 they would bypass this lifecycle. Remaining descendants are terminated when
-the managed shell exits.
+the managed shell exits: the captured process group is signalled once and then
+force-killed after a single bounded cleanup interval, and the record settles
+only after that. Run a service that must outlive its command outside managed
+Bash.
 
 Execution lifetime follows ownership rather than transcript visibility. Agent
 termination synchronously discards only that canonical agent's Bash and native
@@ -699,11 +702,11 @@ MEVEDEL_TEST_PODMAN_ROOT=/podman:container:/workspace/ \
 npx @emacs-eask/cli test ert test/test-mevedel-execution-remote.el
 ```
 
-The loss cases stop the disposable target container and require an unknown
-outcome plus the mutating-execution block. They then restart the target,
-reconnect, identity-check the bounded descendant, and clean its process group.
-SSH loss additionally requires `MEVEDEL_TEST_SSH_CONTAINER`, naming the Docker
-container behind the SSH root.
+The loss cases discard this client's transport and refuse reconnection while
+the execution settles, so the target keeps running and the outcome is
+genuinely unprovable. They require an unknown outcome plus the
+mutating-execution block, then reconnect, identity-check the bounded
+descendant that survived, and clean its process group.
 
 For a disposable local matrix, the repository provides one OCI target image
 used by Docker, Podman, and SSH.  The launcher builds it, starts one container

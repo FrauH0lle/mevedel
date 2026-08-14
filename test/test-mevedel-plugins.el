@@ -10,6 +10,7 @@
 (require 'mevedel-cockpit)
 (require 'mevedel-menu)
 (require 'mevedel-plugins)
+(require 'mevedel-execution-target)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
 (require 'helpers
@@ -48,7 +49,7 @@
 (defun mevedel-plugins-test--workspace (root)
   "Return a test workspace rooted at ROOT."
   (mevedel-workspace--create
-   :type 'test :id root :root root :name "test"))
+   :type 'file :id root :root root :name "test"))
 
 (defun mevedel-plugins-test--session (root)
   "Return a test session rooted at ROOT."
@@ -56,9 +57,12 @@
     (mevedel-session-create "main" workspace root)))
 
 (defun mevedel-plugins-test--slash (session args)
-  "Run `/plugin' ARGS as SESSION."
+  "Run `/plugin' ARGS as SESSION.
+The command reports its outcome and rescans skills, so its messages are
+captured instead of being written to the run log."
   (let ((mevedel--session session))
-    (mevedel-plugins-slash-command args)))
+    (mevedel-test--with-captured-messages nil
+      (mevedel-plugins-slash-command args))))
 
 (defun mevedel-plugins-test--read-state (workspace)
   "Read test plugin state under WORKSPACE."
@@ -409,14 +413,25 @@
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-plugins-remote-state-" t)))
          (remote-root (concat "/mevedelmock:plugins:" root))
-         (workspace (mevedel-plugins-test--workspace remote-root))
-         (session (mevedel-session-create "main" workspace remote-root))
-         (mevedel--session session)
+         ;; Disclosure, lease, and publication are the portable authority,
+         ;; which only a project workspace carries.
+         (workspace (mevedel-workspace--create
+                     :type 'project :id remote-root :root remote-root
+                     :name "test"))
+         (session nil)
+         (mevedel--session nil)
          (mevedel-session-durability--disclosed-targets
           (make-hash-table :test #'equal))
          prompts)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp '("plugins")
+          ;; The mock method only resolves inside this block, so the
+          ;; session has to be built here for a usable target.
+          (setq session (mevedel-session-create "main" workspace remote-root)
+                mevedel--session session)
+          (setf (mevedel-execution-target-readiness
+                 (mevedel-session-execution-target session))
+                '(:status ready))
           (unwind-protect
               (progn
                 (cl-letf (((symbol-function 'yes-or-no-p)
@@ -778,7 +793,8 @@
                                (expand-file-name winning-root)))))))
       (should (equal "Enable plugin"
                      (mevedel-plugins-list--activation-label workspace)))
-      (mevedel-plugins-list-details))
+      (mevedel-test--with-captured-messages nil
+        (mevedel-plugins-list-details)))
     (with-current-buffer "*mevedel plugin details*"
       (let ((details (buffer-string)))
         (should (string-match-p "Name:     demo" details))
@@ -803,7 +819,9 @@
 
   :doc "opens generated plugin cockpit help"
   (progn
-    (mevedel-plugins-list-help)
+    ;; `with-help-window' explains its own keys in the echo area.
+    (mevedel-test--with-captured-messages nil
+      (mevedel-plugins-list-help))
     (with-current-buffer mevedel-plugins-help-buffer-name
       (should (string-match-p "RET  Show selected plugin details"
                               (buffer-string)))
@@ -824,7 +842,8 @@
         (should (equal (cdr (assoc (concat "error:" root) rows))
                        (list "!" "../x" "" "error" "" ""
                              (abbreviate-file-name root)))))
-      (mevedel-plugins-list-details))
+      (mevedel-test--with-captured-messages nil
+        (mevedel-plugins-list-details)))
     (with-current-buffer "*mevedel plugin details*"
       (let ((details (buffer-string)))
         (should (string-match-p "Plugin metadata error" details))
@@ -848,24 +867,28 @@
         (let ((list-workspace
                (mevedel-plugins-list--workspace
                 (mevedel-cockpit-surface-context))))
-          (mevedel-plugins-list-toggle-enabled)
+          (mevedel-test--with-captured-messages nil
+            (mevedel-plugins-list-toggle-enabled))
           (should (equal "Disable plugin"
                          (mevedel-plugins-list--activation-label
                           list-workspace)))
           (should (mevedel-plugins--enabled-p
                    (mevedel-plugins--find "demo" list-workspace)
                    list-workspace))
-          (mevedel-plugins-list-toggle-hooks)
+          (mevedel-test--with-captured-messages nil
+            (mevedel-plugins-list-toggle-hooks))
           (should (equal "off"
                          (mevedel-plugins--hooks-status
                           (mevedel-plugins--find "demo" list-workspace)
                           list-workspace)))
-          (mevedel-plugins-list-toggle-hooks)
+          (mevedel-test--with-captured-messages nil
+            (mevedel-plugins-list-toggle-hooks))
           (should (equal "on"
                          (mevedel-plugins--hooks-status
                           (mevedel-plugins--find "demo" list-workspace)
                           list-workspace)))
-          (mevedel-plugins-list-toggle-enabled)
+          (mevedel-test--with-captured-messages nil
+            (mevedel-plugins-list-toggle-enabled))
           (should (equal "Enable plugin"
                          (mevedel-plugins-list--activation-label
                           list-workspace)))))))
@@ -880,14 +903,16 @@
                  (push (list directory args) calls)
                  (list 0 ""))))
       (with-current-buffer mevedel-plugins-list-buffer-name
-        (mevedel-plugins-list-update)))
+        (mevedel-test--with-captured-messages nil
+          (mevedel-plugins-list-update))))
     (should (equal (list (list (file-name-as-directory
                                 (expand-file-name root))
                                (list "pull" "--ff-only")))
                    calls))
     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
       (with-current-buffer mevedel-plugins-list-buffer-name
-        (mevedel-plugins-list-remove)))
+        (mevedel-test--with-captured-messages nil
+          (mevedel-plugins-list-remove))))
     (should-not (file-exists-p root)))
 
   :doc "installs, refreshes, and selects the newly installed plugin"
@@ -902,7 +927,8 @@
                     dest "{\"name\":\"fresh\"}"))
                  (list 0 ""))))
       (with-current-buffer mevedel-plugins-list-buffer-name
-        (mevedel-plugins-list-install "owner/fresh")
+        (mevedel-test--with-captured-messages nil
+          (mevedel-plugins-list-install "owner/fresh"))
         (should (assoc "fresh"
                        (mevedel-test-tabulated-entries-cells)))))
     (should (= 1 (length calls))))

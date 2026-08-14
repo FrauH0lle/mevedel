@@ -30,7 +30,7 @@
            (one (file-name-concat root "one.txt"))
            (two (file-name-concat root "two.txt"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "review"
+                       :type 'file :id root :root root :name "review"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "review" workspace root))
            (patch (string-join
@@ -126,7 +126,7 @@
                   (make-temp-file "mevedel-patch-feedback-" t)))
            (path (file-name-concat root "one.txt"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "feedback"
+                       :type 'file :id root :root root :name "feedback"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "feedback" workspace root))
            (patch (string-join
@@ -272,7 +272,7 @@
            (moved-path (file-name-concat root "moved.txt"))
            (added-path (file-name-concat root "new.txt"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "whole"
+                       :type 'file :id root :root root :name "whole"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "whole" workspace root))
            (patch (string-join
@@ -338,7 +338,7 @@
                   (make-temp-file "mevedel-patch-filewide-" t)))
            (path (file-name-concat root "one.txt"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "filewide"
+                       :type 'file :id root :root root :name "filewide"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "filewide" workspace root))
            (patch (string-join
@@ -401,7 +401,7 @@
                   (make-temp-file "mevedel-patch-edit-" t)))
            (path (file-name-concat root "one.txt"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "edit"
+                       :type 'file :id root :root root :name "edit"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "edit" workspace root))
            (patch (string-join
@@ -461,7 +461,7 @@
            (one (file-name-concat root "one.txt"))
            (two (file-name-concat root "two.txt"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "stale"
+                       :type 'file :id root :root root :name "stale"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "stale" workspace root))
            (patch (string-join
@@ -514,7 +514,7 @@
                   (make-temp-file "mevedel-patch-submit-key-" t)))
            (path (file-name-concat root "test.el"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "submit-key"
+                       :type 'file :id root :root root :name "submit-key"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "submit-key" workspace root))
            (patch (string-join
@@ -559,7 +559,7 @@
            (path (file-name-concat root "one.txt"))
            (parent-data (generate-new-buffer " *mevedel-patch-parent*"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "parent-race"
+                       :type 'file :id root :root root :name "parent-race"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "parent-race" workspace root))
            (patch (string-join
@@ -591,7 +591,8 @@
                 (buffer-substring-no-properties
                  (point-min) mevedel-view--input-marker))))
             (with-current-buffer parent-data
-              (setq-local mevedel--current-request t))
+              (setq-local mevedel--current-request
+                  (mevedel-request--create :session mevedel--session)))
             (with-current-buffer view-buf
               (goto-char (point-min))
               (search-forward "ApplyPatch ·")
@@ -622,7 +623,7 @@
                   (make-temp-file "mevedel-patch-reject-" t)))
            (path (file-name-concat root "one.txt"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "reject"
+                       :type 'file :id root :root root :name "reject"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "reject" workspace root))
            (patch (string-join
@@ -669,7 +670,7 @@
                   (make-temp-file "mevedel-patch-visit-" t)))
            (path (file-name-concat root "one.txt"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "visit"
+                       :type 'file :id root :root root :name "visit"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "visit" workspace root))
            (patch (string-join
@@ -774,7 +775,7 @@
                   (make-temp-file "mevedel-patch-rows-" t)))
            (one (file-name-concat root "one.txt"))
            (workspace (mevedel-workspace--create
-                       :type 'test :id root :root root :name "rows"
+                       :type 'file :id root :root root :name "rows"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "rows" workspace root))
            (patch (string-join

@@ -10,6 +10,7 @@
 (require 'mevedel-execution-target)
 (require 'mevedel-permissions)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-publication)
 (require 'mevedel-session-persistence)
 (require 'mevedel-workspace-identity)
 (require 'tramp)
@@ -76,9 +77,13 @@
               (setq-local mevedel--workspace workspace-a)
               (setq-local mevedel--session session-a)
               (insert "Published under incarnation A\n")
-              (mevedel-permission-add-session-resource-grant
-               session-a grant-path 'read)
-              (mevedel-session-persistence-save session-a owner))
+              ;; Stage a session saved while the original container was
+              ;; still live: durable mutation normally fences the target,
+              ;; which would acknowledge the replacement before resume.
+              (let ((mevedel-session-persistence--checking-incarnation t))
+                (mevedel-permission-add-session-resource-grant
+                 session-a grant-path 'read)
+                (mevedel-session-persistence-save session-a owner)))
             (let ((session-id (mevedel-session-session-id session-a))
                   (session-dir (mevedel-session-save-path session-a)))
               (should
@@ -116,29 +121,24 @@
                   (let* ((target-b
                           (mevedel-session-execution-target session-b))
                          (incarnation-b
-                          (mevedel-execution-target-observed-incarnation
-                           target-b)))
-                    (should
-                     (mevedel-execution-target-incarnation-changed-p
-                      target-b))
-                    (should
-                     (equal incarnation-a
-                            (mevedel-execution-target-incarnation target-b)))
+                          (mevedel-execution-target-incarnation target-b)))
+                    ;; Resume fences the rebuilt container before any
+                    ;; request: the old exact grants are revoked and the
+                    ;; replacement identity is published by its marker.
                     (should (stringp incarnation-b))
                     (should-not (equal incarnation-a incarnation-b))
-                    (should
-                     (equal (list (list :path grant-path :access 'read))
-                            (mevedel-session-resource-grants session-b)))
+                    (should-not
+                     (mevedel-execution-target-observed-incarnation
+                      target-b))
+                    (should-not
+                     (mevedel-execution-target-incarnation-changed-p
+                      target-b))
+                    (should-not
+                     (mevedel-session-resource-grants session-b))
                     (should (mevedel-request-p
                              (mevedel-request-begin session-b)))
                     (should-not
                      (mevedel-session-resource-grants session-b))
-                    (should
-                     (equal incarnation-b
-                            (mevedel-execution-target-incarnation target-b)))
-                    (should-not
-                     (mevedel-execution-target-incarnation-changed-p
-                      target-b))
                     (let* ((text
                             (mevedel-session-persistence-read-artifact
                              session-b "session.meta.el" t))

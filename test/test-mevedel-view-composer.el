@@ -78,7 +78,7 @@
   (:doc "selects Discuss result attempts and rejects unavailable actions")
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "directive-scope" :root "/tmp"
+           :type 'file :id "directive-scope" :root "/tmp"
            :name "directive-scope"))
          (record
           (mevedel-directive--create
@@ -178,7 +178,7 @@
           (make-temp-file "mevedel-inline-bound-failure-user-" t))
          (mevedel-skill-dirs '(".mevedel/skills"))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "inline-bound-failure"
+              :type 'file :id root :root root :name "inline-bound-failure"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -323,7 +323,7 @@
 
   :doc "Plan shows the retained permission mode"
   (let ((mevedel--session
-         (mevedel-session--create :name "main" :plan-mode t)))
+         (mevedel-session--create :authority-mode 'pid-lock :name "main" :plan-mode t)))
     (should (string= "\n[Plan · full-auto] > "
                      (mevedel-view--input-prompt-string 'full-auto))))
 
@@ -359,7 +359,7 @@
     (should (string-match-p
              "◆ Plan ·" (mevedel-view--input-prompt-string 'ask)))
     (let* ((mevedel--session
-            (mevedel-session--create :name "main" :plan-mode t))
+            (mevedel-session--create :authority-mode 'pid-lock :name "main" :plan-mode t))
            (prompt (mevedel-view--input-prompt-string 'edits)))
       (should (string-match-p "edits · Plan paused" prompt))
       (should (eq 'mevedel-view-permission-mode-edits
@@ -411,7 +411,7 @@
   :doc "preserves independent chat and directive drafts with exact point"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "scope" :root "/tmp" :name "scope"))
+                       :type 'file :id "scope" :root "/tmp" :name "scope"))
            (session (mevedel-session-create "main" workspace))
            (record (mevedel-directive--create
                     :id "directive-1" :request "Explain this code"))
@@ -441,7 +441,7 @@
   :doc "stores directive scope on queued follow-ups"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "queue-scope" :root "/tmp"
+                       :type 'file :id "queue-scope" :root "/tmp"
                        :name "queue-scope"))
            (session (mevedel-session-create "main" workspace)))
       (with-current-buffer data-buf
@@ -498,7 +498,7 @@
   ,test
   (test)
   (let ((mevedel--session
-         (mevedel-session--create :name "main" :plan-mode t)))
+         (mevedel-session--create :authority-mode 'pid-lock :name "main" :plan-mode t)))
     (should (mevedel-view--plan-mode-p))
     (setf (mevedel-session-plan-mode mevedel--session) nil)
     (should-not (mevedel-view--plan-mode-p))))
@@ -513,6 +513,7 @@
     (unwind-protect
         (mevedel-view-test--with-buffers
           (let ((session (mevedel-session--create
+                          :authority-mode 'pid-lock
                           :name "main"
                           :permission-mode 'ask)))
             (with-current-buffer data-buf
@@ -564,6 +565,7 @@
   (test)
   (mevedel-view-test--with-buffers
     (let ((session (mevedel-session--create
+                    :authority-mode 'pid-lock
                     :name "main"
                     :permission-mode 'full-auto)))
       (with-current-buffer data-buf
@@ -654,6 +656,7 @@
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
+            :authority-mode 'pid-lock
             :name "source"
             :session-id "source-id"
             :current-segment 1))
@@ -721,6 +724,7 @@
   (mevedel-view-test--with-buffers
     (let* ((session
             (mevedel-session--create
+             :authority-mode 'pid-lock
              :name "child"
              :session-id "child-id"
              :forked-from-session-id "source-id"
@@ -766,6 +770,7 @@
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
+            :authority-mode 'pid-lock
             :name "source"
             :session-id "source-id"
             :current-segment 1))
@@ -825,6 +830,7 @@
            (make-temp-file "mevedel-mentions-worktree-" t)))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :worktree-source-root source
            :worktree-directory worktree))
          (text (copy-sequence "Use @file:local and $skill"))
@@ -1312,7 +1318,7 @@
          (root (make-temp-file "mevedel-view-skills-" t))
          (mevedel-skill-dirs (list root))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "view-skills"
+              :type 'file :id root :root root :name "view-skills"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1346,7 +1352,7 @@
          (root (make-temp-file "mevedel-view-skill-binding-" t))
          (mevedel-skill-dirs (list root))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "view-skill-binding"
+              :type 'file :id root :root root :name "view-skill-binding"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1384,7 +1390,7 @@
   :doc "view completes Goal commands and permission-mode arguments"
   (let* ((root (make-temp-file "mevedel-view-mode-capf-" t))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "view-mode-capf"
+              :type 'file :id root :root root :name "view-mode-capf"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1414,7 +1420,7 @@
   :doc "view review command completes target arguments"
   (let* ((root (make-temp-file "mevedel-view-review-capf-" t))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "view-review-capf"
+              :type 'file :id root :root root :name "view-review-capf"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1436,7 +1442,7 @@
   :doc "view root completion inserts a real separator before skill hint"
   (let* ((root (make-temp-file "mevedel-view-root-space-" t))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "view-root-space"
+              :type 'file :id root :root root :name "view-root-space"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1514,7 +1520,7 @@
   :doc "argument-hint appears as overlay text before args"
   (let* ((root (make-temp-file "mevedel-view-skill-hint-" t))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "view-skill-hint"
+              :type 'file :id root :root root :name "view-skill-hint"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1543,7 +1549,7 @@
   :doc "argument names show only remaining slots"
   (let* ((root (make-temp-file "mevedel-view-named-hint-" t))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "view-named-hint"
+              :type 'file :id root :root root :name "view-named-hint"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1576,7 +1582,7 @@
   :doc "non-skill input clears the overlay"
   (let* ((root (make-temp-file "mevedel-view-clear-hint-" t))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "view-clear-hint"
+              :type 'file :id root :root root :name "view-clear-hint"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -1682,7 +1688,7 @@
   :doc "unknown dollar-prefixed input sends as normal prompt text"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vd" :root "/tmp/vd" :name "vd"
+                :type 'file :id "vd" :root "/tmp/vd" :name "vd"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -1708,7 +1714,7 @@
         send-called)
     (unwind-protect
         (let* ((ws (mevedel-workspace--create
-                    :type 'test :id root :root root :name "history-send"
+                    :type 'file :id root :root root :name "history-send"
                     :file-cache (mevedel-file-cache--create
                                  :table (make-hash-table :test #'equal)
                                  :order nil :total-bytes 0)))
@@ -1753,7 +1759,7 @@ Binds `data-buf', `view-buf', `session', and `skill' in scope."
                     (or (mevedel-skill-context template) 'inline))
             (mevedel-skill-body template)))
           (ws (mevedel-workspace--create
-               :type 'test :id root :root root :name "view-skill-send"
+               :type 'file :id root :root root :name "view-skill-send"
                :file-cache (mevedel-file-cache--create
                             :table (make-hash-table :test #'equal)
                             :order nil :total-bytes 0)))
@@ -1778,7 +1784,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (root (make-temp-file "mevedel-view-planned-skills-" t))
           (mevedel-skill-dirs (list root))
           (ws (mevedel-workspace--create
-               :type 'test :id root :root root :name "planned-skills"
+               :type 'file :id root :root root :name "planned-skills"
                :file-cache (mevedel-file-cache--create
                             :table (make-hash-table :test #'equal)
                             :order nil :total-bytes 0)))
@@ -2217,7 +2223,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
          (user-skills (make-temp-file "mevedel-inline-bound-user-" t))
          (mevedel-skill-dirs '(".mevedel/skills"))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "inline-bound-queue"
+              :type 'file :id root :root root :name "inline-bound-queue"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -2284,7 +2290,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
          (user-skills (make-temp-file "mevedel-inline-bound-edit-user-" t))
          (mevedel-skill-dirs '(".mevedel/skills"))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "inline-bound-edit"
+              :type 'file :id root :root root :name "inline-bound-edit"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -2332,7 +2338,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
          (skill-root (file-name-concat root ".mevedel/skills"))
          (mevedel-skill-dirs '(".mevedel/skills"))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "inline-bound-rebind"
+              :type 'file :id root :root root :name "inline-bound-rebind"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -2401,7 +2407,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (make-temp-file "mevedel-inline-bound-history-user-" t))
          (mevedel-skill-dirs '(".mevedel/skills"))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "inline-bound-history"
+              :type 'file :id root :root root :name "inline-bound-history"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -2459,6 +2465,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
          (skill-root (file-name-concat root "skills"))
          (mevedel-skill-dirs (list skill-root))
          (session (mevedel-session--create
+                   :authority-mode 'pid-lock
                    :name "main"
                    :working-directory root
                    :skills-snapshot :uninitialized
@@ -2669,7 +2676,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
            (mevedel-model-workloads
             '(($local:alpha :provider "Fast:fast-model" :effort high)))
            (ws (mevedel-workspace--create
-                :type 'test :id root :root root :name "skill-policy"
+                :type 'file :id root :root root :name "skill-policy"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -3239,7 +3246,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "attaches pending SessionStart hook context to the submitted prompt"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vf-session-hook" :root "/tmp/vf"
+                :type 'file :id "vf-session-hook" :root "/tmp/vf"
                 :name "vf"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
@@ -3310,6 +3317,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (test)
   :doc "blocks fallback drainage for approval and Goal handoff ownership"
   (let ((session (mevedel-session--create
+                  :authority-mode 'pid-lock
                   :name "main" :pending-plan-approval 'plan)))
     (should (mevedel-view--follow-up-auto-drain-blocked-p session))
     (setf (mevedel-session-pending-plan-approval session) nil)
@@ -3317,6 +3325,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
      (mevedel-view--follow-up-auto-drain-blocked-p session)))
   (let ((here
          (mevedel-session--create
+          :authority-mode 'pid-lock
           :name "here"
           :plan-metadata
           '(:implementation-retry
@@ -3324,6 +3333,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
              :selection (:location here :execution goal)))))
         (source
          (mevedel-session--create
+          :authority-mode 'pid-lock
           :name "source"
           :plan-metadata
           '(:implementation-retry
@@ -3331,6 +3341,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
              :selection (:location worktree :execution goal)))))
         (target
          (mevedel-session--create
+          :authority-mode 'pid-lock
           :name "target"
           :plan-metadata '(:implementation-goal-id "target-goal"))))
     (should (mevedel-view--follow-up-auto-drain-blocked-p here))
@@ -3339,6 +3350,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (let* ((goal (mevedel-goal--create :id "goal" :status 'paused))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "paused" :goal goal
            :pending-follow-ups
            '((:input "held" :queued-at-goal-id "goal")))))
@@ -3350,11 +3362,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (setf (mevedel-goal-status goal) status)
       (should (mevedel-view--follow-up-auto-drain-blocked-p session))))
   (let ((session (mevedel-session--create
+                  :authority-mode 'pid-lock
                   :name "failed" :pending-input-failure-paused t)))
     (should (mevedel-view--follow-up-auto-drain-blocked-p session)))
   :doc "holds ordinary input but permits the owning directive Plan follow-up"
   (let ((session
          (mevedel-session--create
+          :authority-mode 'pid-lock
           :name "directive-plan"
           :directive-planning '(:directive-id "d1" :phase approval)
           :pending-follow-ups '((:input "ordinary")))))
@@ -3370,7 +3384,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 
   :doc "C-c TAB queues independent FIFO follow-ups during an active request"
   (mevedel-view-test--with-buffers
-    (let ((session (mevedel-session--create :name "main")))
+    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "main")))
       (with-current-buffer data-buf
         (setq-local mevedel--session session
                     mevedel--current-request
@@ -3400,7 +3414,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 
   :doc "C-c TAB cannot overtake an older follow-up after the request settles"
   (mevedel-view-test--with-buffers
-    (let ((session (mevedel-session--create :name "main")))
+    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "main")))
       (with-current-buffer data-buf
         (setq-local mevedel--session session
                     mevedel--current-request
@@ -3429,7 +3443,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 
   :doc "C-c RET queues plain steering against the active request"
   (mevedel-view-test--with-buffers
-    (let* ((session (mevedel-session--create :name "main"))
+    (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "main"))
            (request (mevedel-request--create
                      :id "request-1" :session session
                      :fsm (gptel-make-fsm :state 'TOOL))))
@@ -3456,7 +3470,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
          (file (file-name-concat root "target.txt"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id root :root root :name "steering-file"
+           :type 'file :id root :root root :name "steering-file"
            :file-cache
            (mevedel-file-cache--create
             :table (make-hash-table :test #'equal)
@@ -3560,7 +3574,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 
   :doc "a lost ordinary steering race restores the exact composer state"
   (mevedel-view-test--with-buffers
-    (let* ((session (mevedel-session--create :name "steering-race"))
+    (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "steering-race"))
            (fsm (gptel-make-fsm :state 'TOOL))
            (request
             (mevedel-request--create
@@ -3606,6 +3620,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
+            :authority-mode 'pid-lock
             :name "handoff"
             :plan-metadata
             '(:implementation-retry
@@ -3630,6 +3645,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
     (let* ((metadata '(:status proposed :proposal-id (1 2 "hash")))
            (session
             (mevedel-session--create
+             :authority-mode 'pid-lock
              :name "plan" :plan-mode t :plan-metadata metadata)))
       (setf (mevedel-session-pending-plan-approval session)
             (list :session session :callback #'ignore :renderer #'ignore))
@@ -3652,7 +3668,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 
   :doc "special root workflows reject steering but accept a follow-up"
   (mevedel-view-test--with-buffers
-    (let* ((session (mevedel-session--create :name "review"))
+    (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "review"))
            (request
             (mevedel-request--create
              :id "review-request" :session session :origin "/root")))
@@ -3674,7 +3690,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "plain input during WaitAgent is injected before its resumed sample"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq" :root "/tmp/vq" :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -3738,7 +3754,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (setq-local mevedel--workspace workspace)
             (setq-local mevedel--current-request
                         (mevedel-request--create
-                         :id "wait-hook" :session session :fsm fsm)))
+                         :id "wait-hook" :session session :fsm fsm))
+            (mevedel-session-set-root-buffer session data-buf))
           (cl-letf (((symbol-function 'run-at-time)
                      (lambda (&rest _) 'fake-timer)))
             (mevedel-agent-control-wait
@@ -3794,7 +3811,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "a WaitAgent ending during preparation leaves steering queued"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "steering-race" :root "/tmp"
+                       :type 'file :id "steering-race" :root "/tmp"
                        :name "steering-race"))
            (session (mevedel-session-create "main" workspace))
            (fsm (gptel-make-fsm
@@ -3842,7 +3859,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "a prepared queue entry survives failure before transcript insertion"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "prepared-retry" :root "/tmp"
+                       :type 'file :id "prepared-retry" :root "/tmp"
                        :name "prepared-retry"))
            (entries '((:event SessionStart :body "reserved retry context")))
            (session (mevedel-session-create "main" workspace))
@@ -3880,7 +3897,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "a queued directive follow-up keeps its scope through dispatch"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "directive-queue" :root "/tmp"
+                       :type 'file :id "directive-queue" :root "/tmp"
                        :name "directive-queue"))
            (session (mevedel-session-create "main" workspace))
            (scope '(:directive-id "directive-1" :action discuss
@@ -3905,7 +3922,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (let* ((root (make-temp-file "mevedel-ref-queue-" t))
          (file (file-name-concat root "reference.txt"))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "ref-queue"
+              :type 'file :id root :root root :name "ref-queue"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -4006,7 +4023,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (let* ((root (make-temp-file "mevedel-file-queue-" t))
          (file (file-name-concat root "queued.txt"))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "file-queue"
+              :type 'file :id root :root root :name "file-queue"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -4085,7 +4102,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "queued MCP mention keeps its locator and reads after reconnect"
   (let* ((root (make-temp-file "mevedel-mcp-queue-" t))
          (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "mcp-queue"
+              :type 'file :id root :root root :name "mcp-queue"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -4167,7 +4184,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "queued follow-up stays visible across incremental in-flight rendering"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-incremental" :root "/tmp/vq"
+                :type 'file :id "vq-incremental" :root "/tmp/vq"
                 :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
@@ -4213,7 +4230,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "queued follow-up stays visible across in-flight full rerender"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-full-rerender" :root "/tmp/vq"
+                :type 'file :id "vq-full-rerender" :root "/tmp/vq"
                 :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
@@ -4252,7 +4269,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "pending-input UI shows the queue-management key hint"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-hint" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-hint" :root "/tmp/vq" :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -4337,7 +4354,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "fallback drain preserves queued entries while plan approval is pending"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-fallback-plan" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-fallback-plan" :root "/tmp/vq" :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -4364,7 +4381,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "directive planning drains its revision before earlier ordinary input"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-directive-plan" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-directive-plan" :root "/tmp/vq" :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -4393,7 +4410,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "late drain scheduler uses data buffer after request cleanup"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-hook-late-schedule"
+                :type 'file :id "vq-hook-late-schedule"
                 :root "/tmp/vq" :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
@@ -4415,7 +4432,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "interaction rebuild preserves composer point while drafting"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-point" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-point" :root "/tmp/vq" :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -4469,7 +4486,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "slash input during an active request is rejected"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-slash" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-slash" :root "/tmp/vq" :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -4488,7 +4505,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "fallback drain submits one exact FIFO entry per turn"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-fifo" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-fifo" :root "/tmp/vq" :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -4522,7 +4539,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "queued follow-ups do not drain while the request is still active"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-active" :root "/tmp/vq" :name "vq"
+                :type 'file :id "vq-active" :root "/tmp/vq" :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
@@ -4543,7 +4560,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "clearing prepared follow-ups restores their reserved context"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-clear" :root "/tmp/vq" :name "vq"))
+                :type 'file :id "vq-clear" :root "/tmp/vq" :name "vq"))
            (session (mevedel-session-create "main" ws))
            (context-entries '((:event SessionStart :body "clear context")))
            (submission
@@ -4566,7 +4583,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (test)
   :doc "applies prompt-hook context and starts the Goal in the data buffer"
   (mevedel-view-test--with-buffers
-    (let ((session (mevedel-session--create :name "main"))
+    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "main"))
           started
           started-buffer)
       (with-current-buffer data-buf
@@ -4592,7 +4609,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should (equal '("expanded" "hook context") started))))
   :doc "treats the former auto selector as ordinary objective text"
   (mevedel-view-test--with-buffers
-    (let ((session (mevedel-session--create :name "main"))
+    (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "main"))
           started)
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
@@ -4632,7 +4649,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
             (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace))
+            (setq-local mevedel--workspace workspace)
+            (mevedel-session-set-root-buffer session data-buf))
           (with-current-buffer view-buf
             (goto-char (mevedel-view--input-start))
             (insert "blocked prompt")
@@ -4650,7 +4668,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "blocked prompt context is consumed once by the next accepted root input"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "blocked-context" :root "/tmp"
+                       :type 'file :id "blocked-context" :root "/tmp"
                        :name "blocked-context"))
            (session (mevedel-session-create "main" workspace))
            (decisions
@@ -4660,7 +4678,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
            (blocked-count 0))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (setq-local mevedel--workspace workspace))
+        (setq-local mevedel--workspace workspace)
+        (mevedel-session-set-root-buffer session data-buf))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--workspace workspace))
@@ -4688,7 +4707,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "accepted Plan follow-up input immediately invalidates stale approval"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "plan-follow-up" :root "/tmp"
+                       :type 'file :id "plan-follow-up" :root "/tmp"
                        :name "plan-follow-up"))
            (selection '(:location here :context current
                         :execution direct :mode edits))
@@ -4726,7 +4745,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "first skill turn orders start, expansion, then submit context"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "ordered-context" :root "/tmp"
+                       :type 'file :id "ordered-context" :root "/tmp"
                        :name "ordered-context"))
            (session (mevedel-session-create "main" workspace))
            accepted-context)
@@ -4761,7 +4780,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "errors before transcript insertion leave pending context for retry"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "callback-rollback" :root "/tmp"
+                       :type 'file :id "callback-rollback" :root "/tmp"
                        :name "callback-rollback"))
            (session (mevedel-session-create "main" workspace))
            retry-context)
@@ -4789,7 +4808,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "send startup failure does not duplicate context already inserted"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "send-failure" :root "/tmp"
+                       :type 'file :id "send-failure" :root "/tmp"
                        :name "send-failure"))
            (session (mevedel-session-create "main" workspace)))
       (with-current-buffer data-buf
@@ -4826,7 +4845,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
             (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace))
+            (setq-local mevedel--workspace workspace)
+            (mevedel-session-set-root-buffer session data-buf))
           (with-current-buffer view-buf
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function 'mevedel-goal-start)
@@ -4966,7 +4986,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
             (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace))
+            (setq-local mevedel--workspace workspace)
+            (mevedel-session-set-root-buffer session data-buf))
           (cl-letf (((symbol-function 'gptel-send)
                      (lambda (&rest _)
                        (setq send-called t))))
@@ -5065,7 +5086,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
             (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace))
+            (setq-local mevedel--workspace workspace)
+            (mevedel-session-set-root-buffer session data-buf))
           (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                      (lambda (_event _event-plist callback &rest _)
                        (funcall callback :args)))
@@ -5090,7 +5112,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
             (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace))
+            (setq-local mevedel--workspace workspace)
+            (mevedel-session-set-root-buffer session data-buf))
           (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                      (lambda (_event _event-plist callback &rest _)
                        (funcall callback 'passed)))
@@ -5120,7 +5143,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
             (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace))
+            (setq-local mevedel--workspace workspace)
+            (mevedel-session-set-root-buffer session data-buf))
           (cl-letf (((symbol-function 'gptel-send)
                      (lambda (&rest _)
                        (cl-incf send-count))))

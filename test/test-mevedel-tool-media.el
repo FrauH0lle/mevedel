@@ -68,6 +68,7 @@
   (let* ((target (mevedel-execution-target-create
                   "/ssh:user@host:/srv/project/"))
          (session (mevedel-session--create
+                   :authority-mode 'portable
                    :name "remote-media"
                    :execution-target target
                    :working-directory "/ssh:user@host:/srv/project/"))
@@ -139,6 +140,7 @@
                   (buffer-string)))
          (target (mevedel-execution-target-create remote-root))
          (session (mevedel-session--create
+                   :authority-mode 'portable
                    :name "remote-media" :execution-target target
                    :save-path save-path)))
     (unwind-protect

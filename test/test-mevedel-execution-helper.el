@@ -19,7 +19,7 @@
 (defun test-mevedel-execution-helper--workspace (root)
   "Return a minimal test workspace rooted at ROOT."
   (mevedel-workspace--create
-   :type 'test :id root :root root :name "execution-helper"))
+   :type 'file :id root :root root :name "execution-helper"))
 
 (mevedel-deftest mevedel-execution-start-helper ()
   ,test

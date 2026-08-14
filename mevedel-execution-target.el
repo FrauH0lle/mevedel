@@ -81,6 +81,87 @@
     (cons (substring entry 0 separator)
           (substring entry (1+ separator)))))
 
+(defun mevedel-execution-target--read-local-identity (path)
+  "Return the trimmed contents of local identity file PATH, or nil."
+  (condition-case nil
+      (when (file-readable-p path)
+        (with-temp-buffer
+          (insert-file-contents-literally path)
+          (let ((value (string-trim (buffer-string))))
+            (and (not (string-empty-p value)) value))))
+    (error nil)))
+
+(defun mevedel-execution-target--local-pid1-start-time ()
+  "Return stable PID 1 start ticks from `/proc', or nil."
+  (condition-case nil
+      (when-let* ((line (mevedel-execution-target--read-local-identity
+                         "/proc/1/stat"))
+                  (match (and (string-match "\\(.*\\)) [A-Z] " line)
+                              (match-end 1)))
+                  (fields (split-string
+                           (substring line (1+ match)) "[ \t]+" t)))
+        ;; FIELD 3 (state) is the first element.  FIELD 22 (starttime) is
+        ;; element 19 when the split starts at that state field.
+        (nth 19 fields))
+    (error nil)))
+
+(defun mevedel-execution-target--normalize-incarnation-field (value)
+  "Return VALUE in the canonical single-line incarnation form."
+  (replace-regexp-in-string
+   "[\r\n]" "" (string-trim (or value ""))))
+
+(defun mevedel-execution-target--normalize-hostname (hostname)
+  "Return canonical HOSTNAME bytes for an incarnation payload."
+  (let ((value (downcase
+                (mevedel-execution-target--normalize-incarnation-field
+                 hostname))))
+    (while (string-suffix-p "." value)
+      (setq value (substring value 0 -1)))
+    value))
+
+(defun mevedel-execution-target--local-hostname ()
+  "Return the local kernel hostname used by the target probe, or nil.
+
+The rest of the local payload comes from this machine's `/proc', so the
+hostname must too: a remote `default-directory' would mix two machines into
+one fingerprint and read as a replacement."
+  (condition-case nil
+      (with-temp-buffer
+        (let ((default-directory "/"))
+          (unless (zerop (process-file "uname" nil t nil "-n"))
+            (error "'uname' failed")))
+        (let ((value (string-trim (buffer-string))))
+          (and (not (string-empty-p value)) value)))
+    (error nil)))
+
+(defun mevedel-execution-target--incarnation-payload
+    (boot machine pid1-start hostname)
+  "Return canonical incarnation bytes for BOOT, MACHINE, PID1-START, HOSTNAME."
+  (format "boot=%s\nmachine=%s\npid1-start=%s\nhostname=%s\n"
+          (mevedel-execution-target--normalize-incarnation-field boot)
+          (mevedel-execution-target--normalize-incarnation-field machine)
+          (mevedel-execution-target--normalize-incarnation-field pid1-start)
+          (mevedel-execution-target--normalize-hostname hostname)))
+
+(defun mevedel-execution-target--local-incarnation ()
+  "Return a stable fingerprint for this local host incarnation.
+
+The boot id or PID 1 start time is required to distinguish a reboot or
+recreated runtime.  Machine id and hostname may salt that strong observation,
+but never form an authority identity on their own."
+  (let ((boot (mevedel-execution-target--read-local-identity
+               "/proc/sys/kernel/random/boot_id"))
+        (machine (mevedel-execution-target--read-local-identity
+                  "/etc/machine-id"))
+        (pid1-start (mevedel-execution-target--local-pid1-start-time))
+        (hostname (mevedel-execution-target--local-hostname)))
+    (when (or (and boot (not (string-empty-p boot)))
+              (and pid1-start (not (string-empty-p pid1-start))))
+      (secure-hash
+       'sha256
+       (mevedel-execution-target--incarnation-payload
+        boot machine pid1-start hostname)))))
+
 (defun mevedel-execution-target-create (workspace-root)
   "Derive an execution target from WORKSPACE-ROOT.
 
@@ -108,6 +189,8 @@ This is side-effect free and never opens a TRAMP connection."
      :identity (mevedel-execution-target--identity
                 workspace-root method hop)
      :support-tier (mevedel-execution-target--support-tier method hop)
+     :incarnation (and (null prefix)
+                       (mevedel-execution-target--local-incarnation))
      :environment
      (unless prefix
        (delq nil
@@ -245,17 +328,40 @@ DIRECTORY may be target-native or already qualified for TARGET."
          (mevedel-execution-target--process-output
           target bash "-c"
           (concat
-           "IFS= read -r boot </proc/sys/kernel/random/boot_id || exit 70; "
+           "boot=; "
+           "if test -r /proc/sys/kernel/random/boot_id; then "
+           "IFS= read -r boot </proc/sys/kernel/random/boot_id || true; "
+           "fi; "
            "machine=; "
            "if test -r /etc/machine-id; then "
            "IFS= read -r machine </etc/machine-id || true; fi; "
-           "IFS= read -r line </proc/1/stat || exit 71; "
+           "start=; "
+           "if IFS= read -r line </proc/1/stat; then "
            "rest=${line##*) }; set -- $rest; start=${20}; "
-           "test -n \"$boot\" && test -n \"$start\" || exit 72; "
-           "printf '%s\\n%s\\n%s\\n' \"$boot\" \"$machine\" \"$start\""))))
+           "fi; "
+           "hostname=$(uname -n 2>/dev/null || true); "
+           "test -n \"$boot\" || test -n \"$start\" || exit 72; "
+           "printf 'boot=%s\\nmachine=%s\\npid1-start=%s\\nhostname=%s\\n' "
+           "\"$boot\" \"$machine\" \"$start\" \"$hostname\""))))
     (when (string-empty-p output)
       (error "Target incarnation probe returned no identity"))
-    (secure-hash 'sha256 output)))
+    (let (boot machine pid1-start hostname)
+      (dolist (line (split-string output "\n" t))
+        (when (string-match
+               "\\`\\(boot\\|machine\\|pid1-start\\|hostname\\)=\\(.*\\)\\'"
+               line)
+          (pcase (match-string 1 line)
+            ("boot" (setq boot (match-string 2 line)))
+            ("machine" (setq machine (match-string 2 line)))
+            ("pid1-start" (setq pid1-start (match-string 2 line)))
+            ("hostname" (setq hostname (match-string 2 line))))))
+      (unless (or (not (string-empty-p (or boot "")))
+                  (not (string-empty-p (or pid1-start ""))))
+        (error "Target incarnation probe returned no identity"))
+      (secure-hash
+       'sha256
+       (mevedel-execution-target--incarnation-payload
+        boot machine pid1-start hostname)))))
 
 (defun mevedel-execution-target--record-incarnation (target incarnation)
   "Stage observed INCARNATION on TARGET and detect replacement.
@@ -278,6 +384,18 @@ authority granted to the old target."
             (mevedel-execution-target-incarnation-changed-p target) t))))
   target)
 
+(defun mevedel-execution-target-refresh-incarnation (target)
+  "Refresh TARGET's local incarnation observation when it is local.
+
+Remote targets refresh their identity as part of readiness probing; local
+targets do not need the full command probe merely to detect replacement."
+  (unless (mevedel-execution-target-remote-p target)
+    (let ((incarnation (mevedel-execution-target--local-incarnation)))
+      (unless incarnation
+        (error "Local target incarnation is unavailable"))
+      (mevedel-execution-target--record-incarnation target incarnation)))
+  target)
+
 (defun mevedel-execution-target-seed-incarnation (target incarnation)
   "Seed TARGET with persisted INCARNATION without detecting replacement."
   (unless (and (stringp incarnation) (not (string-blank-p incarnation)))
@@ -285,6 +403,25 @@ authority granted to the old target."
   (setf (mevedel-execution-target-incarnation target) incarnation
         (mevedel-execution-target-observed-incarnation target) nil
         (mevedel-execution-target-incarnation-changed-p target) nil)
+  target)
+
+(defun mevedel-execution-target-restore-incarnation (target incarnation)
+  "Restore persisted INCARNATION while retaining TARGET's live observation.
+
+For a local target, TARGET already carries the current host fingerprint from
+construction.  A mismatch remains pending until the caller revokes prior
+grants and publishes the replacement profile."
+  (unless (and (stringp incarnation) (not (string-blank-p incarnation)))
+    (error "Invalid target incarnation: %S" incarnation))
+  (when (and (not (mevedel-execution-target-remote-p target))
+             (null (mevedel-execution-target-incarnation target)))
+    (error "Local target incarnation is unavailable"))
+  (let ((observed (mevedel-execution-target-incarnation target)))
+    (setf (mevedel-execution-target-incarnation target) incarnation
+          (mevedel-execution-target-observed-incarnation target)
+          (and observed (unless (equal observed incarnation) observed))
+          (mevedel-execution-target-incarnation-changed-p target)
+          (and observed (not (equal observed incarnation)))))
   target)
 
 (defun mevedel-execution-target-prepare-incarnation-acknowledgement (target)
@@ -413,7 +550,7 @@ sidecar publication commits."
 
 The fixed probe result is cached for TARGET's live TRAMP connection.  A
 reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
-SANDBOX-MODE records the session's effective confinement requirement."
+  SANDBOX-MODE records the session's effective confinement requirement."
   (let* ((remote (mevedel-execution-target-remote-p target))
          (connection (and remote
                           (mevedel-execution-target--live-connection target)))
@@ -422,6 +559,8 @@ SANDBOX-MODE records the session's effective confinement requirement."
                (not (eq connection
                         (mevedel-execution-target-connection-process target)))))
          (refresh (or refresh reconnected)))
+    (unless remote
+      (mevedel-execution-target-refresh-incarnation target))
     (when (and remote
                (or refresh
                    (null (mevedel-execution-target-readiness target))))

@@ -82,9 +82,9 @@
 (declare-function mevedel--restore-file-instructions
                   "mevedel-persistence" (file &optional message))
 
-;; `mevedel-session-durability'
-(declare-function mevedel-session-durability-logical-path-p
-                  "mevedel-session-durability" (path))
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-logical-path-p
+                  "mevedel-session-publication" (path))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-artifact-present-p
@@ -590,6 +590,7 @@ boundary checks."
 (defun mevedel-mentions--file-content-hash (path)
   "Return a SHA1 hash of PATH's literal file contents."
   (with-temp-buffer
+    (set-buffer-multibyte nil)
     (insert-file-contents-literally path)
     (secure-hash 'sha1 (buffer-string))))
 
@@ -697,8 +698,8 @@ optional strings from the `#L<start>[-<end>]' suffix."
                 (substring expanded (length root))))))
          (artifact-present
           (when artifact-logical
-            (require 'mevedel-session-durability)
-            (and (mevedel-session-durability-logical-path-p
+            (require 'mevedel-session-publication)
+            (and (mevedel-session-publication-logical-path-p
                   artifact-logical)
                  (progn
                    (require 'mevedel-session-persistence)

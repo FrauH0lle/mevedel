@@ -17,6 +17,9 @@
 (require 'mevedel-skills-ui)
 (require 'mevedel-structs)
 
+(declare-function mevedel-session-persistence-assert-new-mutation-authority
+                  "mevedel-session-persistence" (session))
+
 ;; `gptel'
 (declare-function gptel--update-status
                   "ext:gptel" (status &optional face))
@@ -958,6 +961,9 @@ permission policy decides whether verifier validation commands may run."
   (require 'mevedel-utilities)
   (with-current-buffer data-buffer
     (when mevedel--session
+      (require 'mevedel-session-persistence)
+      (mevedel-session-persistence-assert-new-mutation-authority
+       mevedel--session)
       (mevedel-request-begin mevedel--session
                              (and (boundp 'mevedel--current-directive-uuid)
                                   mevedel--current-directive-uuid)))

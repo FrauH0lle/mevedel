@@ -71,6 +71,8 @@
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-assert-mutation-authority
                   "mevedel-session-persistence" (session &optional buffer))
+(declare-function mevedel-session-persistence-assert-new-mutation-authority
+                  "mevedel-session-persistence" (session))
 (declare-function mevedel-session-persistence-publish-text
                   "mevedel-session-persistence"
                   (session path content &optional coding))
@@ -2099,7 +2101,11 @@ terminal settlement."
   (when (and tty (eq system-type 'windows-nt))
     (signal 'mevedel-execution-input-error
             (list "PTY execution is unavailable on Windows")))
-  (let* ((state (mevedel-execution--state-for-session session)))
+  (let* ((state (mevedel-execution--state-for-session session))
+         (authority (mevedel-execution--mutation-target session)))
+    (unless read-only-p
+      (require 'mevedel-session-persistence)
+      (mevedel-session-persistence-assert-new-mutation-authority authority))
     (when (and (not read-only-p)
                (mevedel-execution-mutation-blocked-p session))
       (signal

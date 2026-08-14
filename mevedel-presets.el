@@ -17,6 +17,9 @@
 (require 'cl-lib)
 (require 'mevedel-turn)
 
+(declare-function mevedel-session-persistence-assert-new-mutation-authority
+                  "mevedel-session-persistence" (session))
+
 (eval-when-compile
   (require 'mevedel-structs)
   ;; Needed for `setf' on `gptel-fsm' struct slots (native comp)
@@ -600,6 +603,9 @@ alist with mevedel-specific handlers added:
                                    (buffer-live-p chat-buffer))
                           (with-current-buffer chat-buffer
                             (when mevedel--session
+                              (require 'mevedel-session-persistence)
+                              (mevedel-session-persistence-assert-new-mutation-authority
+                               mevedel--session)
                               (unless mevedel--current-request
                                 (mevedel-request-begin
                                  mevedel--session

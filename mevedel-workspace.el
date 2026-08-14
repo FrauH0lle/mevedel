@@ -27,6 +27,9 @@
 (declare-function mevedel-execution-target-expand-path
                   "mevedel-execution-target" (target path &optional directory))
 
+;; `tramp'
+(defvar tramp-verbose)
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-get-or-create "mevedel-structs"
@@ -118,10 +121,40 @@ struct directly.")
 ;;
 ;;; Workspace detection functions
 
+(defvar mevedel-workspace--remote-project-cache
+  (make-hash-table :test #'equal)
+  "Remote directory to its detected project, or nil when it has none.
+Cleared with the workspace registry by `mevedel-workspace-clear-registry'.")
+
+(defun mevedel-workspace--project-current (directory)
+  "Return DIRECTORY's project, probing a remote directory once and quietly.
+
+Project detection walks to the top of the tree, so on a remote target every
+hop is a round trip and the last hop is the bare method prefix, which is not
+a directory: TRAMP reports that miss to the user on every probe.  The probe
+is best effort, so its own diagnostics are not the user's business, and its
+answer is remembered per directory rather than re-walked.  A directory that
+becomes a project later is picked up after
+`mevedel-workspace-clear-registry'."
+  (if (not (file-remote-p directory))
+      (project-current nil directory)
+    ;; The key is the spelling as given: expanding a remote name asks the
+    ;; target for its home directory, which opens a connection, and a cache
+    ;; key must not perform I/O.  Distinct spellings only cost an entry.
+    (let* ((key (file-name-as-directory directory))
+           (cached (gethash key mevedel-workspace--remote-project-cache
+                            'mevedel-workspace--absent)))
+      (if (not (eq cached 'mevedel-workspace--absent))
+          cached
+        (puthash key
+                 (let ((tramp-verbose 0))
+                   (project-current nil directory))
+                 mevedel-workspace--remote-project-cache)))))
+
 (defun mevedel-workspace--project-workspace ()
   "Detect project workspace for the current buffer.
 Returns (project . ROOT) if the buffer is in a project, nil otherwise."
-  (when-let* ((project (project-current nil default-directory)))
+  (when-let* ((project (mevedel-workspace--project-current default-directory)))
     (cons 'project (project-root project))))
 
 (defun mevedel-workspace--file-workspace ()
@@ -140,13 +173,13 @@ Returns (file . FILENAME) if the buffer is visiting a file, nil otherwise."
   (unless (and (stringp project-id)
                (file-name-absolute-p project-id)
                (file-directory-p project-id)
-               (project-current nil project-id))
+               (mevedel-workspace--project-current project-id))
     (error "Project ID '%s' is not a valid project root directory" project-id))
   project-id)
 
 (defun mevedel-workspace--project-name (project-id)
   "Get the project name for PROJECT-ID using project.el."
-  (if-let* ((project (project-current nil project-id)))
+  (if-let* ((project (mevedel-workspace--project-current project-id)))
       (project-name project)
     ;; Get the last directory name from the root (trailing slash removed).
     (file-name-nondirectory (directory-file-name project-id))))
@@ -329,7 +362,8 @@ directory and its subdirectories for the current workspace only."
     (let* ((expanded (file-name-as-directory (expand-file-name directory)))
            ;; Try to get project root, otherwise default to directory
            (p-root (condition-case _
-                       (project-root (project-current nil expanded))
+                       (project-root
+                        (mevedel-workspace--project-current expanded))
                      (error expanded)))
            (workspace-root (mevedel-workspace-root (mevedel-workspace)))
            (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))

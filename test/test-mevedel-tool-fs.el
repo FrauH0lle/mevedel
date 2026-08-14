@@ -1398,7 +1398,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
   :doc "records session interaction and workspace cache entry"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "hello world\n"))
          (ws (mevedel-workspace--create
-              :type 'test :id "read-integration"
+              :type 'file :id "read-integration"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))
@@ -1420,7 +1420,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
   :doc "returns stub on duplicate media read when mtime unchanged"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".png"))
          (ws (mevedel-workspace--create
-              :type 'test :id "read-media-dedup"
+              :type 'file :id "read-media-dedup"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))
@@ -1454,7 +1454,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
   :doc "returns stub on duplicate read when mtime unchanged"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "hello world\n"))
          (ws (mevedel-workspace--create
-              :type 'test :id "read-dedup"
+              :type 'file :id "read-dedup"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))
@@ -1474,7 +1474,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
   :doc "sub-agent reads ignore parent-session dedup state"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "agent content\n"))
          (ws (mevedel-workspace--create
-              :type 'test :id "read-agent-dedup"
+              :type 'file :id "read-agent-dedup"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))
@@ -1506,7 +1506,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
   :doc "does not dedupe after external modification"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "hello\n"))
          (ws (mevedel-workspace--create
-              :type 'test :id "read-dedup-mtime"
+              :type 'file :id "read-dedup-mtime"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))
@@ -1529,7 +1529,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt"
                               "a\nb\nc\nd\ne\nf\n"))
          (ws (mevedel-workspace--create
-              :type 'test :id "read-dedup-range"
+              :type 'file :id "read-dedup-range"
               :root (file-name-directory tmp)
               :name "test"
               :file-cache (mevedel-test-file-cache-create)))

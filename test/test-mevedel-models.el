@@ -7,6 +7,7 @@
 (require 'gptel)
 (require 'gptel-openai)
 (require 'mevedel-models)
+(require 'mevedel-structs)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -420,6 +421,7 @@
 
   :doc "returns none when no current model is set"
   (with-temp-buffer
+    (setq-local gptel-model nil)
     (should (equal "none" (mevedel-model-current-label))))
 
   :doc "returns the current model name"
@@ -433,6 +435,7 @@
 
   :doc "returns none when no model is set"
   (with-temp-buffer
+    (setq-local gptel-model nil)
     (should (equal "none" (mevedel-model-current-provider-label))))
 
   :doc "returns backend:model when both are set"
@@ -445,6 +448,7 @@
 
   :doc "falls back to the model label without a backend"
   (with-temp-buffer
+    (setq-local gptel-backend nil)
     (setq-local gptel-model 'balanced-model)
     (should (equal "balanced-model"
                    (mevedel-model-current-provider-label)))))

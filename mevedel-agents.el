@@ -38,6 +38,9 @@
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-hooks'
+(declare-function mevedel-hooks-annotate-rules-source
+                  "mevedel-hooks"
+                  (rules source &optional source-file source-root))
 (declare-function mevedel-hooks-normalize-rules
                   "mevedel-hooks" (rules &optional scope))
 
@@ -280,7 +283,9 @@ Creates a `mevedel-agent' struct and registers it in
                    ,(when hooks
                       `(progn
                          (require 'mevedel-hooks)
-                         (mevedel-hooks-normalize-rules ',hooks 'agent))))))
+                         (mevedel-hooks-annotate-rules-source
+                          (mevedel-hooks-normalize-rules ',hooks 'agent)
+                          'user nil user-emacs-directory))))))
        (setf (alist-get ,name-str mevedel-agent--registry nil nil #'equal)
              agent)
        agent)))

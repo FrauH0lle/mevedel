@@ -17,6 +17,7 @@
        '("skills/analyze-log" "skills/analyze-log/SKILL.md")
        '("skills/remember" "skills/remember/SKILL.md")
        '("skills/review" "skills/review/SKILL.md")
+       '("collaboration" "collaboration/*")
        '("tools" "tools/*.md"))
 
 (script "test" "echo \"Error: no test specified\" && exit 1")
@@ -27,6 +28,7 @@
 (depends-on "emacs" "30.2")
 (depends-on "gptel")
 (depends-on "gptel-agent")
+(depends-on "web-server" "0.1.2")
 
 (development
  (depends-on "mcp"))

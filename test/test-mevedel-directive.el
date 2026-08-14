@@ -173,7 +173,7 @@
   :doc "prunes one execution-session suffix while retaining authored records"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "rewind" :root "/tmp" :name "rewind"))
+           :type 'file :id "rewind" :root "/tmp" :name "rewind"))
          (earlier
           (mevedel-directive--create
            :id "earlier" :request "Earlier" :anchor '(:state attached)
@@ -243,7 +243,7 @@
              :checkpoint '(:session-id "session" :turn 2)))))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id "children" :root "/tmp" :name "children"
+           :type 'file :id "children" :root "/tmp" :name "children"
            :directives (list directive))))
     (mevedel-workspace-rewind-directives workspace "session" 2)
     (should-not (mevedel-directive-attempts directive))
@@ -272,7 +272,7 @@
              :checkpoint '(:session-id "session" :turn 2)))))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id "planned" :root "/tmp" :name "planned"
+           :type 'file :id "planned" :root "/tmp" :name "planned"
            :directives (list directive))))
     (mevedel-workspace-rewind-directives workspace "session" 2)
     (should-not (mevedel-directive-attempts directive))
@@ -301,7 +301,7 @@
                    :checkpoint (:session-id "session" :turn 2)))))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id "planning" :root "/tmp" :name "planning"
+           :type 'file :id "planning" :root "/tmp" :name "planning"
            :directives (list directive))))
     (mevedel-workspace-rewind-directives workspace "session" 2)
     (should (= 1 (length (mevedel-directive-planning directive))))
@@ -324,7 +324,7 @@
              :checkpoint '(:session-id "session" :turn 1)))))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id "stale" :root "/tmp" :name "stale"
+           :type 'file :id "stale" :root "/tmp" :name "stale"
            :directives (list directive))))
     (mevedel-workspace-rewind-directives workspace "session" 1)
     (should-not (mevedel-directive-plan directive))))

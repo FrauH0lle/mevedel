@@ -153,14 +153,23 @@ Chat / view
   mevedel-view-audit.el       audit disclosure rendering
   mevedel-view-zone.el        managed view-zone lifecycle + fragments
   mevedel-view-history.el     view input history ring and persistence
+  mevedel-collaboration.el    live browser room and lifecycle facade
+  mevedel-collaboration-projection.el canonical browser transcript projection
+  mevedel-collaboration-transport.el loopback HTTP/WebSocket transport
   mevedel-view-markdown.el    Markdown tables, links, images, paths, source panels
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
   mevedel-overlays.el         instruction overlays (references/directives)
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      save/load instructions
-  mevedel-session-durability.el remote leases and serialized publication
+  mevedel-session-durability.el lease and storage primitives
+  mevedel-session-recovery.el  specialized recovery protocol and markers
+  mevedel-session-transfer.el  durable cooperative control transfer protocol
+  mevedel-session-publication.el immutable publication and diagnostics
+  mevedel-session-save-as.el portable Save As transaction and adoption
   mevedel-session-persistence.el  session save/resume/rewind/fork
+  mevedel-session-control-fs.el   pinned target-side session control filesystem
+  mevedel-session-control-transfer.el  control-transfer state, drains, descriptors
   mevedel-compact.el          conversation compaction (split-on-compact)
 
 Prompt / presets / agents
@@ -201,7 +210,7 @@ Support
 
 ## External dependencies
 
-- **gptel**, **gptel-agent**, **Emacs >=30.2**, **ediff**, **org-mode**
+- **gptel**, **gptel-agent**, **web-server 0.1.2**, **Emacs >=30.2**, **ediff**, **org-mode**
 
 Eask dependency installs can get stale. 
 Run `npx @emacs-eask/cli upgrade PACKAGE` to update. For example:
@@ -355,6 +364,31 @@ warnings.
   task redraw paths, test that an active composer draft stays unchanged,
   including a multiline draft whose first editable character is `>`.
 - **New functions need tests**; modify tests when behavior changes
+- **Silent output**: a test run prints only ERT's own progress lines
+  (`passed N/M name (time)`) and its final summary. No `mevedel:` messages,
+  no `Warning`/`Error` lines, no Emacs notices such as `Making
+  gptel-org-branching-context buffer-local while locally let-bound!`, and
+  nothing at all during the loading phase. Noise hides real failures and is
+  treated as a defect in the test or in the code it exercises:
+  - A test that deliberately injects a failure must capture the resulting
+    message or warning instead of letting it reach the run log.
+  - Product code must not warn on a path a passing test takes; if the warning
+    is legitimate, the test must assert it rather than emit it.
+  - Loading a test file must have no side effects: no sessions, no requests,
+    no messages. Anything that runs belongs inside a test body.
+  - `mevedel-test--with-captured-diagnostics` captures messages and warnings;
+    `mevedel-test--with-captured-messages` captures messages only, for a case
+    that still inspects the warnings it raises. Both take a place to bind the
+    captured text, or nil when the durable state the diagnostic echoes is what
+    the case asserts. A capture must not forward to the original function:
+    that re-prints what it just captured.
+  - `mevedel-test--muted-message-regexps` in `test/helpers.el` drops the few
+    third-party progress messages mevedel cannot suppress at their source.
+    Nothing mevedel itself emits belongs there.
+- **Isolation**: a test leaves no global state behind — no live session in the
+  execution registry, no workspace registry entry, no live timer, no target
+  connection, and no file outside its own temporary directory. Leaked state
+  makes later tests slow, noisy, and order-dependent.
 
 ## Byte compilation rules
 

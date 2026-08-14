@@ -59,7 +59,10 @@
            (setq-local mevedel--session ,session)
            (mevedel-session-persistence-ensure-files ,session ,buffer)
            ,@body)
-       (mevedel-session-persistence-lock-release tempdir)
+       ;; Release through the session: a bare directory has no authority
+       ;; profile of its own.
+       (mevedel-session-persistence-lock-release
+        (or (mevedel-session-save-path ,session) tempdir) ,session)
        (when (buffer-live-p ,buffer)
          (with-current-buffer ,buffer
            (set-buffer-modified-p nil))
@@ -115,7 +118,10 @@
                (setq-local mevedel--agent-invocation ,invocation)
                (set-visited-file-name ,canonical-path t t)
                ,@body)))
-       (mevedel-session-persistence-lock-release tempdir)
+       ;; Release through the session: a bare directory has no authority
+       ;; profile of its own.
+       (mevedel-session-persistence-lock-release
+        (or (mevedel-session-save-path ,session) tempdir) ,session)
        (dolist (candidate (list ,buffer ,parent-buffer))
          (when (buffer-live-p candidate)
            (with-current-buffer candidate
@@ -1139,6 +1145,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                     ((symbol-function 'mevedel--compact-run)
                      (lambda (&rest _args) (setq ran t))))
             (let ((mevedel-compact-token-threshold 0.5)
+                  (gptel-model nil)
                   (mevedel-model-context-limit 200))
               (mevedel--compact-handle-wait fsm)))
           (should (= sent 1))
@@ -1272,6 +1279,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                        (setq ran t)
                        (funcall (plist-get args :callback) :skip))))
             (let ((mevedel-compact-token-threshold 0.5)
+                  (gptel-model nil)
                   (mevedel-model-context-limit 200))
               (mevedel--compact-handle-wait fsm)))
           (should ran)
@@ -1865,7 +1873,7 @@ missing or zero prompt-side usage cannot become the active baseline"
   (test)
   :doc "manual compaction leaves compact-start context for the next input"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "compact-epoch" :root "/tmp"
+                     :type 'file :id "compact-epoch" :root "/tmp"
                      :name "compact-epoch"))
          (session (mevedel-session-create "main" workspace))
          (buffer (generate-new-buffer " *mevedel-compact-epoch*"))
@@ -1893,7 +1901,7 @@ missing or zero prompt-side usage cannot become the active baseline"
 
   :doc "automatic compaction consumes compact-start context into its request"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "compact-auto-epoch" :root "/tmp"
+                     :type 'file :id "compact-auto-epoch" :root "/tmp"
                      :name "compact-auto-epoch"))
          (session (mevedel-session-create "main" workspace))
          (buffer (generate-new-buffer " *mevedel-compact-auto-epoch*")))
@@ -3300,7 +3308,7 @@ missing or zero prompt-side usage cannot become the active baseline"
       (when (buffer-live-p chat-buf)
 	(kill-buffer chat-buf))
       (when (buffer-live-p view-buf)
-	(kill-buffer view-buf)))))
+	(kill-buffer view-buf))))
 
   :doc "applies a generated continuation summary with PreCompact evidence"
   (let ((chat-buf (generate-new-buffer " *mevedel-compact-summary-callback*"))
@@ -3441,7 +3449,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                      '(:continue nil :stop-reason "blocked"))
             (should-not mevedel--compaction-in-flight)))
       (when (buffer-live-p chat-buf)
-        (kill-buffer chat-buf))))
+        (kill-buffer chat-buf)))))
 
 (mevedel-deftest mevedel--compact-run-auto-file-reference-reminder ()
   ,test
@@ -3710,7 +3718,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                            (buffer-string) 'execution-completion))))
               (should-not (string-match-p "pending" (buffer-string))))))
       (mevedel-session-persistence-lock-release
-       (mevedel-session-save-path session))
+       (mevedel-session-save-path session) session)
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (set-buffer-modified-p nil))
@@ -3730,9 +3738,11 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should-error (mevedel--compact-threshold-tokens) :type 'user-error)))
 
   :doc "float threshold applies to usable context"
+  ;; The configured limit only applies when no model declares a window.
   (let ((mevedel-model-context-limit 200000)
         (mevedel-model-reserve-tokens 20000)
         (mevedel-compact-token-threshold 0.8)
+        (gptel-model nil)
         (gptel-max-tokens nil))
     (should (= (mevedel--compact-threshold-tokens) 144000)))
 
@@ -3740,6 +3750,7 @@ missing or zero prompt-side usage cannot become the active baseline"
   (let ((mevedel-model-context-limit 8000)
         (mevedel-model-reserve-tokens 20000)
         (mevedel-compact-token-threshold 0.8)
+        (gptel-model nil)
         (gptel-max-tokens nil))
     (should (= (mevedel--compact-usable-tokens) 4000))
     (should (= (mevedel--compact-threshold-tokens) 3200))))
@@ -3936,6 +3947,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (insert "a3\n")
         (put-text-property a3-start (point) 'gptel 'response))
       (let ((mevedel-model-context-limit 200000)
+            (gptel-model nil)
             (mevedel-compact-tail-turns 2)
             (mevedel-compact-tail-budget 0.25))
         (should (= (mevedel--compact-tail-start (point-max) nil)
@@ -3958,6 +3970,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (put-text-property a3-start (point) 'gptel 'response))
       (let ((mevedel-model-context-limit 100)
             (mevedel-model-reserve-tokens 20)
+            (gptel-model nil)
             (mevedel-compact-tail-turns 2)
             (mevedel-compact-tail-budget 0.01))
         (should (= (mevedel--compact-tail-start (point-max) nil)
@@ -3976,6 +3989,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (put-text-property a2-start (point) 'gptel 'response))
 	  (let ((mevedel-model-context-limit 100)
 	        (mevedel-model-reserve-tokens 20)
+	        (gptel-model nil)
 	        (mevedel-compact-tail-turns 2)
 	        (mevedel-compact-tail-budget 0.01))
 	    (should (= (mevedel--compact-tail-start (point-max) nil)
@@ -4003,6 +4017,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (insert "a3\n")
         (put-text-property a3-start (point) 'gptel 'response))
       (let ((mevedel-model-context-limit 200000)
+            (gptel-model nil)
             (mevedel-compact-tail-turns 2)
             (mevedel-compact-tail-budget 0.25))
         (should (= (mevedel--compact-tail-start (point-max) nil)
@@ -4031,6 +4046,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (insert "a3\n")
         (put-text-property response-start (point) 'gptel 'response))
       (let ((mevedel-model-context-limit 200000)
+            (gptel-model nil)
             (mevedel-compact-tail-turns 2)
             (mevedel-compact-tail-budget 0.25))
         (should (= boundary-start
@@ -4286,7 +4302,7 @@ missing or zero prompt-side usage cannot become the active baseline"
 
   :doc "returns no provenance when the session has no skill records"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "c1" :root "/tmp/c1" :name "c1"
+              :type 'file :id "c1" :root "/tmp/c1" :name "c1"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
@@ -4295,7 +4311,7 @@ missing or zero prompt-side usage cannot become the active baseline"
 
   :doc "lists invoked skills with name, args, role, origin, and turn"
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "c2" :root "/tmp/c2" :name "c2"
+              :type 'file :id "c2" :root "/tmp/c2" :name "c2"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))

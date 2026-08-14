@@ -25,6 +25,7 @@
 (require 'mevedel-skills-ui)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-media)
+(require 'mevedel-chat)
 (require 'mevedel-goal)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair)
@@ -50,7 +51,11 @@
              (setq-local mevedel--current-request nil)
              (setq-local mevedel--session nil)
              (setq-local gptel-response-separator "\n\n")
-             (setq-local gptel-prompt-prefix-alist '((org-mode . "*** "))))
+             (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+             ;; These buffers own no root lifecycle, so teardown drains the
+             ;; queues without the session save a fixture cannot complete.
+             (setq-local mevedel-view--abort-function
+                         #'mevedel-view-test--abort-interactions))
            (mevedel-view--setup view-buf data-buf)
            ,@body)
        (when (buffer-live-p view-buf)
@@ -776,9 +781,13 @@
                         (error "Selecting deleted buffer")))))
       (mevedel-view-stream--repair-gptel-stream-info info)
       (should (plist-get info :mevedel-transformer-wrapped))
-      (should (equal "raw chunk"
-                     (funcall (plist-get info :transformer)
-                              "raw chunk"))))))
+      (let (diagnostics)
+        (mevedel-test--with-captured-diagnostics diagnostics
+          (should (equal "raw chunk"
+                         (funcall (plist-get info :transformer)
+                                  "raw chunk"))))
+        (should (string-match-p "stale gptel stream transformer"
+                                diagnostics))))))
 
 (mevedel-deftest mevedel-view-stream--gptel-stream-filter-advice ()
   ,test
@@ -3827,9 +3836,15 @@
           (should (buffer-live-p opened))
           (with-current-buffer opened
             (should (equal remote-file buffer-file-name))
-            (should (equal "target\n" (buffer-string)))))
+            (should (equal "target\n" (buffer-string))))
+          ;; The buffer visits a target file, so it has to be killed while
+          ;; the mock method still resolves.
+          (with-current-buffer opened
+            (set-buffer-modified-p nil))
+          (kill-buffer opened))
       (when (buffer-live-p opened)
-        (set-buffer-modified-p nil)
+        (with-current-buffer opened
+          (set-buffer-modified-p nil))
         (kill-buffer opened))
       (when (file-exists-p client-file)
         (delete-file client-file))

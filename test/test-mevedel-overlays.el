@@ -162,7 +162,7 @@
   (with-temp-buffer
     (insert "directive")
     (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "edited" :root "/tmp" :name "edited"))
+                       :type 'file :id "edited" :root "/tmp" :name "edited"))
            (record
             (mevedel-directive--create
              :id "directive" :request "Edited request"
@@ -347,7 +347,7 @@
   :doc "pins and resets the request-owning top-level directive"
   (let ((session-buffer (generate-new-buffer " *directive-model-session*"))
         (workspace (mevedel-workspace--create
-                    :type 'test :id "model-owner" :root "/tmp"
+                    :type 'file :id "model-owner" :root "/tmp"
                     :name "model-owner"))
         options)
     (unwind-protect
@@ -424,7 +424,7 @@
   :doc "shows the effective pair except while the directive is implementing"
   (let ((session-buffer (generate-new-buffer " *directive-actions-session*"))
         (workspace (mevedel-workspace--create
-                    :type 'test :id "action-owner" :root "/tmp"
+                    :type 'file :id "action-owner" :root "/tmp"
                     :name "action-owner"))
         choices action-row target)
     (unwind-protect
@@ -558,7 +558,7 @@
     (insert "directive")
     (let* ((workspace
             (mevedel-workspace--create
-             :type 'test :id "settings" :root "/tmp" :name "settings"))
+             :type 'file :id "settings" :root "/tmp" :name "settings"))
            (mevedel--workspace workspace)
            (directive
             (mevedel--create-directive-in
@@ -577,7 +577,7 @@
     (insert "directive")
     (let* ((workspace
             (mevedel-workspace--create
-             :type 'test :id "settings-label" :root "/tmp"
+             :type 'file :id "settings-label" :root "/tmp"
              :name "settings-label"))
            (mevedel--workspace workspace)
            (directive
@@ -603,7 +603,7 @@
     (insert "directive")
     (let* ((workspace
             (mevedel-workspace--create
-             :type 'test :id "settings-skills" :root "/tmp"
+             :type 'file :id "settings-skills" :root "/tmp"
              :name "settings-skills"))
            (mevedel--workspace workspace)
            (directive
@@ -650,7 +650,7 @@
     (insert "directive")
     (let* ((workspace
             (mevedel-workspace--create
-             :type 'test :id "preview-plan" :root "/tmp"
+             :type 'file :id "preview-plan" :root "/tmp"
              :name "preview-plan"))
            (mevedel--workspace workspace)
            (directive
@@ -677,7 +677,7 @@
     (insert "directive")
     (let* ((workspace
             (mevedel-workspace--create
-             :type 'test :id "preview-discuss" :root "/tmp"
+             :type 'file :id "preview-discuss" :root "/tmp"
              :name "preview-discuss"))
            (mevedel--workspace workspace)
            (directive
@@ -709,7 +709,7 @@
   (test)
   :doc "reads patch history from the latest workspace-owned attempt"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "patch" :root "/tmp" :name "patch"))
+                     :type 'file :id "patch" :root "/tmp" :name "patch"))
          (record (mevedel-directive--create
                   :id "directive" :request "Request"
                   :anchor '(:state attached) :state 'implemented
@@ -742,7 +742,7 @@
   (test)
   :doc "creates one workspace-owned record resolved by the source overlay"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "create-directive" :root "/tmp"
+                     :type 'file :id "create-directive" :root "/tmp"
                      :name "create-directive"))
          (cell (mevedel-overlays-test--make-directive
                 "directive body\n" "Initial request" workspace))
@@ -763,7 +763,7 @@
 
   :doc "stores nested directives as ordered details on the top-level record"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "nested" :root "/tmp" :name "nested"))
+                     :type 'file :id "nested" :root "/tmp" :name "nested"))
          (cell (mevedel-overlays-test--make-directive
                 "outer child tail\n" "Parent request" workspace))
          (buffer (car cell))
@@ -795,7 +795,7 @@
   (dolist (state '(nil implemented))
     (let* ((request (concat "A request " (make-string 140 ?x)))
            (workspace (mevedel-workspace--create
-                       :type 'test :id (format "detach-%s" state)
+                       :type 'file :id (format "detach-%s" state)
                        :root "/tmp" :name "detach"))
            (cell (mevedel-overlays-test--make-directive
                   "before\ndirective body\nafter\n"
@@ -843,7 +843,7 @@
 
   :doc "keeps partial edits attached through ordinary overlay resizing"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "detach-partial" :root "/tmp"
+                     :type 'file :id "detach-partial" :root "/tmp"
                      :name "detach-partial"))
          (cell (mevedel-overlays-test--make-directive
                 "directive body\n" "Keep attached" workspace))
@@ -861,7 +861,7 @@
 
   :doc "renders co-located detached directives in former source order"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "detach-many" :root "/tmp"
+                     :type 'file :id "detach-many" :root "/tmp"
                      :name "detach-many"))
          (file (make-temp-file "mevedel-detach-many-" nil ".txt"
                                "first\nmiddle\nsecond\n"))
@@ -909,7 +909,7 @@
   (test)
   :doc "keeps references source-bound and outside durable directive records"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "create-reference" :root "/tmp"
+                     :type 'file :id "create-reference" :root "/tmp"
                      :name "create-reference"))
          (cell (mevedel-overlays-test--make-reference
                 "reference body\n" workspace)))
@@ -932,7 +932,7 @@
   (test)
   :doc "updates the durable request without replacing directive identity"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "edit-directive" :root "/tmp"
+                     :type 'file :id "edit-directive" :root "/tmp"
                      :name "edit-directive"))
          (cell (mevedel-overlays-test--make-directive
                 "directive body\n" "Initial request" workspace))
@@ -959,7 +959,7 @@
   (test)
   :doc "removes a Ready directive record with its presentation overlay"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "delete-directive" :root "/tmp"
+                     :type 'file :id "delete-directive" :root "/tmp"
                      :name "delete-directive"))
          (cell (mevedel-overlays-test--make-directive
                 "directive body\n" "Unused request" workspace))
@@ -979,9 +979,9 @@
   (test)
   :doc "filters only references belonging to the explicit workspace"
   (let* ((workspace-a (mevedel-workspace--create
-                       :type 'test :id "filter-a" :root "/tmp" :name "filter-a"))
+                       :type 'file :id "filter-a" :root "/tmp" :name "filter-a"))
          (workspace-b (mevedel-workspace--create
-                       :type 'test :id "filter-b" :root "/tmp" :name "filter-b"))
+                       :type 'file :id "filter-b" :root "/tmp" :name "filter-b"))
          (first (mevedel-overlays-test--make-reference "first\n" workspace-a))
          (second (mevedel-overlays-test--make-reference "second\n" workspace-b)))
     (overlay-put (cdr first) 'mevedel-reference-tags '(shared))
@@ -1003,9 +1003,9 @@
   (test)
   :doc "returns a unique live match and rejects ambiguous matches"
   (let* ((workspace-a (mevedel-workspace--create
-                       :type 'test :id "find-a" :root "/tmp" :name "find-a"))
+                       :type 'file :id "find-a" :root "/tmp" :name "find-a"))
          (workspace-b (mevedel-workspace--create
-                       :type 'test :id "find-b" :root "/tmp" :name "find-b"))
+                       :type 'file :id "find-b" :root "/tmp" :name "find-b"))
          (first (mevedel-overlays-test--make-reference "first\n" workspace-a))
          (second (mevedel-overlays-test--make-reference "second\n" workspace-b))
          (first-reference (cdr first)))
@@ -1030,9 +1030,9 @@
   (test)
   :doc "scopes explicit lookup and permits only unambiguous fallback"
   (let* ((workspace-a (mevedel-workspace--create
-                       :type 'test :id "id-a" :root "/tmp" :name "id-a"))
+                       :type 'file :id "id-a" :root "/tmp" :name "id-a"))
          (workspace-b (mevedel-workspace--create
-                       :type 'test :id "id-b" :root "/tmp" :name "id-b"))
+                       :type 'file :id "id-b" :root "/tmp" :name "id-b"))
          (first (mevedel-overlays-test--make-reference "first\n" workspace-a))
          (second (mevedel-overlays-test--make-reference "second\n" workspace-b))
          (first-reference (cdr first))
@@ -1062,7 +1062,7 @@
   (test)
   :doc "restores a stashed instruction before resolving its UUID"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "restore" :root "/tmp" :name "restore"))
+                     :type 'file :id "restore" :root "/tmp" :name "restore"))
          (cell (mevedel-overlays-test--make-reference
                 "restored body\n" workspace))
          (buffer (car cell))
@@ -1088,9 +1088,9 @@
 
   :doc "known workspace never selects the same UUID from another workspace"
   (let* ((workspace-a (mevedel-workspace--create
-                       :type 'test :id "uuid-a" :root "/tmp" :name "uuid-a"))
+                       :type 'file :id "uuid-a" :root "/tmp" :name "uuid-a"))
          (workspace-b (mevedel-workspace--create
-                       :type 'test :id "uuid-b" :root "/tmp" :name "uuid-b"))
+                       :type 'file :id "uuid-b" :root "/tmp" :name "uuid-b"))
          (first (mevedel-overlays-test--make-reference
                  "first body\n" workspace-a))
          (second (mevedel-overlays-test--make-reference

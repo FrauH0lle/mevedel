@@ -141,7 +141,7 @@
   :doc "installs immutable read-only denial rules on discussion requests"
   (mevedel-tools-register)
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "read-only" :root "/tmp"
+                     :type 'file :id "read-only" :root "/tmp"
                      :name "read-only"))
          (session (mevedel-session-create "main" workspace))
          (buffer (generate-new-buffer " *discussion-request-rules*"))

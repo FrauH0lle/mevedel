@@ -30,7 +30,10 @@
 (require 'mevedel-skills-ui)
 (require 'mevedel-workspace)
 (require 'mevedel-file-state)
+(require 'mevedel-plan-mode)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
+(require 'mevedel-session-recovery)
 (require 'mevedel-tool-ui)
 (require 'mevedel-permission-queue)
 (require 'mevedel-tool-exec)
@@ -203,7 +206,7 @@
     (let* ((session (mevedel-session-create
                      "main"
                      (mevedel-workspace--create
-                      :type 'test :id "skills" :root "/tmp/skills"
+                      :type 'file :id "skills" :root "/tmp/skills"
                       :name "skills")))
            (skill (mevedel-skill--create :name "review" :body "Review")))
       (setf (mevedel-session-skills session) (list skill))
@@ -265,7 +268,7 @@
 	                   (setq prompted t)
 	                   (error "View buffer requested save confirmation"))))
         (save-some-buffers t (lambda () (eq (current-buffer) view-buf))))
-      (should-not prompted))))
+      (should-not prompted)))
 
   :doc "view buffers stay out of save prompts even if a file name leaks in"
   (mevedel-view-test--with-buffers
@@ -283,7 +286,7 @@
             (should-not (memq view-buf
                               (files--buffers-needing-to-be-saved t))))
         (when (file-exists-p fake-file)
-          (delete-file fake-file)))))
+          (delete-file fake-file))))))
 
 (mevedel-deftest mevedel-view--status-strip-button ()
   ,test
@@ -349,6 +352,10 @@
 
   :doc "status strip preserves the model none label"
   (mevedel-view-test--with-buffers
+    ;; The label describes an unconfigured gptel, so the data buffer must
+    ;; not inherit the harness default model.
+    (with-current-buffer data-buf
+      (setq-local gptel-model nil))
     (with-current-buffer view-buf
       (let ((line (mevedel-view--status-strip)))
         (should (string-match-p
@@ -398,6 +405,8 @@
             (with-current-buffer data-buf
               (setq-local mevedel--session session))
             (with-current-buffer view-buf
+              (mevedel-view-interaction-initialize))
+            (with-current-buffer view-buf
               (mevedel-view-test--insert-composer-draft draft point-offset)
               (should (string-match-p "ssh:user@host"
                                       (mevedel-view--status-strip))))
@@ -409,7 +418,7 @@
                   '(:status ready
                     :sandbox-mode best-effort
                     :sandbox-status bubblewrap))
-            (mevedel-session-durability--refresh-session-buffers session)
+            (mevedel-session-recovery-refresh-session-buffers session)
             (with-current-buffer view-buf
               (force-mode-line-update t)
               (let ((line (mevedel-view--status-strip))

@@ -20,31 +20,221 @@
 (defvar tramp-local-host-regexp)
 (defvar tramp-methods)
 
+;; gptel ships no default backend, and a session cannot be saved without one.
+;; Tests that create chat buffers would otherwise warn on every teardown save
+;; instead of exercising the persistence path they mean to cover.
+(defvar gptel-backend)
+(defvar gptel-model)
+(declare-function gptel-make-openai "gptel")
+(with-eval-after-load 'gptel
+  (unless (default-value 'gptel-backend)
+    (setq-default gptel-backend
+                  (gptel-make-openai "mevedel-test"
+                                     :key "test"
+                                     :models '(mevedel-test-model)))
+    (setq-default gptel-model 'mevedel-test-model)))
+
+(defconst mevedel-test--muted-message-regexps
+  '("\\`gptel chat restored\\.\\'"
+    "\\`Type q to \\(?:restore previous buffer\\|delete help window\\)")
+  "Third-party progress messages the run log must not carry.
+
+Each entry names a message mevedel does not emit and cannot suppress at
+its source.  Nothing mevedel itself reports belongs here: its messages
+either signal a defect worth seeing or belong to a test that captures
+them.")
+
+(defun mevedel-test--mute-third-party-message (original &optional format &rest args)
+  "Call ORIGINAL with FORMAT and ARGS unless the result is muted.
+A muted call returns the text it would have shown, as `message' does."
+  (let ((text (and format (apply #'format-message format args))))
+    (if (and text
+             (seq-some (lambda (regexp) (string-match-p regexp text))
+                       mevedel-test--muted-message-regexps))
+        text
+      (apply original format args))))
+
+(advice-add 'message :around #'mevedel-test--mute-third-party-message)
+
+
+;; `mevedel-test--worktree-root' is fixed from this helper's location so a
+;; test that temporarily binds `default-directory' cannot redirect the guard.
+(defconst mevedel-test--worktree-root
+  (file-name-as-directory
+   (expand-file-name
+    ".."
+    (file-name-directory
+     (or load-file-name buffer-file-name default-directory))))
+  "Worktree root whose portable control artifacts tests must not mutate.")
+
+(defmacro mevedel-test--with-captured-diagnostics (place &rest body)
+  "Run BODY collecting its messages and warnings into PLACE.
+
+A test that deliberately injects a failure owns the diagnostic it provokes:
+letting it reach the run log buries real failures in expected noise.  PLACE
+is set to the collected text so the test can assert on it, or nil when the
+test asserts the durable state the diagnostic merely echoes."
+  (declare (indent 1) (debug (form body)))
+  `(let ((mevedel-test--captured ""))
+     (cl-letf* ((original-message (symbol-function 'message))
+                ((symbol-function 'message)
+                 (lambda (&optional format &rest args)
+                   (when format
+                     (setq mevedel-test--captured
+                           (concat mevedel-test--captured
+                                   (apply #'format format args) "\n")))
+                   nil))
+                ((symbol-function 'display-warning)
+                 (lambda (_type warning &rest _)
+                   (setq mevedel-test--captured
+                         (concat mevedel-test--captured
+                                 (format "%s" warning) "\n"))
+                   nil)))
+       (ignore original-message)
+       (unwind-protect (progn ,@body)
+         ,@(when place `((setq ,place mevedel-test--captured)))))))
+
+(defmacro mevedel-test--with-captured-messages (place &rest body)
+  "Run BODY collecting its messages into PLACE, leaving warnings alone.
+Use this when BODY reports progress the run log does not need but a test
+still inspects the warnings it raises."
+  (declare (indent 1) (debug (form body)))
+  `(let ((mevedel-test--captured ""))
+     (cl-letf (((symbol-function 'message)
+                (lambda (&optional format &rest args)
+                  (when format
+                    (setq mevedel-test--captured
+                          (concat mevedel-test--captured
+                                  (apply #'format format args) "\n")))
+                  nil)))
+       (unwind-protect (progn ,@body)
+         ,@(when place `((setq ,place mevedel-test--captured)))))))
+
+(defun mevedel-test--worktree-control-snapshot ()
+  "Return content/shape snapshots of worktree-root portable controls.
+
+The baseline may contain an artifact left by an earlier interrupted run; the
+guard detects only changes made by the current test invocation."
+  (mapcar
+   (lambda (name)
+     (let ((path (file-name-concat mevedel-test--worktree-root name)))
+       (cons
+        name
+        (cond
+         ((not (file-exists-p path)) nil)
+         ((file-directory-p path)
+          (cons
+           'directory
+           (mapcar
+            (lambda (entry)
+              (list
+               (file-relative-name entry path)
+               (cond
+                ((file-directory-p entry) 'directory)
+                ((file-regular-p entry)
+                 (with-temp-buffer
+                   (set-buffer-multibyte nil)
+                   (insert-file-contents-literally entry)
+                   (secure-hash 'sha256 (current-buffer))))
+                ((file-symlink-p entry) 'symlink)
+                (t 'other))))
+            (sort (directory-files-recursively path ".*" t)
+                  #'string<))))
+         ((file-regular-p path)
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally path)
+            (list 'file (secure-hash 'sha256 (current-buffer)))))
+         ((file-symlink-p path) '(symlink))
+         (t '(other))))))
+   '(".lease" ".recovery" "agents" "plans" "file-history" "instructions"
+     "session.meta.el")))
+
+(defun mevedel-test--cancel-stray-lease-timers ()
+  "Cancel portable lease renewal timers a test left running.
+
+A surviving timer performs target I/O from wherever the main loop is waiting
+during later tests, which floods their output and can wedge a shared TRAMP
+connection."
+  (dolist (timer (append timer-list timer-idle-list))
+    (when (memq (timer--function timer)
+                '(mevedel-session-durability-lease-renew))
+      (cancel-timer timer))))
+
+(defvar mevedel-test--release-leaked-state-p t
+  "Whether each test releases global session and workspace state.
+Bound to nil only to measure what that release costs.")
+
+(defun mevedel-test--release-leaked-state ()
+  "Drop live session and workspace state a test left registered.
+
+Registered sessions and workspaces are process-global.  A test that leaves
+them behind makes every later test carry that state: execution bookkeeping
+walks the session registry, and workspace detection re-resolves roots whose
+target is gone, which is slow, noisy, and order dependent."
+  (when (boundp 'mevedel-execution--sessions)
+    ;; Settling state a test left behind reports on that state; the report
+    ;; belongs to the test that leaked it, not to the run log.
+    (mevedel-test--with-captured-diagnostics nil
+      (let ((mevedel-execution--child-kill-delay 0.05))
+        (ignore-errors (mevedel-execution-teardown-all))))
+    (clrhash mevedel-execution--sessions))
+  (when (fboundp 'mevedel-workspace-clear-registry)
+    (ignore-errors (mevedel-workspace-clear-registry))))
+
+(defun mevedel-test--assert-worktree-controls-unchanged (before)
+  "Signal when a test changes worktree-root session artifacts.
+BEFORE is the snapshot captured before test setup; an existing artifact is
+allowed, but creation, deletion, or mutation during the test is not.  The
+watched names cover session control state and the session artifacts a
+fixture writes when it derives paths from an unset save path."
+  (let ((after (mevedel-test--worktree-control-snapshot)))
+    (unless (equal before after)
+      (error "Test changed worktree-root portable controls: %S -> %S"
+             before after))))
+
 
 ;;
 ;;; TRAMP test helper
+
+(defun mevedel-test--ensure-mock-tramp-method ()
+  "Register the local-shell TRAMP method the tests address as remote.
+
+The definition is inert data, and registering it once per process keeps a
+test that addresses a `mevedelmock' path from depending on an earlier test
+having registered it."
+  (require 'tramp)
+  (unless (assoc "mevedelmock" tramp-methods)
+    (add-to-list
+     'tramp-methods
+     '("mevedelmock"
+       (tramp-login-program "sh")
+       (tramp-login-args (("-i")))
+       (tramp-remote-shell "/bin/sh")
+       (tramp-remote-shell-args ("-c"))
+       (tramp-connection-timeout 10)))))
+
+(mevedel-test--ensure-mock-tramp-method)
 
 (defmacro mevedel-test--with-local-shell-tramp (hosts &rest body)
   "Run BODY through a local-shell TRAMP method for HOSTS."
   (declare (indent 1) (debug (form body)))
   `(progn
-     (require 'tramp)
-     (unless (assoc "mevedelmock" tramp-methods)
-       (add-to-list
-        'tramp-methods
-        '("mevedelmock"
-          (tramp-login-program "sh")
-          (tramp-login-args (("-i")))
-          (tramp-remote-shell "/bin/sh")
-          (tramp-remote-shell-args ("-c"))
-          (tramp-connection-timeout 10))))
+     (mevedel-test--ensure-mock-tramp-method)
      (let ((tramp-local-host-regexp
             (concat "\\`"
                     (regexp-opt (append ,hosts (list (system-name))))
                     "\\'")))
-       (unwind-protect
-           (progn ,@body)
-         (tramp-cleanup-all-connections)))))
+       (let ((original-support-tier
+              (symbol-function 'mevedel-execution-target--support-tier)))
+         (cl-letf (((symbol-function 'mevedel-execution-target--support-tier)
+                    (lambda (method hop)
+                      (if (eq method 'mevedelmock)
+                          'supported
+                        (funcall original-support-tier method hop)))))
+           (unwind-protect
+               (progn ,@body)
+             (tramp-cleanup-all-connections)))))))
 
 
 ;;
@@ -61,7 +251,9 @@
 (defun mevedel-skills-test--make-session (&optional name)
   "Return a throwaway session named NAME with a minimal workspace."
   (let ((ws (mevedel-workspace--create
-             :type 'test :id "t" :root "/tmp/t" :name (or name "t")
+             ;; A real workspace category: durable authority resolution
+             ;; refuses to guess one for a synthetic type.
+             :type 'file :id "t" :root "/tmp/t" :name (or name "t")
              :file-cache (mevedel-file-cache--create
                           :table (make-hash-table :test #'equal)
                           :order nil :total-bytes 0))))
@@ -111,7 +303,7 @@ Return the plugin root directory."
 (defun mevedel-skills-test--make-workspace (root)
   "Return a minimal workspace struct rooted at ROOT."
   (mevedel-workspace--create
-   :type 'test :id root :root root :name "test"
+   :type 'file :id root :root root :name "test"
    :file-cache (mevedel-file-cache--create
                 :table (make-hash-table :test #'equal)
                 :order nil :total-bytes 0)))
@@ -176,6 +368,17 @@ Return the plugin root directory."
        rear-nonsticky nil))
     (goto-char (+ start (or point-offset (length draft))))))
 
+(defun mevedel-view-test--abort-interactions (data-buffer)
+  "Abort DATA-BUFFER's queued interactions without saving its session.
+A fixture session has no durable home, so the production abort's save would
+only report a failure the test never asked for."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (when (fboundp 'mevedel-permission-queue-abort-all)
+        (mevedel-permission-queue-abort-all))
+      (when (fboundp 'mevedel-plan-approval-abort)
+        (mevedel-plan-approval-abort)))))
+
 (defmacro mevedel-view-test--with-buffers (&rest body)
   "Execute BODY with data and view buffers bound and initialized."
   (declare (indent 0) (debug t))
@@ -189,7 +392,12 @@ Return the plugin root directory."
            (with-current-buffer data-buf
              (org-mode)
              (setq-local gptel-response-separator "\n\n")
-             (setq-local gptel-prompt-prefix-alist '((org-mode . "*** "))))
+             (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+             ;; These buffers own no root lifecycle, so teardown drains the
+             ;; queues a test may assert on without running the session save
+             ;; that a fixture session cannot complete.
+             (setq-local mevedel-view--abort-function
+                         #'mevedel-view-test--abort-interactions))
            (mevedel-view--setup view-buf data-buf)
            ,@body)
        (when (buffer-live-p view-buf) (kill-buffer view-buf))
@@ -522,6 +730,16 @@ See also:
                          (if (cl-every #'listp after-each)
                              after-each
                            (list after-each))))))
+              (setq test-body
+                    `((let ((worktree-controls-before
+                             (mevedel-test--worktree-control-snapshot)))
+                        (unwind-protect
+                            (progn ,@test-body)
+                          (mevedel-test--cancel-stray-lease-timers)
+                          (when mevedel-test--release-leaked-state-p
+                            (mevedel-test--release-leaked-state))
+                          (mevedel-test--assert-worktree-controls-unchanged
+                           worktree-controls-before)))))
               `(ert-deftest
                    ,(intern (concat
                              (format "%s/test" object)

@@ -48,6 +48,32 @@
                 (if target-prefix (concat target-prefix "/") "/")))))
     (nreverse links)))
 
+(defun mevedel-sandbox--target-identity (path)
+  "Return PATH's device and inode as the target's own `stat' reports them.
+
+The launcher compares this pair with `stat' output taken from an already
+open descriptor on the target, so the recorded pair must come from the same
+producer.  Client-side attributes cannot be used: TRAMP reports a synthetic
+device number for remote files, which never matches the target."
+  (let* ((expanded (expand-file-name path))
+         (default-directory (file-name-directory expanded))
+         (stat (executable-find "stat" (file-remote-p expanded))))
+    (unless stat
+      (signal 'mevedel-sandbox-policy-error
+              '("Exact filesystem identity requires 'stat'")))
+    (with-temp-buffer
+      (let ((status (process-file stat nil t nil "-Lc" "%d:%i"
+                                  (file-local-name expanded)))
+            identity)
+        (setq identity (string-trim (buffer-string)))
+        (unless (and (integerp status) (zerop status)
+                     (string-match-p "\\`[0-9]+:[0-9]+\\'" identity))
+          (signal 'mevedel-sandbox-policy-error
+                  (list
+                   (format "Cannot establish exact filesystem identity: %s"
+                           path))))
+        identity))))
+
 (defun mevedel-sandbox--resolve-filesystem-permissions (permissions)
   "Return PERMISSIONS with canonical paths and original source paths."
   (mapcar
@@ -64,12 +90,15 @@
          (signal 'mevedel-sandbox-policy-error
                  (list (format "Invalid additional filesystem access: %S"
                                access))))
-       (let ((resolved (copy-sequence grant)))
+       (let* ((resolved (copy-sequence grant))
+              (canonical (file-truename path))
+              (identity (mevedel-sandbox--target-identity canonical)))
          (setq resolved (plist-put resolved :source-path path))
          (setq resolved
                (plist-put resolved :symlinks
                           (mevedel-sandbox--symlink-chain path)))
-         (plist-put resolved :path (file-truename path)))))
+         (setq resolved (plist-put resolved :identity identity))
+         (plist-put resolved :path canonical))))
    permissions))
 
 (defun mevedel-sandbox--grant-paths (grant)
@@ -88,27 +117,34 @@
     (permissions &optional first-fd)
   "Return FD-backed exact mounts for normalized filesystem PERMISSIONS.
 FIRST-FD defaults to 10."
-  (let (arguments paths)
+  (let (arguments grants)
     (dolist (grant (plist-get permissions :file-system))
       (let ((path (plist-get grant :path))
-            (source (or (plist-get grant :source-path)
-                        (plist-get grant :path)))
             (access (plist-get grant :access))
-            (fd (+ (or first-fd 10) (length paths))))
+            (fd (+ (or first-fd 10) (length grants))))
         (setq arguments
               (append arguments
                       (list (if (eq access 'write)
                                 "--bind-fd"
                               "--ro-bind-fd")
                             (number-to-string fd) path))
-              paths (append paths (list source)))))
-    (list :arguments arguments :paths paths)))
+              grants (append grants (list grant)))))
+    (list :arguments arguments :grants grants)))
 
-(defun mevedel-sandbox--fd-backed-command (command paths &optional workdir)
-  "Wrap COMMAND to preserve exact target PATHS on file descriptors.
+(defun mevedel-sandbox--grant-identity (grant)
+  "Return the target-native device/inode identity recorded in GRANT."
+  (let ((identity (plist-get grant :identity)))
+    (unless (and (stringp identity)
+                 (string-match-p "\\`[0-9]+:[0-9]+\\'" identity))
+      (signal 'mevedel-sandbox-policy-error
+              (list "Filesystem grant lacks an exact identity")))
+    identity))
+
+(defun mevedel-sandbox--fd-backed-command (command grants &optional workdir)
+  "Wrap COMMAND to preserve exact target GRANTS on file descriptors.
 When WORKDIR is remote, discover and launch the wrapper on that target."
   (require 'subr-x)
-  (if (not paths)
+  (if (not grants)
       command
     (let* ((remote (and workdir (file-remote-p workdir)))
            (bash
@@ -120,18 +156,53 @@ When WORKDIR is remote, discover and launch the wrapper on that target."
       (unless bash
         (signal 'mevedel-sandbox-policy-error
                 '("Additive filesystem confinement requires 'bash'")))
-      (let* ((count (length paths))
-             (open-forms
-              (cl-loop for index from 1 to count
-                       for fd from 10
-                       collect (format "exec %d<\"$%d\"" fd index)))
+      (let ((stat
+             (if remote
+                 (with-temp-buffer
+                   (setq default-directory workdir)
+                   (executable-find "stat" remote))
+               (executable-find "stat"))))
+        (unless stat
+          (signal 'mevedel-sandbox-policy-error
+                  '("Additive filesystem confinement requires 'stat'")))
+        (let* ((count (length grants))
+               (open-forms
+                (cl-loop for fd from 10 repeat count
+                         collect
+                         (format
+                          (concat
+                           "if ! exec %d<\"$1\"; then "
+                           "export MEVEDEL_SANDBOX_GRANT_FAILURE=1; "
+                           "exec %d<&0; "
+                           "fi; "
+                           "actual=$(%s -Lc '%%d:%%i' /proc/self/fd/%d "
+                           "2>/dev/null) || "
+                           "export MEVEDEL_SANDBOX_GRANT_FAILURE=1; "
+                           "if [ \"$actual\" != \"$2\" ]; then "
+                           "export MEVEDEL_SANDBOX_GRANT_FAILURE=1; "
+                           "fi; shift 2")
+                          fd fd (shell-quote-argument stat) fd)))
              (script
               (string-join
-               (append open-forms
-                       (list (format "shift %d" count) "exec \"$@\""))
+               (append
+                ;; A target exporting POSIXLY_CORRECT puts `bash -p -c' in
+                ;; posix mode, where a failed `exec' redirection kills the
+                ;; shell instead of setting the failure flag.  The launcher
+                ;; would then look like a backend launch failure, which
+                ;; best-effort answers by retrying with no confinement.
+                (list "set +o posix"
+                      "unset MEVEDEL_SANDBOX_GRANT_FAILURE")
+                open-forms
+                (list "exec \"$@\""))
                "; ")))
-        (append (list bash "-p" "-c" script "mevedel-sandbox-fds")
-                paths command)))))
+          (append
+           (list bash "-p" "-c" script "mevedel-sandbox-fds")
+           (cl-mapcan
+            (lambda (grant)
+              (list (plist-get grant :source-path)
+                    (mevedel-sandbox--grant-identity grant)))
+            grants)
+           command))))))
 
 (defun mevedel-sandbox--open-granted-paths (arguments permissions)
   "Reopen exact granted paths in protected Bubblewrap ARGUMENTS."

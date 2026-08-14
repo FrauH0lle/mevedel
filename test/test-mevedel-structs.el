@@ -15,6 +15,7 @@
 (require 'mevedel-reminders)
 (require 'mevedel-sandbox)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-publication)
 (require 'mevedel-session-persistence)
 (require 'mevedel-telemetry)
 (require 'mevedel-workspace-identity)
@@ -32,6 +33,25 @@
 
 ;;
 ;;; Session transient state
+
+(mevedel-deftest mevedel-session-authority-mode-for-session
+  (:doc "normalizes workspace authority once and rejects unset or mismatched state")
+  (let* ((workspace
+          (mevedel-workspace--create
+           :type 'project :id "project" :root "/tmp/project/"
+           :name "project"))
+         (session (mevedel-session--create :workspace workspace)))
+    (should (eq 'portable
+                (mevedel-session-authority-mode-for-session session)))
+    (should (eq 'portable (mevedel-session-authority-mode session)))
+    (setf (mevedel-session-authority-mode session) 'pid-lock)
+    (should-error
+     (mevedel-session-authority-mode-for-session session)
+     :type 'error))
+  (should-error
+   (mevedel-session-authority-mode-for-session
+    (mevedel-session--create))
+   :type 'error))
 
 (mevedel-deftest mevedel-session-audit-target ()
   ,test
@@ -634,7 +654,7 @@
   :doc "creates request and sets buffer-local"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
            (req (mevedel-request-begin session)))
       (should (mevedel-request-p req))
@@ -648,7 +668,7 @@
   :doc "reserves the next turn without committing it"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws)))
       (setf (mevedel-session-turn-count session) 4)
       (let ((req (mevedel-request-begin session)))
@@ -658,7 +678,7 @@
   :doc "sets directive-uuid when provided"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
            (req (mevedel-request-begin session "test-uuid")))
       (should (equal "test-uuid" (mevedel-request-directive-uuid req)))))
@@ -666,7 +686,7 @@
   :doc "stamps directive planning authority onto the request"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws)))
       (setf (mevedel-session-directive-planning session)
             '(:directive-id "d1" :phase planning))
@@ -676,7 +696,7 @@
   :doc "records agent origin when request begins in a sub-agent buffer"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
            (agent (mevedel-agent--create :name "verifier"))
            (inv (mevedel-agent-invocation-create agent)))
@@ -692,17 +712,20 @@
   :doc "replaces stale request with warning"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
            (req1 (mevedel-request-begin session))
-           (req2 (mevedel-request-begin session)))
+           diagnostics
+           (req2 (mevedel-test--with-captured-messages diagnostics
+                   (mevedel-request-begin session))))
+      (should (string-match-p "stale request found" diagnostics))
       (should (eq req2 mevedel--current-request))
       (should-not (eq req1 req2))))
 
   :doc "replacing stale request drains queued interactions"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
            (outcomes nil)
            (request (mevedel-request-begin session)))
@@ -722,7 +745,8 @@
                         :callback
                         (lambda (outcome)
                           (push (cons 'plan outcome) outcomes))))
-      (mevedel-request-begin session)
+      (mevedel-test--with-captured-messages nil
+        (mevedel-request-begin session))
       (should (null (mevedel-session-permission-queue session)))
       (should (null (mevedel-session-pending-plan-approval session)))
       (should (equal '((plan . aborted) (permission . aborted))
@@ -768,11 +792,18 @@
             (mevedel-execution-target-observed-incarnation target)
             "new-incarnation"
             (mevedel-execution-target-incarnation-changed-p target) t)
+      (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-execution-target-probe)
-                 (lambda (&rest _args) (push 'probe calls)))
+                 (lambda (&rest _args)
+                   (push 'probe calls)
+                   '(:status ready)))
                 ((symbol-function
                   'mevedel-session-persistence-assert-mutation-authority)
-                 (lambda (&rest _) (push 'lease calls) t))
+                 (lambda (checked &optional buffer)
+                   (push 'lease calls)
+                   (mevedel-session-persistence--check-target-incarnation
+                    checked (or buffer (current-buffer)))
+                   t))
                 ((symbol-function
                   'mevedel-permission-invalidate-target-grants)
                  (lambda (_session) (push 'invalidate calls) t))
@@ -780,7 +811,8 @@
                   'mevedel-session-persistence-publish-sidecar-state)
                  (lambda (_session _root-buffer) (push 'publish calls) t)))
         (should (mevedel-request-p (mevedel-request-begin session))))
-      (should (equal '(probe lease invalidate publish) (nreverse calls)))
+      (should (equal '(probe lease invalidate)
+                     (nreverse calls)))
       (should (equal "new-incarnation"
                      (mevedel-execution-target-incarnation target)))
       (should-not
@@ -821,7 +853,10 @@
                   (generate-new-buffer " *incarnation-ack-root*"))
             (let ((target (mevedel-session-execution-target session))
                   (replacement-incarnation
-                   (secure-hash 'sha256 "Linux\n")))
+                   (secure-hash
+                    'sha256
+                    (mevedel-execution-target--incarnation-payload
+                     "fixture" "fixture" "1" "fixture"))))
               (mevedel-execution-target-seed-incarnation
                target "old-incarnation")
               (setf (mevedel-execution-target-support-tier target) 'supported
@@ -847,7 +882,7 @@
                (mevedel-session-durability-lease-acquire
                 session-dir (buffer-name buffer) session))
               (should
-               (mevedel-session-durability-publish
+               (mevedel-session-publication-publish
                 session
                 (list
                  (list :path segment :content "Published transcript\n")
@@ -867,11 +902,16 @@
                            (concat "/usr/bin/" name)))
                         ((symbol-function 'process-file)
                          (lambda (program _in destination _display
-                                          &rest _args)
+                                          &rest args)
                            (with-current-buffer destination
-                             (insert (if (equal program "env")
-                                         (concat "HOME=" local-root "\0")
-                                       "Linux\n")))
+                             (insert
+                              (cond
+                               ((equal program "env")
+                                (concat "HOME=" local-root "\0"))
+                               ((string-suffix-p "bash" program)
+                                "boot=fixture\nmachine=fixture\npid1-start=1\nhostname=fixture\n")
+                               ((equal args '("-r")) "6.8.0-target\n")
+                               (t "Linux\n"))))
                            0)))
                 (let ((readiness
                        (mevedel-execution-target-probe target t 'off)))
@@ -923,11 +963,28 @@
               (should-not
                (mevedel-execution-target-incarnation-changed-p target))
               (should-not
-               (mevedel-execution-target-observed-incarnation target)))))
+               (mevedel-execution-target-observed-incarnation target))
+              ;; A replacement after request admission is fenced again at
+              ;; the next mutating-tool boundary, not deferred to a new turn.
+              (setf (mevedel-session-resource-grants session)
+                    (list (list :path grant-path :access 'read)))
+              (mevedel-execution-target--record-incarnation
+               target "second-incarnation")
+              (with-current-buffer buffer
+                (mevedel-session-persistence-assert-new-mutation-authority
+                 session))
+              (should-not (mevedel-session-resource-grants session))
+              (should (equal "second-incarnation"
+                             (mevedel-execution-target-incarnation target)))
+              (should-not
+               (mevedel-execution-target-incarnation-changed-p target)))))
       (when (and session (mevedel-session-save-path session))
+        ;; Releasing reaches the target, so it needs the mock method that
+        ;; only resolves inside this helper.
         (ignore-errors
-          (mevedel-session-durability-lease-release
-           (mevedel-session-save-path session) session)))
+          (mevedel-test--with-local-shell-tramp (list host)
+            (mevedel-session-durability-lease-release
+             (mevedel-session-save-path session) session))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (set-buffer-modified-p nil))
@@ -946,6 +1003,8 @@
                      :name "main" :workspace workspace
                      :execution-target target
                      :working-directory "/docker:dev:/workspace/"
+                     :session-id "failed-replacement"
+                     :save-path "/tmp/mevedel-failed-replacement/"
                      :resource-grants
                      '((:path "/docker:dev:/outside.el" :access read))))
            (fail-publication t))
@@ -958,10 +1017,15 @@
       (cl-letf
           (((symbol-function 'mevedel-execution-target-probe) #'ignore)
            ((symbol-function
+             'mevedel-session-persistence-artifact-present-p)
+            (lambda (&rest _) t))
+           ((symbol-function
              'mevedel-session-persistence-assert-mutation-authority)
             (lambda (checked &optional _buffer)
               (when (mevedel-session-pending-publication checked)
                 (user-error "Session has pending publication"))
+              (mevedel-session-persistence--check-target-incarnation
+               checked (current-buffer))
               t))
            ((symbol-function 'mevedel-permission-invalidate-target-grants)
             (lambda (checked)
@@ -1010,11 +1074,15 @@
             (mevedel-execution-target-observed-incarnation target)
             "new-incarnation"
             (mevedel-execution-target-incarnation-changed-p target) t)
+      (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-execution-target-probe)
                  #'ignore)
                 ((symbol-function
                   'mevedel-session-persistence-assert-mutation-authority)
-                 (lambda (&rest _) t))
+                 (lambda (checked &optional buffer)
+                   (mevedel-session-persistence--check-target-incarnation
+                    checked (or buffer (current-buffer)))
+                   t))
                 ((symbol-function
                   'mevedel-permission-invalidate-target-grants)
                  (lambda (_session) (user-error "Publication failed"))))
@@ -1053,10 +1121,83 @@
     (let* ((workspace (mevedel-workspace-get-or-create
                        'project "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" workspace)))
+      (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-execution-target-probe)
                  (lambda (&rest _)
                    (ert-fail "local request unexpectedly probed"))))
-        (should (mevedel-request-p (mevedel-request-begin session)))))))
+        (should (mevedel-request-p (mevedel-request-begin session))))))
+
+  :doc "invalidates local project grants, publishes the replacement, and admits later requests"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-local-incarnation-" t)))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "local-incarnation" root "local-incarnation"))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *local-incarnation-root*"))
+         (grant-path (file-name-concat root "granted.el"))
+         save-path)
+    (unwind-protect
+        (progn
+          (with-temp-file grant-path
+            (insert "granted"))
+          (setf (mevedel-execution-target-incarnation
+                 (mevedel-session-execution-target session))
+                "old-incarnation"
+                (mevedel-session-resource-grants session)
+                (list (list :path grant-path :access 'read)))
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local mevedel--session session)
+            (insert "Initial local request\n")
+            (cl-letf (((symbol-function
+                        'mevedel-execution-target--local-incarnation)
+                       (lambda () "old-incarnation")))
+              (mevedel-session-persistence-save session buffer))
+            (setq save-path (mevedel-session-save-path session))
+            (let ((sidecar
+                   (with-temp-buffer
+                     (insert
+                      (mevedel-session-persistence-read-artifact
+                       session "session.meta.el" t))
+                     (goto-char (point-min))
+                     (read (current-buffer)))))
+              (should (equal "old-incarnation"
+                             (plist-get sidecar :target-incarnation)))
+              (should (plist-get sidecar :resource-grants)))
+            (cl-letf (((symbol-function
+                        'mevedel-execution-target--local-incarnation)
+                       (lambda () "new-incarnation")))
+              (should (mevedel-request-p (mevedel-request-begin session)))
+              (should-not (mevedel-session-resource-grants session))
+              (should-not
+               (mevedel-execution-target-incarnation-changed-p
+                (mevedel-session-execution-target session)))
+              (let ((sidecar
+                     (with-temp-buffer
+                       (insert
+                        (mevedel-session-persistence-read-artifact
+                         session "session.meta.el" t))
+                       (goto-char (point-min))
+                       (read (current-buffer)))))
+                (should (equal "new-incarnation"
+                               (plist-get sidecar :target-incarnation)))
+                (should-not (plist-get sidecar :resource-grants)))
+              ;; A later request must see the acknowledged replacement as
+              ;; the current baseline and remain admissible.
+              (mevedel-request-end)
+              (should (mevedel-request-p (mevedel-request-begin session)))
+              (mevedel-request-end))))
+      (when mevedel--current-request
+        (mevedel-request-end))
+      (when (and save-path (mevedel-session-save-path session))
+        (ignore-errors
+          (mevedel-session-persistence-lock-release save-path session)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-request-end
   (:before-each (mevedel-workspace-clear-registry)
@@ -1068,7 +1209,7 @@
   :doc "clears buffer-local"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws)))
       (mevedel-request-begin session)
       (should mevedel--current-request)
@@ -1080,48 +1221,48 @@
   :doc "drains every registered canceller on end"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
-           (session (mevedel-session-create "main" ws))
-           (fired nil)
-           (req (mevedel-request-begin session)))
-      (mevedel-request-push-canceller req (lambda () (push 'a fired)))
-      (mevedel-request-push-canceller req (lambda () (push 'b fired)))
-      (mevedel-request-end)
-      (should (equal (sort (copy-sequence fired) (lambda (a b)
-                                                   (string< (symbol-name a)
-                                                            (symbol-name b))))
-                     '(a b)))
-      (should (null mevedel--current-request))))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws)))
+      (let* ((fired nil)
+             (req (mevedel-request-begin session)))
+        (mevedel-request-push-canceller req (lambda () (push 'a fired)))
+        (mevedel-request-push-canceller req (lambda () (push 'b fired)))
+        (mevedel-request-end)
+        (should (equal (sort (copy-sequence fired) (lambda (a b)
+                                                     (string< (symbol-name a)
+                                                              (symbol-name b))))
+                       '(a b)))
+        (should (null mevedel--current-request)))))
 
   :doc "tolerates canceller errors"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
-           (session (mevedel-session-create "main" ws))
-           (survivor-fired nil)
-           (req (mevedel-request-begin session)))
-      (mevedel-request-push-canceller req (lambda () (error "Boom")))
-      (mevedel-request-push-canceller
-       req (lambda () (setq survivor-fired t)))
-      (mevedel-request-end)
-      (should survivor-fired)
-      (should (null mevedel--current-request))))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws)))
+      (let* ((survivor-fired nil)
+             (req (mevedel-request-begin session)))
+        (mevedel-request-push-canceller req (lambda () (error "Boom")))
+        (mevedel-request-push-canceller
+         req (lambda () (setq survivor-fired t)))
+        (mevedel-request-end)
+        (should survivor-fired)
+        (should (null mevedel--current-request)))))
 
   :doc "does not re-invoke cancellers on second end"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
-           (session (mevedel-session-create "main" ws))
-           (count 0)
-           (req (mevedel-request-begin session)))
-      (mevedel-request-push-canceller req (lambda () (cl-incf count)))
-      ;; Drain once manually, then end; canceller already fired and
-      ;; the list is empty, so end must not re-fire it.
-      (mevedel-request-drain-cancellers req)
-      (should (= count 1))
-      (mevedel-request-end)
-      (should (= count 1))
-      (should (null mevedel--current-request))))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws)))
+      (let* ((count 0)
+             (req (mevedel-request-begin session)))
+        (mevedel-request-push-canceller req (lambda () (cl-incf count)))
+        ;; Drain once manually, then end; canceller already fired and
+        ;; the list is empty, so end must not re-fire it.
+        (mevedel-request-drain-cancellers req)
+        (should (= count 1))
+        (mevedel-request-end)
+        (should (= count 1))
+        (should (null mevedel--current-request)))))
 
   :doc "no-op when no active request"
   (with-temp-buffer
@@ -1184,10 +1325,11 @@
   :doc "request end keeps session-scoped grants"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
            (path "/tmp/dropped.txt")
            (expanded (expand-file-name path)))
+      (setq-local mevedel--session session)
       (mevedel-session-activate-dropped-file-grants session (list path))
       (mevedel-request-begin session)
       (mevedel-request-end)
@@ -1205,11 +1347,11 @@
   :doc "request end sweeps only request-owned permissions and keeps plan approvals"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
-           (session (mevedel-session-create "main" ws))
-           (outcomes nil)
-           (request (mevedel-request-begin session)))
-      (setf (mevedel-session-permission-queue session)
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws)))
+      (let* ((outcomes nil)
+             (request (mevedel-request-begin session)))
+        (setf (mevedel-session-permission-queue session)
             (list (list :kind 'generic
                         :tool-name "Read"
                         :session session
@@ -1228,36 +1370,36 @@
                         (lambda (outcome)
                           (push (cons 'agent-permission outcome)
                                 outcomes)))))
-      (setf (mevedel-session-pending-plan-approval session)
-            (list :body "# Plan"
-                        :chat-buffer (current-buffer)
-                        :session session
-                        :callback
-                        (lambda (outcome)
-                          (push (cons 'plan outcome) outcomes))))
-      (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
-                 #'ignore))
-        (mevedel-request-end))
-      (should (= 1 (length (mevedel-session-permission-queue session))))
-      (should (equal "other-request"
-                     (plist-get (car (mevedel-session-permission-queue session))
-                                :request-id)))
-      (should (mevedel-session-pending-plan-approval session))
-      (should (equal '((main-permission . aborted))
-                     outcomes))
-      (mevedel-request-end)
-      (should (equal '((main-permission . aborted))
-                     outcomes))))
+        (setf (mevedel-session-pending-plan-approval session)
+              (list :body "# Plan"
+                          :chat-buffer (current-buffer)
+                          :session session
+                          :callback
+                          (lambda (outcome)
+                            (push (cons 'plan outcome) outcomes))))
+        (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                   #'ignore))
+          (mevedel-request-end))
+        (should (= 1 (length (mevedel-session-permission-queue session))))
+        (should (equal "other-request"
+                       (plist-get (car (mevedel-session-permission-queue session))
+                                  :request-id)))
+        (should (mevedel-session-pending-plan-approval session))
+        (should (equal '((main-permission . aborted))
+                       outcomes))
+        (mevedel-request-end)
+        (should (equal '((main-permission . aborted))
+                       outcomes)))))
 
   :doc "request end renders a surviving permission when the swept entry was visible"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
-           (session (mevedel-session-create "main" ws))
-           (outcomes nil)
-           (rendered nil)
-           (request (mevedel-request-begin session)))
-      (setf (mevedel-session-permission-queue session)
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws)))
+      (let* ((outcomes nil)
+             (rendered nil)
+             (request (mevedel-request-begin session)))
+        (setf (mevedel-session-permission-queue session)
             (list (list :kind 'generic
                         :tool-name "Read"
                         :session session
@@ -1276,18 +1418,18 @@
                         (lambda (outcome)
                           (push (cons 'agent-permission outcome)
                                 outcomes)))))
-      (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
-                 (lambda (entry)
-                   (push (plist-get entry :origin) rendered))))
-        (mevedel-request-end))
-      (should (equal '("/root/verifier") rendered))
-      (should (equal '((main-permission . aborted))
-                     outcomes))))
+        (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                   (lambda (entry)
+                     (push (plist-get entry :origin) rendered))))
+          (mevedel-request-end))
+        (should (equal '("/root/verifier") rendered))
+        (should (equal '((main-permission . aborted))
+                       outcomes)))))
 
   :doc "agent request end sweeps only that agent's permission entries"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
-                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+                'file "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
            (agent (mevedel-agent--create :name "verifier"))
            (inv (mevedel-agent-invocation-create agent))

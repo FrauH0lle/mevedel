@@ -11,6 +11,8 @@
           "helpers"))
 (require 'gptel-agent-tools)
 (require 'mevedel-agent-conversation)
+(require 'mevedel-chat)
+(require 'mevedel-directive)
 (require 'mevedel-view)
 (require 'mevedel-view-audit)
 (require 'mevedel-view-render)
@@ -97,6 +99,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   `(let* ((directory (make-temp-file "mevedel-view-segments-" t))
           (session
            (mevedel-session--create
+            :authority-mode 'pid-lock
             :name "segments"
             :save-path (file-name-as-directory directory)
             :current-segment 3
@@ -421,6 +424,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
          (missing (mevedel-session-persistence--segment-path directory 2))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "segments"
            :save-path (file-name-as-directory directory)
            :current-segment 3
@@ -455,6 +459,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (let* ((directory (make-temp-file "mevedel-view-stale-bound-" t))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "segments"
            :save-path (file-name-as-directory directory)
            :current-segment 2
@@ -506,6 +511,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (let* ((directory (make-temp-file "mevedel-view-segment-picker-" t))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "segments"
            :save-path (file-name-as-directory directory)
            :current-segment 3
@@ -596,6 +602,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
+            :authority-mode 'pid-lock
             :name "fork-points"
             :current-segment 1)))
       (with-current-buffer data-buf
@@ -628,6 +635,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
+            :authority-mode 'pid-lock
             :name "rewind-point"
             :current-segment 1))
           called-buffer called-target returned-latest)
@@ -664,19 +672,22 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (test)
   :doc "renders the direct Source switch beside expanded and collapsed headers"
   (mevedel-view-test--with-buffers
-    (let ((session
-           (mevedel-session--create
-            :name "source"
-            :session-id "source-id"
-            :save-path "/sessions/source/"
-            :current-segment 1))
-          (variants
-           '((:save-path "/sessions/source/"
-              :variant-origin source
-              :summary (:session-id "source-id"))
-             (:save-path "/sessions/child/"
-              :variant-origin conversation
-              :summary (:session-id "child-id")))))
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-view-variants-" t)))
+           (session
+            (mevedel-session--create
+             :authority-mode 'pid-lock
+             :name "source"
+             :session-id "source-id"
+             :save-path (file-name-concat root "sessions/source/")
+             :current-segment 1))
+           (variants
+            `((:save-path ,(file-name-concat root "sessions/source/")
+               :variant-origin source
+               :summary (:session-id "source-id"))
+              (:save-path ,(file-name-concat root "sessions/child/")
+               :variant-origin conversation
+               :summary (:session-id "child-id")))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (insert (propertize "Response line one.\nResponse line two.\n"
@@ -716,9 +727,10 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (with-temp-buffer
     (let ((session
            (mevedel-session--create
+            :authority-mode 'pid-lock
             :name "source"
             :session-id "source-id"
-            :save-path "/sessions/source/"))
+            :save-path "/tmp/mevedel-view-sessions/source/"))
           (variants
            '((:variant-origin source
               :summary (:session-id "source-id"))
@@ -791,16 +803,18 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
            (target-view (generate-new-buffer " *test-target-view*"))
            (source-session
             (mevedel-session--create
+             :authority-mode 'pid-lock
              :name "source"
              :session-id "source-id"
-             :save-path "/sessions/source/"
+             :save-path "/tmp/mevedel-view-sessions/source/"
              :working-directory "/source/"
              :current-segment 1))
            (target-session
             (mevedel-session--create
+             :authority-mode 'pid-lock
              :name "fork"
              :session-id "child-id"
-             :save-path "/sessions/child/"
+             :save-path "/tmp/mevedel-view-sessions/child/"
              :working-directory "/worktree/"
              :forked-from-session-id "source-id"
              :forked-from-fork-point-id "fork-point-1"
@@ -810,10 +824,10 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
              '((1 . ((:fork-point-id "fork-point-1"
                       :cum-turn 1 :preview "shared"))))))
            (variants
-            '((:save-path "/sessions/source/"
+            '((:save-path "/tmp/mevedel-view-sessions/source/"
                :variant-origin source
                :summary (:session-id "source-id"))
-              (:save-path "/sessions/child/"
+              (:save-path "/tmp/mevedel-view-sessions/child/"
                :variant-origin worktree
                :summary (:session-id "child-id"))))
            displayed
@@ -896,19 +910,20 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
   (mevedel-view-test--with-buffers
     (let* ((session
             (mevedel-session--create
+             :authority-mode 'pid-lock
              :name "source"
              :session-id "source-id"
-             :save-path "/sessions/source/"))
+             :save-path "/tmp/mevedel-view-sessions/source/"))
            (target-data (generate-new-buffer " *test-choice-data*"))
            (target-view (generate-new-buffer " *test-choice-view*"))
            (variants
-            '((:save-path "/sessions/source/"
+            '((:save-path "/tmp/mevedel-view-sessions/source/"
                :variant-origin source
                :summary (:session-id "source-id"))
-              (:save-path "/sessions/child-1/"
+              (:save-path "/tmp/mevedel-view-sessions/child-1/"
                :variant-origin conversation
                :summary (:session-id "child-1"))
-              (:save-path "/sessions/child-2/"
+              (:save-path "/tmp/mevedel-view-sessions/child-2/"
                :variant-origin worktree
                :summary (:session-id "child-2"))))
            chosen)
@@ -919,6 +934,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
             (with-current-buffer target-data
               (setq-local mevedel--session
                           (mevedel-session--create
+                           :authority-mode 'pid-lock
                            :name "target"
                            :session-id "child-2"))
               (setq-local mevedel--view-buffer target-view))
@@ -1221,7 +1237,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
            :checkpoint '(:session-id "main" :turn 3)))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id "directive-actions" :root "/tmp"
+           :type 'file :id "directive-actions" :root "/tmp"
            :name "directive-actions"))
          (record
           (mevedel-directive--create
@@ -2097,18 +2113,20 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
 
   :doc "loads persisted session summaries once for a full transcript render"
   (mevedel-view-test--with-buffers
-    (let* ((workspace
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-view-summaries-" t)))
+           (workspace
             (mevedel-workspace--create
-             :type 'project :id "test" :root "/workspace/" :name "test"))
+             :type 'project :id "test" :root root :name "test"))
            (session
             (mevedel-session--create
              :name "source"
              :session-id "source-id"
-             :save-path "/sessions/source/"
+             :save-path (file-name-concat root "sessions/source/")
              :workspace workspace
              :current-segment 1))
            (entries
-            '((:save-path "/sessions/source/"
+            '((:save-path "/tmp/mevedel-view-sessions/source/"
                :summary
                (:session-id "source-id"
                 :fork-point-ids ("fork-point-1" "fork-point-2")))))
@@ -2133,7 +2151,8 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                 (cl-incf calls)
                 entries)))
           (mevedel-view--full-rerender))
-        (should (= 1 calls))))))
+        (should (= 1 calls)))
+      (delete-directory root t))))
 
 
 (mevedel-deftest mevedel-view--rebase-data-sources ()
@@ -5186,7 +5205,7 @@ state of its inner sections"
   :doc "rewind resumes the real checkpoint session from a synthetic transcript"
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "directive-rewind" :root "/tmp"
+           :type 'file :id "directive-rewind" :root "/tmp"
            :name "directive-rewind"))
          (attempt
           (mevedel-directive-attempt--create
@@ -5200,7 +5219,7 @@ state of its inner sections"
     (with-temp-buffer
       (setq-local mevedel--data-buffer (current-buffer)
                   mevedel--session
-                  (mevedel-session--create :session-id "synthetic"))
+                  (mevedel-session--create :authority-mode 'pid-lock :session-id "synthetic"))
       (cl-letf (((symbol-function 'mevedel-view--directive-metadata-context)
                  (lambda (_) (list record workspace attempt 1)))
                 ((symbol-function 'read-multiple-choice)
@@ -5658,16 +5677,17 @@ state of its inner sections"
   :doc "long agent-result delivery expands to the final response body"
   (mevedel-view-test--with-buffers
     (let* ((mevedel-view-mailbox-collapse-line-threshold 1)
+           (root (file-name-as-directory
+                  (make-temp-file "mevedel-mailbox-long-" t)))
            (workspace (mevedel-workspace--create
                        :type 'project
                        :id "mailbox-long"
-                       :root temporary-file-directory
+                       :root root
                        :name "mailbox-long"))
            (session (mevedel-session-create "main" workspace)))
       (setf (mevedel-session-save-path session)
             (file-name-as-directory
-             (file-name-concat temporary-file-directory
-                               "mevedel-mailbox-long-session")))
+             (file-name-concat root "session")))
       (setf (mevedel-session-agent-transcripts session)
             '(("storage-long" . (:agent-path "/root/worker"
                                   :path "agents/worker.chat.org"
@@ -5719,7 +5739,8 @@ state of its inner sections"
                    text))
           (should-not (string-match-p
                        "✓ Finished /root/worker\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
-                       text))))))
+                       text))))
+      (delete-directory root t)))
 
   :doc "collapsed agent-result counts non-empty payload lines"
   (mevedel-view-test--with-buffers

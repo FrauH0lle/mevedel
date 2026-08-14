@@ -720,7 +720,7 @@
   (:doc "fires every turn only while Plan mode is active")
   ,test
   (test)
-  (let* ((session (mevedel-session--create :name "main" :plan-mode t))
+  (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "main" :plan-mode t))
          (reminder (mevedel-reminders-make-plan-mode))
          (skeleton
           (concat
@@ -1014,9 +1014,17 @@
           '(:path "local/plans/current.md"
             :accepted-path "local/plans/accepted-20260813-120000.md"
             :status accepted :accepted-turn 5))
-    (should-not (funcall (mevedel-reminder-trigger r) session))
-    (setf (mevedel-session-turn-count session) 6)
-    (should (funcall (mevedel-reminder-trigger r) session)))
+    ;; A portable session reads its plan through the publication, never
+    ;; the fixed cache, so the artifact has to be served here.
+    (cl-letf (((symbol-function
+                'mevedel-session-persistence-artifact-present-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-session-persistence-read-artifact)
+               (lambda (&rest _)
+                 (encode-coding-string "# Plan\n\nDo it." 'utf-8-unix))))
+      (should-not (funcall (mevedel-reminder-trigger r) session))
+      (setf (mevedel-session-turn-count session) 6)
+      (should (funcall (mevedel-reminder-trigger r) session))))
 
   :doc "does not fire or read the mutable plan without an accepted artifact"
   (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))
@@ -1039,6 +1047,7 @@
   :doc "stays suppressed during a standalone Plan conversation"
   (let ((session
          (mevedel-session--create
+          :authority-mode 'pid-lock
           :name "main" :plan-mode t :turn-count 2
           :plan-metadata '(:status accepted :accepted-turn 1))))
     (should-not

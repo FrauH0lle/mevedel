@@ -21,16 +21,10 @@
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-execution-target'
-(declare-function mevedel-execution-target-acknowledge-incarnation
-                  "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-create
                   "mevedel-execution-target" (workspace-root))
 (declare-function mevedel-execution-target-expand-path
                   "mevedel-execution-target" (target path &optional directory))
-(declare-function mevedel-execution-target-incarnation-changed-p
-                  "mevedel-execution-target" (cl-x) t)
-(declare-function mevedel-execution-target-prepare-incarnation-acknowledgement
-                  "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-probe
                   "mevedel-execution-target"
                   (target &optional refresh sandbox-mode))
@@ -42,15 +36,13 @@
                   "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-refresh-incarnation
+                  "mevedel-execution-target" (target))
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-request
                   "mevedel-permission-queue"
                   (request-id &optional session no-render))
-
-;; `mevedel-permissions'
-(declare-function mevedel-permission-invalidate-target-grants
-                  "mevedel-permissions" (session))
 
 ;; `mevedel-sandbox'
 (defvar mevedel-sandbox-mode)
@@ -58,8 +50,6 @@
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-assert-mutation-authority
                   "mevedel-session-persistence" (session &optional buffer))
-(declare-function mevedel-session-persistence-publish-sidecar-state
-                  "mevedel-session-persistence" (session root-buffer))
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record
@@ -319,8 +309,11 @@ and NAME arguments)."
 (defun mevedel-workspace-clear-registry ()
   "Remove all workspaces from the global registry.
 
-Intended for testing and cleanup."
-  (clrhash mevedel-workspace--registry))
+Also drops remembered remote project detections, which are the same decision
+cached one level lower.  Intended for testing and cleanup."
+  (clrhash mevedel-workspace--registry)
+  (when (boundp 'mevedel-workspace--remote-project-cache)
+    (clrhash mevedel-workspace--remote-project-cache)))
 
 
 ;;
@@ -356,6 +349,7 @@ workspace."
   name              ; string: "main", "refactor", "tutor", etc.
   workspace         ; mevedel-workspace struct (shared by reference)
   (execution-target nil :read-only t) ; immutable filesystem/process authority
+  authority-mode    ; `portable' for project sessions, `pid-lock' for file sessions
   working-directory ; absolute directory used for relative tools/prompts
   tasks             ; list of mevedel-task structs
   task-status-notes ; alist: owner -> plist with :note/:updated-turn/:updated-at
@@ -414,6 +408,9 @@ workspace."
   publication-queue ; transient FIFO of durability publication batches
   publication-uncommitted-batches ; transient staged session-local writes
   publication-active-p ; non-nil while this session publishes target state
+  control-transfer ; transient cooperative lease-transfer state; never persisted
+  control-transfer-drains ; transient predicates that block lease handoff
+  root-buffer       ; transient authoritative chat data buffer, or nil
   lease             ; transient portable lease record and live ownership state
   lease-renewal-timer ; transient timer renewing remote mutation authority
   ;; Persistence -- nil until lazy materialization.
@@ -459,6 +456,70 @@ workspace."
   plan-metadata
   ;; The session-owned current `mevedel-goal', or nil.
   goal)
+
+(defun mevedel-session-authority-mode-for-workspace (workspace)
+  "Return the durable authority mode required by WORKSPACE."
+  (pcase (and workspace (mevedel-workspace-type workspace))
+    ('project 'portable)
+    ('file 'pid-lock)
+    (_ (error "Unsupported workspace category for session authority: %S"
+               (and workspace (mevedel-workspace-type workspace))))))
+
+(defun mevedel-session-authority-mode-for-session (session)
+  "Return and normalize SESSION's explicit durable authority mode.
+
+A session with a workspace derives its missing mode once and stores it on the
+struct.  An explicitly supplied mode must match that workspace category.  A
+session with neither a mode nor a workspace is rejected instead of falling
+back to an authority inferred from a path or process locality."
+  (let* ((workspace (mevedel-session-workspace session))
+         (mode (mevedel-session-authority-mode session))
+         (expected (and workspace
+                        (mevedel-session-authority-mode-for-workspace
+                         workspace))))
+    (unless (or (eq mode 'portable) (eq mode 'pid-lock))
+      (if expected
+          (setq mode expected)
+        (error "Session authority mode is unavailable")))
+    (when (and expected (not (eq mode expected)))
+      (error "Session authority mode does not match its workspace: %S" mode))
+    (unless (eq mode (mevedel-session-authority-mode session))
+      (setf (mevedel-session-authority-mode session) mode))
+    mode))
+
+(defun mevedel-session-set-control-transfer-drains (session predicates)
+  "Set SESSION's transient control-transfer drain PREDICATES."
+  (setf (mevedel-session-control-transfer-drains session) predicates))
+
+(defun mevedel-session-set-control-transfer (session transfer)
+  "Set SESSION's transient cooperative control-transfer state."
+  (setf (mevedel-session-control-transfer session) transfer))
+
+(defun mevedel-session-set-root-buffer (session buffer)
+  "Set SESSION's authoritative live root data BUFFER, or nil."
+  (setf (mevedel-session-root-buffer session)
+        (and (buffer-live-p buffer) buffer)))
+
+(defun mevedel-session-set-execution-target (session target)
+  "Set SESSION's execution TARGET during committed-state adoption."
+  (setf (cl-struct-slot-value 'mevedel-session 'execution-target session)
+        target))
+
+(defun mevedel-session-adopt-committed-state
+    (session workspace save-path lease lease-renewal-timer publication
+             control-transfer root-buffer)
+  "Adopt committed durable state into SESSION after a control transfer.
+
+The coordinator supplies the already validated committed values.  Keep this
+slot-level update here so a transfer cannot leave runtime state from the old
+owner alongside the newly committed session state."
+  (setf (mevedel-session-workspace session) workspace
+        (mevedel-session-save-path session) save-path
+        (mevedel-session-lease session) lease
+        (mevedel-session-lease-renewal-timer session) lease-renewal-timer
+        (mevedel-session-publication session) publication
+        (mevedel-session-control-transfer session) control-transfer)
+  (mevedel-session-set-root-buffer session root-buffer))
 
 
 ;;
@@ -603,6 +664,10 @@ workspace root and is kept stable for the lifetime of the session."
      :name name
      :workspace workspace
      :execution-target target
+     :authority-mode
+     (if (eq (mevedel-workspace-type workspace) 'project)
+         'portable
+       'pid-lock)
      :working-directory directory
      :touched-files (make-hash-table :test #'equal)
      :mentions-shown (make-hash-table :test #'equal)
@@ -936,7 +1001,7 @@ only call sites that may invoke cancellers."
   (mevedel-request-untracked-effects request))
 
 (defun mevedel-request-assert-target-ready (session)
-  "Signal a user error when SESSION's remote execution target is not ready."
+  "Signal a user error when SESSION's execution target is not ready."
   (when-let* ((session)
               (target (mevedel-session-execution-target session)))
     (require 'mevedel-execution-target)
@@ -945,7 +1010,9 @@ only call sites that may invoke cancellers."
        target nil (mevedel-session-sandbox-mode session))
       (unless (mevedel-execution-target-ready-p target)
         (user-error "Execution target is not ready: %s"
-                    (mevedel-execution-target-readiness-message target)))))
+                    (mevedel-execution-target-readiness-message target))))
+    (unless (mevedel-execution-target-remote-p target)
+      (mevedel-execution-target-refresh-incarnation target)))
   t)
 
 (defun mevedel-request-begin (session &optional directive-uuid)
@@ -958,19 +1025,6 @@ the new request struct."
   (require 'mevedel-session-persistence)
   (mevedel-session-persistence-assert-mutation-authority
    session (current-buffer))
-  (when-let* ((target (mevedel-session-execution-target session))
-              ((mevedel-execution-target-incarnation-changed-p target)))
-    (require 'mevedel-permissions)
-    (mevedel-permission-invalidate-target-grants session)
-    (mevedel-execution-target-prepare-incarnation-acknowledgement target)
-    (mevedel-session-persistence-publish-sidecar-state
-     session
-     (or (and (boundp 'mevedel--agent-invocation)
-              mevedel--agent-invocation
-              (mevedel-agent-invocation-parent-data-buffer
-               mevedel--agent-invocation))
-         (current-buffer)))
-    (mevedel-execution-target-acknowledge-incarnation target))
   (when mevedel--current-request
     (message "mevedel: stale request found, replacing")
     (mevedel-request-end t))

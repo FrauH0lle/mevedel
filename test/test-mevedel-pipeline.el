@@ -19,6 +19,7 @@
 (require 'mevedel-patch-review)
 (require 'mevedel-tools)
 (require 'mevedel-view)
+(require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-prompt)
@@ -94,18 +95,32 @@
               (push record records))))))
     (nreverse records)))
 
+(defun test-mevedel-pipeline--drop-sessionless-warning
+    (original type message &rest args)
+  "Call ORIGINAL unless MESSAGE is the sessionless permission warning.
+Several permission cases deliberately resolve without a session, and the
+warning that reports it belongs to those cases rather than the run log.
+TYPE and ARGS are passed through unchanged."
+  (unless (and (eq type 'mevedel)
+               (string-match-p "no session in context"
+                               (format "%s" message)))
+    (apply original type message args)))
+
 (defun test-mevedel-pipeline--run-tool-and-wait (tool args)
-  "Run TOOL with ARGS and return its eventual pipeline result."
+  "Run TOOL with ARGS and return its eventual pipeline result.
+Running without a session in context is exactly what these cases mean to
+cover, so the permission step's warning about it is captured here."
   (let ((deadline (+ (float-time) 5.0))
         done result)
-    (mevedel-pipeline-run-tool
-     tool
-     (lambda (value)
-       (setq result value
-             done t))
-     args)
-    (while (and (not done) (< (float-time) deadline))
-      (accept-process-output nil 0.01))
+    (mevedel-test--with-captured-diagnostics nil
+      (mevedel-pipeline-run-tool
+       tool
+       (lambda (value)
+         (setq result value
+               done t))
+       args)
+      (while (and (not done) (< (float-time) deadline))
+        (accept-process-output nil 0.01)))
     (should done)
     result))
 
@@ -144,7 +159,7 @@
               (mevedel-pipeline--format-context-failure
                '(:hook-audit-records ((:bad t))) "handler failed"))))
     (should warning)
-    (should-not (string-match-p "private\|sentinel" warning))))
+    (should-not (string-match-p "private\|sentinel" warning)))
 
   :doc "does not duplicate audit records already embedded in the reason"
   (let* ((audit
@@ -176,7 +191,7 @@
           (mevedel-pipeline--format-context-failure
            (list :hook-audit-records (list embedded context-only)) reason)))
     (should (equal (list embedded context-only)
-                   (test-mevedel-pipeline--hook-audit-records result))))
+                   (test-mevedel-pipeline--hook-audit-records result)))))
 
 (mevedel-deftest mevedel-pipeline--run ()
 		 ,test
@@ -322,7 +337,7 @@
 		    nil)
 		   (funcall saved-next saved-ctx)
 		   ;; Latch: a second invocation must not re-enter the chain.
-		   (let ((warning-minimum-level :emergency))
+		   (mevedel-test--with-captured-diagnostics nil
 		     (funcall saved-next saved-ctx))
 		   (should (equal results '("first"))))
 		 :doc "calling fail after next is a no-op (latch)"
@@ -335,7 +350,7 @@
 		    (lambda (r) (push r results))
 		    nil)
 		   (funcall saved-next saved-ctx)
-		   (let ((warning-minimum-level :emergency))
+		   (mevedel-test--with-captured-diagnostics nil
 		     (funcall saved-fail "ignored"))
 		   (should (equal results '("ok")))))
 
@@ -579,7 +594,8 @@
 		 :doc "authorization and handler observe one identical path"
 		 (let* ((root (file-name-as-directory
 				 (make-temp-file "mevedel-normalize-" t)))
-			(workspace (mevedel-workspace--create :root root))
+			(workspace (mevedel-workspace--create
+			            :type 'project :id root :root root))
 			(session (mevedel-session--create
 				  :name "path-normalization"
 				  :workspace workspace
@@ -1331,10 +1347,13 @@
                          (list (lambda (_event)
                                  '(:additional-context ("hook note")
                                    :system-message "because")))))
+                   ;; The hook's system message is reported to the user;
+                   ;; the audit assertions below own it.
+                   (mevedel-test--with-captured-messages nil
                      (mevedel-pipeline--step-post-tool-hooks
                       context
                       (lambda (ctx) (setq result (plist-get ctx :result)))
-                      #'ignore)
+                      #'ignore))
                    (should (string-match-p
                             "<hook-event name=\"PostToolUse\">"
                             result))
@@ -1381,7 +1400,7 @@
 		   (mevedel-pipeline--step-attach-media-data
 		    after-hooks (lambda (ctx) (setq after-media ctx)) #'ignore)
 			   (should-not (string-search mevedel-tool-media--data-open
-					      (plist-get after-media :result)))))
+					      (plist-get after-media :result))))
 			 :doc "updated hook results retain committed repair audit metadata"
 			 (let* ((tool (mevedel-tool--create :name "Collect"))
 				(repair-audit
@@ -1406,7 +1425,7 @@
 			    (cl-some
 			     (lambda (record)
 			       (eq 'tool-input-repair (plist-get record :type)))
-			     (test-mevedel-pipeline--hook-audit-records result))))
+			     (test-mevedel-pipeline--hook-audit-records result)))))
 
 (mevedel-deftest mevedel-pipeline--step-post-tool-hooks/no-block
 		 (:doc "does not fail the pipeline for post-tool blocking decisions")
@@ -1626,7 +1645,13 @@
           (should (eq side-buffer (plist-get queued :data-buffer))))
       (kill-buffer side-buffer))))
 
-(mevedel-deftest mevedel-pipeline--step-permission ()
+(mevedel-deftest mevedel-pipeline--step-permission
+		 (:before-each
+		  (advice-add 'display-warning :around
+			      #'test-mevedel-pipeline--drop-sessionless-warning)
+		  :after-each
+		  (advice-remove 'display-warning
+				 #'test-mevedel-pipeline--drop-sessionless-warning))
 		 ,test
 		 (test)
 		 :doc "allows read-only tool in ask mode"
@@ -3154,7 +3179,12 @@
   )
 
 (mevedel-deftest mevedel-pipeline-run-tool
-  ()
+  (:before-each
+   (advice-add 'display-warning :around
+               #'test-mevedel-pipeline--drop-sessionless-warning)
+   :after-each
+   (advice-remove 'display-warning
+                  #'test-mevedel-pipeline--drop-sessionless-warning))
   ,test
   (test)
 
@@ -3213,12 +3243,19 @@
           (setq session
                 (mevedel-session-create
                  "unknown-remote" workspace remote-root))
-          (setf (mevedel-session-lease session)
-                '(:unsettled-mutation t))
+          (puthash
+           (mevedel-execution-target-identity
+            (mevedel-session-execution-target session))
+           t mevedel-session-durability--disclosed-targets)
           (with-temp-buffer
             (setq-local default-directory remote-root)
             (setq-local mevedel--workspace workspace)
             (setq-local mevedel--session session)
+            (mevedel-session-persistence-assert-mutation-authority
+             session (current-buffer))
+            (should
+             (mevedel-session-durability-set-unsettled-mutation
+              session t))
             (setq mutation-result
                   (test-mevedel-pipeline--run-tool-and-wait
                    mutating-tool nil))
@@ -3792,8 +3829,12 @@
 					    (prin1-to-string (nth 2 call))))))
 		     (delete-directory root t)))
 		 :doc "one-shot request prompts for mutations without storing authority"
-		 (let* ((session (mevedel-session--create
-				  :name "one-shot" :permission-mode 'full-auto))
+		 (let* ((workspace (mevedel-workspace--create
+				   :type 'project :id temporary-file-directory
+				   :root temporary-file-directory))
+				(session (mevedel-session--create
+					  :name "one-shot" :workspace workspace
+					  :permission-mode 'full-auto))
 			(request (mevedel-request--create
 				  :session session
 				  :one-shot-mutations-p t
@@ -4273,10 +4314,14 @@
 			   (should (= 1 (length repair-audits)))))
 		     (mevedel-tool-clear-registry)))
 			 :doc "path repair is shared by permission, snapshot, handler, and rendering"
-		 (let* ((expected "/tmp/notes.md")
-			(session
-			 (mevedel-session--create
-			  :name "path-repair"
+			 (let* ((expected "/tmp/notes.md")
+				(workspace (mevedel-workspace--create
+				            :type 'project :id temporary-file-directory
+				            :root temporary-file-directory))
+				(session
+				 (mevedel-session--create
+				  :name "path-repair"
+				  :workspace workspace
 			  :permission-mode 'ask
 			  :resource-grants
 			  (list (list :path expected :access 'write))))
@@ -4345,10 +4390,13 @@
 		   (should (equal result "async hello")))
 		 :doc "network escalation is a separate audited retry without hidden replay"
 		 (let* ((root (make-temp-file "mevedel-network-retry-" t))
-			(workspace (mevedel-workspace--create :root root))
+			(workspace (mevedel-workspace--create
+			            :type 'project :id root :root root))
 			(session (mevedel-session--create
 				  :name "network-retry"
 				  :workspace workspace
+				  :execution-target
+				  (mevedel-execution-target-create root)
 				  :save-path root
 				  :permission-mode 'full-auto))
 			(mevedel--session session)
@@ -4430,10 +4478,13 @@
 		 :doc "filesystem authority does not authorize its Bash consumer"
 		 (let* ((root (make-temp-file "mevedel-resource-authority-" t))
 			(secret (file-name-concat root "secret"))
-			(workspace (mevedel-workspace--create :root root))
+			(workspace (mevedel-workspace--create
+			            :type 'project :id root :root root))
 			(session (mevedel-session--create
 				  :name "resource-authority"
 				  :workspace workspace
+				  :execution-target
+				  (mevedel-execution-target-create root)
 				  :save-path root
 				  :permission-mode 'ask
 				  :resource-grants
@@ -4588,12 +4639,15 @@
 		   (should (string-match-p "Handler exploded" result)))
 		 :doc "persist still fires when handler wraps callback in with-temp-buffer"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
-			(ws (mevedel-workspace--create :root tmpdir))
+			(ws (mevedel-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
 			(save-path (file-name-as-directory
 				    (file-name-concat tmpdir ".mevedel" "sessions" "main")))
 			(mevedel--session (mevedel-session--create
 					   :name "main"
 					   :workspace ws
+					   :execution-target
+					   (mevedel-execution-target-create tmpdir)
 					   :save-path save-path))
 			;; Handler mimics Grep/Glob: all work, including the callback,
 			;; runs inside `with-temp-buffer'.  If step-persist were
@@ -4658,7 +4712,7 @@
 				 'mevedel
 				 (format "Pipeline final callback signaled: %S" err)
 				 :warning)))))))
-		   (let ((warning-minimum-level :emergency))
+		   (mevedel-test--with-captured-diagnostics nil
 		     (mevedel-pipeline--run
 		      (list post-next-signal-step) once-callback nil))
 		   (should (= 1 (length deliveries)))
@@ -4680,7 +4734,7 @@
 			(signaling-cb (lambda (_r)
 					(cl-incf count)
 						(error "Consumer signaled"))))
-		   (let ((warning-minimum-level :emergency))
+		   (mevedel-test--with-captured-diagnostics nil
 		     (mevedel-pipeline-run-tool tool signaling-cb nil))
 		   ;; The consumer was called once; its signal was caught inside the
 		   ;; once-fire wrapper, so the runner's caller did not unwind.
@@ -4712,7 +4766,13 @@
 ;;
 ;;; Pipeline wrapper via mevedel-define-tool
 
-(mevedel-deftest mevedel-pipeline--define-tool-wrapper ()
+(mevedel-deftest mevedel-pipeline--define-tool-wrapper
+		 (:before-each
+		  (advice-add 'display-warning :around
+			      #'test-mevedel-pipeline--drop-sessionless-warning)
+		  :after-each
+		  (advice-remove 'display-warning
+				 #'test-mevedel-pipeline--drop-sessionless-warning))
 		 ,test
 		 (test)
 		 :doc "generated wrapper runs pipeline"
@@ -4800,11 +4860,15 @@
 		 (test)
 		 :doc "writes full result to file and returns preview"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
-			(ws (mevedel-workspace--create :root tmpdir))
+			(ws (mevedel-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
 			(save-path (file-name-as-directory
 				    (file-name-concat tmpdir ".mevedel" "sessions" "main")))
+			(_ (make-directory save-path t))
 			(session (mevedel-session--create
-				  :name "main" :workspace ws :save-path save-path))
+				  :name "main" :workspace ws :save-path save-path
+				  :execution-target
+				  (mevedel-execution-target-create tmpdir)))
 			(tool (mevedel-tool--create :name "TestTool" :max-result-size 100))
 			(result (make-string 500 ?x))
 			(persisted (mevedel-pipeline--persist-result result tool session)))
@@ -4879,11 +4943,15 @@
 		     (delete-directory tmpdir t)))
 		 :doc "normalizes raw UTF-8 bytes before writing persisted results"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
-			(ws (mevedel-workspace--create :root tmpdir))
+			(ws (mevedel-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
 			(save-path (file-name-as-directory
 				    (file-name-concat tmpdir ".mevedel" "sessions" "main")))
+			(_ (make-directory save-path t))
 			(session (mevedel-session--create
-				  :name "main" :workspace ws :save-path save-path))
+				  :name "main" :workspace ws :save-path save-path
+				  :execution-target
+				  (mevedel-execution-target-create tmpdir)))
 			(tool (mevedel-tool--create :name "TestTool" :max-result-size 100))
 			(result (concat "quote "
 					(test-mevedel-pipeline--raw-bytes
@@ -4902,11 +4970,15 @@
 		     (delete-directory tmpdir t)))
 		 :doc "preview preserves the head and tail while the artifact stays complete"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
-			(ws (mevedel-workspace--create :root tmpdir))
+			(ws (mevedel-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
 			(save-path (file-name-as-directory
 				    (file-name-concat tmpdir ".mevedel" "sessions" "main")))
+			(_ (make-directory save-path t))
 			(session (mevedel-session--create
-				  :name "main" :workspace ws :save-path save-path))
+				  :name "main" :workspace ws :save-path save-path
+				  :execution-target
+				  (mevedel-execution-target-create tmpdir)))
 			(tool (mevedel-tool--create :name "TestTool" :max-result-size 100))
 			(result (concat (make-string 1000 ?h)
 					(make-string 3000 ?m)
@@ -4927,7 +4999,8 @@
 		     (delete-directory tmpdir t)))
 		 :doc "materializes session directory when save path is absent"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
-			(ws (mevedel-workspace--create :root tmpdir))
+			(ws (mevedel-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
 			(session (mevedel-session--create
 				  :name "main" :workspace ws
 				  :execution-target
@@ -5003,7 +5076,13 @@
 			   (should-not (string-search (make-string 100 ?m) truncated))
 			   (should (string-search "omitted 3000 chars" truncated))))
 
-(mevedel-deftest mevedel-pipeline--context-status ()
+(mevedel-deftest mevedel-pipeline--context-status
+		 (:before-each
+		  (advice-add 'display-warning :around
+			      #'test-mevedel-pipeline--drop-sessionless-warning)
+		  :after-each
+		  (advice-remove 'display-warning
+				 #'test-mevedel-pipeline--drop-sessionless-warning))
 		 ,test
 		 (test)
 		 :doc "canonical handler status takes precedence over render status"
@@ -5075,13 +5154,17 @@
 			     (should-not (string-prefix-p "Error:" preview))
 			     (should (string-search (make-string 100 ?h) preview))
 			     (should (string-search (make-string 100 ?t) preview))))
-			 :doc "persists result when over limit"
-		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
-			(ws (mevedel-workspace--create :root tmpdir))
+				 :doc "persists result when over limit"
+			 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
+			(ws (mevedel-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
 			(save-path (file-name-as-directory
 				    (file-name-concat tmpdir ".mevedel" "sessions" "main")))
+			(_ (make-directory save-path t))
 			(session (mevedel-session--create
-				  :name "main" :workspace ws :save-path save-path))
+				  :name "main" :workspace ws :save-path save-path
+				  :execution-target
+				  (mevedel-execution-target-create tmpdir)))
 			(tool (mevedel-tool--create :name "BigResult" :max-result-size 100))
 			(big-result (make-string 500 ?y))
 			(ctx (list :tool tool :result big-result :session session))
@@ -5127,11 +5210,15 @@
 		     (delete-directory tmpdir t)))
 		 :doc "uses global cap when tool limit exceeds it"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
-			(ws (mevedel-workspace--create :root tmpdir))
+			(ws (mevedel-workspace--create
+			     :type 'project :id tmpdir :root tmpdir))
 			(save-path (file-name-as-directory
 				    (file-name-concat tmpdir ".mevedel" "sessions" "main")))
+			(_ (make-directory save-path t))
 			(session (mevedel-session--create
-				  :name "main" :workspace ws :save-path save-path))
+				  :name "main" :workspace ws :save-path save-path
+				  :execution-target
+				  (mevedel-execution-target-create tmpdir)))
 			;; Tool declares 100000 but global cap is 50000
 			(tool (mevedel-tool--create :name "HighLimit" :max-result-size 100000))
 			;; Result is 60000 chars: above the 50K global cap but below the
@@ -5498,7 +5585,7 @@
 				  "hello"
 				  (car (mevedel-pipeline-extract-render-data
 					plain session "toolu_1")))))
-		     (delete-directory tmpdir t))))
+		     (delete-directory tmpdir t)))
 		 :doc "view extraction can strip duplicate tool block with wrong gptel id"
 		 (let* ((tmpdir (make-temp-file
 				 "mevedel-test-media-store-view-" t))
@@ -5527,9 +5614,15 @@
 				  "hello"
 				  (car (mevedel-pipeline-extract-render-data
 					plain session "toolu_1" t)))))
-		     (delete-directory tmpdir t)))
+		     (delete-directory tmpdir t))))
 
-(mevedel-deftest mevedel-pipeline--current-tool-use-id ()
+(mevedel-deftest mevedel-pipeline--current-tool-use-id
+		 (:before-each
+		  (advice-add 'display-warning :around
+			      #'test-mevedel-pipeline--drop-sessionless-warning)
+		  :after-each
+		  (advice-remove 'display-warning
+				 #'test-mevedel-pipeline--drop-sessionless-warning))
 		 ,test
 		 (test)
 		 :doc "claims matching duplicate tool calls in dispatch order"
@@ -5559,7 +5652,13 @@
 		      (mevedel-pipeline--current-tool-use-id
 		       tool pipeline-args)))))
 
-(mevedel-deftest mevedel-pipeline-extract-render-data ()
+(mevedel-deftest mevedel-pipeline-extract-render-data
+		 (:before-each
+		  (advice-add 'display-warning :around
+			      #'test-mevedel-pipeline--drop-sessionless-warning)
+		  :after-each
+		  (advice-remove 'display-warning
+				 #'test-mevedel-pipeline--drop-sessionless-warning))
 		 ,test
 		 (test)
 		 :doc "round-trip: format then extract yields original payload"

@@ -29,7 +29,7 @@
 (defun mevedel-cockpit-test--workspace ()
   "Return a test workspace."
   (mevedel-workspace--create
-   :type 'test :id "cockpit" :root "/tmp/cockpit" :name "cockpit"))
+   :type 'file :id "cockpit" :root "/tmp/cockpit" :name "cockpit"))
 
 (defun mevedel-cockpit-test--setup-pair (view-buffer data-buffer &optional session)
   "Wire VIEW-BUFFER and DATA-BUFFER as a cockpit pair."

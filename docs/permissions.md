@@ -395,9 +395,13 @@ user-triggered Git, clipboard, and UI helpers are not external tool helpers.
 
 An exact filesystem grant may name a symlink. The launcher opens the granted
 path but mounts its canonical target, leaving the requested command and symlink
-chain unchanged while avoiding Bubblewrap mounts onto symlink entries. Beneath
-a masked parent it recreates only the link hops and empty traversal directories
-needed to reach that exact target.
+chain unchanged while avoiding Bubblewrap mounts onto symlink entries. Before
+Bubblewrap starts, the target-side launcher compares the device/inode identity
+of each already-open descriptor with the identity captured during grant
+resolution. A failed open, missing descriptor stat support, or replacement
+mismatch refuses the child; `best-effort` does not retry that authority failure
+as an unrestricted launch. Beneath a masked parent it recreates only the link
+hops and empty traversal directories needed to reach that exact target.
 
 A justified additive filesystem request names exact absolute paths and marks
 each as read or write. Ungranted paths prompt in every permission mode;

@@ -31,6 +31,7 @@
 (require 'mevedel-permission-queue)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-publication)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tools)
@@ -198,8 +199,11 @@
         (progn
           (write-region "not a directory" nil blocked nil 'silent)
           (setf (mevedel-session-save-path session) blocked)
-          (mevedel-permission-log
-           session 'permission-decision :tool-name "Read")
+          (let (diagnostics)
+            (mevedel-test--with-captured-diagnostics diagnostics
+              (mevedel-permission-log
+               session 'permission-decision :tool-name "Read"))
+            (should (string-match-p "persistence failed" diagnostics)))
           (should (= 1
                      (length
                       (mevedel-session-permission-log-pending session)))))
@@ -217,7 +221,7 @@
     (unwind-protect
         (cl-letf
             (((symbol-function
-               'mevedel-session-durability-append-diagnostic)
+               'mevedel-session-publication-append-diagnostic)
               (lambda (_session path content)
                 (push (list path content) calls)
                 t))

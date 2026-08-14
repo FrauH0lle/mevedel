@@ -218,7 +218,7 @@
            (mevedel-worktree--git-result
             source "worktree" "add" other "HEAD")
            :type 'mevedel-execution-target-error))
-      (delete-directory root t))))
+      (delete-directory root t)))
 
   :doc "does not forward client-only environment variables to target Git"
   (let ((process-environment
@@ -232,7 +232,7 @@
            (plist-get
             (mevedel-worktree--git-result
              "/ssh:user@host:/srv/project/" "status" "--short")
-            :exit)))))
+            :exit))))))
 
 (mevedel-deftest mevedel-worktree--ensure-worktree ()
   ,test
@@ -1159,7 +1159,7 @@
             (should (plist-get item :current))
             (should (equal (plist-get item :state) "branch"))
             (should (equal (plist-get item :sessions) '("main")))))
-      (delete-directory root t))))
+      (delete-directory root t)))
 
   :doc "uses workspace root spelling for aliased porcelain paths"
   (let* ((alias-root (file-name-as-directory
@@ -1193,7 +1193,7 @@
       (let ((item (mevedel-worktree-list--item status entry)))
         (should (equal (plist-get item :path) real-path))
         (should (equal (mevedel-worktree-list--item-id item) real-path))
-        (should-not (plist-get item :current)))))
+        (should-not (plist-get item :current))))))
 
 (mevedel-deftest mevedel-worktree-list--items ()
   ,test

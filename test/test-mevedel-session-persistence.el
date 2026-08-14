@@ -23,7 +23,12 @@
 (require 'mevedel-permission-log)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-recovery)
+(require 'mevedel-session-transfer)
+(require 'mevedel-session-publication)
+(require 'mevedel-session-save-as)
 (require 'mevedel-session-persistence)
+(require 'mevedel-session-control-transfer)
 (require 'mevedel-tool-repair)
 (require 'mevedel-tools)
 (require 'mevedel-worktree)
@@ -104,6 +109,21 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (mevedel-workspace-identity-ensure root)
     workspace))
 
+(defun test-mevedel-session-persistence--make-file-workspace (root)
+  "Build a file-workspace authority rooted at ROOT.
+Use this for tests that exercise direct local files rather than project
+publication."
+  (mevedel-workspace-clear-registry)
+  (mevedel-workspace-get-or-create
+   'file
+   (file-name-nondirectory (directory-file-name root))
+   root
+   (file-name-nondirectory (directory-file-name root))))
+
+(defun test-mevedel-session-persistence--pid-lock-context ()
+  "Return an explicit file-session authority profile for lock tests."
+  (mevedel-session--create :authority-mode 'pid-lock))
+
 (defun test-mevedel-session-persistence--make-session (root)
   "Build a populated session for ROOT in round-trip cases."
   (let* ((workspace (test-mevedel-session-persistence--make-workspace root))
@@ -172,6 +192,11 @@ ROOT is a temporary directory owned and cleaned up by the caller."
            'project remote-root remote-root "remote-restore"))
          (identity (mevedel-workspace-identity-ensure remote-root))
          (session (mevedel-session-create "main" workspace remote-root))
+         (target (mevedel-session-execution-target session))
+         (target-incarnation
+          (progn
+            (mevedel-execution-target-probe target t 'off)
+            (mevedel-execution-target-incarnation target)))
          (session-id "main-remote-restore")
          (session-dir
           (file-name-as-directory
@@ -189,9 +214,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                   :target-native-root (file-name-as-directory local-root)
                   :name "remote-restore")
             :working-directory (file-name-as-directory local-root)
-            :target-incarnation "mock-remote-incarnation"))))
-    (mevedel-execution-target-seed-incarnation
-     (mevedel-session-execution-target session) "mock-remote-incarnation")
+            :target-incarnation target-incarnation))))
     (setf (mevedel-session-session-id session) session-id
           (mevedel-session-save-path session) session-dir)
     (make-directory session-dir t)
@@ -212,7 +235,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                 (mevedel-session-durability-lease-acquire
                  session-dir "*fixture-publisher*" session)
               (error "Could not acquire fixture publication lease"))
-            (mevedel-session-durability-publish
+            (mevedel-session-publication-publish
              session
              (list
               (list :path segment :content transcript)
@@ -248,7 +271,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
 (defun test-mevedel-session-persistence--complete-sidecar (plist)
   "Return a current complete sidecar with PLIST values overriding defaults."
   (let ((sidecar
-         (list :version (mevedel-version)
+         (list :version mevedel-session-persistence-format-version
                :session-id "test-session"
                :session-name "x"
                :workspace '(:type project
@@ -257,7 +280,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                             :target-native-root "/tmp/"
                             :name "test")
                :working-directory "/tmp/"
-               :target-incarnation nil
+               :authority-mode 'portable
+               :target-incarnation "test-incarnation"
                :created-at "created"
                :updated-at "updated"
                :current-segment 1
@@ -297,8 +321,12 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :plan-metadata nil
                :goal nil
                :messages nil)))
-    (while plist
-      (setq sidecar (plist-put sidecar (pop plist) (pop plist))))
+    (let ((overrides plist))
+      (while plist
+        (setq sidecar (plist-put sidecar (pop plist) (pop plist))))
+      (when (and (not (plist-member overrides :authority-mode))
+                 (eq (plist-get (plist-get sidecar :workspace) :type) 'file))
+        (setq sidecar (plist-put sidecar :authority-mode 'pid-lock))))
     sidecar))
 
 (defun test-mevedel-session-persistence--deserialize-sidecar (overrides)
@@ -586,7 +614,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                        :first-user-message "Refactor X"
                        :latest-user-message "Ship Y"
                        :additional-roots '(("alt" . "/tmp/alt")))))
-          (should (equal "v0.5.0" (plist-get plist :version)))
+          (should (equal mevedel-session-persistence-format-version
+                         (plist-get plist :version)))
           (should (equal "main-2026-04-23T14-30-a9f2"
                          (plist-get plist :session-id)))
           (should (equal "main" (plist-get plist :session-name)))
@@ -594,7 +623,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                           (file-name-concat root "packages" "api"))
                          (plist-get plist :working-directory)))
           (should (plist-member plist :target-incarnation))
-          (should-not (plist-get plist :target-incarnation))
+          (should (stringp (plist-get plist :target-incarnation)))
           (should (equal 'ask (plist-get plist :permission-mode)))
           (should (equal 'required (plist-get plist :sandbox-mode)))
           (should (eq t (plist-get plist :plan-mode)))
@@ -796,7 +825,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (should-error
      (mevedel-session-persistence--validate-current-sidecar plist)
      :type 'error))
-  :doc "requires a nil or nonblank target incarnation field"
+  :doc "requires a nonblank target incarnation field"
   (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
     (cl-remf plist :target-incarnation)
     (should-error
@@ -958,12 +987,26 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (let ((workspace (mevedel-session-workspace session)))
             (should (eq 'project (mevedel-workspace-type workspace)))
             (should (equal "test-id" (mevedel-workspace-id workspace))))
-          (should-not
-           (mevedel-execution-target-incarnation
-            (mevedel-session-execution-target session)))
+          (should
+           (equal
+            (mevedel-execution-target-incarnation
+             (mevedel-session-execution-target session))
+            (plist-get plist :target-incarnation)))
           (should (mevedel-session-execution-target session)))
       (when (file-directory-p root)
         (delete-directory root t))))
+
+  :doc "rejects the superseded session format without a compatibility reader"
+  (let ((sidecar
+         (test-mevedel-session-persistence--complete-sidecar
+          '(:version "v0.5.0"))))
+    (should-error
+     (mevedel-session-persistence-deserialize
+      sidecar
+      (mevedel-workspace--create
+       :type 'project :id "/tmp/old-format/"
+       :root "/tmp/old-format/" :name "old-format"))
+     :type 'error))
 
   :doc "identity rebinding drops copied authority and additional roots"
   (let ((saved-root (make-temp-file "mevedel-rebind-saved-" t))
@@ -1202,7 +1245,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
            (list :goal old))))
     (should-not (mevedel-session-goal (plist-get result :session))))
   :doc "drops permission rules with unknown actions"
-  (let* ((plist (list :version (mevedel-version)
+  (let* ((plist (list :version mevedel-session-persistence-format-version
                       :session-name "x"
                       :permission-rules
                       '(("Read"  :path "/x" :action allow)
@@ -1345,7 +1388,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   :doc "atomic write produces a readable plist"
   (let ((tmp (make-temp-file "mevedel-session-meta-test-" nil ".el")))
     (unwind-protect
-        (let* ((plist `(:version ,(mevedel-version)
+        (let* ((plist `(:version ,mevedel-session-persistence-format-version
                                  :session-name "main"
                                  :tasks nil
                                  :permission-rules nil)))
@@ -1383,23 +1426,26 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                     (buffer-string)))))
       (when (file-exists-p path) (delete-file path))))
   :doc "preserves the original when publication fails"
-  (let ((path (make-temp-file "mevedel-transcript-atomic-")))
+  (let* ((root (make-temp-file "mevedel-transcript-atomic-" t))
+         (path (file-name-concat root "segment.org")))
     (unwind-protect
         (progn
           (write-region "original" nil path nil 'silent)
+          ;; A read-only parent stops the control filesystem before its
+          ;; rename, which is the only way the published bytes can appear.
+          (set-file-modes root #o500)
           (with-temp-buffer
             (insert "replacement")
-            (cl-letf (((symbol-function 'rename-file)
-                       (lambda (&rest _) (error "Publication failed"))))
-              (should-error
-               (mevedel-session-persistence--write-current-buffer-atomically
-                path))))
+            (should-error
+             (mevedel-session-persistence--write-current-buffer-atomically
+              path)))
           (should
            (equal "original"
                   (with-temp-buffer
                     (insert-file-contents path)
                     (buffer-string)))))
-      (when (file-exists-p path) (delete-file path)))))
+      (set-file-modes root #o700)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-persistence--set-visited-segment-file ()
   ,test
@@ -1540,6 +1586,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (mevedel-session--create
            :name "segments"
            :save-path (file-name-as-directory directory)
+           :authority-mode 'pid-lock
            :current-segment 4
            :prompt-index
            '((1 . ((:cum-turn 1 :preview "first prompt")))
@@ -1590,6 +1637,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (mevedel-session--create
            :name "segments"
            :save-path (file-name-as-directory directory)
+           :authority-mode 'pid-lock
            :current-segment 2))
          inspection)
     (unwind-protect
@@ -1633,6 +1681,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (mevedel-session--create
            :name "segments"
            :save-path (file-name-as-directory directory)
+           :authority-mode 'pid-lock
            :current-segment 2))
          (path (mevedel-session-persistence--segment-path directory 1)))
     (unwind-protect
@@ -1677,7 +1726,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
 ;;; Phase 2: write path
 
 (defun test-mevedel-session-persistence--make-tempdir-workspace ()
-  "Build a workspace rooted in a fresh tempdir.
+  "Build a file workspace rooted in a fresh tempdir.
 Returns (cons WORKSPACE TEMPDIR).  The workspace's NAME is derived
 from the tempdir basename so that different tests never collide on the
 chat-buffer name (`*mevedel:NAME@WORKSPACE*'); buffer leakage across
@@ -1689,7 +1738,8 @@ tests would otherwise mask correctness bugs in the live-buffer path of
          (basename (file-name-nondirectory (directory-file-name tempdir)))
          (_       (mevedel-workspace-clear-registry))
          (ws      (mevedel-workspace-get-or-create
-                   'project basename tempdir basename)))
+                   'file basename tempdir basename)))
+    (mevedel-workspace-identity-ensure tempdir)
     (cons ws tempdir)))
 
 (defun test-mevedel-session-persistence--release-and-kill (buf session)
@@ -1699,7 +1749,8 @@ that don't go through `mevedel--chat-buffer-init-common' (which
 installs the real hook)."
   (when (and session (mevedel-session-save-path session))
     (mevedel-session-persistence-lock-release
-     (mevedel-session-save-path session)))
+     (mevedel-session-save-path session)
+     session))
   (when (and buf (buffer-live-p buf))
     (with-current-buffer buf (set-buffer-modified-p nil))
     (kill-buffer buf)))
@@ -1756,15 +1807,22 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
   ,test
   (test)
   :doc "recognizes only root session data buffers"
-  (let ((root (generate-new-buffer " *test-root-role*"))
+  (let ((session (mevedel-session--create :name "root-role"))
+        (root (generate-new-buffer " *test-root-role*"))
         (view (generate-new-buffer " *test-view-role*"))
         (agent (generate-new-buffer " *test-agent-role*")))
     (unwind-protect
         (progn
+          (with-current-buffer root
+            (setq-local mevedel--session session))
+          (with-current-buffer view
+            (setq-local mevedel--session session))
           (with-current-buffer view
             (setq-local mevedel--data-buffer root))
           (with-current-buffer agent
+            (setq-local mevedel--session session)
             (setq-local mevedel--agent-invocation t))
+          (mevedel-session-set-root-buffer session root)
           (should
            (mevedel-session-persistence--root-data-buffer-p root))
           (should-not
@@ -2508,7 +2566,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                 (cl-letf (((symbol-function 'read-file-name)
                            (lambda (&rest _)
                              (error "View buffer requested a save filename"))))
-                  (mevedel-session-persistence-save session view-buf))
+                  (mevedel-session-persistence-save session data-buf))
                 (with-current-buffer view-buf
                   (should-not buffer-file-name)
                   (should-not buffer-file-truename))
@@ -2754,7 +2812,8 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                 (dolist (session (list live-session expired-session))
                   (test-mevedel-session-persistence--expire-session session))
                 (mevedel-session-persistence-lock-release
-                 (mevedel-session-save-path expired-session))
+                 (mevedel-session-save-path expired-session)
+                 expired-session)
                 (cl-letf (((symbol-function 'buffer-list)
                            (lambda (&optional _frame) (list live-buf))))
                   (mevedel-session-persistence--kill-emacs-hook))
@@ -2790,7 +2849,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                   (mevedel-session-persistence-save session buf))
                 (let ((save-path (mevedel-session-save-path session)))
                   (test-mevedel-session-persistence--expire-session session)
-                  (mevedel-session-persistence-lock-release save-path)
+                  (mevedel-session-persistence-lock-release save-path session)
                   (puthash
                    (cons (mevedel-workspace-type workspace)
                          (mevedel-workspace-id workspace))
@@ -2853,10 +2912,10 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                      (make-temp-file "mevedel-test-good-ws-" t)))
          (bad-workspace
           (mevedel-workspace-get-or-create
-           'project "bad" bad-root "bad"))
+           'file "bad" bad-root "bad"))
          (good-workspace
           (mevedel-workspace-get-or-create
-           'project "good" good-root "good"))
+           'file "good" good-root "good"))
          (bad-sessions
           (mevedel-session-persistence--sessions-dir bad-workspace))
          (live-session (mevedel-session-create "live" good-workspace))
@@ -2875,7 +2934,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
               (set-buffer-modified-p nil)))
           (let ((save-path (mevedel-session-save-path expired-session)))
             (test-mevedel-session-persistence--expire-session expired-session)
-            (mevedel-session-persistence-lock-release save-path))
+            (mevedel-session-persistence-lock-release save-path expired-session))
           (make-directory bad-sessions t)
           (set-file-modes bad-sessions 0)
           (cl-letf (((symbol-function 'buffer-list)
@@ -3193,12 +3252,12 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                      (mevedel-session-durability-lease-acquire
                       session-dir "*instruction-publisher*" session))
                     (let* ((publication
-                            (mevedel-session-durability-read-publication
+                            (mevedel-session-publication-read
                              session-dir))
                            (sidecar
                             (mevedel-session-persistence-load-sidecar
                              (plist-get publication :sidecar))))
-                      (mevedel-session-durability-publish
+                      (mevedel-session-publication-publish
                        session
                        (list
                         (list :path instruction-path :content published)
@@ -3676,16 +3735,29 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
           (let ((data (current-buffer)))
             (with-current-buffer view
               (setq-local mevedel--data-buffer data))
-            (insert "Transcript body\n")
-            (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
-                       (lambda () nil))
-                      ((symbol-function 'mevedel-view--rebase-data-sources)
-                       (lambda (delta) (push delta deltas))))
-              (mevedel-session-persistence--save-gptel-state-around
-               (lambda ()
-                 (org-entry-put (point-min) "GPTEL_MODEL" "fake-model"))))
-            (should (= 1 (length deltas)))
-            (should-not (= 0 (car deltas)))))
+            (require 'mevedel-session-control-transfer)
+            (let ((observer
+                   (lambda (event &rest args)
+                     (when (eq event 'rebase-data-sources)
+                       (apply #'mevedel-view--rebase-data-sources args)))))
+              (mevedel-session-control-transfer-register-observer
+               t observer)
+              (unwind-protect
+                  (progn
+                    (insert "Transcript body\n")
+                    (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
+                               (lambda () nil))
+                              ((symbol-function
+                                'mevedel-view--rebase-data-sources)
+                               (lambda (delta) (push delta deltas))))
+                      (mevedel-session-persistence--save-gptel-state-around
+                       (lambda ()
+                         (org-entry-put (point-min) "GPTEL_MODEL"
+                                        "fake-model"))))
+                    (should (= 1 (length deltas)))
+                    (should-not (= 0 (car deltas))))
+                (mevedel-session-control-transfer-unregister-observer
+                 t observer)))))
       (when (buffer-live-p view)
         (kill-buffer view)))))
 
@@ -4469,7 +4541,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
            tmp (test-mevedel-session-persistence--complete-sidecar
                 '(:session-name "x")))
           (let ((plist (mevedel-session-persistence-load-sidecar tmp)))
-            (should (equal (mevedel-version) (plist-get plist :version)))
+            (should (equal mevedel-session-persistence-format-version
+                           (plist-get plist :version)))
             (should (equal "x" (plist-get plist :session-name)))))
       (when (file-exists-p tmp) (delete-file tmp))))
 
@@ -4693,7 +4766,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                               (lambda (&rest _)
                                 (ert-fail "Foreign restore pruned")))
                              ((symbol-function
-                               'mevedel-session-durability-publish)
+                               'mevedel-session-publication-publish)
                               (lambda (&rest _)
                                 (ert-fail "Foreign restore published"))))
                           (setq restored
@@ -4844,14 +4917,14 @@ rotation never saves through a rebound temporary visited filename or prompts"
                                   session-dir "*intervening-owner*"
                                   fixture-session))
                                 (let* ((publication
-                                        (mevedel-session-durability-read-publication
+                                        (mevedel-session-publication-read
                                          session-dir))
                                        (new-sidecar
                                         (mevedel-session-persistence-read
                                          (plist-get publication :sidecar))))
                                   (plist-put
                                    new-sidecar :total-turn-count 17)
-                                  (mevedel-session-durability-publish
+                                  (mevedel-session-publication-publish
                                    fixture-session
                                    (list
                                     (list
@@ -4901,12 +4974,13 @@ rotation never saves through a rebound temporary visited filename or prompts"
                   (plist-get
                    (mevedel-session-persistence-read
                     (plist-get
-                     (mevedel-session-durability-read-publication session-dir)
+                     (mevedel-session-publication-read session-dir)
                      :sidecar))
                    :total-turn-count))))))
-      (test-mevedel-session-persistence--release-and-kill
-       restored
-       (and restored (buffer-local-value 'mevedel--session restored)))
+      (mevedel-test--with-local-shell-tramp (list host)
+        (test-mevedel-session-persistence--release-and-kill
+         restored
+         (and restored (buffer-local-value 'mevedel--session restored))))
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry)))
@@ -4952,9 +5026,10 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 (should-not
                  (string-match-p "Poisoned fixed" (buffer-string)))
                 (should (mevedel-session-publication mevedel--session))))))
-      (test-mevedel-session-persistence--release-and-kill
-       restored
-       (and restored (buffer-local-value 'mevedel--session restored)))
+      (mevedel-test--with-local-shell-tramp (list host)
+        (test-mevedel-session-persistence--release-and-kill
+         restored
+         (and restored (buffer-local-value 'mevedel--session restored))))
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry)))
@@ -4973,7 +5048,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                    (mevedel-session-durability--disclosed-targets
                     (make-hash-table :test #'equal))
                    (publication
-                    (mevedel-session-durability-read-publication session-dir))
+                    (mevedel-session-publication-read session-dir))
                    (entry
                     (cdr (assoc "segment-0001.chat.org"
                                 (plist-get publication :artifacts)))))
@@ -5102,7 +5177,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                            'mevedel-session-persistence--load-instructions)
                           #'ignore)
                          ((symbol-function
-                           'mevedel-session-durability-publish)
+                           'mevedel-session-publication-publish)
                           (lambda (_session artifacts)
                             (push artifacts publications)
                             t)))
@@ -5412,6 +5487,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (setq buf (generate-new-buffer "*test-data-buf*"))
           (with-current-buffer buf
             (org-mode)
+            (setq-local mevedel--session session)
             (insert "Nested relocation\n")
             (mevedel-session-persistence-save session buf))
           (setq session-dir (mevedel-session-save-path session))
@@ -5657,7 +5733,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
     (unwind-protect
         (progn
           (should (mevedel-session-persistence-lock-acquire
-                   tempdir "*test-buf*"))
+                   tempdir "*test-buf*"
+                   (test-mevedel-session-persistence--pid-lock-context)))
           (let ((lock-path
                  (mevedel-session-persistence--lock-path tempdir)))
             (should (file-exists-p lock-path))
@@ -5676,7 +5753,9 @@ rotation never saves through a rebound temporary visited filename or prompts"
                     'mevedel-session-persistence--write-lock-atomic)
                    (lambda (&rest _) nil)))
           (should-error
-           (mevedel-session-persistence-lock-acquire tempdir "*test-buf*")
+           (mevedel-session-persistence-lock-acquire
+            tempdir "*test-buf*"
+            (test-mevedel-session-persistence--pid-lock-context))
            :type 'user-error))
       (delete-directory tempdir t)))
   :doc "same-host live PID: [b]reak overwrites the lock"
@@ -5694,7 +5773,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (cl-letf (((symbol-function 'read-char-choice)
                      (lambda (&rest _) ?b)))
             (should (mevedel-session-persistence-lock-acquire
-                     tempdir "*test-buf*")))
+                     tempdir "*test-buf*"
+                     (test-mevedel-session-persistence--pid-lock-context))))
           (let ((plist (mevedel-session-persistence--read-lock lock-path)))
             (should (= (emacs-pid) (plist-get plist :pid)))
             (should (equal "*test-buf*" (plist-get plist :buffer)))))
@@ -5713,7 +5793,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (cl-letf (((symbol-function 'read-char-choice)
                      (lambda (&rest _) ?r)))
             (should (null (mevedel-session-persistence-lock-acquire
-                           tempdir "*test-buf*"))))
+                           tempdir "*test-buf*"
+                           (test-mevedel-session-persistence--pid-lock-context)))))
           ;; Original lock untouched.
           (let ((plist (mevedel-session-persistence--read-lock lock-path)))
             (should (equal "*other-buf*" (plist-get plist :buffer)))))
@@ -5733,7 +5814,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                      (lambda (&rest _) ?a)))
             (should-error
              (mevedel-session-persistence-lock-acquire
-              tempdir "*test-buf*")
+              tempdir "*test-buf*"
+              (test-mevedel-session-persistence--pid-lock-context))
              :type 'user-error)))
       (delete-directory tempdir t)))
   :doc "same-host reused PID follows the stale-lock confirmation path"
@@ -5761,7 +5843,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                       'mevedel-session-persistence--pid-start-time)
                      (lambda (&rest _) (current-time))))
             (should (mevedel-session-persistence-lock-acquire
-                     tempdir "*new-buf*")))
+                     tempdir "*new-buf*"
+                     (test-mevedel-session-persistence--pid-lock-context))))
           (let ((plist (mevedel-session-persistence--read-lock lock-path)))
             (should (= (emacs-pid) (plist-get plist :pid)))
             (should (equal "*new-buf*" (plist-get plist :buffer)))))
@@ -5784,7 +5867,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                       'mevedel-session-persistence--pid-alive-p)
                      (lambda (&rest _) nil)))
             (should (mevedel-session-persistence-lock-acquire
-                     tempdir "*new-buf*")))
+                     tempdir "*new-buf*"
+                     (test-mevedel-session-persistence--pid-lock-context))))
           (let ((plist (mevedel-session-persistence--read-lock lock-path)))
             (should (= (emacs-pid) (plist-get plist :pid)))
             (should (equal "*new-buf*" (plist-get plist :buffer)))))
@@ -5806,7 +5890,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                      (lambda (&rest _) nil)))
             (should-error
              (mevedel-session-persistence-lock-acquire
-              tempdir "*new-buf*")
+              tempdir "*new-buf*"
+              (test-mevedel-session-persistence--pid-lock-context))
              :type 'user-error))
           ;; Original lock remains untouched.
           (let ((plist (mevedel-session-persistence--read-lock lock-path)))
@@ -5826,7 +5911,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (cl-letf (((symbol-function 'read-char-choice)
                      (lambda (&rest _) ?r)))
             (should (null (mevedel-session-persistence-lock-acquire
-                           tempdir "*test-buf*"))))
+                           tempdir "*test-buf*"
+                           (test-mevedel-session-persistence--pid-lock-context)))))
           ;; The remote lock is still in place.
           (let ((plist (mevedel-session-persistence--read-lock lock-path)))
             (should (equal "other-host" (plist-get plist :hostname)))))
@@ -5840,9 +5926,12 @@ rotation never saves through a rebound temporary visited filename or prompts"
                   (make-temp-file "mevedel-lock-test-" t))))
     (unwind-protect
         (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
-          (mevedel-session-persistence-lock-acquire tempdir "*x*")
+          (mevedel-session-persistence-lock-acquire
+           tempdir "*x*"
+           (test-mevedel-session-persistence--pid-lock-context))
           (should (file-exists-p lock-path))
-          (mevedel-session-persistence-lock-release tempdir)
+          (mevedel-session-persistence-lock-release
+           tempdir (test-mevedel-session-persistence--pid-lock-context))
           (should-not (file-exists-p lock-path)))
       (delete-directory tempdir t)))
   :doc "leaves alien locks alone"
@@ -5855,7 +5944,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                          :hostname "other-host"
                          :buffer "*x*")
                    (current-buffer)))
-          (mevedel-session-persistence-lock-release tempdir)
+          (mevedel-session-persistence-lock-release
+           tempdir (test-mevedel-session-persistence--pid-lock-context))
           ;; Lock still present.
           (should (file-exists-p lock-path)))
       (delete-directory tempdir t)))
@@ -5865,7 +5955,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
     (unwind-protect
         (progn
           ;; Should not error.
-          (mevedel-session-persistence-lock-release tempdir)
+          (mevedel-session-persistence-lock-release
+           tempdir (test-mevedel-session-persistence--pid-lock-context))
           (should-not (file-exists-p
                        (mevedel-session-persistence--lock-path tempdir))))
       (delete-directory tempdir t))))
@@ -5987,6 +6078,298 @@ rotation never saves through a rebound temporary visited filename or prompts"
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-session-persistence-project-materialization ()
+  ,test
+  (test)
+  :doc "materializes local project authority as lease and publication without a lock"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-local-project-authority-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (should
+           (mevedel-session-persistence-assert-mutation-authority
+            session (current-buffer)))
+          (let ((save-path (mevedel-session-save-path session)))
+            (should save-path)
+            (should (file-directory-p
+                     (file-name-concat save-path ".lease")))
+            (should-not (file-exists-p
+                         (file-name-concat save-path ".lock")))
+            (should
+             (mevedel-session-publication-publish
+              session
+              (list
+               (list :path (file-name-concat save-path "session.meta.el")
+                     :content "(:version \"v0.5.2\")"
+                     :commit-marker t))))
+            (should (mevedel-session-publication-read save-path))
+            (let ((other-client (make-string 64 ?b))
+                  (other (mevedel-session-create "main" workspace)))
+              (setf (mevedel-session-save-path other) save-path)
+              (let ((mevedel-session-durability--client-id other-client))
+                (with-temp-buffer
+                  (setq-local mevedel--session other)
+                  (should-error
+                   (mevedel-session-persistence-assert-mutation-authority
+                    other (current-buffer))
+                   :type 'user-error))))
+            (mevedel-session-persistence-lock-release save-path session)))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence-assert-mutation-authority ()
+  ,test
+  (test)
+  :doc "fences remote file-session grants after target replacement"
+  (let* ((host "file-incarnation")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-file-incarnation-" t)))
+         (remote-root (format "/mevedelmock:%s:%s" host local-root))
+         session buffer)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) t)))
+            (mevedel-workspace-identity-ensure remote-root)
+            (let* ((workspace
+                    (mevedel-workspace-get-or-create
+                     'file "remote-file" remote-root "remote-file"))
+                 (_ (setq session (mevedel-session-create "main" workspace)))
+                 (target (mevedel-session-execution-target session))
+                 (grant (file-name-concat remote-root "granted.txt")))
+            (setq buffer (generate-new-buffer " *remote-file-incarnation*"))
+            (with-current-buffer buffer
+              (org-mode)
+              (setq-local mevedel--workspace workspace
+                          mevedel--session session)
+              (setq default-directory remote-root)
+              (insert "Remote file session\n")
+              (should
+               (mevedel-session-persistence-save session buffer t))
+              (set-buffer-modified-p nil))
+            (write-region "grant\n" nil grant nil 'silent)
+            (setf (mevedel-session-resource-grants session)
+                  (list (list :path grant :access 'read)))
+            (with-current-buffer buffer
+              (mevedel-session-persistence-save session buffer t)
+              (set-buffer-modified-p nil))
+            (mevedel-execution-target--record-incarnation
+             target "replacement-incarnation")
+            (with-current-buffer buffer
+              (should
+               (mevedel-session-persistence-assert-mutation-authority
+                session buffer)))
+            (should-not (mevedel-session-resource-grants session))
+            (should-not
+             (mevedel-execution-target-incarnation-changed-p target))
+            (let ((sidecar
+                   (mevedel-session-persistence-read
+                    (mevedel-session-persistence--sidecar-path
+                     (mevedel-session-save-path session)))))
+              (should
+               (equal "replacement-incarnation"
+                      (plist-get sidecar :target-incarnation)))
+              (should-not (plist-get sidecar :resource-grants))))))
+      (when (and session (mevedel-session-save-path session))
+        (ignore-errors
+          (mevedel-session-persistence-lock-release
+           (mevedel-session-save-path session) session)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence-mixed-authority-controls ()
+  ,test
+  (test)
+  :doc "rejects mixed PID-lock and portable controls during discovery, restore, and admission"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-mixed-authority-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session-dir
+          (file-name-as-directory
+           (file-name-concat root ".mevedel" "sessions" "mixed")))
+         (session (mevedel-session-create "mixed" workspace)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat session-dir ".lease") t)
+          (with-temp-file (file-name-concat session-dir ".lock")
+            (insert "mixed controls"))
+          (setf (mevedel-session-save-path session) session-dir)
+          (should-error
+           (mevedel-session-persistence--authority-mode-for-path session-dir)
+           :type 'error)
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (should-error
+             (mevedel-session-persistence-assert-mutation-authority
+              session (current-buffer))
+             :type 'error))
+          (should-error
+           (mevedel-session-persistence-list-sessions workspace)
+           :type 'error)
+          (should-error
+           (mevedel-session-persistence-restore
+            session-dir nil nil workspace)
+           :type 'error))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence-transfer-admission ()
+  ,test
+  (test)
+  :doc "blocks new mutation admission while preserving a quiet drain"
+  (let ((session (mevedel-session--create :name "transfer-admission"))
+        (ordinary-called nil))
+    (setf (mevedel-session-control-transfer session)
+          '(:state quiescing))
+    (cl-letf (((symbol-function
+                'mevedel-session-persistence-assert-mutation-authority)
+               (lambda (&rest _) (setq ordinary-called t))))
+      (should-error
+       (mevedel-session-persistence-assert-new-mutation-authority session)
+       :type 'user-error)
+      (should-not ordinary-called))))
+
+(mevedel-deftest mevedel-session-persistence-control-transfer-poll ()
+  ,test
+  (test)
+  :doc "keeps a drained transfer quiescing when no root buffer can be saved"
+  (let* ((session (mevedel-session--create :name "transfer-poll"))
+         (transfer '(:state quiescing))
+         saved released)
+    (setf (mevedel-session-control-transfer session) transfer)
+    (cl-letf (((symbol-function
+                'mevedel-session-transfer-poll)
+               (lambda (_) transfer))
+              ((symbol-function
+                'mevedel-session-persistence--root-buffer-for-session)
+               (lambda (&rest _) nil))
+              ((symbol-function 'mevedel-session-persistence-save)
+               (lambda (&rest _) (setq saved t)))
+              ((symbol-function
+                'mevedel-session-transfer-release)
+               (lambda (_) (setq released t))))
+      (should
+       (eq transfer
+           (mevedel-session-control-transfer-poll session nil nil)))
+      (should-not saved)
+      (should-not released)))
+  :doc "refreshes committed transcript and sidecar state before enabling writes"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-transfer-refresh-" t)))
+         (workspace
+          (test-mevedel-session-persistence--make-file-workspace root))
+         (session (mevedel-session-create "requester" workspace))
+         (refreshed (mevedel-session-create "requester" workspace))
+         (buffer (generate-new-buffer " *mevedel-transfer-refresh*"))
+         (save-path (file-name-as-directory
+                     (file-name-concat root "session")))
+         (segment-path (file-name-concat save-path "segment-0002.chat.org"))
+         instructions-loaded incarnation-checked released)
+    (make-directory save-path t)
+    (write-region "initial transcript" nil segment-path nil 'silent)
+    (setf (mevedel-session-save-path session) save-path
+          (mevedel-session-control-transfer session)
+          '(:state requested :request (:request-id "request"))
+          (mevedel-session-turn-count refreshed) 7
+          (mevedel-session-current-segment refreshed) 2)
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq buffer-file-name segment-path)
+          (insert "stale transcript")
+          (set-buffer-modified-p nil)
+          (set-visited-file-modtime)
+          (setq buffer-read-only t
+                mevedel-session--read-only-mode t)
+          (write-region "owner committed transcript" nil segment-path
+                        nil 'silent)
+          (should-not (verify-visited-file-modtime buffer))
+          (cl-letf
+              (((symbol-function 'mevedel-session-durability-lease-acquire)
+                (lambda (_path _name actual)
+                  (setf (mevedel-session-lease actual) '(:state owned))
+                  t))
+               ((symbol-function
+                 'mevedel-session-publication-read)
+                (lambda (_) '(:sidecar "/committed/session.meta.el")))
+               ((symbol-function
+                 'mevedel-session-persistence-load-sidecar)
+                (lambda (_) '(:committed t)))
+               ((symbol-function 'mevedel-session-persistence-deserialize)
+                (lambda (&rest _) (list :session refreshed)))
+               ((symbol-function 'mevedel-session-persistence-read-artifact)
+                (lambda (&rest _) "fresh transcript"))
+               ((symbol-function
+                 'mevedel-session-persistence--check-target-incarnation)
+                (lambda (_session checked-buffer)
+                  (should (eq checked-buffer buffer))
+                  (should buffer-read-only)
+                  (setq incarnation-checked t)))
+               ((symbol-function 'mevedel-transcript-restore-gptel-state)
+                #'ignore)
+               ((symbol-function
+                 'mevedel-session-persistence--load-instructions)
+                (lambda (&rest _) (setq instructions-loaded t)))
+               ((symbol-function
+                 'mevedel-session-durability-lease-release)
+                (lambda (&rest _) (setq released t)))
+               ((symbol-function 'ask-user-about-supersession-threat)
+                (lambda (&rest _) (error "Supersession prompt"))))
+            (should
+             (mevedel-session-control-transfer-poll session buffer t))
+            (should (= 7 (mevedel-session-turn-count session)))
+            (should (equal "fresh transcript" (buffer-string)))
+            (should-not buffer-read-only)
+            (should-not mevedel-session--read-only-mode)
+            (should instructions-loaded)
+            (should incarnation-checked)
+            (should-not released)
+            (should
+             (eq 'acquired
+                 (plist-get (mevedel-session-control-transfer session)
+                            :state)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+  :doc "releases a newly acquired lease when committed refresh fails"
+  (let* ((session (mevedel-session--create
+                   :name "failed-refresh" :save-path "/session/"))
+         (buffer (generate-new-buffer " *mevedel-transfer-failure*"))
+         released)
+    (setf (mevedel-session-control-transfer session)
+          '(:state requested :request (:request-id "request")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq buffer-read-only t
+                mevedel-session--read-only-mode t)
+          (cl-letf
+              (((symbol-function 'mevedel-session-durability-lease-acquire)
+                (lambda (&rest _) t))
+               ((symbol-function
+                 'mevedel-session-publication-read)
+                (lambda (_) (error "Injected refresh failure")))
+               ((symbol-function
+                 'mevedel-session-durability-lease-release)
+                (lambda (&rest _) (setq released t))))
+            (should-error
+             (mevedel-session-control-transfer-poll session buffer t))
+            (should released)
+            (should buffer-read-only)
+            (should mevedel-session--read-only-mode)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (mevedel-deftest mevedel-session-persistence-read-artifact ()
   ,test
   (test)
@@ -5995,7 +6378,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (file-name-as-directory
            (make-temp-file "mevedel-local-artifact-resolver-" t)))
          (workspace
-          (test-mevedel-session-persistence--make-workspace root))
+          (test-mevedel-session-persistence--make-file-workspace root))
          (session (mevedel-session-create "resolver" workspace))
          (session-dir
           (file-name-as-directory (file-name-concat root "session")))
@@ -6039,7 +6422,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                    (mevedel-session-durability-lease-acquire
                     session-dir "*resolver*" session))
                   (should
-                   (mevedel-session-durability-publish
+                   (mevedel-session-publication-publish
                     session
                     (list (list :path segment :content "committed")
                           (list :path sidecar :content "sidecar"
@@ -6050,7 +6433,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                           (mevedel-session-persistence-read-artifact
                            session "segment-0001.chat.org" t)))
                   (should
-                   (mevedel-session-durability-publish
+                   (mevedel-session-publication-publish
                     session (list (list :path segment :content "staged"))))
                   (should
                    (equal "staged"
@@ -6085,7 +6468,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (file-name-as-directory
            (make-temp-file "mevedel-local-artifact-present-" t)))
          (workspace
-          (test-mevedel-session-persistence--make-workspace root))
+          (test-mevedel-session-persistence--make-file-workspace root))
          (session (mevedel-session-create "resolver" workspace))
          (session-dir
           (file-name-as-directory (file-name-concat root "session")))
@@ -6125,7 +6508,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                    (mevedel-session-durability-lease-acquire
                     session-dir "*present*" session))
                   (should
-                   (mevedel-session-durability-publish
+                   (mevedel-session-publication-publish
                     session
                     (list (list :path segment :content "committed")
                           (list :path sidecar :content "sidecar"
@@ -6139,7 +6522,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                     session "plans/missing.md"))
                   (let ((plan (file-name-concat session-dir "plans/current.md")))
                     (should
-                     (mevedel-session-durability-publish
+                     (mevedel-session-publication-publish
                       session (list (list :path plan :content "staged"))))
                     (should
                      (mevedel-session-persistence-artifact-present-p
@@ -6173,7 +6556,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                    (mevedel-session-durability-lease-acquire
                     session-dir "*find-artifact*" session))
                   (should
-                   (mevedel-session-durability-publish
+                   (mevedel-session-publication-publish
                     session
                     (list (list :path segment :content "committed transcript")
                           (list :path sidecar :content "sidecar"
@@ -6222,7 +6605,9 @@ rotation never saves through a rebound temporary visited filename or prompts"
   :doc "writes local bytes atomically and returns their path"
   (let* ((root (make-temp-file "mevedel-publish-text-" t))
          (path (file-name-concat root "state.el"))
-         (session (mevedel-session--create)))
+         (workspace
+          (test-mevedel-session-persistence--make-file-workspace root))
+         (session (mevedel-session-create "publish" workspace)))
     (unwind-protect
         (progn
           (should
@@ -6238,14 +6623,16 @@ rotation never saves through a rebound temporary visited filename or prompts"
   :doc "returns the remote queue outcome without claiming publication"
   (let* ((target
           (mevedel-execution-target-create "/ssh:user@host:/srv/project/"))
-         (session (mevedel-session--create :execution-target target))
+         (session (mevedel-session--create
+                   :execution-target target
+                   :authority-mode 'portable))
          (path "/ssh:user@host:/srv/project/state.el")
          published)
     (cl-letf
         (((symbol-function
            'mevedel-session-persistence-assert-mutation-authority)
           (lambda (_) t))
-         ((symbol-function 'mevedel-session-durability-publish)
+         ((symbol-function 'mevedel-session-publication-publish)
           (lambda (_session artifacts)
             (setq published artifacts)
             'queued)))
@@ -6288,7 +6675,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                    (mevedel-session-durability-lease-acquire
                     session-dir "*transcript-state*" session))
                   (setf (mevedel-session-publication session)
-                        (mevedel-session-durability-read-publication
+                        (mevedel-session-publication-read
                          session-dir))
                   (setq buffer
                         (generate-new-buffer " *transcript-state-root*"))
@@ -6370,7 +6757,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                    (mevedel-session-durability-lease-acquire
                     session-dir "*sidecar-state*" session))
                   (setf (mevedel-session-publication session)
-                        (mevedel-session-durability-read-publication
+                        (mevedel-session-publication-read
                          session-dir))
                   (setq buffer
                         (generate-new-buffer " *sidecar-state-root*"))
@@ -6428,7 +6815,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                       (mapc (lambda (path) (set-file-modes path #o700))
                             directories))
                     (should
-                     (mevedel-session-durability-retry-publication session))))
+                     (mevedel-session-publication-retry session))))
               (when session
                 (mevedel-session-durability-lease-release
                  session-dir session)))))
@@ -6450,7 +6837,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
               '(:path "/target/session.meta.el"
                 :content "sidecar"
                 :commit-marker t)))
-           ((symbol-function 'mevedel-session-durability-publish)
+           ((symbol-function 'mevedel-session-publication-publish)
             (lambda (_session artifacts)
               (should (plist-get (car artifacts) :commit-marker))
               'queued)))
@@ -6859,7 +7246,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                   :id "directive" :request "Request"
                   :anchor '(:state attached)))
          (workspace (mevedel-workspace--create
-                     :type 'test :id "checkpoint" :root "/tmp"
+                     :type 'file :id "checkpoint" :root "/tmp"
                      :name "checkpoint" :directives (list record)))
          (session (mevedel-session--create :session-id "cold-session"))
          (buffer (generate-new-buffer " *checkpoint-rewind*"))
@@ -7782,7 +8169,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
          (path (file-name-concat tempdir "tracked.el"))
          (workspace
           (mevedel-workspace--create
-           :type 'test :id "rewind" :root tempdir :name "rewind"))
+           :type 'file :id "rewind" :root tempdir :name "rewind"))
          (session
           (mevedel-session--create
            :name "main"
@@ -7847,7 +8234,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                (mevedel-session-durability-lease-acquire
                 session-dir "*remote-rewind*" session))
               (setf (mevedel-session-publication session)
-                    (mevedel-session-durability-read-publication session-dir)
+                    (mevedel-session-publication-read session-dir)
                     (mevedel-session-turn-count session) 1
                     (mevedel-session-prompt-index session)
                     `((1 . (,target))))
@@ -7957,7 +8344,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                (mevedel-session-durability-lease-acquire
                 session-dir "*remote-rewind-rollback*" session))
               (setf (mevedel-session-publication session)
-                    (mevedel-session-durability-read-publication session-dir)
+                    (mevedel-session-publication-read session-dir)
                     (mevedel-session-turn-count session) 1)
               (write-region "current project bytes\n" nil tracked nil 'silent)
               (setq buffer (generate-new-buffer " *remote-rewind-rollback*"))
@@ -7993,7 +8380,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                         (write-region "rewound project bytes\n" nil
                                       tracked nil 'silent)
                         '(:succeeded 1 :failed nil :total 1)))
-                     ((symbol-function 'mevedel-session-durability-publish)
+                     ((symbol-function 'mevedel-session-publication-publish)
                       (lambda (actual-session _artifacts)
                         (setf (mevedel-session-pending-publication
                                actual-session)
@@ -8341,18 +8728,22 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 (let* ((mevedel-session-durability--client-id owner-id)
                        (mevedel-session-durability--disclosed-targets
                         (make-hash-table :test #'equal))
-                       (copy-function (symbol-function 'copy-directory))
-                       (acquire-function
+                       (materialize-function
                         (symbol-function
-                         'mevedel-session-persistence-lock-acquire))
+                         'mevedel-session-persistence--materialize-publication))
                        (publish-function
                         (symbol-function
-                         'mevedel-session-durability-publish))
+                         'mevedel-session-publication-publish))
                        parent-generation
                        competitor-blocked
                        fresh-child
+                       materialized
+                       copy-called
                        child-rewrite-authorized
-                       (acquire-count 0))
+                       child-session
+                       parent-artifacts
+                       staging-path
+                       target-probed)
                   (puthash
                    (mevedel-execution-target-identity
                     (mevedel-session-execution-target session))
@@ -8379,72 +8770,93 @@ rotation never saves through a rebound temporary visited filename or prompts"
                   (cl-letf
                       (((symbol-function 'read-string)
                         (lambda (&rest _) "clone"))
+                       ((symbol-function 'mevedel-execution-target-probe)
+                        (lambda (&rest _)
+                          (setq target-probed t)
+                          '(:status ready)))
                        ((symbol-function 'copy-directory)
-                        (lambda (&rest arguments)
+                        (lambda (&rest _)
+                          (setq copy-called t)
+                          (error "Remote Save As must not copy a session directory")))
+                       ((symbol-function
+                         'mevedel-session-persistence--materialize-publication)
+                        (lambda (actual-session publication destination)
                           (let ((mevedel-session-durability--client-id
                                  competitor-id))
                             (should-not
                              (mevedel-session-durability-lease-acquire
                               old-save-path "*save-as-competitor*")))
-                          (setq competitor-blocked t)
-                          (apply copy-function arguments)))
-                       ((symbol-function
-                         'mevedel-session-persistence-lock-acquire)
-                        (lambda (&rest arguments)
-                          (cl-incf acquire-count)
-                          (setq new-save-path (car arguments))
-                          (when (= acquire-count 1)
-                            (should
-                             (mevedel-session-durability-lease-owned-p
-                              session))
-                            (should-not (nth 2 arguments))
-                            (should-not
-                             (file-exists-p
-                              (mevedel-session-persistence--lock-path
-                               new-save-path)))
-                            (should-not
-                             (file-directory-p
-                              (file-name-concat new-save-path ".lease")))
-                            (setq fresh-child t))
-                          (when (= acquire-count 2)
-                            (should (eq session (nth 2 arguments)))
-                            (should
-                             (equal new-save-path
-                                    (mevedel-session-save-path session))))
-                          (apply acquire-function arguments)))
-                       ((symbol-function
-                         'mevedel-session-durability-publish)
+                          (setq competitor-blocked t
+                                staging-path destination)
+                          (setq parent-artifacts
+                                (sort
+                                 (mapcar #'car
+                                         (plist-get publication :artifacts))
+                                 #'string-lessp))
+                          (setq materialized t)
+                          (funcall materialize-function
+                                   actual-session publication destination)
+                          (should (file-exists-p
+                                   (file-name-concat destination
+                                                     "segment-0001.chat.org")))
+                          (should-not
+                           (file-exists-p
+                            (file-name-concat destination ".publications")))
+                          (should-not
+                           (file-exists-p
+                            (file-name-concat destination ".recovery")))
+                          (should-not
+                           (file-exists-p
+                           (file-name-concat destination ".lock")))))
+                        ((symbol-function
+                        'mevedel-session-publication-publish)
                         (lambda (actual-session artifacts)
-                          (when
-                              (equal
-                               (plist-get (car (last artifacts)) :path)
-                               (and new-save-path
-                                    (mevedel-session-persistence--sidecar-path
-                                     new-save-path)))
-                            (should (eq actual-session session))
+                          (let ((sidecar-artifact
+                                 (cl-find-if
+                                  (lambda (artifact)
+                                    (equal
+                                     (plist-get artifact :path)
+                                     (mevedel-session-persistence--sidecar-path
+                                      (mevedel-session-save-path actual-session))))
+                                  artifacts)))
+                            (when (and staging-path sidecar-artifact)
+                            (should-not (eq actual-session session))
+                            (setq fresh-child t)
+                            (setq child-session actual-session)
                             (should
-                             (plist-get (car (last artifacts))
-                                        :commit-marker))
+                             (equal staging-path
+                                    (mevedel-session-save-path actual-session)))
+                            (should (plist-get sidecar-artifact
+                                               :commit-marker))
                             (should
                              (mevedel-session-durability-lease-owned-p
-                              session))
+                              actual-session))
                             (should
                              (eq
-                              'active
+                              'publishing
                               (plist-get
                                (mevedel-session-durability--lease-head
                                 (mevedel-session-durability--lease-path
                                  old-save-path))
                                :status)))
-                            (setq child-rewrite-authorized t))
+                            (setq child-rewrite-authorized t)))
                           (funcall publish-function
                                    actual-session artifacts))))
+                    (should
+                     (eq 'portable
+                         (mevedel-session-persistence--authority-mode
+                          session)))
                     (with-current-buffer buffer
-                      (mevedel-save-session t)))
+                      (mevedel-save-session t))
+                  (should target-probed)
                   (should competitor-blocked)
+                  (should materialized)
+                  (should-not copy-called)
                   (should fresh-child)
                   (should child-rewrite-authorized)
-                  (should (= 2 acquire-count))
+                  (should child-session)
+                  (should
+                   (mevedel-session-durability-lease-owned-p child-session))
                   (should
                    (= 1
                       (plist-get (mevedel-session-lease session)
@@ -8456,17 +8868,39 @@ rotation never saves through a rebound temporary visited filename or prompts"
                      (mevedel-session-durability--lease-head
                       (mevedel-session-durability--lease-path old-save-path))
                      :status)))
-                  (should
-                   (equal new-save-path
-                          (mevedel-session-save-path session)))
+                  (setq new-save-path (mevedel-session-save-path session))
                   (let ((publication
-                         (mevedel-session-durability-read-publication
+                         (mevedel-session-publication-read
                           new-save-path)))
                     (should publication)
                     (should
-                     (equal "Parent transcript\n"
-                            (mevedel-session-persistence-read-artifact
-                             session "segment-0001.chat.org" t)))
+                     (equal parent-artifacts
+                            (sort
+                             (mapcar #'car
+                                     (plist-get publication :artifacts))
+                             #'string-lessp)))
+                    (should
+                     (= 1
+                        (length
+                         (directory-files
+                          (file-name-concat new-save-path ".publications")
+                          nil "\\`generation-"))))
+                    (should
+                     (> (length
+                         (directory-files
+                          (file-name-concat old-save-path ".publications")
+                          nil "\\`generation-"))
+                        1))
+                    (let ((transcript
+                           (condition-case err
+                               (mevedel-session-persistence-read-artifact
+                                session "segment-0001.chat.org" t)
+                             (error
+                              (ert-fail
+                               (format
+                                "Save As child transcript read failed: %S; publication=%S"
+                                err publication))))))
+                      (should (equal "Parent transcript\n" transcript)))
                     (let ((sidecar
                            (with-temp-buffer
                              (insert
@@ -8493,7 +8927,172 @@ rotation never saves through a rebound temporary visited filename or prompts"
         (kill-buffer buffer))
       (when (file-directory-p local-root)
         (delete-directory local-root t))
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))))
+
+(mevedel-deftest mevedel-session-save-as-run ()
+  ,test
+  (test)
+  :doc "cleans pre-commit recovery and keeps every committed child discoverable"
+  (dolist (failure-point
+           '(pre-commit publish-pre-commit post-commit move-post-commit))
+    (let* ((host (format "save-as-%s" failure-point))
+           (local-root
+            (file-name-as-directory
+             (make-temp-file "mevedel-save-as-failure-" t)))
+           (owner-id (make-string 64 ?a))
+           buffer
+           view-buffer
+           session
+           old-save-path
+           new-save-path
+           staging-path)
+      (unwind-protect
+          (mevedel-test--with-local-shell-tramp (list host)
+            (cl-destructuring-bind
+                (_workspace fixture-session session-dir segment)
+                (test-mevedel-session-persistence--make-remote-restore-fixture
+                 host local-root "Parent transcript\n")
+              (setq session fixture-session
+                    old-save-path session-dir
+                    new-save-path
+                    (file-name-as-directory
+                     (file-name-concat
+                      (file-name-directory (directory-file-name session-dir))
+                      (format "clone-%s" failure-point)))
+                    buffer (generate-new-buffer " *save-as-failure*")
+                    view-buffer (generate-new-buffer " *save-as-failure:view*"))
+              (let* ((mevedel-session-durability--client-id owner-id)
+                     (mevedel-session-durability--disclosed-targets
+                      (make-hash-table :test #'equal))
+                     (materialize-function
+                      (symbol-function
+                       'mevedel-session-persistence--materialize-publication))
+                     (publish-function
+                      (symbol-function 'mevedel-session-publication-publish))
+                     (rename-function (symbol-function 'rename-file))
+                     recovery)
+                (puthash
+                 (mevedel-execution-target-identity
+                  (mevedel-session-execution-target session))
+                 t mevedel-session-durability--disclosed-targets)
+                (should
+                 (mevedel-session-durability-lease-acquire
+                  old-save-path "save-as-owner" session))
+                (with-current-buffer buffer
+                  (org-mode)
+                  (setq-local mevedel--session session
+                              mevedel--view-buffer view-buffer
+                              buffer-file-name segment)
+                  (insert "Parent transcript\n"))
+                (cl-letf
+                    (((symbol-function
+                       'mevedel-session-persistence--materialize-publication)
+                      (lambda (actual-session publication destination)
+                        (setq staging-path destination)
+                        (if (eq failure-point 'pre-commit)
+                            (error "Injected pre-commit Save As failure")
+                          (funcall materialize-function
+                                   actual-session publication destination))))
+                     ((symbol-function 'mevedel-session-publication-publish)
+                      (lambda (actual-session artifacts)
+                        (if (eq failure-point 'publish-pre-commit)
+                            (let* ((directory
+                                    (make-temp-file
+                                     "mevedel-save-as-recovery-" t))
+                                   (source
+                                    (file-name-concat directory "artifact")))
+                              (write-region "recovery" nil source nil 'silent)
+                              (setq recovery directory)
+                              (setf
+                               (mevedel-session-pending-publication
+                                actual-session)
+                               (list
+                                :batches
+                                (list
+                                 (list :directory directory
+                                       :artifacts
+                                       (list (list :source source))))))
+                              (error "Injected publication failure"))
+                          (prog1
+                              (funcall publish-function
+                                       actual-session artifacts)
+                            (when (eq failure-point 'post-commit)
+                              (error "Injected post-commit Save As failure"))))))
+                     ((symbol-function 'rename-file)
+                      (lambda (file newname &optional ok-if-exists)
+                        (if (and (eq failure-point 'move-post-commit)
+                                 staging-path
+                                 (equal file
+                                        (directory-file-name staging-path)))
+                            (error "Injected Save As discovery move failure")
+                          (funcall rename-function
+                                   file newname ok-if-exists)))))
+                  (let ((error
+                         (should-error
+                          (mevedel-session-save-as-run
+                           session buffer "clone"
+                           (file-name-nondirectory
+                            (directory-file-name new-save-path))
+                           new-save-path))))
+                    (if (memq failure-point
+                              '(pre-commit publish-pre-commit))
+                        (progn
+                          (should-not (file-directory-p staging-path))
+                          (should-not (file-directory-p new-save-path))
+                          (should
+                           (equal old-save-path
+                                  (mevedel-session-save-path session)))
+                          (should
+                           (mevedel-session-durability-lease-owned-p session)))
+                      (should
+                       (string-match-p
+                        "committed a child"
+                        (error-message-string error)))
+                      (if (eq failure-point 'move-post-commit)
+                          (progn
+                            (should-not (file-directory-p new-save-path))
+                            (should (file-directory-p staging-path))
+                            (should
+                             (equal staging-path
+                                    (mevedel-session-save-path session)))
+                            (should
+                             (cl-find staging-path
+                                      (mevedel-session-persistence-list-sessions
+                                       (mevedel-session-workspace session))
+                                      :key (lambda (entry)
+                                             (plist-get entry :save-path))
+                                      :test #'equal)))
+                        (should (file-directory-p new-save-path)))
+                      (should
+                       (mevedel-session-publication-read
+                        (mevedel-session-save-path session)))
+                      (should
+                       (string-match-p "clone" (buffer-name buffer)))
+                      (should
+                       (string-match-p "clone" (buffer-name view-buffer)))
+                      (should
+                       (mevedel-session-durability-lease-owned-p session))))
+                  (when recovery
+                    (should-not (file-exists-p recovery)))))))
+        (mevedel-test--with-local-shell-tramp (list host)
+          (when (and session (mevedel-session-save-path session))
+            (ignore-errors
+              (mevedel-session-persistence-lock-release
+               (mevedel-session-save-path session) session)))
+          (when old-save-path
+            (ignore-errors
+              (mevedel-session-persistence-lock-release old-save-path)))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (set-buffer-modified-p nil)
+              (set-visited-file-name nil t)
+              (setq-local kill-buffer-hook nil))
+            (kill-buffer buffer)))
+        (when (buffer-live-p view-buffer)
+          (kill-buffer view-buffer))
+        (when (file-directory-p local-root)
+          (delete-directory local-root t))
+        (mevedel-workspace-clear-registry)))))
 
 (defun test-mevedel-session-persistence--make-fork-ready ()
   "Return a real saved session rewound and ready to fork.
@@ -8538,6 +9137,9 @@ The result is a plist whose :tempdir owns every created file."
         (mevedel-session-persistence-save session buf)
         (setq parent-path (mevedel-session-save-path session)
               parent-id (mevedel-session-session-id session))
+        ;; Every path below is derived from this one: without it the writes
+        ;; below are relative and land in the working tree.
+        (should parent-path)
         (make-directory (file-name-concat parent-path "agents") t)
         (make-directory (file-name-concat parent-path "local" "plans") t)
         (write-region "# Parent plan\n" nil
@@ -8699,7 +9301,227 @@ The result is a plist whose :tempdir owns every created file."
       (delete-directory tempdir t)))
   (mevedel-workspace-clear-registry))
 
-(mevedel-deftest mevedel-session-persistence--fork-candidate ()
+(mevedel-deftest mevedel-session-persistence--clone-session
+  (:doc "covers every session slot and isolates both clone policies")
+  (progn
+    (should (= 87
+             (length
+              (cdr (cl-struct-slot-info 'mevedel-session)))))
+    (should (mevedel-session-persistence--assert-clone-slot-completeness))
+    (let* ((workspace
+          (mevedel-workspace--create
+           :type 'project :id "clone-project" :root "/tmp/clone-project/"
+           :name "clone-project"))
+         (target (mevedel-execution-target-create "/tmp/clone-project/"))
+         (task (mevedel-task--create
+                :id 1 :subject "task" :status 'pending
+                :metadata '(:nested (:value source))))
+         (reminder
+          (mevedel-reminder--create
+           :type 'clone :trigger #'ignore :content #'ignore :interval 1))
+         (invoked
+          (mevedel-skill-invocation-record--create
+           :name "clone-skill" :role 'instruction :origin 'user :turn 1))
+         (goal
+          (mevedel-goal--create
+           :id "clone-goal" :objective "Clone" :status 'paused
+           :reason "test" :tokens-used 1 :time-used-seconds 2
+           :turns-run 3 :created-at "created" :updated-at "updated"))
+         (source
+          (mevedel-session--create
+           :name "source"
+           :workspace workspace
+           :execution-target target
+           :authority-mode 'portable
+           :working-directory "/tmp/clone-project/"
+           :tasks (list task)
+           :task-status-notes '((nil :note "note"))
+           :last-task-write-turn 1
+           :permission-rules '(("Read" :path "/tmp" :action allow))
+           :resource-grants '((:path "/tmp/exact" :access read))
+           :permission-mode 'edits
+           :sandbox-mode 'off
+           :plan-mode t
+           :preset-name 'clone-preset
+           :preset-settings '((clone-setting (:nested source)))
+           :model-provider "clone:model"
+           :reasoning-effort 'high
+           :turn-count 1
+           :reminders (list reminder)
+           :last-observed-date "2026-08-13"
+           :agent-types-snapshot '(("worker" . "Worker"))
+           :skills-snapshot '(("skill" . "Skill"))
+           :specialist-nudge-state '(:count 1)
+           :deferred-set '(((:tool "Read") . "Read"))
+           :deferred-pending '(pending)
+           :deferred-injected '(("Read" . 1))
+           :deferred-used '("Read")
+           :deferred-expired '("Old")
+           :messages '((:type RESULT :payload "message"))
+           :agent-registry '(("/root/worker" :state (:nested source)))
+           :agent-reservations '((reserved))
+           :agent-root-activity 'running
+           :agent-root-waiter 'waiter
+           :agent-turn-capacity 7
+           :pending-steering '((:input "steer"))
+           :pending-follow-ups '((:input "follow-up"))
+           :pending-input-next-id 2
+           :pending-input-paused t
+           :pending-input-failure-paused t
+           :dropped-file-grants '("drop")
+           :active-dropped-file-grants '("active")
+           :skills '((skill :name "skill"))
+           :hook-rules '((:event SessionStart))
+           :hook-log '((:event SessionStart))
+           :hook-log-pending '((pending))
+           :repair-log '((repair))
+           :repair-log-pending '((repair-pending))
+           :permission-log-pending '((permission-pending))
+           :telemetry-pending '((telemetry-pending))
+           :hook-context-pending '((:event UserPromptSubmit))
+           :execution-state 'execution
+           :audit-session 'audit
+           :pending-publication 'pending-publication
+           :publication 'publication
+           :publication-queue '(publication-queue)
+           :publication-uncommitted-batches '(uncommitted)
+           :publication-active-p t
+           :control-transfer 'control-transfer
+           :control-transfer-drains '(drain)
+           :lease 'lease
+           :lease-renewal-timer 'timer
+           :current-segment 1
+           :prompt-index '((1 . ((:turn 1 :cum-turn 1))))
+           :file-snapshots '((1 . (("/tmp/file" . (:version 1)))))
+           :agent-transcripts '(("worker--1" :parent-turn 1 :status completed))
+           :invoked-skills (list invoked)
+           :pending-plan-approval '(:proposal pending)
+           :plan-metadata '(:status accepted :nested source)
+           :goal goal))
+         (fork
+          (mevedel-session-persistence--clone-session
+           source 'fork
+           :save-path "/tmp/fork/"
+           :session-id "fork"
+           :created-at "fork-created"
+           :updated-at "fork-updated"
+           :current-segment 1
+           :forked-from-session-id "source"
+           :forked-from-turn 1))
+         (save-as
+          (mevedel-session-persistence--clone-session
+           source 'save-as
+           :name "copy"
+           :save-path "/tmp/copy/"
+           :session-id "copy"
+           :created-at "copy-created"
+           :updated-at "copy-updated"
+           :forked-from-session-id "source")))
+    (dolist (candidate (list fork save-as))
+      (should (eq workspace (mevedel-session-workspace candidate)))
+      (should (eq target (mevedel-session-execution-target candidate)))
+      (should (= 0 (hash-table-count
+                    (mevedel-session-touched-files candidate))))
+      (should (= 0 (hash-table-count
+                    (mevedel-session-mentions-shown candidate))))
+      (dolist (value
+               (list (mevedel-session-directive-planning candidate)
+                     (mevedel-session-pending-reminders candidate)
+                     (mevedel-session-specialist-nudge-state candidate)
+                     (mevedel-session-deferred-pending candidate)
+                     (mevedel-session-deferred-injected candidate)
+                     (mevedel-session-deferred-used candidate)
+                     (mevedel-session-deferred-expired candidate)
+                     (mevedel-session-agent-reservations candidate)
+                     (mevedel-session-agent-root-waiter candidate)
+                     (mevedel-session-pending-steering candidate)
+                     (mevedel-session-pending-follow-ups candidate)
+                     (mevedel-session-pending-input-next-id candidate)
+                     (mevedel-session-pending-input-paused candidate)
+                     (mevedel-session-pending-input-failure-paused candidate)
+                     (mevedel-session-dropped-file-grants candidate)
+                     (mevedel-session-active-dropped-file-grants candidate)
+                     (mevedel-session-hook-log candidate)
+                     (mevedel-session-hook-log-pending candidate)
+                     (mevedel-session-repair-log candidate)
+                     (mevedel-session-repair-log-pending candidate)
+                     (mevedel-session-permission-log-pending candidate)
+                     (mevedel-session-telemetry-pending candidate)
+                     (mevedel-session-hook-context-pending candidate)
+                     (mevedel-session-execution-state candidate)
+                     (mevedel-session-audit-session candidate)
+                     (mevedel-session-pending-publication candidate)
+                     (mevedel-session-publication candidate)
+                     (mevedel-session-publication-queue candidate)
+                     (mevedel-session-publication-uncommitted-batches candidate)
+                     (mevedel-session-publication-active-p candidate)
+                     (mevedel-session-control-transfer candidate)
+                     (mevedel-session-control-transfer-drains candidate)
+                     (mevedel-session-lease candidate)
+                     (mevedel-session-lease-renewal-timer candidate)
+                     (mevedel-session-permission-queue candidate)
+                     (mevedel-session-pending-plan-approval candidate)))
+        (should-not value)))
+    (dolist (candidate (list fork save-as))
+      (should (eq 'idle
+                  (mevedel-session-agent-root-activity candidate))))
+    ;; Save As preserves logical state but owns every mutable container.
+    (should (equal (mevedel-session-tasks source)
+                   (mevedel-session-tasks save-as)))
+    (should-not (eq (car (mevedel-session-tasks source))
+                    (car (mevedel-session-tasks save-as))))
+    (should-not (eq (mevedel-task-metadata (car (mevedel-session-tasks source)))
+                    (mevedel-task-metadata (car (mevedel-session-tasks save-as)))))
+    (dolist (getter '(mevedel-session-task-status-notes
+                      mevedel-session-permission-rules
+                      mevedel-session-resource-grants
+                      mevedel-session-preset-settings
+                      mevedel-session-agent-types-snapshot
+                      mevedel-session-skills-snapshot
+                      mevedel-session-deferred-set
+                      mevedel-session-messages
+                      mevedel-session-agent-registry
+                      mevedel-session-skills
+                      mevedel-session-prompt-index
+                      mevedel-session-file-snapshots
+                      mevedel-session-agent-transcripts
+                      mevedel-session-invoked-skills
+                      mevedel-session-plan-metadata))
+      (should-not (eq (funcall getter source)
+                      (funcall getter save-as))))
+    (should-not (eq (mevedel-session-reminders source)
+                    (mevedel-session-reminders save-as)))
+    (should-not (eq (car (mevedel-session-reminders source))
+                    (car (mevedel-session-reminders save-as))))
+    (should-not (eq (mevedel-session-goal source)
+                    (mevedel-session-goal save-as)))
+    (should (equal (mevedel-session-turn-count source)
+                   (mevedel-session-turn-count save-as)))
+    (should-not (mevedel-session-hook-rules save-as))
+    ;; Fork retains policy configuration but starts a new conversation state.
+    (should-not (mevedel-session-tasks fork))
+    (should-not (mevedel-session-task-status-notes fork))
+    (should (equal (mevedel-session-hook-rules source)
+                   (mevedel-session-hook-rules fork)))
+    (should-not (eq (mevedel-session-hook-rules source)
+                    (mevedel-session-hook-rules fork)))
+    (should (= 1 (mevedel-session-turn-count fork)))
+    (should (equal '((1 . ((:turn 1 :cum-turn 1))))
+                   (mevedel-session-prompt-index fork)))
+    (should (equal '((1 . (("/tmp/file" . (:version 1)))))
+                   (mevedel-session-file-snapshots fork)))
+    (should-not (eq (mevedel-session-permission-rules source)
+                    (mevedel-session-permission-rules fork)))
+    (should-not (eq (mevedel-session-reminders source)
+                    (mevedel-session-reminders fork)))
+    (should-not (mevedel-session-goal fork))
+    (should (eq 'portable (mevedel-session-authority-mode fork)))
+    (should (equal "source"
+                   (mevedel-session-forked-from-session-id fork)))
+    (should (equal "source"
+                   (mevedel-session-forked-from-session-id save-as))))))
+
+(mevedel-deftest mevedel-session-persistence--clone-session/fork ()
   ,test
   (test)
   :doc "copies and reduces fork state without mutating the parent"
@@ -8786,9 +9608,15 @@ The result is a plist whose :tempdir owns every created file."
                (before (mevedel-session-persistence-serialize session))
                (before-text (prin1-to-string before))
                (child
-                (mevedel-session-persistence--fork-candidate
-                 session "/tmp/staged-fork/" "child-id"
-                 (plist-get fixture :parent-id) 2 2 "now")))
+                (mevedel-session-persistence--clone-session
+                 session 'fork
+                 :save-path "/tmp/staged-fork/"
+                 :session-id "child-id"
+                 :created-at "now"
+                 :updated-at "now"
+                 :current-segment 2
+                 :forked-from-session-id (plist-get fixture :parent-id)
+                 :forked-from-turn 2)))
           (should-not (eq child session))
           (should (eq (mevedel-session-execution-target session)
                       (mevedel-session-execution-target child)))
@@ -8985,7 +9813,8 @@ The result is a plist whose :tempdir owns every created file."
   (let* ((root
           (file-name-as-directory
            (make-temp-file "mevedel-fork-artifact-" t)))
-         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (workspace
+          (test-mevedel-session-persistence--make-file-workspace root))
          (source (mevedel-session-create "source" workspace))
          (source-path
           (file-name-as-directory (file-name-concat root "source")))
@@ -9029,9 +9858,15 @@ The result is a plist whose :tempdir owns every created file."
                               (plist-get fixture :sessions-dir))
             t)))
          (child
-          (mevedel-session-persistence--fork-candidate
-           session staging-path "child-id"
-           (plist-get fixture :parent-id) 2 2 "now"))
+          (mevedel-session-persistence--clone-session
+           session 'fork
+           :save-path staging-path
+           :session-id "child-id"
+           :created-at "now"
+           :updated-at "now"
+           :current-segment 2
+           :forked-from-session-id (plist-get fixture :parent-id)
+           :forked-from-turn 2))
          (staging-buffer
           (with-current-buffer buf
             (clone-buffer " *mevedel-stage-test*" nil))))
@@ -9183,8 +10018,8 @@ The result is a plist whose :tempdir owns every created file."
              (mevedel-session-durability-lease-acquire
               parent-path "*remote-stage-parent*" source))
             (setf (mevedel-session-publication source)
-                  (mevedel-session-durability-read-publication parent-path))
-            (mevedel-session-durability-publish
+                  (mevedel-session-publication-read parent-path))
+            (mevedel-session-publication-publish
              source
              (list
               (list :path segment-one :content "published segment one")
@@ -9211,10 +10046,16 @@ The result is a plist whose :tempdir owns every created file."
                   (file-name-as-directory
                    (file-name-concat sessions-dir ".fork-artifacts"))
                   child
-                  (mevedel-session-persistence--fork-candidate
-                   source staging-path "fork-artifacts"
-                   (mevedel-session-session-id source) 2 2
-                   "2026-08-11T20-00-00")
+                  (mevedel-session-persistence--clone-session
+                   source 'fork
+                   :save-path staging-path
+                   :session-id "fork-artifacts"
+                   :created-at "2026-08-11T20-00-00"
+                   :updated-at "2026-08-11T20-00-00"
+                   :current-segment 2
+                   :forked-from-session-id
+                   (mevedel-session-session-id source)
+                   :forked-from-turn 2)
                   staging-buffer
                   (generate-new-buffer " *remote-stage-fork-child*"))
             (with-current-buffer staging-buffer
@@ -9262,7 +10103,7 @@ The result is a plist whose :tempdir owns every created file."
   ,test
   (test)
   :doc "moves one owned remote lease from staging into the restored child"
-  (let* ((host "publish-fork-lease-host")
+  (let* ((host "localhost")
          (local-root
           (file-name-as-directory
            (make-temp-file "mevedel-publish-fork-" t)))
@@ -9283,10 +10124,16 @@ The result is a plist whose :tempdir owns every created file."
                     (file-name-as-directory
                      (file-name-concat sessions-dir "fork-child")))
                    (child
-                    (mevedel-session-persistence--fork-candidate
-                     parent staging-path "fork-child"
-                     (mevedel-session-session-id parent) 1 0
-                     "2026-08-11T18-00-00"))
+                    (mevedel-session-persistence--clone-session
+                     parent 'fork
+                     :save-path staging-path
+                     :session-id "fork-child"
+                     :created-at "2026-08-11T18-00-00"
+                     :updated-at "2026-08-11T18-00-00"
+                     :current-segment 1
+                     :forked-from-session-id
+                     (mevedel-session-session-id parent)
+                     :forked-from-turn 0))
                    (mevedel-session-durability--client-id
                     (make-string 64 ?a))
                    (mevedel-session-durability--disclosed-targets
@@ -9409,14 +10256,20 @@ The result is a plist whose :tempdir owns every created file."
                     (file-name-as-directory
                      (file-name-concat sessions-dir "fork-failed-child")))
                    (child
-                    (mevedel-session-persistence--fork-candidate
-                     parent staging-path "fork-failed-child"
-                     (mevedel-session-session-id parent) 1 0
-                     "2026-08-11T18-01-00"))
+                    (mevedel-session-persistence--clone-session
+                     parent 'fork
+                     :save-path staging-path
+                     :session-id "fork-failed-child"
+                     :created-at "2026-08-11T18-01-00"
+                     :updated-at "2026-08-11T18-01-00"
+                     :current-segment 1
+                     :forked-from-session-id
+                     (mevedel-session-session-id parent)
+                     :forked-from-turn 0))
                    (child-id (mevedel-session-session-id child))
                    (read-publication
                     (symbol-function
-                     'mevedel-session-durability-read-publication))
+                     'mevedel-session-publication-read))
                    (release-lock
                     (symbol-function
                      'mevedel-session-persistence-lock-release))
@@ -9456,7 +10309,7 @@ The result is a plist whose :tempdir owns every created file."
                          (mevedel-session-persistence--build-sidecar
                           actual-child actual-staging-buffer)))))
                    ((symbol-function
-                     'mevedel-session-durability-read-publication)
+                     'mevedel-session-publication-read)
                     (lambda (path)
                       (if (equal (file-name-as-directory path)
                                  new-save-path)
@@ -10199,7 +11052,7 @@ The result is a plist whose :tempdir owns every created file."
                    (mevedel-session-durability-lease-acquire
                     session-dir "*remote-rename*" session))
                   (setf (mevedel-session-publication session)
-                        (mevedel-session-durability-read-publication
+                        (mevedel-session-publication-read
                          session-dir))
                   (setq buffer
                         (generate-new-buffer " *remote-rename-root*"))
@@ -10282,7 +11135,7 @@ The result is a plist whose :tempdir owns every created file."
                    (mevedel-session-durability-lease-acquire
                     session-dir "*remote-rename-rollback*" session))
                   (setf (mevedel-session-publication session)
-                        (mevedel-session-durability-read-publication
+                        (mevedel-session-publication-read
                          session-dir))
                   (setq buffer
                         (generate-new-buffer
@@ -10297,10 +11150,10 @@ The result is a plist whose :tempdir owns every created file."
                                     :head))
                         (publish-artifact
                          (symbol-function
-                          'mevedel-session-durability--publish-artifact)))
+                          'mevedel-session-publication--publish-artifact)))
                     (cl-letf
                         (((symbol-function
-                           'mevedel-session-durability--publish-artifact)
+                           'mevedel-session-publication--publish-artifact)
                           (lambda (artifact)
                             (ignore artifact publish-artifact)
                             (signal 'file-error
@@ -10450,6 +11303,80 @@ The result is a plist whose :tempdir owns every created file."
 ;;
 ;;; Phase 10: resume / list / save commands
 
+(mevedel-deftest mevedel-session-persistence--entry-action ()
+  ,test
+  (test)
+  :doc "labels foreign and expired portable sessions without changing them"
+  (let* ((root (make-temp-file "mevedel-entry-action-" t))
+         (workspace
+          (test-mevedel-session-persistence--make-workspace root))
+         (entry '(:save-path "/session/")))
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-session-durability-lease-state)
+              (lambda (&rest _) 'foreign)))
+          (should
+           (equal "Join read-only"
+                  (mevedel-session-persistence--entry-action
+                   workspace entry)))
+          (cl-letf
+              (((symbol-function 'mevedel-session-durability-lease-state)
+                (lambda (&rest _) 'expired)))
+            (should
+             (equal "Take over"
+                    (mevedel-session-persistence--entry-action
+                     workspace entry)))))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence-choose-entry ()
+  ,test
+  (test)
+  :doc "offers safe new-session disclosure and restores the chosen session"
+  (let* ((root (make-temp-file "mevedel-entry-choice-" t))
+         (workspace
+          (test-mevedel-session-persistence--make-workspace root))
+         (entry '(:save-path "/session/" :summary (:session-name "main")))
+         (choice "Start new session")
+         (warned nil)
+         (restored (generate-new-buffer " *mevedel-entry-restored*")))
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-session-persistence-list-sessions)
+              (lambda (&rest _) (list entry)))
+             ((symbol-function 'mevedel-session-persistence--entry-action)
+              (lambda (&rest _) "Join read-only"))
+             ((symbol-function 'mevedel-session-durability-lease-state)
+              (lambda (&rest _) 'owned))
+             ((symbol-function
+               'mevedel-session-persistence--format-session-candidate)
+              (lambda (&rest _) "main"))
+             ((symbol-function
+               'mevedel-session-persistence--ordered-display-collection)
+              (lambda (values &rest _) values))
+             ((symbol-function 'completing-read)
+              (lambda (&rest _) choice))
+             ((symbol-function 'yes-or-no-p)
+              (lambda (&rest _) (setq warned t)))
+             ((symbol-function 'mevedel-session-persistence-restore)
+              (lambda (path &rest _)
+                (should (equal "/session/" path))
+                restored)))
+          (should
+           (eq 'new
+               (mevedel-session-persistence-choose-entry workspace)))
+          (should warned)
+          (setq choice "Join read-only — main")
+          (should
+           (eq restored
+               (mevedel-session-persistence-choose-entry workspace))))
+      (when (buffer-live-p restored)
+        (kill-buffer restored))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry))))
+
 (mevedel-deftest mevedel-session-persistence-list-sessions ()
   ,test
   (test)
@@ -10514,7 +11441,7 @@ The result is a plist whose :tempdir owns every created file."
                     (file-name-as-directory
                      (file-name-concat sessions-dir "corrupt-head")))
                    (publication
-                    (mevedel-session-durability-read-publication session-dir))
+                    (mevedel-session-publication-read session-dir))
                    (segment-entry
                     (cdr (assoc "segment-0001.chat.org"
                                 (plist-get publication :artifacts))))
@@ -10548,7 +11475,7 @@ The result is a plist whose :tempdir owns every created file."
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry)))
-  :doc "lists through remote alias A and resumes through equivalent alias B"
+  :doc "discovers a Save As child through alias B and resumes its full state"
   (let* ((alias-a "portable-resume-a")
          (alias-b "portable-resume-b")
          (local-root
@@ -10557,7 +11484,7 @@ The result is a plist whose :tempdir owns every created file."
          restored)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp (list alias-a alias-b)
-          (cl-destructuring-bind (_workspace-a session-a _session-dir _segment)
+          (cl-destructuring-bind (_workspace-a session-a session-dir segment)
               (test-mevedel-session-persistence--make-remote-restore-fixture
                alias-a local-root "Portable transcript\n")
             (let* ((root-a
@@ -10568,29 +11495,61 @@ The result is a plist whose :tempdir owns every created file."
                    (root-b
                     (format "/mevedelmock:%s:%s"
                             alias-b (file-name-as-directory local-root)))
-                   (session-id (mevedel-session-session-id session-a))
+                   session-id
                    (mevedel-session-durability--client-id
                     (make-string 64 ?b))
                    (mevedel-session-durability--disclosed-targets
                     (make-hash-table :test #'equal)))
+              (puthash
+               (mevedel-execution-target-identity
+                (mevedel-session-execution-target session-a))
+               t mevedel-session-durability--disclosed-targets)
+              (let ((buffer (generate-new-buffer " *save-as-alias*")))
+                (unwind-protect
+                    (progn
+                      (should
+                       (mevedel-session-durability-lease-acquire
+                        session-dir "save-as-alias" session-a))
+                      (with-current-buffer buffer
+                        (org-mode)
+                        (setq-local mevedel--session session-a
+                                    buffer-file-name segment)
+                        (insert "Portable transcript\n")
+                        (cl-letf (((symbol-function 'read-string)
+                                   (lambda (&rest _) "alias-clone")))
+                          (mevedel-save-session t)))
+                      (setq session-id
+                            (mevedel-session-session-id session-a))
+                      (mevedel-session-persistence-lock-release
+                       (mevedel-session-save-path session-a) session-a))
+                  (when (buffer-live-p buffer)
+                    (with-current-buffer buffer
+                      (set-buffer-modified-p nil)
+                      (set-visited-file-name nil t)
+                      (setq-local kill-buffer-hook nil))
+                    (kill-buffer buffer))))
               (mevedel-workspace-clear-registry)
               (let* ((workspace-b
                       (mevedel-workspace-get-or-create
                        'project root-b root-b "portable-resume"))
                      (target-b (mevedel-execution-target-create root-b))
                      (listed
-                      (mevedel-session-persistence-list-sessions workspace-b)))
+                      (mevedel-session-persistence-list-sessions workspace-b))
+                     (child
+                      (cl-find
+                       session-id listed
+                       :key (lambda (entry)
+                              (plist-get (plist-get entry :summary)
+                                         :session-id))
+                       :test #'equal)))
                 (should
                  (equal identity
                         (mevedel-workspace-identity-read root-b)))
-                (should (= 1 (length listed)))
-                (should
-                 (equal session-id
-                        (plist-get (plist-get (car listed) :summary)
-                                   :session-id)))
+                (should (= 2 (length listed)))
+                (should child)
                 (should
                  (string-prefix-p root-b
-                                  (plist-get (car listed) :save-path)))
+                                  (plist-get child :save-path)))
                 (puthash
                  (mevedel-execution-target-identity target-b)
                  t mevedel-session-durability--disclosed-targets)
@@ -10622,13 +11581,14 @@ The result is a plist whose :tempdir owns every created file."
                           (mevedel-session-working-directory
                            mevedel--session))))))))
       (when (buffer-live-p restored)
-        (let ((session (buffer-local-value 'mevedel--session restored)))
-          (when (and session (mevedel-session-save-path session))
-            (mevedel-session-persistence-lock-release
-             (mevedel-session-save-path session) session))
-          (with-current-buffer restored
-            (set-buffer-modified-p nil))
-          (kill-buffer restored)))
+        (mevedel-test--with-local-shell-tramp (list alias-a alias-b)
+          (let ((session (buffer-local-value 'mevedel--session restored)))
+            (when (and session (mevedel-session-save-path session))
+              (mevedel-session-persistence-lock-release
+               (mevedel-session-save-path session) session))
+            (with-current-buffer restored
+              (set-buffer-modified-p nil))
+            (kill-buffer restored))))
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry)))
@@ -11171,9 +12131,9 @@ The result is a plist whose :tempdir owns every created file."
                   (mevedel-session-persistence-write sidecar plist))
                 ;; Release locks so cleanup can delete the dirs.
                 (mevedel-session-persistence-lock-release
-                 (mevedel-session-save-path s1))
+                 (mevedel-session-save-path s1) s1)
                 (mevedel-session-persistence-lock-release
-                 (mevedel-session-save-path s2))
+                 (mevedel-session-save-path s2) s2)
                 (let ((deleted
                        (mevedel-session-persistence-cleanup-expired
                         workspace t)))
@@ -11216,7 +12176,7 @@ The result is a plist whose :tempdir owns every created file."
                   (cl-remf plist :plan-mode)
                   (plist-put plist :updated-at forged)
                   (mevedel-session-persistence-write sidecar plist)
-                  (mevedel-session-persistence-lock-release save-path)
+                  (mevedel-session-persistence-lock-release save-path session)
                   (should (= 1
                              (mevedel-session-persistence-cleanup-expired
                               workspace t)))
@@ -11246,7 +12206,7 @@ The result is a plist whose :tempdir owns every created file."
                         (mevedel-session-persistence--sidecar-path save-path))
                        (old-time
                         (time-subtract (current-time) (* 14 24 60 60))))
-                  (mevedel-session-persistence-lock-release save-path)
+                  (mevedel-session-persistence-lock-release save-path session)
                   (delete-file sidecar)
                   (set-file-times save-path old-time)
                   (should (= 1
@@ -11534,6 +12494,12 @@ The result is a plist whose :tempdir owns every created file."
                   ((symbol-function
                     'mevedel-pipeline-reconcile-lost-executions)
                    (lambda (_buffer) 0))
+                  ((symbol-function
+                    'mevedel-session-persistence--check-target-incarnation)
+                   (lambda (checked-session checked-buffer)
+                     (should (eq checked-session session))
+                     (should (eq checked-buffer buffer))
+                     (push 'incarnation events)))
                   ((symbol-function 'mevedel--chat-buffer-init-common)
                    (lambda (_buffer _workspace source &optional inspection-p)
                      (should (equal source "resume"))
@@ -11553,7 +12519,7 @@ The result is a plist whose :tempdir owns every created file."
            (= 2
               (mevedel-session-persistence--hydrate-restored-buffer
                buffer session workspace segment-path t nil nil)))
-          (should (equal '(transcript chat agents instructions)
+          (should (equal '(transcript incarnation chat agents instructions)
                          (nreverse events)))
           (with-current-buffer buffer
             (should (equal root default-directory))))
@@ -11568,33 +12534,35 @@ The result is a plist whose :tempdir owns every created file."
   :doc "persists repairs and loads history before rendering a fresh buffer"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-restore-finish-" t)))
-         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (workspace
+          (test-mevedel-session-persistence--make-file-workspace root))
          (session (mevedel-session-create "main" workspace root))
          (buffer (generate-new-buffer " *mevedel-restore-finish-data*"))
-         (view (generate-new-buffer " *mevedel-restore-finish-view*"))
+         observer
          events)
     (setf (mevedel-session-save-path session) root)
     (unwind-protect
         (progn
-          (with-current-buffer buffer
-            (setq-local mevedel--view-buffer view))
+          (setq observer
+                (mevedel-session-control-transfer-register-observer
+                 session
+                 (lambda (event &rest _args)
+                   (pcase event
+                     ('load-history (push 'history events))
+                     ('rerender (push 'render events))))))
           (cl-letf (((symbol-function
                       'mevedel-session-persistence--build-sidecar)
                      (lambda (_session _buffer) '(:sidecar t)))
                     ((symbol-function 'mevedel-session-persistence-write)
-                     (lambda (_path _sidecar) (push 'write events)))
-                    ((symbol-function 'mevedel-view-history-load)
-                     (lambda (_session) (push 'history events)))
-                    ((symbol-function 'mevedel-view--full-rerender)
-                     (lambda () (push 'render events))))
+                     (lambda (_path _sidecar) (push 'write events))))
             (should
              (eq buffer
                  (mevedel-session-persistence--finish-restored-buffer
                   buffer session nil t))))
           (should (equal '(write history render) (nreverse events))))
-      (dolist (item (list view buffer))
-        (when (buffer-live-p item)
-          (kill-buffer item)))
+      (mevedel-session-control-transfer-unregister-observer session observer)
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
 
@@ -11617,13 +12585,14 @@ The result is a plist whose :tempdir owns every created file."
           (with-current-buffer agent-buffer
             (setq-local mevedel--session session)
             (setq-local mevedel--agent-invocation t))
+          (mevedel-session-set-root-buffer session root-buffer)
           (should (eq root-buffer
                       (mevedel-session-persistence--find-live-buffer
-                       "source-id" "unused")))
+                       "source-id" " *source-root*")))
           (kill-buffer root-buffer)
           (should-not
            (mevedel-session-persistence--find-live-buffer
-            "source-id" "unused")))
+            "source-id" " *source-root*")))
       (dolist (buffer (list agent-buffer view-buffer root-buffer))
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
@@ -11853,13 +12822,13 @@ The result is a plist whose :tempdir owns every created file."
 (mevedel-deftest mevedel-session-persistence/sidecar-missing-on-restore ()
   ,test
   (test)
-  :doc "deleted sidecar causes restore to synthesize a fresh session"
+  :doc "deleted sidecar fails closed without a committed authority profile"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*"))
-               session-dir restored)
+               (buf (generate-new-buffer "*test-data-buf*"))
+               session-dir)
           (unwind-protect
               (progn
                 (with-current-buffer buf
@@ -11872,30 +12841,21 @@ The result is a plist whose :tempdir owns every created file."
                 (setq buf nil)
                 (delete-file
                  (mevedel-session-persistence--sidecar-path session-dir))
-                (cl-letf (((symbol-function 'display-warning) #'ignore))
-                  (setq restored
-                        (mevedel-session-persistence-restore session-dir)))
-                (should (buffer-live-p restored))
-                (with-current-buffer restored
-                  (should mevedel--session)
-                  (should (mevedel-session-session-id mevedel--session))
-                  (should (mevedel-session-execution-target
-                           mevedel--session))))
-            (test-mevedel-session-persistence--release-and-kill
-             buf session)
-            (test-mevedel-session-persistence--release-and-kill
-             restored
-             (and restored
-                  (buffer-local-value 'mevedel--session restored)))))
+                (should-error
+                 (mevedel-session-persistence-restore session-dir)
+                 :type 'error))
+            (ignore-errors
+              (test-mevedel-session-persistence--release-and-kill
+               buf session)))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
-  :doc "corrupt sidecar also causes restore to synthesize a fresh session"
+      (mevedel-workspace-clear-registry))))
+  :doc "corrupt sidecar fails closed instead of synthesizing authority"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*"))
-               session-dir restored)
+               (buf (generate-new-buffer "*test-data-buf*"))
+               session-dir)
           (unwind-protect
               (progn
                 (with-current-buffer buf
@@ -11910,18 +12870,14 @@ The result is a plist whose :tempdir owns every created file."
                               (mevedel-session-persistence--sidecar-path
                                session-dir)
                               nil 'silent)
-                (cl-letf (((symbol-function 'display-warning) #'ignore))
-                  (setq restored
-                        (mevedel-session-persistence-restore session-dir)))
-                (should (buffer-live-p restored)))
-            (test-mevedel-session-persistence--release-and-kill
-             buf session)
-            (test-mevedel-session-persistence--release-and-kill
-             restored
-             (and restored
-                  (buffer-local-value 'mevedel--session restored)))))
+                (should-error
+                 (mevedel-session-persistence-restore session-dir)
+                 :type 'error))
+            (ignore-errors
+              (test-mevedel-session-persistence--release-and-kill
+               buf session)))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))))
 
 
 ;;
@@ -12108,7 +13064,7 @@ The result is a plist whose :tempdir owns every created file."
                    (mevedel-session-durability-lease-acquire
                     session-dir "*write-sidecar*" session))
                   (setf (mevedel-session-publication session)
-                        (mevedel-session-durability-read-publication
+                        (mevedel-session-publication-read
                          session-dir)
                         (mevedel-session-name session) "updated")
                   (setq buffer
@@ -12177,6 +13133,8 @@ The result is a plist whose :tempdir owns every created file."
             (setq-local mevedel--session session)
             (setq-local mevedel--agent-invocation
                         (mevedel-agent-invocation--create)))
+          (mevedel-session-control-transfer-register-root-buffer
+           session root)
           (cl-letf (((symbol-function
                       'mevedel-session-persistence--write-sidecar-now)
                      (lambda (seen-session seen-buffer)
@@ -12224,7 +13182,7 @@ The result is a plist whose :tempdir owns every created file."
   (:doc "reports untracked effects belonging to discarded directive attempts")
   (let* ((workspace
           (mevedel-workspace--create
-           :type 'test :id "capture-gaps" :root "/tmp" :name "capture-gaps"))
+           :type 'file :id "capture-gaps" :root "/tmp" :name "capture-gaps"))
          (session (mevedel-session-create "main" workspace))
          (attempt
           (mevedel-directive-attempt--create

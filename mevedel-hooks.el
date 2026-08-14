@@ -52,9 +52,9 @@
 (declare-function mevedel-reminders-queue-turn-event
                   "mevedel-reminders" (buffer key body &optional commit))
 
-;; `mevedel-session-durability'
-(declare-function mevedel-session-durability-append-diagnostic
-                  "mevedel-session-durability" (session path content))
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-append-diagnostic
+                  "mevedel-session-publication" (session path content))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
@@ -533,6 +533,7 @@ treated as `SubagentStop'."
 (defun mevedel-hooks--file-hash (file)
   "Return SHA256 hash for FILE contents."
   (with-temp-buffer
+    (set-buffer-multibyte nil)
     (insert-file-contents-literally file)
     (secure-hash 'sha256 (current-buffer))))
 
@@ -1211,7 +1212,8 @@ EVENT labels each generated hook event block."
                      (mevedel-execution-target-remote-p target)))
               (progn
                 (require 'mevedel-session-durability)
-                (mevedel-session-durability-append-diagnostic
+                (require 'mevedel-session-publication)
+                (mevedel-session-publication-append-diagnostic
                  session file content))
             (make-directory (file-name-directory file) t)
             (write-region content nil file t 'silent)
@@ -1655,7 +1657,7 @@ record only that context was added, without duplicating the body."
          (settled nil)
          (stdout-truncated nil)
          (stderr-truncated nil)
-         process stderr-process timer)
+         process stderr-cap-timer stderr-process timer)
     (cl-labels
         ((truncation-marker ()
            (format "\n... Hook output truncated at %d character limit."
@@ -1686,6 +1688,26 @@ record only that context was added, without duplicating the body."
                        (if (eq stream 'stdout)
                            (setq stdout-truncated t)
                          (setq stderr-truncated t))))))))))
+         (truncate-remote-stderr ()
+           (setq stderr-cap-timer nil)
+           (when (and (buffer-live-p stderr-buffer)
+                      mevedel-hooks-command-output-max-chars)
+             (with-current-buffer stderr-buffer
+               (when (> (buffer-size)
+                        mevedel-hooks-command-output-max-chars)
+                 (let ((prefix
+                        (buffer-substring-no-properties
+                         (point-min)
+                         (+ (point-min)
+                            mevedel-hooks-command-output-max-chars)))
+                       (inhibit-modification-hooks t))
+                   (erase-buffer)
+                   (insert prefix (truncation-marker))
+                   (setq stderr-truncated t))))))
+         (cap-remote-stderr (&rest _)
+           (unless (timerp stderr-cap-timer)
+             (setq stderr-cap-timer
+                   (run-at-time 0 nil #'truncate-remote-stderr))))
          (buffer-string-safe (buffer)
            (if (buffer-live-p buffer)
                (with-current-buffer buffer
@@ -1695,6 +1717,8 @@ record only that context was added, without duplicating the body."
            (unless settled
              (setq settled t)
              (when (timerp timer) (cancel-timer timer))
+             (when (timerp stderr-cap-timer)
+               (cancel-timer stderr-cap-timer))
              (when (and process (process-live-p process))
                (delete-process process))
              (when (and stderr-process (process-live-p stderr-process))
@@ -1705,6 +1729,9 @@ record only that context was added, without duplicating the body."
            (unless settled
              (setq settled t)
              (when timer (cancel-timer timer))
+             (when (timerp stderr-cap-timer)
+               (cancel-timer stderr-cap-timer))
+             (truncate-remote-stderr)
              (let* ((stdout (buffer-string-safe stdout-buffer))
                     (stderr (buffer-string-safe stderr-buffer))
                     (elapsed (- (float-time) start-time))
@@ -1765,13 +1792,25 @@ record only that context was added, without duplicating the body."
           (let ((process-environment
                  (mevedel-hooks--command-process-environment
                   handler session)))
+            (if remote
+                (with-current-buffer stderr-buffer
+                  (add-hook 'after-change-functions
+                            #'cap-remote-stderr nil t))
+              (setq stderr-process
+                    (make-pipe-process
+                     :name "mevedel-hook-stderr"
+                     :buffer nil
+                     :filter (lambda (_proc chunk)
+                               (append-buffer-output
+                                stderr-buffer chunk 'stderr))
+                     :noquery t)))
             (setq process
                   (make-process
                    :name "mevedel-hook"
                    :buffer stdout-buffer
                    :filter (lambda (_proc chunk)
                              (append-buffer-output stdout-buffer chunk 'stdout))
-                   :stderr stderr-buffer
+                   :stderr (or stderr-process stderr-buffer)
                    :command
                    (mevedel-hooks--command-process-command command remote)
                    :connection-type 'pipe
@@ -1787,17 +1826,6 @@ record only that context was added, without duplicating the body."
                           (t (finish 'error
                                      (format "Hook exited with status %s"
                                              code)))))))))
-            (setq stderr-process (get-buffer-process stderr-buffer))
-            (when stderr-process
-              (set-process-filter
-               stderr-process
-               (lambda (_proc chunk)
-                 (append-buffer-output stderr-buffer chunk 'stderr))))
-            (when (buffer-live-p stderr-buffer)
-              (let ((initial-stderr
-                     (with-current-buffer stderr-buffer (buffer-string))))
-                (with-current-buffer stderr-buffer (erase-buffer))
-                (append-buffer-output stderr-buffer initial-stderr 'stderr)))
             (process-send-string process
                                  (concat (mevedel-hooks--event-json
                                           (mevedel-hooks--command-event-plist

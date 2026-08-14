@@ -25,7 +25,7 @@
   (let* ((directory (make-temp-file "mevedel-source-" t))
          (file (file-name-concat directory "source.el"))
          (workspace (mevedel-workspace--create
-                     :type 'test :id directory :root directory
+                     :type 'file :id directory :root directory
                      :name "source")))
     (with-temp-file file
       (insert "before target after\n"))
@@ -178,7 +178,7 @@
   (let* ((directory (make-temp-file "mevedel-nested-source-" t))
          (file (file-name-concat directory "source.el"))
          (workspace (mevedel-workspace--create
-                     :type 'test :id directory :root directory
+                     :type 'file :id directory :root directory
                      :name "nested-source"))
          buffer parent child parent-id child-id)
     (unwind-protect
@@ -346,7 +346,7 @@
   (test)
   :doc "keeps source-missing directives active while hiding archived records"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "list" :root "/tmp" :name "list"))
+                     :type 'file :id "list" :root "/tmp" :name "list"))
          (missing (mevedel-directive--create
                    :id "missing" :request "missing"
                    :anchor '(:state source-missing) :state nil))
@@ -373,7 +373,7 @@
   (test)
   :doc "keeps archived activity inspectable outside the active list"
   (let* ((workspace (mevedel-workspace--create
-                     :type 'test :id "archive-list" :root "/tmp"
+                     :type 'file :id "archive-list" :root "/tmp"
                      :name "archive-list"))
          (active (mevedel-directive--create
                   :id "active" :request "active"
