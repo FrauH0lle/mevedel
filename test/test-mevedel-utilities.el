@@ -600,5 +600,28 @@ rejects trailing binary operators"
   (should-error (mevedel--tag-query-prefix-from-infix '(foo and)))
   (should-error (mevedel--tag-query-prefix-from-infix '(foo or))))
 
+(mevedel-deftest mevedel--forget-place ()
+  ,test
+  (test)
+  :doc "keeps a persisted mevedel buffer out of `save-place-alist'"
+  (require 'saveplace)
+  (let ((save-place-loaded t)
+        (save-place-alist nil)
+        (default-directory temporary-file-directory))
+    (save-place-mode +1)
+    (unwind-protect
+        (with-temp-buffer
+          (setq buffer-file-name
+                (file-name-concat temporary-file-directory
+                                  "segment-0001.chat.org"))
+          (should save-place-mode)
+          (mevedel--forget-place)
+          (should-not save-place-mode)
+          (insert "transcript\n")
+          (save-place-to-alist)
+          (should-not save-place-alist)
+          (setq buffer-file-name nil))
+      (save-place-mode -1))))
+
 (provide 'test-mevedel-utilities)
 ;;; test-mevedel-utilities.el ends here

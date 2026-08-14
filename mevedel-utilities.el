@@ -60,6 +60,9 @@
 ;; `org-indent'
 (declare-function org-indent-mode "org-indent" (&optional arg))
 
+;; `saveplace'
+(defvar save-place-mode)
+
 ;; `subr'
 (defvar read-eval)
 
@@ -118,7 +121,19 @@ insertion from running expensive editor hooks."
       (ignore-errors
         (funcall mode -1))))
   (when (boundp 'undo-tree-auto-save-history)
-    (setq-local undo-tree-auto-save-history nil)))
+    (setq-local undo-tree-auto-save-history nil))
+  (mevedel--forget-place))
+
+(defun mevedel--forget-place ()
+  "Keep the current buffer out of `save-place-alist'.
+
+Persisted mevedel buffers visit internal state files, not documents the
+user opened, so recording point in them is noise.  On a remote execution
+target it is worse than noise: the resulting `/ssh:' entry makes a later
+Emacs touch the target host while merely initializing `saveplace'.
+Clearing the buffer-local mode also drops any entry a previous session
+already recorded, because `save-place-to-alist' deletes on kill."
+  (setq-local save-place-mode nil))
 
 
 ;;

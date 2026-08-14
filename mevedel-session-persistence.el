@@ -452,6 +452,7 @@
 		  "mevedel-transcript-restore" nil)
 
 ;; `mevedel-utilities'
+(declare-function mevedel--forget-place "mevedel-utilities" nil)
 (declare-function mevedel--normalize-message-text
                   "mevedel-utilities" (text))
 
@@ -509,6 +510,9 @@
 		  (pom property &optional inherit literal-nil))
 (declare-function org-entry-put "ext:org" (epom property value))
 (defvar org-agenda-file-menu-enabled)
+
+;; `saveplace'
+(defvar save-place-mode)
 
 ;; `so-long'
 (defvar so-long-predicate)
@@ -1720,6 +1724,8 @@ for saving."
         (setq buffer-file-name path
               buffer-file-truename path)
         (delay-mode-hooks (set-auto-mode)))
+      (require 'mevedel-utilities)
+      (mevedel--forget-place)
       (setq-local mevedel-session--inspection-buffer-p inspection)
       (setq-local buffer-offer-save (not inspection))
       (setq buffer-read-only inspection)
@@ -4196,8 +4202,14 @@ Persisted chat and agent transcript files may contain very long org
 property lines, especially GPTEL_SYSTEM.  Those lines are expected
 data, and letting `so-long' replace `org-mode' breaks gptel/org state
 restoration and reveal timers."
-  (let ((so-long-predicate (lambda () nil)))
-    (find-file-noselect file)))
+  (let* ((so-long-predicate (lambda () nil))
+         ;; Bound around the visit so a stale entry cannot move point either.
+         (save-place-mode nil)
+         (buffer (find-file-noselect file)))
+    (with-current-buffer buffer
+      (require 'mevedel-utilities)
+      (mevedel--forget-place))
+    buffer))
 
 (defun mevedel-session-persistence-load-sidecar (path)
   "Read a current-version sidecar plist from PATH.
