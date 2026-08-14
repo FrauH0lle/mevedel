@@ -1489,7 +1489,8 @@ Returns SESSION's `save-path' on success, or nil on failure.  Idempotent."
              (mevedel-session-workspace session))
             (with-current-buffer buffer
               (unless buffer-file-name
-                (setq buffer-file-name segment-path)))
+                (setq buffer-file-name segment-path))
+              (mevedel-session-persistence--disown-save-machinery))
             save-path)
         (error
          (message "mevedel: shallow session materialization failed: %S" err)
@@ -2311,6 +2312,7 @@ Returns SESSION's `save-path' (allocated or existing)."
                      (equal (expand-file-name buffer-file-name)
                             (expand-file-name segment-path)))
           (setq buffer-file-name segment-path))
+        (mevedel-session-persistence--disown-save-machinery)
         (unless (file-exists-p segment-path)
           (set-buffer-modified-p t)
           (unless (mevedel-session-persistence--portable-authority-p session)
@@ -3452,12 +3454,29 @@ automatic segment rotation."
             (set-visited-file-modtime)
           (error "Session segment changed on disk: %s" buffer-file-name)))))))
 
+(defun mevedel-session-persistence--disown-save-machinery ()
+  "Keep Emacs backups and file locks off the current buffer's segment.
+
+Both are answers to problems this session already answers better.  A backup is
+the immutable publication and the file-history checkpoint; a lock is the
+durable lease, which a second client observes before its buffer becomes
+writable, where Emacs's lock is only advisory between Emacsen.
+
+On a target they are not free.  The backup is one whole-segment copy over the
+connection, and the lock is a symlink created and removed around every
+modify-and-save cycle.  They also leave `segment-NNNN.chat.org~' and
+`.#segment-NNNN.chat.org' inside a portable session directory that another
+client resumes from, where neither means anything."
+  (setq-local make-backup-files nil)
+  (setq-local create-lockfiles nil))
+
 (defun mevedel-session-persistence--set-visited-segment-file (file)
   "Make the current buffer visit segment FILE without changing its name."
   (let ((name (buffer-name)))
     (set-visited-file-name file t)
     (rename-buffer name t))
   (setq buffer-file-truename (file-truename file))
+  (mevedel-session-persistence--disown-save-machinery)
   (set-visited-file-modtime)
   (set-buffer-modified-p nil))
 

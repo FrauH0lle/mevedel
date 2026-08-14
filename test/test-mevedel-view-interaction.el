@@ -13,6 +13,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
 (require 'mevedel-view-stream)
 (require 'mevedel-transcript)
@@ -1352,6 +1353,38 @@
             (funcall (overlay-get current 'mevedel-view-interaction-activate)
                      'kept)))
         (should (equal kinds (mapcar #'car callbacks))))))))
+
+(mevedel-deftest mevedel-view--control-transfer-poll-seconds ()
+  ,test
+  (test)
+  :doc "polls a local session at the local cadence"
+  (let ((mevedel-view-control-transfer-poll-seconds 5)
+        (mevedel-view-control-transfer-remote-poll-seconds 30)
+        (session (mevedel-session--create
+                  :name "local"
+                  :working-directory "/srv/project/")))
+    (should (= 5 (mevedel-view--control-transfer-poll-seconds session)))
+    (setf (mevedel-session-save-path session) "/srv/project/.mevedel/main/")
+    (should (= 5 (mevedel-view--control-transfer-poll-seconds session))))
+
+  :doc "polls a target session at the remote cadence"
+  ;; Each poll is several synchronous round trips, and each one is a window
+  ;; for a foreign process sentinel to nest its own remote call in.
+  (let ((mevedel-view-control-transfer-poll-seconds 5)
+        (mevedel-view-control-transfer-remote-poll-seconds 30)
+        (session (mevedel-session--create
+                  :name "remote"
+                  :working-directory "/ssh:user@host:/srv/project/")))
+    ;; The working directory answers before the session is materialized.
+    (should (= 30 (mevedel-view--control-transfer-poll-seconds session)))
+    (setf (mevedel-session-save-path session)
+          "/ssh:user@host:/srv/project/.mevedel/main/")
+    (should (= 30 (mevedel-view--control-transfer-poll-seconds session))))
+
+  :doc "falls back to the local cadence without a session"
+  (let ((mevedel-view-control-transfer-poll-seconds 5)
+        (mevedel-view-control-transfer-remote-poll-seconds 30))
+    (should (= 5 (mevedel-view--control-transfer-poll-seconds nil)))))
 
 (provide 'test-mevedel-view-interaction)
 ;;; test-mevedel-view-interaction.el ends here

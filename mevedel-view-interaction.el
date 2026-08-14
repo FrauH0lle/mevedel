@@ -52,6 +52,9 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x))
+(declare-function mevedel-session-working-directory
+                  "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -147,9 +150,35 @@
 Each poll reads the durable lease head, the target clock, and the transfer
 mailbox.  On a remote target that is several synchronous round trips through
 the one connection every interval, competing with the work the user asked
-for, so the interval trades handoff latency against connection time."
+for, so the interval trades handoff latency against connection time.
+`mevedel-view-control-transfer-remote-poll-seconds' governs that case."
   :type 'number
   :group 'mevedel)
+
+(defcustom mevedel-view-control-transfer-remote-poll-seconds 30
+  "Seconds between control-transfer polls when the session lives on a target.
+
+The poll costs nothing worth counting locally and several synchronous round
+trips remotely, so the two cases do not want the same cadence.  Connection
+time is not the only cost: every command in flight is a window in which a
+process sentinel belonging to some other package can issue its own remote
+operation on the same connection, which TRAMP then refuses as a reentrant
+call.  Polling twelve times a minute holds that window open for no reason.
+
+Only handoff latency is traded away.  A control transfer requested from
+another client is noticed within this interval instead of within five
+seconds; nothing else observes the cadence."
+  :type 'number
+  :group 'mevedel)
+
+(defun mevedel-view--control-transfer-poll-seconds (session)
+  "Return the control-transfer poll interval to use for SESSION."
+  (if (and session
+           (file-remote-p (or (mevedel-session-save-path session)
+                              (mevedel-session-working-directory session)
+                              "")))
+      mevedel-view-control-transfer-remote-poll-seconds
+    mevedel-view-control-transfer-poll-seconds))
 
 
 ;;
@@ -369,10 +398,13 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
                      (lambda ()
                        (mevedel-view-interaction-transfer-drain-p view))))))
     (setq-local mevedel-view--control-transfer-timer
-                (run-at-time mevedel-view-control-transfer-poll-seconds
-                             mevedel-view-control-transfer-poll-seconds
-                             #'mevedel-view--control-transfer-refresh
-                             (current-buffer)))))
+                (let ((interval
+                       (mevedel-view--control-transfer-poll-seconds
+                        (buffer-local-value 'mevedel--session
+                                            mevedel--data-buffer))))
+                  (run-at-time interval interval
+                               #'mevedel-view--control-transfer-refresh
+                               (current-buffer))))))
 
 (defun mevedel-view--interaction-telemetry-close (id)
   "Record and forget telemetry lifetime ID."
