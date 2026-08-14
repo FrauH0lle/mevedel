@@ -340,9 +340,14 @@ successor, then reloads the committed sidecar and transcript before its buffer
 becomes writable. A failed refresh releases the new lease and leaves the
 requester read-only. Transfer state is transient session state and is not
 serialized in the sidecar. A view polls that state every
-`mevedel-view-control-transfer-poll-seconds`; each poll reads the lease head,
-the target clock, and the mailbox, so the interval trades handoff latency
-against time on the one target connection the user's own work also needs.
+`mevedel-view-control-transfer-poll-seconds`, or every
+`mevedel-view-control-transfer-remote-poll-seconds` when the session lives on a
+target; each poll reads the lease head, the target clock, and the mailbox, so
+the interval trades handoff latency against time on the one target connection
+the user's own work also needs. The remote default is much longer because that
+cost is real only there, and because a command in flight is also a window in
+which a foreign process sentinel can issue its own remote operation on the same
+connection — see [Transport reentrancy](#transport-reentrancy).
 Like lease renewal, that poll performs no target I/O while another TRAMP
 operation is in progress or while a publication owns the bounded window: Emacs
 runs timers and process filters wherever the main loop waits, including inside
@@ -381,12 +386,26 @@ is just as destructive: an idle timer belonging to a syntax checker or a mode
 line does not consult it, and TRAMP's wait loop yields to timers with a command
 in flight, so that timer sends its own command on the same connection and
 consumes the reply this session was waiting for — our lease records arrive at
-its parser, and the record we read belongs to it. Control operations therefore
-run inside `mevedel-transport-with-exclusive-connection`, which suspends timers
-for the duration, exactly as TRAMP does around its own critical sections. One
-control operation is a single short target process, so the suspension is brief;
-its body must not schedule a timer, because restoring the binding would discard
-it.
+its parser, and the record we read belongs to it. Control operations, and the
+whole save transaction around them, therefore run inside
+`mevedel-transport-with-exclusive-connection`, which suspends timers for the
+duration, exactly as TRAMP does around its own critical sections. A timer the
+body arms is re-armed on exit rather than lost, and a `with-timeout` opened
+inside it still fires, because the bound lists are the ones Emacs consults
+while the body runs; only timers that existed beforehand are held.
+
+Suspension stops timers, not process sentinels, and that residual is real
+rather than theoretical. `accept-process-output` with JUST-THIS-ONE suppresses
+other processes' *output* but still dispatches their status changes, so any
+package that performs remote I/O from a sentinel can still nest inside a
+mevedel command. Observed in practice: projectile advises `delete-file` to
+invalidate its cache, which resolves a project root — `file-truename` over the
+connection — whenever a native-compilation job or a syntax checker deletes its
+own local temporary file. TRAMP refuses that nested call, which is the
+outcome the guard exists to produce: the refusal belongs to the intruding
+sentinel and the running command's reply is untouched. Nothing on this side can
+prevent it, so the mitigation is to hold fewer commands in flight, which is why
+the remote control-transfer poll is deliberately slow.
 
 Turn settlement is deferred as one unit for the same reason. gptel drives it
 from a process sentinel, which Emacs may dispatch from inside an unrelated

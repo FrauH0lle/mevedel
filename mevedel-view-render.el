@@ -81,6 +81,8 @@
 		  "mevedel-review" (text))
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--fork-point-spans
+                  "mevedel-session-persistence" (buffer))
 (declare-function mevedel-session-persistence-choose-conversation-variant
                   "mevedel-session-persistence"
                   (variants current-session-id))
@@ -6375,8 +6377,17 @@ turn.  SAVED-STATES restores matching disclosure state."
                            (mevedel-session-save-path session)
                            (mevedel-session-workspace session))
                   (require 'mevedel-session-persistence)
-                  (mevedel-session-persistence-list-sessions
-                   (mevedel-session-workspace session))))
+                  ;; Enumerating a workspace's sessions costs several target
+                  ;; round trips per session, and all of them are wasted
+                  ;; unless a fork point exists for a variant button to hang
+                  ;; on.  The spans are cached against this buffer's
+                  ;; modification tick, so asking first is free -- and asking
+                  ;; here populates that cache under the same narrowing the
+                  ;; buttons will read it through.
+                  (when (mevedel-session-persistence--fork-point-spans
+                         data-buf)
+                    (mevedel-session-persistence-list-sessions
+                     (mevedel-session-workspace session)))))
                last-assistant-turn-start
                last-current-assistant-turn-start
                last-turn-role)

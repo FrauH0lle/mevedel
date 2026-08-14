@@ -2445,6 +2445,39 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
             (kill-buffer buf)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
+  :doc "leaves no Emacs backup or lock beside the segment"
+  ;; A backup is one whole-segment copy over the connection and a lock is a
+  ;; symlink per modify-and-save cycle, both answering questions the
+  ;; publication and the lease already answer -- and both would sit in a
+  ;; directory another client resumes from.
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf (generate-new-buffer "*test-save-machinery*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (insert "First prompt\n")
+                (mevedel-session-persistence-save session buf)
+                ;; The backup lands on the second save, once the segment it
+                ;; would copy exists.
+                (insert "Second prompt\n")
+                (mevedel-session-persistence-save session buf)
+                (should-not make-backup-files)
+                (should-not create-lockfiles)
+                (let ((entries (directory-files
+                                (mevedel-session-save-path session))))
+                  (should (member "segment-0001.chat.org" entries))
+                  (should-not
+                   (seq-find (lambda (entry)
+                               (or (string-suffix-p "~" entry)
+                                   (string-prefix-p ".#" entry)))
+                             entries))))
+            (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+
   :doc "advances updated-at across saves"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)

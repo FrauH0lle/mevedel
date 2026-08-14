@@ -2152,6 +2152,40 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
                 entries)))
           (mevedel-view--full-rerender))
         (should (= 1 calls)))
+      (delete-directory root t)))
+
+  :doc "loads no session summaries for a transcript with no fork point"
+  ;; The enumeration costs several target round trips per session in the
+  ;; workspace, and nothing reads it unless a fork point exists to carry a
+  ;; variant button.
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-view-summaries-" t)))
+           (workspace
+            (mevedel-workspace--create
+             :type 'project :id "test" :root root :name "test"))
+           (session
+            (mevedel-session--create
+             :name "source"
+             :session-id "source-id"
+             :save-path (file-name-concat root "sessions/source/")
+             :workspace workspace
+             :current-segment 1))
+           (calls 0))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert "Prompt\n")
+        (insert (propertize "First response.\n" 'gptel 'response)))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (cl-letf
+            (((symbol-function
+               'mevedel-session-persistence-list-sessions)
+              (lambda (_workspace)
+                (cl-incf calls)
+                nil)))
+          (mevedel-view--full-rerender))
+        (should (= 0 calls)))
       (delete-directory root t))))
 
 
