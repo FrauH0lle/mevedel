@@ -239,32 +239,54 @@ registry, creating one lazily if needed."
                                      (file-truename git-root))))
     (file-name-concat dot-git "info" "exclude")))
 
+(defvar mevedel-workspace--generated-state-ignored
+  (make-hash-table :test #'equal)
+  "Workspace roots whose generated-state exclusion has been settled.
+
+Holds roots outside Git as well, because deciding that costs the same walk as
+acting on it.")
+
 (defun mevedel-workspace-ensure-generated-state-ignored (workspace)
   "Add mevedel generated-state paths to WORKSPACE's Git exclude file.
 
 Only generated runtime artifacts are ignored.  The top-level
 `.mevedel/' directory is deliberately not ignored so durable project
-state can still be tracked."
-  (condition-case nil
-      (when-let* ((root (and workspace (mevedel-workspace-root workspace)))
-                  (exclude-file (mevedel-workspace--git-exclude-file root)))
-        (make-directory (file-name-directory exclude-file) t)
-        (let ((changed nil))
-          (with-temp-buffer
-            (when (file-exists-p exclude-file)
-              (insert-file-contents exclude-file))
-            (dolist (entry mevedel-workspace--generated-state-excludes)
-              (goto-char (point-min))
-              (unless (re-search-forward
-                       (concat "^" (regexp-quote entry) "$") nil t)
-                (goto-char (point-max))
-                (unless (or (bobp) (bolp))
-                  (insert "\n"))
-                (insert entry "\n")
-                (setq changed t)))
-            (when changed
-              (write-region nil nil exclude-file nil 'silent)))))
-    (error nil)))
+state can still be tracked.
+
+The answer is remembered per root for this Emacs process.  The exclude file
+only ever gains entries, and it gains them once, but re-deriving that runs a
+`locate-dominating-file' walk plus two `file-truename' resolutions -- on a
+remote workspace that is a target round trip per path component, on every
+save, to discover there is nothing to do.  A root whose exclude file is edited
+by hand afterwards keeps the remembered answer until Emacs restarts, which is
+the same bargain the session's `durable-tree-ensured' already makes for the
+directory tree beside it."
+  (let ((root (and workspace (mevedel-workspace-root workspace))))
+    (when (and root
+               (not (gethash root mevedel-workspace--generated-state-ignored)))
+      (condition-case nil
+          (progn
+            (when-let* ((exclude-file
+                         (mevedel-workspace--git-exclude-file root)))
+              (make-directory (file-name-directory exclude-file) t)
+              (let ((changed nil))
+                (with-temp-buffer
+                  (when (file-exists-p exclude-file)
+                    (insert-file-contents exclude-file))
+                  (dolist (entry mevedel-workspace--generated-state-excludes)
+                    (goto-char (point-min))
+                    (unless (re-search-forward
+                             (concat "^" (regexp-quote entry) "$") nil t)
+                      (goto-char (point-max))
+                      (unless (or (bobp) (bolp))
+                        (insert "\n"))
+                      (insert entry "\n")
+                      (setq changed t)))
+                  (when changed
+                    (write-region nil nil exclude-file nil 'silent)))))
+            ;; Only a completed pass is remembered; a failure retries next save.
+            (puthash root t mevedel-workspace--generated-state-ignored))
+        (error nil)))))
 
 
 ;;

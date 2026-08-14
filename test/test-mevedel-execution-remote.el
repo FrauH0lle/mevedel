@@ -309,9 +309,11 @@ before returning."
 (defun test-mevedel-execution-remote--exercise-control-filesystem (root)
   "Round trip pinned control operations against the real target at ROOT.
 
-Session control runs one target process per operation and stages content
-larger than a command line can carry, so both the small and the staged path
-need proof on a real connection rather than on a local temporary directory."
+Session control stages content larger than a command line can carry, so both
+the small and the staged path need proof on a real connection rather than on a
+local temporary directory.  Durable session work is carried as programs of
+pinned operations, and the round trips they save are exactly what a real
+connection charges for, so the program path is proved here too."
   (require 'mevedel-session-control-fs)
   (let* ((directory (file-name-concat root "control-fs"))
          (small (file-name-concat directory "small.el"))
@@ -332,6 +334,35 @@ need proof on a real connection rather than on a local temporary directory."
     (should (member small (mevedel-session-control-fs-list-directory
                            directory "\\`small\\.el\\'")))
     (should (integerp (mevedel-session-control-fs-target-time directory)))
+    ;; One program carries a whole compare-and-set plus its staged payload
+    ;; across the real connection, and its proof still guards its writes.
+    ;; This one is oversized for a command line, so it proves the request
+    ;; file; the small program below proves argument delivery.
+    (let ((results
+           (mevedel-session-control-fs-run-program
+            (list (list :op 'verify :path small :content "(:probe 1)")
+                  (list :op 'write :path small :content "(:probe 3)")
+                  (list :op 'write :path large
+                        :content bytes :coding 'no-conversion)
+                  (list :op 'read :path large :coding 'no-conversion)
+                  (list :op 'list-directory :path directory)
+                  (list :op 'target-time :path directory)))))
+      (should (equal '(ok ok ok ok ok ok)
+                     (mapcar (lambda (result) (plist-get result :status))
+                             results)))
+      (should (equal bytes (plist-get (nth 3 results) :value)))
+      (should (member "small.el" (plist-get (nth 4 results) :value)))
+      (should (integerp (plist-get (nth 5 results) :value))))
+    (should (equal "(:probe 3)"
+                   (mevedel-session-control-fs-read-file small)))
+    (let ((results
+           (mevedel-session-control-fs-run-program
+            (list (list :op 'verify :path small :content "(:probe 1)")
+                  (list :op 'write :path small :content "(:probe 4)")))))
+      (should (equal 'mismatch (plist-get (nth 0 results) :status)))
+      (should (equal 'skipped (plist-get (nth 1 results) :status))))
+    (should (equal "(:probe 3)"
+                   (mevedel-session-control-fs-read-file small)))
     (mevedel-session-control-fs-delete-directory directory)
     (should-not (mevedel-session-control-fs-directory-p directory))))
 

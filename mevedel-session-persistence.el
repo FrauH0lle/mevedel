@@ -58,6 +58,7 @@
 
 (require 'mevedel-session-control-fs)
 (require 'mevedel-transcript)
+(require 'mevedel-transport)
 
 ;; `diff'
 (declare-function diff "diff" (old new &optional switches no-async))
@@ -231,6 +232,8 @@
                   "mevedel-session-control-fs" (path content))
 (declare-function mevedel-session-durability-call-with-reserved-lease
                   "mevedel-session-durability" (session function))
+(defvar mevedel-session-durability--asserted-directories)
+(defvar mevedel-session-durability--transaction-clock)
 (declare-function mevedel-session-publication-discard-rolled-back
                   "mevedel-session-publication" (session))
 (declare-function mevedel-session-durability-disclose
@@ -254,12 +257,17 @@
                   "mevedel-session-transfer" (session))
 (declare-function mevedel-session-transfer-request
                   "mevedel-session-transfer" (session &optional label))
+(declare-function mevedel-session-publication-committed-p
+                  "mevedel-session-publication" (session artifacts))
 (declare-function mevedel-session-publication-logical-path-p
                   "mevedel-session-publication" (path))
+(declare-function mevedel-session-publication-prune-committed
+                  "mevedel-session-publication" (session artifacts))
 (declare-function mevedel-session-publication-publish
                   "mevedel-session-publication" (session artifacts))
 (declare-function mevedel-session-recovery-refresh
                   "mevedel-session-recovery" (session))
+(defvar mevedel-session-recovery--mutation-cache)
 (declare-function mevedel-session-publication-read
                   "mevedel-session-publication" (session-dir))
 (declare-function mevedel-session-recovery-record-failure
@@ -624,31 +632,45 @@ an error rather than an implicit PID-lock fallback."
     (error "Session path is unavailable: %S" session-dir))
   (let* ((lock (file-name-concat session-dir ".lock"))
          (lease (file-name-concat session-dir ".lease"))
-         (sidecar (file-name-concat session-dir "session.meta.el"))
-         (lock-exists (mevedel-session-control-fs-path-exists-p lock))
-         (lease-exists (mevedel-session-control-fs-path-exists-p lease))
-         (sidecar-exists
-          (mevedel-session-control-fs-path-exists-p sidecar))
-         (mode (or explicit-mode
-                   (and session
-                        (mevedel-session-persistence--authority-mode session))
-                   (cond
-                    ((and lock-exists lease-exists)
-                     (error "Session has both PID lock and portable lease: %s"
-                            session-dir))
-                    (lease-exists 'portable)
-                    (lock-exists 'pid-lock)
-                    (sidecar-exists
-                     (let* ((plist (mevedel-session-persistence-read sidecar))
-                            (mode (plist-get plist :authority-mode)))
-                       (mevedel-session-persistence--validate-authority-mode
-                        mode (plist-get plist :workspace))))
-                    (t (error "Session authority profile is unavailable: %s"
-                              session-dir))))))
-    (when (and (eq mode 'portable) lock-exists)
-      (error "Portable session has a PID lock: %s" session-dir))
-    (when (and (eq mode 'pid-lock) lease-exists)
-      (error "PID-lock session has a portable lease: %s" session-dir))
+         ;; A decided profile needs no inference probes, and every control
+         ;; probe is one target process.
+         (decided (or explicit-mode
+                      (and session
+                           (mevedel-session-persistence--authority-mode
+                            session))))
+         (mode
+          (or decided
+              (let ((lock-exists
+                     (mevedel-session-control-fs-path-exists-p lock))
+                    (lease-exists
+                     (mevedel-session-control-fs-path-exists-p lease)))
+                (cond
+                 ((and lock-exists lease-exists)
+                  (error "Session has both PID lock and portable lease: %s"
+                         session-dir))
+                 (lease-exists 'portable)
+                 (lock-exists 'pid-lock)
+                 (t
+                  (let ((sidecar
+                         (file-name-concat session-dir "session.meta.el")))
+                    (unless (mevedel-session-control-fs-path-exists-p sidecar)
+                      (error "Session authority profile is unavailable: %s"
+                             session-dir))
+                    (let* ((plist (mevedel-session-persistence-read sidecar))
+                           (mode (plist-get plist :authority-mode)))
+                      (mevedel-session-persistence--validate-authority-mode
+                       mode (plist-get plist :workspace))))))))))
+    ;; Only a decided profile can disagree with the directory: an inferred
+    ;; one was derived from these very artifacts and already failed closed on
+    ;; a mixed directory.  Probe just the artifact that would contradict it.
+    (when decided
+      (pcase mode
+        ('portable
+         (when (mevedel-session-control-fs-path-exists-p lock)
+           (error "Portable session has a PID lock: %s" session-dir)))
+        ('pid-lock
+         (when (mevedel-session-control-fs-path-exists-p lease)
+           (error "PID-lock session has a portable lease: %s" session-dir)))))
     mode))
 
 
@@ -2264,20 +2286,26 @@ Returns SESSION's `save-path' (allocated or existing)."
                   (require 'mevedel-workspace)
                   (mevedel-workspace-ensure-generated-state-ignored
                    (mevedel-session-workspace session))
+                  (setf (mevedel-session-durable-tree-ensured session) t)
                   new-save-path)))
            (segment-number (or (mevedel-session-current-segment session) 1))
            (segment-path (mevedel-session-persistence--segment-path
                           save-path segment-number)))
-      (make-directory save-path t)
-      (make-directory (file-name-concat save-path "agents") t)
-      (make-directory (file-name-concat save-path "file-history") t)
+      ;; The tree and the workspace ignore entries are established once per
+      ;; process.  Re-establishing them on every save is several target round
+      ;; trips plus a re-parse of the ignore file for a settled answer.
+      (unless (mevedel-session-durable-tree-ensured session)
+        (make-directory save-path t)
+        (make-directory (file-name-concat save-path "agents") t)
+        (make-directory (file-name-concat save-path "file-history") t)
+        (require 'mevedel-workspace)
+        (mevedel-workspace-ensure-generated-state-ignored
+         (mevedel-session-workspace session))
+        (setf (mevedel-session-durable-tree-ensured session) t))
       (require 'mevedel-session-control-transfer)
       (when (and (buffer-live-p buffer)
                  (eq buffer (mevedel-session-root-buffer session)))
         (mevedel-session-control-transfer-register-root-buffer session buffer))
-      (require 'mevedel-workspace)
-      (mevedel-workspace-ensure-generated-state-ignored
-       (mevedel-session-workspace session))
       (with-current-buffer buffer
         (unless (and buffer-file-name
                      (equal (expand-file-name buffer-file-name)
@@ -2463,25 +2491,32 @@ authority gate; callers use this narrower guard at admission boundaries."
 ;;; Sidecar build helper
 
 (defun mevedel-session-persistence--persisted-first-user-message (session)
-  "Return SESSION's already persisted first user preview, or nil."
-  (when-let* ((save-path (mevedel-session-save-path session)))
-    (condition-case nil
-        (let ((sidecar
-               (if (mevedel-session-persistence--portable-authority-p session)
-                   (with-temp-buffer
-                     (insert
-                      (decode-coding-string
-                       (mevedel-session-persistence-read-artifact
-                        session "session.meta.el")
-                       'utf-8-unix))
-                     (read (current-buffer)))
-                 (let ((path
-                        (mevedel-session-persistence--sidecar-path
-                         save-path)))
-                   (and (file-exists-p path)
-                        (mevedel-session-persistence-read path))))))
-          (plist-get sidecar :first-user-message))
-      (error nil))))
+  "Return SESSION's already persisted first user preview, or nil.
+
+The committed field never changes once a session has a first turn, so the
+first successful read is cached on the session rather than re-read and
+re-verified on every save."
+  (or (mevedel-session-persisted-first-user-message session)
+      (when-let* ((save-path (mevedel-session-save-path session)))
+        (condition-case nil
+            (let ((sidecar
+                   (if (mevedel-session-persistence--portable-authority-p
+                        session)
+                       (with-temp-buffer
+                         (insert
+                          (decode-coding-string
+                           (mevedel-session-persistence-read-artifact
+                            session "session.meta.el")
+                           'utf-8-unix))
+                         (read (current-buffer)))
+                     (let ((path
+                            (mevedel-session-persistence--sidecar-path
+                             save-path)))
+                       (and (file-exists-p path)
+                            (mevedel-session-persistence-read path))))))
+              (setf (mevedel-session-persisted-first-user-message session)
+                    (plist-get sidecar :first-user-message)))
+          (error nil)))))
 
 (defun mevedel-session-persistence--build-sidecar (session buffer)
   "Build the sidecar plist for SESSION using BUFFER for ancillary fields."
@@ -3046,14 +3081,26 @@ continues to wait for the root turn's completed-turn publication boundary."
                 (mevedel-session-persistence--printed-value
                  (mevedel--serialize-instructions workspace-root nil)))))))))
 
-(defun mevedel-session-persistence--remote-save (session buffer settled)
+(defun mevedel-session-persistence--sidecar-artifact (session buffer)
+  "Return SESSION's sidecar publication artifact derived from BUFFER.
+
+The sidecar is the commit marker, so callers place it last in a batch."
+  (list :path
+        (mevedel-session-persistence--sidecar-path
+         (mevedel-session-save-path session))
+        :content
+        (mevedel-session-persistence--printed-value
+         (mevedel-session-persistence--build-sidecar session buffer))
+        :commit-marker t))
+
+(defun mevedel-session-persistence--remote-save
+    (session buffer settled &optional force)
   "Publish portable project SESSION's durability-critical state from BUFFER.
 When SETTLED is non-nil, update the prompt index and latest fork point.
+When FORCE is non-nil, publish even when the state is already committed.
 The public save entry point has already completed the mutation gate before
 calling this serializer."
   (mevedel-session-persistence-ensure-files session buffer)
-  (setf (mevedel-session-updated-at session)
-        (format-time-string "%FT%H-%M-%S"))
   (when settled
     (mevedel-session-persistence--update-prompt-index session buffer)
     (mevedel-session-persistence--ensure-latest-fork-point session buffer))
@@ -3076,45 +3123,67 @@ calling this serializer."
        session
        (or (mevedel-session-turn-count session) 0)
        (mevedel-request-file-snapshots mevedel--current-request)))
-    (let ((artifacts
-           (append
-            (and segment-artifact (list segment-artifact))
-            (nreverse mevedel-session-persistence--critical-artifacts)
-            (mevedel-session-persistence--instruction-artifacts
-             session buffer)
-            ;; The sidecar is the commit marker and therefore publishes last.
-            (list
-             (list
-              :path
-              (mevedel-session-persistence--sidecar-path
-               (mevedel-session-save-path session))
-              :content
-              (mevedel-session-persistence--printed-value
-               (mevedel-session-persistence--build-sidecar
-                session buffer))
-              :commit-marker t)))))
-      (require 'mevedel-session-durability)
-      (require 'mevedel-session-publication)
-      (mevedel-session-publication-publish session artifacts))
-    (when segment-artifact
-      (with-current-buffer buffer
-        (set-visited-file-modtime)
-        (set-buffer-modified-p nil)
-        (run-hooks 'after-save-hook)))
+    (require 'mevedel-session-durability)
+    (require 'mevedel-session-publication)
+    ;; `updated-at' is stamped only once this save is known to carry a
+    ;; change, because stamping it first would make the sidecar differ from
+    ;; the committed one on every call and defeat the comparison below.
+    (let* ((leading
+            (append
+             (and segment-artifact (list segment-artifact))
+             (nreverse mevedel-session-persistence--critical-artifacts)
+             (mevedel-session-persistence--instruction-artifacts
+              session buffer)))
+           (artifacts
+            (append leading
+                    (list (mevedel-session-persistence--sidecar-artifact
+                           session buffer))))
+           (unchanged
+            (and (not force)
+                 (mevedel-session-publication-committed-p
+                  session artifacts))))
+      (if unchanged
+          ;; Nothing durable differs from the committed snapshot, so this
+          ;; save owes the target no transaction.  A segment artifact that
+          ;; compared equal proves the fixed cache already holds these
+          ;; bytes, so the buffer is no longer dirty against the target.
+          (when segment-artifact
+            (with-current-buffer buffer
+              (set-visited-file-modtime)
+              (set-buffer-modified-p nil)))
+        (setf (mevedel-session-updated-at session)
+              (format-time-string "%FT%H-%M-%S"))
+        (mevedel-session-publication-publish
+         session
+         (mevedel-session-publication-prune-committed
+          session
+          (append leading
+                  (list (mevedel-session-persistence--sidecar-artifact
+                         session buffer)))))
+        (when segment-artifact
+          (with-current-buffer buffer
+            (set-visited-file-modtime)
+            (set-buffer-modified-p nil)
+            (run-hooks 'after-save-hook)))))
     ;; Input history is diagnostic UI state: warn/retry independently and
     ;; never turn it into critical publication.
     (mevedel-session-persistence--notify-session-event
      session 'save-history)
     (mevedel-session-save-path session)))
 
-(defun mevedel-session-persistence-save (session buffer &optional settled)
+(defun mevedel-session-persistence-save
+    (session buffer &optional settled force)
   "Save SESSION's on-disk state from BUFFER's contents.
 
 Materializes lazily on first call.  Subsequent calls update the
 `updated-at' timestamp, save the data buffer, checkpoint any tool-modified
 files from before this turn, and rewrite the sidecar.  When SETTLED is non-nil,
 mark the latest assistant response
-  as a stable fork point."
+  as a stable fork point.
+
+A portable session whose durable state is byte for byte the committed one
+performs no target transaction.  FORCE publishes anyway, for a caller that
+must materialize a snapshot rather than record a change."
   ;; A direct data-buffer caller establishes the session-owned root before
   ;; the projection boundary is consulted.  View callers must pass their
   ;; registered data buffer, never the view projection itself.
@@ -3133,41 +3202,62 @@ mark the latest assistant response
     (when (or (null (mevedel-session-root-buffer session))
               (eq buffer (mevedel-session-root-buffer session)))
       (mevedel-session-control-transfer-register-root-buffer session buffer))
-    ;; A save is a real durable mutation even for file-workspace sessions.
-    ;; Probe the target before any branch constructs serialized bytes.
-    (mevedel-session-persistence-assert-mutation-authority session buffer)
-    (prog1
-        (if (mevedel-session-persistence--portable-authority-p session)
-            (mevedel-session-persistence--remote-save session buffer settled)
-          (mevedel-session-persistence-ensure-files session buffer)
-          (setf (mevedel-session-updated-at session)
-                (format-time-string "%FT%H-%M-%S"))
-          (when settled
-            (mevedel-session-persistence--update-prompt-index session buffer)
-            (mevedel-session-persistence--ensure-latest-fork-point
-             session buffer))
-          (with-current-buffer buffer
-            (when (buffer-modified-p)
-              (save-buffer)))
-          (mevedel-session-persistence--update-prompt-index session buffer)
-          ;; Snapshot files modified during the just-completed turn.
-          (when (and (boundp 'mevedel--current-request)
-                     mevedel--current-request)
-            (let ((pre-snapshots
-                   (mevedel-request-file-snapshots mevedel--current-request)))
-              (mevedel-file-history-snapshot-modified
-               session
-               (or (mevedel-session-turn-count session) 0)
-               pre-snapshots)))
-          (mevedel-session-persistence-write
-           (mevedel-session-persistence--sidecar-path
-            (mevedel-session-save-path session))
-           (mevedel-session-persistence--build-sidecar session buffer))
-          (mevedel-session-persistence--save-instructions session buffer)
-          (mevedel-session-persistence--notify-session-event
-           session 'save-history)
-          (mevedel-session-save-path session))
-      (mevedel-session-persistence--flush-diagnostic-logs session))))
+    ;; The mutation gate and the publication entry both consult the target
+    ;; recovery marker, and nothing in between can install one.
+    (require 'mevedel-session-recovery)
+    (let ((mevedel-session-recovery--mutation-cache
+           (or mevedel-session-recovery--mutation-cache (list nil)))
+          ;; One save is one durable transaction, so its lease operations
+          ;; share the target clock reading rather than each paying for one.
+          (mevedel-session-durability--transaction-clock
+           (or mevedel-session-durability--transaction-clock (list nil)))
+          (mevedel-session-durability--asserted-directories
+           (or mevedel-session-durability--asserted-directories (list nil))))
+      ;; The whole save is one transaction on one connection, and every
+      ;; segment write, sidecar rewrite, modtime stat, and file-history read
+      ;; below is a command on it.  A foreign idle timer that sends its own
+      ;; command in between consumes the reply we are waiting for, so the
+      ;; transaction holds the connection rather than merely refusing to nest
+      ;; inside somebody else's.
+      (mevedel-transport-with-exclusive-connection
+        ;; A save is a real durable mutation even for file-workspace sessions.
+        ;; Probe the target before any branch constructs serialized bytes.
+        (mevedel-session-persistence-assert-mutation-authority session buffer)
+        (prog1
+            (if (mevedel-session-persistence--portable-authority-p session)
+                (mevedel-session-persistence--remote-save
+                 session buffer settled force)
+              (mevedel-session-persistence-ensure-files session buffer)
+              (setf (mevedel-session-updated-at session)
+                    (format-time-string "%FT%H-%M-%S"))
+              (when settled
+                (mevedel-session-persistence--update-prompt-index
+                 session buffer)
+                (mevedel-session-persistence--ensure-latest-fork-point
+                 session buffer))
+              (with-current-buffer buffer
+                (when (buffer-modified-p)
+                  (save-buffer)))
+              (mevedel-session-persistence--update-prompt-index session buffer)
+              ;; Snapshot files modified during the just-completed turn.
+              (when (and (boundp 'mevedel--current-request)
+                         mevedel--current-request)
+                (let ((pre-snapshots
+                       (mevedel-request-file-snapshots
+                        mevedel--current-request)))
+                  (mevedel-file-history-snapshot-modified
+                   session
+                   (or (mevedel-session-turn-count session) 0)
+                   pre-snapshots)))
+              (mevedel-session-persistence-write
+               (mevedel-session-persistence--sidecar-path
+                (mevedel-session-save-path session))
+               (mevedel-session-persistence--build-sidecar session buffer))
+              (mevedel-session-persistence--save-instructions session buffer)
+              (mevedel-session-persistence--notify-session-event
+               session 'save-history)
+              (mevedel-session-save-path session))
+          (mevedel-session-persistence--flush-diagnostic-logs session))))))
 
 
 ;;
@@ -6368,6 +6458,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     current-segment forked-from-session-id forked-from-turn fork-type
     forked-from-fork-point-id worktree-source-root worktree-directory
     worktree-branch worktree-base-commit prompt-index file-snapshots
+    persisted-first-user-message durable-tree-ensured
     agent-transcripts invoked-skills permission-queue pending-plan-approval
     plan-metadata goal)
   "Every `mevedel-session' slot decided by the logical clone constructor.")
@@ -8008,9 +8099,7 @@ To rename the current session in place, use `mevedel-rename-session'."
      (arg
       (mevedel-session-persistence--save-as session data-buf))
      (t
-      (with-current-buffer data-buf
-        (set-buffer-modified-p t))
-      (mevedel-session-persistence-save session data-buf)
+      (mevedel-session-persistence-save session data-buf nil t)
       (message "Session saved.")))))
 
 (defun mevedel-session-persistence--save-as (session data-buf)
@@ -8020,8 +8109,7 @@ sessions copy only committed logical artifacts; file-workspace sessions copy
 their directory.  Repoint DATA-BUF at the child after it commits."
   ;; Force materialization so either authority mode has a durable parent.
   (unless (mevedel-session-save-path session)
-    (with-current-buffer data-buf (set-buffer-modified-p t))
-    (mevedel-session-persistence-save session data-buf))
+    (mevedel-session-persistence-save session data-buf nil t))
   (let* ((old-save-path (mevedel-session-save-path session))
          (old-id (mevedel-session-session-id session))
          (new-name (read-string

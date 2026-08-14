@@ -1306,7 +1306,13 @@ Skips mentions in non-user regions or adjacent to quoting chars."
     (mevedel--fontify-file-keyword
      0 (let ((filepath (mevedel-mentions--unescape-braced-file-path
                         (match-string 1))))
-         (if (file-exists-p filepath)
+         ;; Fontification runs from redisplay.  Probing a target path there
+         ;; costs a synchronous round trip every time the mention is redrawn,
+         ;; and the wait yields to timers with the connection mid-command,
+         ;; which is how unrelated code ends up re-entering TRAMP.  A remote
+         ;; mention is therefore drawn as a link without proving it resolves;
+         ;; expansion still reports a path that is not there.
+         (if (or (file-remote-p filepath) (file-exists-p filepath))
              '(:box (:line-width -1) :inherit link)
            '(:box (:line-width -1) :inherit shadow)))
      prepend)

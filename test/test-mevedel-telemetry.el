@@ -211,8 +211,11 @@
             (should-not (string-match-p "SECRET" printed))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-telemetry-profiler-directory
-  (:doc "isolates artifacts below the active profiler run directory")
+(mevedel-deftest mevedel-telemetry-profiler-directory ()
+  ,test
+  (test)
+
+  :doc "isolates artifacts below the active profiler run directory"
   (let* ((root (make-temp-file "mevedel-telemetry-directory-" t))
          (session (test-mevedel-telemetry--session root))
          (mevedel-telemetry--profiler-session session)
@@ -223,6 +226,28 @@
           (should
            (equal (file-name-concat root "diagnostics" "run-test")
                   (mevedel-telemetry-profiler-directory session))))
+      (delete-directory root t)))
+
+  :doc "keeps a target session's artifacts on this client"
+  ;; A profile measures this Emacs and no resume consults it, so it never
+  ;; crosses the connection.
+  (let* ((root (make-temp-file "mevedel-telemetry-directory-" t))
+         (session (test-mevedel-telemetry--session root))
+         (mevedel-telemetry--profiler-session session)
+         (mevedel-telemetry--profiler-run-id "run-test")
+         first second)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session)
+                "/ssh:user@host:/srv/project/.mevedel/session")
+          (setq first (mevedel-telemetry-profiler-directory session))
+          (should-not (file-remote-p first))
+          (should (file-in-directory-p first temporary-file-directory))
+          ;; Every caller derives the same answer without state to leak.
+          (should (equal first (mevedel-telemetry-profiler-directory session)))
+          (setq mevedel-telemetry--profiler-run-id "run-other")
+          (setq second (mevedel-telemetry-profiler-directory session))
+          (should-not (equal first second)))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry--install-prompt-guard

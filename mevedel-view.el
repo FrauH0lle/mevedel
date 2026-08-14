@@ -118,6 +118,10 @@
 (declare-function mevedel-tools-active-count "mevedel-tools"
                   (&optional buffer))
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p
+                  "mevedel-transport" (&optional path))
+
 ;; `mevedel-view-agent'
 (declare-function mevedel-view--on-agent-transcript-data-killed
                   "mevedel-view-agent" ())
@@ -205,9 +209,6 @@
 ;; `org'
 (declare-function org-mode "ext:org" ())
 
-;; `tramp'
-(defvar tramp-current-connection)
-
 
 ;;
 ;;; Customization
@@ -225,6 +226,14 @@
 
 (defvar-local mevedel-view--abort-function nil
   "Optional data-buffer function used to abort work without root lifecycle.")
+
+(defvar-local mevedel-view--aborted-p nil
+  "Non-nil once this data buffer's active work has been aborted.
+
+Killing either half of a view pair aborts the data buffer, and the first
+kill then kills its partner, whose own hook aborts the same data buffer
+again.  Aborting settles the session, so a second pass repeats a whole
+durable publication for state that cannot have changed in between.")
 
 
 (defface mevedel-view-separator
@@ -744,6 +753,20 @@ new view buffer is created."
         (format "Could not abort session during buffer cleanup: %S" err)
         :warning)))))
 
+(defun mevedel-view--abort-data-buffer-for-kill (data-buffer)
+  "Abort DATA-BUFFER's active work once for the whole teardown of its pair.
+
+Killing either half of a view pair kills the other, and both kill hooks
+reach this data buffer.  Aborting settles the session, so a second pass
+would repeat a full durable publication for state that cannot have changed
+in between.  The latch is set before the abort runs, so a partner hook
+performs no second abort even when the first one signals."
+  (when (and (buffer-live-p data-buffer)
+             (not (buffer-local-value 'mevedel-view--aborted-p data-buffer)))
+    (with-current-buffer data-buffer
+      (setq mevedel-view--aborted-p t))
+    (mevedel-view--abort-data-buffer data-buffer)))
+
 (defun mevedel-view--on-view-killed ()
   "Hook run when the view buffer is killed.
 Clears `mevedel--view-buffer' on the associated data buffer and kills
@@ -755,7 +778,7 @@ kill hook sees nil and exits without re-entering this function."
       (mevedel-view--interaction-clear)
       (when-let* ((db mevedel--data-buffer)
                   (_ (buffer-live-p db)))
-        (mevedel-view--abort-data-buffer db)
+        (mevedel-view--abort-data-buffer-for-kill db)
         (mevedel-view-agent-cleanup-parent view-buffer)
         (with-current-buffer db
           (when (fboundp 'mevedel-permission-queue-abort-all)
@@ -768,7 +791,7 @@ kill hook sees nil and exits without re-entering this function."
 (defun mevedel-view--on-data-killed ()
   "Hook run when the data buffer is killed.
 Kills the associated view buffer."
-  (mevedel-view--abort-data-buffer (current-buffer))
+  (mevedel-view--abort-data-buffer-for-kill (current-buffer))
   (when (and mevedel--session
              (fboundp 'mevedel-execution-teardown-session))
     (mevedel-execution-teardown-session mevedel--session))
@@ -997,7 +1020,15 @@ refresh; a full request upgrades a pending incremental refresh."
     (with-current-buffer view-buffer
       (let ((kind mevedel-view--pending-render-kind)
             (data-buffer mevedel-view--pending-render-data-buffer))
-        (if (bound-and-true-p tramp-current-connection)
+        ;; Rendering reads target files, so it waits for an idle transport.
+        ;; It must not test `tramp-current-connection': that is the last
+        ;; connection timestamp, which stays set for the life of the process
+        ;; once any remote file has been touched, so testing it postponed
+        ;; every render on a remote workspace forever.
+        (if (progn (require 'mevedel-transport)
+                   (mevedel-transport-busy-p
+                    (and (buffer-live-p data-buffer)
+                         (buffer-local-value 'default-directory data-buffer))))
             (setq mevedel-view--render-timer
                   (run-at-time
                    (max 0.1 mevedel-view-rerender-debounce) nil

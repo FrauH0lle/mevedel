@@ -22,6 +22,7 @@
 (require 'mevedel-menu)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-restore)
+(require 'mevedel-transport)
 (require 'mevedel-structs)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-media)
@@ -140,7 +141,7 @@
         (should (= 1 full-count))
         (should (= 1 incremental-count)))))
 
-  :doc "defers timer flushes while a TRAMP file handler owns a connection"
+  :doc "defers timer flushes while a remote operation is already in flight"
   (mevedel-view-test--with-buffers
     (let ((mevedel-view-rerender-debounce 1)
           callback args
@@ -155,8 +156,13 @@
                 ((symbol-function 'mevedel-view--full-rerender)
                  (lambda () (cl-incf full-count))))
         (mevedel-view-rerender view-buf)
-        (cl-progv '(tramp-current-connection) '((busy))
-          (apply callback args))
+        ;; A real handler frame, because that is what a render timer lands
+        ;; inside.  It must not test `tramp-current-connection': that stays
+        ;; set for the life of the process once any remote file is touched,
+        ;; which postponed every remote render forever.
+        (mevedel-transport--handler-advice
+         (lambda (&rest _) (apply callback args))
+         'file-exists-p "/ssh:user@host:/srv/x")
         (should (= 2 scheduled))
         (should (= 0 full-count))
         (with-current-buffer view-buf

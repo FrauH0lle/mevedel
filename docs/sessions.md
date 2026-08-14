@@ -95,7 +95,7 @@ Layout:
   permission-log.el                  ; permission/request diagnostic plists
   repair-log.el                      ; redacted tool-input validation telemetry
   telemetry-log.el                   ; correlated lifecycle events, one plist/line
-  diagnostics/run-*/                 ; profiler and full-suite resource reports
+  diagnostics/run-*/                 ; resource reports; local sessions only
   file-history/                      ; per-session backup store
     4f1e8c9a3b2d6e57@v1
     4f1e8c9a3b2d6e57@v2
@@ -201,6 +201,15 @@ transaction immediately, so a restored session already carries the
 acknowledged new incarnation; request admission runs it for replacements
 observed later.  Publication failure leaves admission blocked and retryable.
 
+Admission observes the fingerprint with one target command rather than a full
+readiness probe.  Environment, capabilities, and sandbox facts are fixed for
+the life of a connection, so they are probed when the session opens, when the
+connection is replaced, and on `mevedel-retry-target-readiness`; re-deriving
+them at every mutation boundary cost roughly fifteen synchronous round trips
+per admitted mutation, and a session admits several per prompt.  A failed
+observation falls back to the full probe, which settles the blocked readiness
+that admission reports.
+
 The unsettled-mutation latch is
 [`ADR 0098`](adr/0098-store-unsettled-mutation-in-the-session-lease.md); the
 one portable authority profile is
@@ -209,14 +218,50 @@ one portable authority profile is
 Portable control roots are physical target directories, not ordinary
 pathname-checked caches. Lease generations, transfer requests and fences, and
 specialized recovery markers are read and mutated through a pinned target-side
-parent descriptor; symlinked roots or final entries fail closed. One target
-process performs each control operation: it opens the parent directory, proves
-the opened directory is the requested physical path, and then works only
-through that descriptor. Control operations therefore cost one target process
-each, which dominates durable session work over a real remote connection.
+parent descriptor; symlinked roots or final entries fail closed. Each control
+operation opens its parent directory, proves the opened directory is the
+requested physical path, and then works only through that descriptor.
+
+One target process carries a *program* of such operations rather than a single
+one. Every operation in a program opens and re-proves its own parent, so a
+program is exactly as pinned as the same operations run one at a time, while
+costing one round trip instead of one per operation. A program stops at the
+first operation that does not succeed and reports the rest as skipped, which is
+what lets a caller state a compare-and-set as a `verify` operation its writes
+depend on: the proof and the write it guards share one process, so no other
+client's write can land between them. Each operation reports `ok`, `conflict`,
+`absent`, `mismatch`, `failed` or `skipped`, so a caller reproduces the
+per-operation nil-versus-signal contract of the single-operation wrappers.
+Payloads and listings travel base64-encoded inside a NUL-framed request and
+response, because filenames and content both contain bytes a shell cannot pass
+through a command substitution literally. An operation marked optional does not
+end its program, which is how ensuring a directory that may already exist
+shares a round trip with the write that needs it. Target diagnostics are
+captured separately from the response, so a tool writing to stderr cannot
+present itself as a result.
+
+Round trips therefore dominate durable session work over a real remote
+connection, and the layer is written to spend as few as it can. One lease
+compare-and-set is one program, not a clock read plus two listings plus two
+reads plus a write. The interpreters those processes run through are resolved
+once per target rather than per operation, because locating a program on a
+TRAMP target costs one test per `exec-path` entry and the durability layer
+inhibits the remote file-name cache; a refused operation drops the resolved
+pair so a moved interpreter is looked up again. An operation that carries
+content pays two further round trips, because TRAMP copies its input file to
+the target and removes it afterwards. Reads never create control directories:
+an absent transfer mailbox holds no requests, so a polling observer performs no
+target mutation. Publication proves lease ownership immediately before every
+artifact write and once after the last one; each of those proofs is one round
+trip.
 Portable lease expiry and transfer deadlines use the target filesystem clock at
 whole-second resolution, so clients with skewed wall clocks cannot change one
 another's authority and lease durations are configured in whole seconds.  A
+lease observation reads that clock in the same process as the records it
+inspects, and one durable transaction may answer from a reading it already took
+for at most one second before taking another; local elapsed time only decides
+when to read the target again and never becomes a time value, so no deadline is
+ever derived from a client clock.  A
 client reclaims its own expired lease without a prompt, because renewal cannot
 run inside blocking target I/O and confirming a takeover from oneself is
 meaningless; the generation compare-and-set still refuses the reclaim when
@@ -243,11 +288,26 @@ batch in order; duplicate logical paths use the last write.  Artifacts outside
 the session directory remain ordinary fenced writes and never enter the
 session snapshot.
 
+A save whose durable state is byte for byte the committed snapshot performs no
+target transaction at all: the candidate artifacts are hashed against the
+committed manifest, and when every one matches, the save records nothing and
+`updated-at` is not even stamped, because stamping it first would make the
+sidecar differ on every call and defeat the comparison.  When some artifacts
+differ, only those are published; an omitted artifact keeps its existing
+manifest entry, so the logical snapshot is unchanged while whole per-artifact
+ownership proofs are avoided.  The commit marker always publishes, because it is
+the transaction's commit point rather than a payload.  `mevedel-save-session`
+publishes regardless, for a user who wants a snapshot rather than a record of a
+change.
+
 The marker transaction copies the merged logical artifacts into a unique,
 never-overwritten directory below `.publications/`, records each target-native
 session-relative logical and published path plus its SHA-256, and creates the
-immutable `manifest.el` last.  Updating the exact current lease generation's
-`:publication-head` to that manifest is the only commit point.  Every fixed
+immutable `manifest.el` last.  That directory, its artifacts and its manifest
+are one target program, so the whole generation costs one round trip and the
+manifest is still the last byte written inside it.  Updating the exact current
+lease generation's `:publication-head` to that manifest is the only commit
+point.  Every fixed
 cache write precedes this compare-and-set, and no fixed or shared state is
 written after a failed compare-and-set.  Consequently, a reader sees either
 the complete old manifest or the complete new one even if newer fixed caches
@@ -279,7 +339,62 @@ while draining; the named requester acquires only after observing the released
 successor, then reloads the committed sidecar and transcript before its buffer
 becomes writable. A failed refresh releases the new lease and leaves the
 requester read-only. Transfer state is transient session state and is not
-serialized in the sidecar.
+serialized in the sidecar. A view polls that state every
+`mevedel-view-control-transfer-poll-seconds`; each poll reads the lease head,
+the target clock, and the mailbox, so the interval trades handoff latency
+against time on the one target connection the user's own work also needs.
+Like lease renewal, that poll performs no target I/O while another TRAMP
+operation is in progress or while a publication owns the bounded window: Emacs
+runs timers and process filters wherever the main loop waits, including inside
+a TRAMP operation, and the owner poll may itself publish. The next tick
+observes the same durable state once the transport is free.
+
+### Transport reentrancy
+
+Target I/O started while another remote operation is already in flight does not
+merely fail. TRAMP refuses the reentrant call, or the nested command consumes
+the running command's pending output and returns an answer belonging to
+something else — an absent lock reads as present, and durable state derived
+from that is wrong. Every caller reachable from a timer, a process filter, or
+redisplay therefore asks `mevedel-transport-busy-p` first and defers through
+`mevedel-transport-run-when-idle`.
+
+That predicate combines two signals with complementary blind spots. A dynamic
+depth counter, maintained by observational advice on `tramp-file-name-handler`,
+spans the whole of any operation this Emacs started through a file name,
+including operations belonging to other packages: a mode line that stats a
+remote file during redisplay opens exactly this window. TRAMP's own
+per-connection lock property covers callers that reach the connection without
+a handler frame, but only for the instants it is held — TRAMP releases it and
+runs timers between the send and the read, which is the window the depth
+counter exists to see. TRAMP has no global in-operation flag, so a plain
+variable check silently never fires.
+
+Neither signal sees a remote process on a separate connection, so the predicate
+is necessary rather than sufficient. `mevedel-session-control-fs` therefore also
+refuses outright, with `mevedel-session-control-fs-busy`, any control operation
+issued while the transport is busy: a visible failure is recoverable, a
+fabricated answer is not.
+
+The predicate only governs this package. It cannot stop the reverse case, which
+is just as destructive: an idle timer belonging to a syntax checker or a mode
+line does not consult it, and TRAMP's wait loop yields to timers with a command
+in flight, so that timer sends its own command on the same connection and
+consumes the reply this session was waiting for — our lease records arrive at
+its parser, and the record we read belongs to it. Control operations therefore
+run inside `mevedel-transport-with-exclusive-connection`, which suspends timers
+for the duration, exactly as TRAMP does around its own critical sections. One
+control operation is a single short target process, so the suspension is brief;
+its body must not schedule a timer, because restoring the binding would discard
+it.
+
+Turn settlement is deferred as one unit for the same reason. gptel drives it
+from a process sentinel, which Emacs may dispatch from inside an unrelated
+remote operation. Only the turn commit — the single-use reservation fence,
+which touches no target — runs synchronously there; the publishing steps wait
+for an idle transport. The chain defers whole rather than step by step because
+its order is load-bearing: ending the request follows the autosave, and
+inverting them drops the turn's file-history checkpoints.
 
 Without a prefix, `M-x mevedel` lists persisted workspace sessions before
 creating a buffer. Each candidate is labeled `Resume`, `Join read-only`, or
@@ -469,8 +584,12 @@ Goal is paused and its owned queue remains held for `/goal resume`.
 
 The telemetry stream and diagnostics directory are observational artifacts,
 not resumable state. They are append-only within a run and are never consulted
-to restore a session. See [`telemetry.md`](telemetry.md) for the event schema,
-redaction boundary, and profiler procedure.
+to restore a session. Because nothing restores from them, a session saved on a
+target keeps its profiler run directory on the client instead — in a per-run
+temporary directory, not `diagnostics/` — so a multi-megabyte profile never
+crosses the connection. Diagnostics for such a run are consequently not
+portable. See [`telemetry.md`](telemetry.md) for the event schema, redaction
+boundary, and profiler procedure.
 
 The Goal remains in the session sidecar as a strict phase-free record: identity,
 objective, status/reason, token/time/turn accounting, optional budget, optional

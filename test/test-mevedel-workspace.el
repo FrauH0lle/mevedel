@@ -327,6 +327,46 @@
               (should-not (string-match-p "^/.mevedel/$" content)))))
       (delete-directory root t)))
 
+  :doc "settles the exclusion once per root instead of on every save"
+  ;; Re-deriving costs a `locate-dominating-file' walk plus two `file-truename'
+  ;; resolutions, which on a remote workspace is a round trip per path
+  ;; component -- paid on every save to find nothing to do.
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-ws-ignore-once-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "once"))
+         (exclude (file-name-concat root ".git" "info" "exclude"))
+         (walks 0))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory exclude) t)
+          (clrhash mevedel-workspace--generated-state-ignored)
+          (cl-letf* ((real (symbol-function 'locate-dominating-file))
+                     ((symbol-function 'locate-dominating-file)
+                      (lambda (file name)
+                        (cl-incf walks)
+                        (funcall real file name))))
+            (mevedel-workspace-ensure-generated-state-ignored workspace)
+            (should (= 1 walks))
+            (mevedel-workspace-ensure-generated-state-ignored workspace)
+            (mevedel-workspace-ensure-generated-state-ignored workspace)
+            (should (= 1 walks))
+            ;; A root outside Git settles too; deciding that costs the walk.
+            (let* ((bare (file-name-as-directory
+                          (make-temp-file "mevedel-ws-ignore-bare-" t)))
+                   (other (mevedel-workspace--create
+                           :type 'project :id bare :root bare :name "bare")))
+              (unwind-protect
+                  (progn
+                    (setq walks 0)
+                    (mevedel-workspace-ensure-generated-state-ignored other)
+                    (should (= 1 walks))
+                    (mevedel-workspace-ensure-generated-state-ignored other)
+                    (should (= 1 walks)))
+                (delete-directory bare t)))))
+      (clrhash mevedel-workspace--generated-state-ignored)
+      (delete-directory root t)))
+
   :doc "writes generated-state excludes through a TRAMP workspace"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-ws-remote-ignore-" t)))

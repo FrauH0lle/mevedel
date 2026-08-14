@@ -358,7 +358,10 @@ The early return below needs the block a `cl-defun' establishes; a plain
     ;; opening a listener.  A guest can reconnect for a fresh snapshot, but a
     ;; room that cannot produce one is not useful.
     (mevedel-collaboration--snapshot-chunks records)
-    (require 'web-server)
+    ;; Only this feature needs the listener, so a missing package is a setup
+    ;; answer rather than a load failure out of a slash command.
+    (unless (require 'web-server nil t)
+      (user-error "Collaboration requires the 'web-server' package; install it first"))
     (let ((server nil))
       (condition-case error-data
           (progn

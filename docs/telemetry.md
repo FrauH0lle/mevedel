@@ -111,8 +111,7 @@ buffer point, selected-window point/start, composer-relative offsets, and
 managed-fragment coordinates around interaction registration, full rerenders,
 and zone reconciliation.
 
-Each profiler run gets
-`SESSION_DIR/diagnostics/run-TIMESTAMP-ID/`, containing:
+Each profiler run gets a directory containing:
 
 ```text
 profiler-cpu-profile.el       native readable Emacs CPU profile, when enabled
@@ -124,8 +123,21 @@ gptel-debug.log               gptel log captured by mevedel-session-debug
 view-render-debug.log         view trace captured by mevedel-session-debug
 ```
 
-Native profile files are written through `profiler-write-profile`, which
-normalizes sampled runtime objects before serialization.  Open them with
+For a session saved locally that directory is
+`SESSION_DIR/diagnostics/run-TIMESTAMP-ID/`. For a session saved on a target it
+is a fresh local temporary directory instead, created per run under
+`temporary-file-directory`. A profile measures the client Emacs, and the `ssh`
+method has no out-of-band copy at any size, so writing 8 MB of profile to the
+target means 8 MB of base64 through the shell for an artifact no resume
+consults. The cost is the reason; the consequence is that diagnostics for a
+remote session are **not portable** — another client resuming it finds no
+`diagnostics/` for a run profiled elsewhere. The `profiler-stopped` event
+therefore records `:artifacts-directory` as an absolute client-side path plus
+`:artifacts-local`, and `M-x mevedel-telemetry-profiler-stop` prints the
+directory, which is the only way to find a remote-session run.
+
+Native profile files hold `profiler-fixup-profile` output, which normalizes
+sampled runtime objects before serialization.  Open them with
 `M-x profiler-find-profile`.  A run is recorded as `profiler-stopped` only
 after every expected profile and report exists and is nonempty; otherwise it
 records `profiler-stop-failed` and signals the save error.

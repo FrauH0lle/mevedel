@@ -2454,16 +2454,18 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
           (unwind-protect
               (with-current-buffer buf
                 (org-mode)
-                (insert "First prompt\n")
-                (mevedel-session-persistence-save session buf)
-                (let ((first-updated (mevedel-session-updated-at session)))
-                  (should first-updated)
-                  ;; Force a second-tick gap so the timestamp can advance.
-                  (sleep-for 1.1)
-                  (insert "Second prompt\n")
+                (mevedel-test--with-shifted-clock
+                  (insert "First prompt\n")
                   (mevedel-session-persistence-save session buf)
-                  (should-not (equal first-updated
-                                     (mevedel-session-updated-at session)))))
+                  (let ((first-updated (mevedel-session-updated-at session)))
+                    (should first-updated)
+                    ;; Advance the clock the stamps see instead of sleeping
+                    ;; past a second boundary.
+                    (setq mevedel-test--timestamp-offset 2)
+                    (insert "Second prompt\n")
+                    (mevedel-session-persistence-save session buf)
+                    (should-not (equal first-updated
+                                       (mevedel-session-updated-at session))))))
             (kill-buffer buf)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
@@ -9304,7 +9306,7 @@ The result is a plist whose :tempdir owns every created file."
 (mevedel-deftest mevedel-session-persistence--clone-session
   (:doc "covers every session slot and isolates both clone policies")
   (progn
-    (should (= 87
+    (should (= 89
              (length
               (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-persistence--assert-clone-slot-completeness))
@@ -11389,12 +11391,13 @@ The result is a plist whose :tempdir owns every created file."
                (s2 (mevedel-session-create "beta" workspace))
                (b2 (generate-new-buffer "*test-session-beta*")))
           (unwind-protect
-              (progn
+              (mevedel-test--with-shifted-clock
                 (with-current-buffer b1
                   (org-mode)
                   (insert "Hello\n")
                   (mevedel-session-persistence-save s1 b1))
-                (sleep-for 1.1)   ; ensure :updated-at differs
+                ;; Advance the stamps so `:updated-at' differs.
+                (setq mevedel-test--timestamp-offset 2)
                 (with-current-buffer b2
                   (org-mode)
                   (insert "World\n")
@@ -12950,14 +12953,14 @@ The result is a plist whose :tempdir owns every created file."
                (b2 (generate-new-buffer "*test-data-2*"))
                restored)
           (unwind-protect
-              (progn
+              (mevedel-test--with-shifted-clock
                 (with-current-buffer b1
                   (org-mode)
                   (setq-local mevedel--session s1)
                   (insert "session one\n")
                   (mevedel-session-persistence-save s1 b1))
-                ;; Force a visible clock gap so session ids differ.
-                (sleep-for 1.1)
+                ;; Advance the stamps so the derived session ids differ.
+                (setq mevedel-test--timestamp-offset 120)
                 (with-current-buffer b2
                   (org-mode)
                   (setq-local mevedel--session s2)

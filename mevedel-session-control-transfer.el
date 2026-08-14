@@ -128,6 +128,10 @@
 (declare-function mevedel-session-transfer-release
                   "mevedel-session-transfer" (session))
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p
+                  "mevedel-transport" (&optional path))
+
 (defun mevedel-session-control-transfer-register-observer
     (session observer)
   "Register OBSERVER for semantic SESSION lifecycle events.
@@ -408,10 +412,21 @@ before transcript bytes are inserted or the buffer becomes writable."
   "Poll SESSION's durable transfer state for BUFFER.
 
 READ-ONLY-P selects requester admission; an owning session drains and settles
-its committed transfer. Return non-nil when a requester acquired control."
-  (if read-only-p
-      (mevedel-session-control-transfer--poll-requester session buffer)
-    (mevedel-session-control-transfer--poll-owner session)))
+its committed transfer. Return non-nil when a requester acquired control.
+
+Polling runs from a timer, and a timer fires wherever the main loop happens to
+be waiting, including inside a TRAMP operation.  Target I/O from there is a
+reentrant TRAMP call that can wedge the operation already in progress, and the
+owner poll may itself publish.  The poll therefore performs no target I/O
+while another TRAMP operation is in progress, or while a publication owns the
+bounded window; the next tick observes the same durable state once the
+transport is free."
+  (require 'mevedel-transport)
+  (unless (or (mevedel-session-publication-active-p session)
+              (mevedel-transport-busy-p (mevedel-session-save-path session)))
+    (if read-only-p
+        (mevedel-session-control-transfer--poll-requester session buffer)
+      (mevedel-session-control-transfer--poll-owner session))))
 
 (defun mevedel-session-control-transfer-request (session)
   "Record a control request for SESSION's current owner."

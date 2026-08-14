@@ -67,6 +67,37 @@ A muted call returns the text it would have shown, as `message' does."
      (or load-file-name buffer-file-name default-directory))))
   "Worktree root whose portable control artifacts tests must not mutate.")
 
+(defvar mevedel-test--timestamp-offset 0
+  "Seconds added to every timestamp mevedel formats inside a shifted clock.
+
+A case that needs two durable saves to carry different whole-second stamps
+sets this instead of sleeping past a second boundary.")
+
+(defvar mevedel-test--format-time-string nil
+  "The real `format-time-string' while a shifted clock is installed.")
+
+(defmacro mevedel-test--with-shifted-clock (&rest body)
+  "Run BODY with formatted timestamps shifted by the test's own offset.
+
+Durable saves stamp `updated-at' and derive session ids at whole-second
+resolution, so a case proving two saves differ used to sleep for over a
+second.  Setting `mevedel-test--timestamp-offset' advances the clock those
+stamps see, which is both instant and deterministic: the case no longer
+depends on when in a second it happened to run."
+  (declare (indent 0) (debug t))
+  `(let ((mevedel-test--timestamp-offset 0)
+         (mevedel-test--format-time-string
+          (symbol-function 'format-time-string)))
+     (cl-letf (((symbol-function 'format-time-string)
+                (lambda (format &optional time &rest arguments)
+                  (apply mevedel-test--format-time-string
+                         format
+                         (or time
+                             (time-add (current-time)
+                                       mevedel-test--timestamp-offset))
+                         arguments))))
+       ,@body)))
+
 (defmacro mevedel-test--with-captured-diagnostics (place &rest body)
   "Run BODY collecting its messages and warnings into PLACE.
 
@@ -151,15 +182,18 @@ guard detects only changes made by the current test invocation."
      "session.meta.el")))
 
 (defun mevedel-test--cancel-stray-lease-timers ()
-  "Cancel portable lease renewal timers a test left running.
+  "Cancel portable lease renewal and deferred transport timers a test left.
 
 A surviving timer performs target I/O from wherever the main loop is waiting
 during later tests, which floods their output and can wedge a shared TRAMP
 connection."
   (dolist (timer (append timer-list timer-idle-list))
     (when (memq (timer--function timer)
-                '(mevedel-session-durability-lease-renew))
-      (cancel-timer timer))))
+                '(mevedel-session-durability-lease-renew
+                  mevedel-transport--retry))
+      (cancel-timer timer)))
+  (when (fboundp 'mevedel-transport-cancel-pending)
+    (mevedel-transport-cancel-pending)))
 
 (defvar mevedel-test--release-leaked-state-p t
   "Whether each test releases global session and workspace state.
@@ -180,7 +214,11 @@ target is gone, which is slow, noisy, and order dependent."
         (ignore-errors (mevedel-execution-teardown-all))))
     (clrhash mevedel-execution--sessions))
   (when (fboundp 'mevedel-workspace-clear-registry)
-    (ignore-errors (mevedel-workspace-clear-registry))))
+    (ignore-errors (mevedel-workspace-clear-registry)))
+  ;; Generated-state exclusion is remembered per root for the process, so a
+  ;; test that reuses a root would otherwise inherit the previous answer.
+  (when (boundp 'mevedel-workspace--generated-state-ignored)
+    (clrhash mevedel-workspace--generated-state-ignored)))
 
 (defun mevedel-test--assert-worktree-controls-unchanged (before)
   "Signal when a test changes worktree-root session artifacts.

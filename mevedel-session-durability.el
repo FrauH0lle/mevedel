@@ -19,9 +19,6 @@
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
 
-;; `tramp'
-(defvar tramp-locked)
-
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-identity
                   "mevedel-execution-target" (cl-x) t)
@@ -92,6 +89,10 @@
 (declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
+
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p
+                  "mevedel-transport" (&optional path))
 
 
 ;;
@@ -169,6 +170,39 @@ project sessions need no disclosure."
          (path (file-name-concat session-dir ".lease")))
     (mevedel-session-control-fs-physical-path path)))
 
+(defvar mevedel-session-durability--observed-time nil
+  "Target clock seconds already observed for the current transaction, or nil.
+
+A batched observation reads the target clock in the same process as the lease
+records it inspects, so the value is target-authoritative and needs no second
+round trip.  It is still delivered through
+`mevedel-session-durability--target-time', which stays the single seam for
+the target clock.")
+
+(defconst mevedel-session-durability--clock-reuse-seconds 1
+  "How long one observed target clock reading may answer for a transaction.
+
+Every reading is the target's own, never a client clock.  Reusing one for at
+most this long keeps a transaction that renews its lease several times from
+paying a round trip per reading, while bounding how stale a reading can be to
+less than the whole-second resolution the deadlines are written at.  Local
+elapsed time only decides when to read the target again; it never becomes a
+time value.")
+
+(defvar mevedel-session-durability--transaction-clock nil
+  "Cons cell caching one transaction's target clock reading, or nil.
+
+Its car is (TARGET-SECONDS . LOCAL-FLOAT-TIME).  A caller that spans one
+durable transaction binds this to a fresh `(list nil)'; outside such a binding
+every reading reaches the target.")
+
+(defun mevedel-session-durability--note-target-time (seconds)
+  "Record SECONDS as this transaction's target clock reading."
+  (when (and mevedel-session-durability--transaction-clock (numberp seconds))
+    (setcar mevedel-session-durability--transaction-clock
+            (cons seconds (float-time))))
+  seconds)
+
 (defun mevedel-session-durability--target-time (directory)
   "Return the target filesystem's current time for control DIRECTORY.
 
@@ -176,15 +210,35 @@ The modification timestamp of a freshly created marker is supplied by the
 target filesystem, including through TRAMP.  It is therefore shared by
 clients whose local wall clocks disagree.  Failure to obtain that timestamp
 fails closed instead of falling back to a client clock."
-  (mevedel-session-control-fs-target-time directory))
+  (or mevedel-session-durability--observed-time
+      (let ((cached (car mevedel-session-durability--transaction-clock)))
+        (and cached
+             (< (- (float-time) (cdr cached))
+                mevedel-session-durability--clock-reuse-seconds)
+             (car cached)))
+      (mevedel-session-durability--note-target-time
+       (mevedel-session-control-fs-target-time directory))))
+
+(defvar mevedel-session-durability--asserted-directories nil
+  "Cons cell listing directories already proved free of a PID lock, or nil.
+
+A portable session cannot grow a `.lock' while this client holds its lease,
+and one transaction reaches several entry points that each prove its absence.
+A caller that spans one transaction binds this to a fresh `(list nil)';
+outside such a binding every call proves it against the target.")
 
 (defun mevedel-session-durability--assert-no-pid-lock (session-dir)
   "Signal when portable SESSION-DIR also contains the obsolete PID lock."
   (setq session-dir (mevedel-session-control-fs-physical-path
                      session-dir))
-  (when (mevedel-session-control-fs-path-exists-p
-         (file-name-concat session-dir ".lock"))
-    (error "Portable session has a PID lock: %s" session-dir)))
+  (unless (member session-dir
+                  (car mevedel-session-durability--asserted-directories))
+    (when (mevedel-session-control-fs-path-exists-p
+           (file-name-concat session-dir ".lock"))
+      (error "Portable session has a PID lock: %s" session-dir))
+    (when mevedel-session-durability--asserted-directories
+      (push session-dir
+            (car mevedel-session-durability--asserted-directories)))))
 
 (defun mevedel-session-durability--read-plist (path)
   "Return the plist stored at PATH, or nil when PATH is absent or unreadable.
@@ -265,11 +319,15 @@ UNSETTLED-MUTATION records target mutation whose outcome is not yet proved."
           (format "%020d.el" generation))))
     (mevedel-session-control-fs-physical-path path)))
 
+(defconst mevedel-session-durability--generation-name-regexp
+  "\\`[0-9]\\{20\\}\\.el\\'"
+  "Name shape of a lease generation record.")
+
 (defun mevedel-session-durability--generation-paths (directory)
   "Return DIRECTORY's generation record paths in descending order."
   (mevedel-session-control-fs-physical-path directory)
   (sort (mevedel-session-control-fs-list-directory
-         directory "\\`[0-9]\\{20\\}\\.el\\'")
+         directory mevedel-session-durability--generation-name-regexp)
         #'string>))
 
 (defun mevedel-session-durability--generation (path)
@@ -347,6 +405,104 @@ An unreadable record is skipped for the same reason as in
             (mevedel-session-control-fs-delete-file path))
         (error nil)))))
 
+(defun mevedel-session-durability--record-bytes (record)
+  "Return the exact content RECORD occupies as a lease generation file."
+  (with-temp-buffer
+    (let ((print-length nil)
+          (print-level nil))
+      (prin1 record (current-buffer))
+      (buffer-string))))
+
+(defun mevedel-session-durability--newest-generation (names)
+  "Return the highest generation among lease record NAMES, or zero.
+
+Only names shaped like a generation record count, so an unrelated entry in
+the lease directory cannot present itself as a newer generation."
+  (let ((best 0))
+    (dolist (name names best)
+      (when (string-match-p mevedel-session-durability--generation-name-regexp
+                            (file-name-nondirectory name))
+        (let ((generation (mevedel-session-durability--generation name)))
+          (when (> generation best)
+            (setq best generation)))))))
+
+(defun mevedel-session-durability--target-time-cached-p ()
+  "Return non-nil when a fresh target clock reading can answer without I/O."
+  (or (numberp mevedel-session-durability--observed-time)
+      (let ((cached (car mevedel-session-durability--transaction-clock)))
+        (and cached
+             (< (- (float-time) (cdr cached))
+                mevedel-session-durability--clock-reuse-seconds)))))
+
+(defun mevedel-session-durability--strip-assumption (lease)
+  "Return LEASE without the remembered on-target bytes."
+  (let ((copy (copy-sequence lease)))
+    (plist-put copy :bytes nil)))
+
+(defun mevedel-session-durability--observe-lease (directory generation)
+  "Observe DIRECTORY's clock, records, and GENERATION's own record at once.
+
+Return a plist with `:now', `:names', `:bytes', and `:record'.  The three
+observations are one target process rather than four, and the record read is
+last so an absent record still leaves the clock and the listing answered."
+  (let* ((operations
+          (append
+           (list (list :op 'target-time :path directory)
+                 (list :op 'list-directory :path directory))
+           (when (natnump generation)
+             (list (list :op 'read
+                         :path (mevedel-session-durability--generation-path
+                                directory generation))))))
+         (results (mevedel-session-control-fs-run-program operations))
+         (clock (nth 0 results))
+         (listing (nth 1 results))
+         (record (nth 2 results))
+         (bytes (and record
+                     (eq 'ok (plist-get record :status))
+                     (plist-get record :value))))
+    ;; A clock the target could not supply is left unanswered rather than
+    ;; raised: the seam falls back, and a caller with no usable clock fails
+    ;; closed there.
+    (list :now (and (eq 'ok (plist-get clock :status))
+                    (mevedel-session-durability--note-target-time
+                     (plist-get clock :value)))
+          :names (and (eq 'ok (plist-get listing :status))
+                      (plist-get listing :value))
+          :bytes bytes
+          :record
+          (and bytes
+               (condition-case nil
+                   (car (read-from-string bytes))
+                 (error nil))))))
+
+(defun mevedel-session-durability--commit-lease
+    (directory generation expected record)
+  "Replace GENERATION's record below DIRECTORY only while it still is EXPECTED.
+
+EXPECTED is the content observed on the target; RECORD is the replacement.
+The proof and the write share one target process, so no observation of another
+client can slip between them.  Return the record names observed afterwards, or
+nil when the proof failed."
+  (let* ((path (mevedel-session-durability--generation-path
+                directory generation))
+         (results
+          (mevedel-session-control-fs-run-program
+           (list (list :op 'verify :path path :content expected)
+                 (list :op 'write :path path
+                       :content (mevedel-session-durability--record-bytes
+                                 record))
+                 (list :op 'list-directory :path directory))))
+         (proof (nth 0 results))
+         (write (nth 1 results))
+         (listing (nth 2 results)))
+    (cond
+     ((memq (plist-get proof :status) '(mismatch absent)) nil)
+     ((not (eq 'ok (plist-get proof :status)))
+      (mevedel-session-control-fs-program-value proof))
+     ((not (eq 'ok (plist-get write :status)))
+      (mevedel-session-control-fs-program-value write))
+     (t (or (plist-get listing :value) t)))))
+
 (defun mevedel-session-durability--same-generation-p (left right)
   "Return non-nil when lease records LEFT and RIGHT name one generation."
   (and left right
@@ -360,14 +516,19 @@ An unreadable record is skipped for the same reason as in
     (cancel-timer timer))
   (setf (mevedel-session-lease-renewal-timer session) nil))
 
-(defun mevedel-session-durability--bind-lease (session lease state)
-  "Record LEASE and STATE on SESSION and maintain its renewal timer."
+(defun mevedel-session-durability--bind-lease (session lease state &optional bytes)
+  "Record LEASE and STATE on SESSION and maintain its renewal timer.
+
+BYTES is the exact content LEASE occupies on the target when that is known.
+A later renewal states it as the precondition of its compare-and-set, which
+saves re-reading a record this client just wrote."
   (when session
     (let ((live (and lease (copy-sequence lease)))
           (release-pending
            (plist-get (mevedel-session-lease session) :release-pending)))
       (when live
-        (setq live (plist-put live :state state)))
+        (setq live (plist-put live :state state))
+        (setq live (plist-put live :bytes bytes)))
       (when release-pending
         (setq live (plist-put live :release-pending t)))
       (setf (mevedel-session-lease session) live)
@@ -610,19 +771,49 @@ preserved unsettled-mutation flag with UNSETTLED-MUTATION."
   (when-let ((session-dir (mevedel-session-save-path session)))
     (let* ((remote-file-name-inhibit-cache t)
            (directory (mevedel-session-durability--lease-path session-dir))
-           (now (mevedel-session-durability--target-time directory))
            (bound (mevedel-session-lease session))
-           (existing
-            (condition-case nil
-                (if-let ((generation (plist-get bound :generation)))
-                    (mevedel-session-durability--read-plist
-                     (mevedel-session-durability--generation-path
-                      directory generation))
-                  (mevedel-session-durability--lease-head directory))
-              (error nil)))
-           (head (condition-case nil
-                     (mevedel-session-durability--lease-head directory)
-                   (error nil))))
+           (generation (plist-get bound :generation))
+           ;; A transaction that renews repeatedly already knows the bytes it
+           ;; last wrote and has a fresh target clock, so it states them as
+           ;; the compare-and-set precondition instead of observing again.  A
+           ;; precondition that no longer holds falls back to observation
+           ;; below, so a stale belief costs a round trip and never a wrong
+           ;; answer.
+           (assumed
+            (and (natnump generation)
+                 (eq 'owned (plist-get bound :state))
+                 (plist-get bound :bytes)
+                 (mevedel-session-durability--target-time-cached-p)
+                 bound))
+           (observed (unless assumed
+                       (condition-case nil
+                           (mevedel-session-durability--observe-lease
+                            directory generation)
+                         (error nil))))
+           ;; The clock arrives from the same process as the records, and still
+           ;; through the single target-clock seam.
+           (now (let ((mevedel-session-durability--observed-time
+                       (plist-get observed :now)))
+                  (mevedel-session-durability--target-time directory)))
+           (existing (if assumed assumed (plist-get observed :record)))
+           (existing-bytes (if assumed
+                               (plist-get assumed :bytes)
+                             (plist-get observed :bytes)))
+           (names (plist-get observed :names))
+           ;; The bound generation is the head whenever no newer record was
+           ;; allocated, which is the steady state; only a foreign claim costs
+           ;; the extra reads to derive the head.
+           (head
+            (if (or assumed
+                    (and existing
+                         (natnump generation)
+                         (= generation
+                            (mevedel-session-durability--newest-generation
+                             names))))
+                existing
+              (condition-case nil
+                  (mevedel-session-durability--lease-head directory)
+                (error nil)))))
       (if (and (mevedel-session-durability--valid-lease-p existing)
                (memq (plist-get existing :status) accepted-status)
                (equal mevedel-session-durability--client-id
@@ -632,25 +823,49 @@ preserved unsettled-mutation flag with UNSETTLED-MUTATION."
                    (equal expected-publication-head
                           (plist-get existing :publication-head)))
                (> (plist-get existing :expires-at) now))
-          (let ((record
-                 (let ((mevedel-session-lease-seconds seconds))
-                   (mevedel-session-durability--lease-record
-                    (plist-get existing :buffer)
-                    (plist-get existing :generation)
-                    status
-                    (or publication-head
-                        (plist-get existing :publication-head))
-                    (if unsettled-mutation-p
-                        unsettled-mutation
-                      (plist-get existing :unsettled-mutation))
-                    now))))
-            (mevedel-session-durability--write-generation directory record)
-            (if (equal record
-                       (mevedel-session-durability--lease-head directory))
-                (progn
-                  (mevedel-session-durability--bind-lease
-                   session record 'owned)
-                  t)
+          (let* ((record
+                  (let ((mevedel-session-lease-seconds seconds))
+                    (mevedel-session-durability--lease-record
+                     (plist-get existing :buffer)
+                     (plist-get existing :generation)
+                     status
+                     (or publication-head
+                         (plist-get existing :publication-head))
+                     (if unsettled-mutation-p
+                         unsettled-mutation
+                       (plist-get existing :unsettled-mutation))
+                     now)))
+                 (committed
+                  (mevedel-session-durability--commit-lease
+                   directory (plist-get existing :generation)
+                   existing-bytes record)))
+            (cond
+             ((and committed
+                   ;; A newer generation appearing means another client won,
+                   ;; unless that record is itself aborted.
+                   (or (not (listp committed))
+                       (= (plist-get existing :generation)
+                          (mevedel-session-durability--newest-generation
+                           committed))
+                       (equal record
+                              (mevedel-session-durability--lease-head
+                               directory))))
+              (mevedel-session-durability--bind-lease
+               session record 'owned
+               (mevedel-session-durability--record-bytes record))
+              t)
+             ;; An assumed precondition that no longer holds is not a lost
+             ;; lease: drop the assumption and decide from the target.
+             ((and (null committed) assumed)
+              (mevedel-session-durability--bind-lease
+               session (mevedel-session-durability--strip-assumption bound)
+               (plist-get bound :state))
+              (mevedel-session-durability--update-owned-lease
+               session accepted-status status seconds
+               publication-head expected-publication-head-p
+               expected-publication-head unsettled-mutation-p
+               unsettled-mutation))
+             (t
               (let ((latest
                      (mevedel-session-durability--lease-head directory)))
                 (mevedel-session-durability--bind-lease
@@ -659,15 +874,26 @@ preserved unsettled-mutation flag with UNSETTLED-MUTATION."
                       latest directory now)
                      'owned
                    'lost)))
-              nil))
-        (let ((latest (or head existing)))
-          (mevedel-session-durability--bind-lease
-           session latest
-           (if (mevedel-session-durability--owned-lease-record-p
-                latest directory now)
-               'owned
-             'lost)))
-        nil))))
+              nil)))
+        (if assumed
+            ;; The assumption was the only reason this looked unusable.
+            (progn
+              (mevedel-session-durability--bind-lease
+               session (mevedel-session-durability--strip-assumption bound)
+               (plist-get bound :state))
+              (mevedel-session-durability--update-owned-lease
+               session accepted-status status seconds
+               publication-head expected-publication-head-p
+               expected-publication-head unsettled-mutation-p
+               unsettled-mutation))
+          (let ((latest (or head existing)))
+            (mevedel-session-durability--bind-lease
+             session latest
+             (if (mevedel-session-durability--owned-lease-record-p
+                  latest directory now)
+                 'owned
+               'lost)))
+          nil)))))
 
 (defun mevedel-session-durability-set-unsettled-mutation (session value)
   "Set SESSION's durable unsettled-mutation latch to boolean VALUE.
@@ -742,7 +968,7 @@ The next tick renews once the transport is free.  After serialization exits,
 renewal also normalizes this client's live `publishing\=' generation back to
 `active\='."
   (if (or (mevedel-session-publication-active-p session)
-          (bound-and-true-p tramp-locked))
+          (mevedel-transport-busy-p (mevedel-session-save-path session)))
       (eq 'owned (plist-get (mevedel-session-lease session) :state))
     (condition-case err
         (mevedel-session-durability--update-owned-lease

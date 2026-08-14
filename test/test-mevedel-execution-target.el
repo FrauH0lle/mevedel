@@ -754,6 +754,77 @@
                              :status)))
       (should (= 4 probes)))))
 
+(mevedel-deftest mevedel-execution-target-observe-incarnation ()
+  ,test
+  (test)
+  :doc "refreshes a remote fingerprint without reprobing readiness"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@host:/srv/project/"))
+        (incarnation "first-incarnation")
+        (lookups 0)
+        (fingerprints 0))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name &optional _remote)
+                 (cl-incf lookups)
+                 (concat "/usr/bin/" name)))
+              ((symbol-function 'process-file)
+               (lambda (program _in destination _display &rest _args)
+                 (with-current-buffer destination
+                   (insert (if (equal program "env")
+                               "HOME=/root\0"
+                             "Linux\n")))
+                 0))
+              ((symbol-function
+                'mevedel-execution-target--live-connection)
+               (lambda (_target) 'connection))
+              ((symbol-function
+                'mevedel-execution-target--probe-incarnation)
+               (lambda (_target _bash)
+                 (cl-incf fingerprints)
+                 incarnation))
+              ((symbol-function 'mevedel-sandbox-invalidate-probe-cache)
+               #'ignore))
+      (mevedel-execution-target-probe target)
+      (should (= 6 lookups))
+      (should (= 1 fingerprints))
+      ;; An unchanged target costs one target command and no capability,
+      ;; environment, or sandbox work.
+      (mevedel-execution-target-observe-incarnation target)
+      (should (= 6 lookups))
+      (should (= 2 fingerprints))
+      (should-not
+       (mevedel-execution-target-incarnation-changed-p target))
+      (setq incarnation "replacement-incarnation")
+      (mevedel-execution-target-observe-incarnation target)
+      (should (= 6 lookups))
+      (should
+       (mevedel-execution-target-incarnation-changed-p target))
+      (should (equal "first-incarnation"
+                     (mevedel-execution-target-incarnation target)))
+      (should (equal "replacement-incarnation"
+                     (mevedel-execution-target-observed-incarnation
+                      target)))))
+
+  :doc "refuses a remote observation before readiness establishes Bash"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@host:/srv/project/")))
+    (should-error (mevedel-execution-target-observe-incarnation target)))
+
+  :doc "observes a local replacement without any target command"
+  (let ((target (mevedel-execution-target-create "/srv/project/"))
+        (probes 0))
+    (cl-letf (((symbol-function 'mevedel-execution-target--process-output)
+               (lambda (&rest _) (cl-incf probes) ""))
+              ((symbol-function 'mevedel-execution-target--local-incarnation)
+               (lambda () "local-replacement")))
+      (mevedel-execution-target-seed-incarnation target "local-baseline")
+      (mevedel-execution-target-observe-incarnation target)
+      (should (= 0 probes))
+      (should (mevedel-execution-target-incarnation-changed-p target))
+      (should (equal "local-replacement"
+                     (mevedel-execution-target-observed-incarnation
+                      target))))))
+
 (mevedel-deftest mevedel-execution-target-seed-incarnation ()
   ,test
   (test)

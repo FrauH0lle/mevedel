@@ -382,7 +382,13 @@ reverted, and restores them afterward."
                 nil t)
       (add-hook 'post-command-hook
                 (lambda ()
+                  ;; Remote files are skipped: this runs after every command,
+                  ;; and `file-exists-p' on a target path is a synchronous
+                  ;; round trip that would also nest inside whatever remote
+                  ;; operation the command left in flight.  A vanished remote
+                  ;; source is still caught by the revert and save hooks.
                   (when-let* ((file (buffer-file-name buffer))
+                              ((not (file-remote-p file)))
                               ((not (file-exists-p file)))
                               ((mevedel--buffer-has-instructions-p buffer)))
                     (mevedel--mark-buffer-source-missing buffer)))

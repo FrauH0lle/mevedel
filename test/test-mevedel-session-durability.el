@@ -64,6 +64,20 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-session-transfer--path
+  (:doc "names a transfer mailbox without creating it")
+  (let ((root (make-temp-file "mevedel-transfer-path-" t)))
+    (unwind-protect
+        (let ((path (mevedel-session-transfer--path root "requests")))
+          (should (equal (file-name-concat root "requests") path))
+          ;; A poll must not mutate the target on behalf of an observer, and
+          ;; an absent mailbox already reads as "no requests".
+          (should-not (file-exists-p path))
+          (should-not
+           (mevedel-session-control-fs-list-directory path "\\`request-")))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
 (mevedel-deftest mevedel-session-transfer--valid-request-p
   (:doc "rejects hostile labels and non-finite, future, or overlong deadlines")
   (let* ((now (float-time))
@@ -939,8 +953,8 @@
          (mevedel-session-lease-seconds 90)
          (now 0.0)
          (triggered nil)
-         (write-file-function
-          (symbol-function 'mevedel-session-control-fs-write-file)))
+         (program-function
+          (symbol-function 'mevedel-session-control-fs-run-program)))
     (make-directory session-dir t)
     (unwind-protect
         (progn
@@ -952,18 +966,24 @@
             (setq now 80.0)
             (cl-letf
                 (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
-                 ((symbol-function 'mevedel-session-control-fs-write-file)
-                  (lambda (path content)
-                    (unless triggered
+                 ;; A renewal states its precondition as the `verify' opening
+                 ;; its commit program.  Letting a successor take over
+                 ;; immediately before that program runs is the last moment a
+                 ;; stale renewal could still overwrite the newer owner.
+                 ((symbol-function 'mevedel-session-control-fs-run-program)
+                  (lambda (operations)
+                    (when (and (not triggered)
+                               (eq 'verify (plist-get (car operations) :op)))
                       (setq triggered t
                             now 100.0)
                       (let ((mevedel-session-durability--client-id successor))
                         (should
                          (mevedel-session-durability-lease-acquire
                           session-dir "*successor*"))))
-                    (funcall write-file-function path content))))
+                    (funcall program-function operations))))
               (should-not
-               (mevedel-session-durability-lease-renew session)))
+               (mevedel-session-durability-lease-renew session))
+              (should triggered))
             (let ((mevedel-session-durability--client-id successor))
               (should (mevedel-session-durability-lease-acquire
                        session-dir "*successor*"))
@@ -992,8 +1012,8 @@
          (renew-allowed nil)
          (renew-done nil)
          (renew-result nil)
-         (write-file-function
-          (symbol-function 'mevedel-session-control-fs-write-file))
+         (program-function
+          (symbol-function 'mevedel-session-control-fs-run-program))
          renew-thread)
     (make-directory session-dir t)
     (setf (mevedel-session-save-path session) session-dir)
@@ -1005,17 +1025,22 @@
                  (initial 0.0)
                  ((equal mevedel-session-durability--client-id owner) 80.0)
                  (t 100.0))))
-             ((symbol-function 'mevedel-session-control-fs-write-file)
-              (lambda (path content)
+             ;; The renewal is held immediately before its commit program,
+             ;; which is the operation that proves its precondition and writes
+             ;; the new record.  That is the moment the contender must find
+             ;; still outstanding.
+             ((symbol-function 'mevedel-session-control-fs-run-program)
+              (lambda (operations)
                 (when (and (equal (thread-name (current-thread))
                                   "mevedel-owner-renew")
+                           (eq 'verify (plist-get (car operations) :op))
                            (not renew-ready))
                   (with-mutex mutex
                     (setq renew-ready t)
                     (condition-notify condition t)
                     (while (not renew-allowed)
                       (condition-wait condition))))
-                (funcall write-file-function path content))))
+                (funcall program-function operations))))
           (should (mevedel-session-durability-lease-acquire
                    session-dir "*owner*" session))
           (setq initial nil
@@ -1064,8 +1089,8 @@
          (successor (make-string 64 ?b))
          (mevedel-session-durability--client-id owner)
          (session (test-mevedel-session-durability--local-session local-root))
-         (list-directory-function
-          (symbol-function 'mevedel-session-control-fs-list-directory))
+         (program-function
+          (symbol-function 'mevedel-session-control-fs-run-program))
          (helper-called nil))
     (make-directory session-dir t)
     (setf (mevedel-session-save-path session) session-dir)
@@ -1080,13 +1105,21 @@
               (mevedel-session-durability--lease-record
                "*successor*" 2 'active nil nil
                (mevedel-session-durability--target-time lease-directory))))
+          ;; The renewal observes the generation listing inside its own
+          ;; target program, so that is where consulting it is proved.
           (cl-letf
-              (((symbol-function 'mevedel-session-control-fs-list-directory)
-                (lambda (directory regexp)
-                  (if (not (equal directory lease-directory))
-                      (funcall list-directory-function directory regexp)
-                    (setq helper-called t)
-                    (funcall list-directory-function directory regexp)))))
+              (((symbol-function 'mevedel-session-control-fs-run-program)
+                (lambda (operations)
+                  (when (cl-find-if
+                         (lambda (operation)
+                           (and (eq 'list-directory (plist-get operation :op))
+                                (equal (mevedel-session-control-fs-physical-path
+                                        (plist-get operation :path))
+                                       (mevedel-session-control-fs-physical-path
+                                        lease-directory))))
+                         operations)
+                    (setq helper-called t))
+                  (funcall program-function operations))))
             (should-not
              (mevedel-session-durability-lease-renew session)))
           (should helper-called))
