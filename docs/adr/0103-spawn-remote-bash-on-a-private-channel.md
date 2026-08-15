@@ -43,11 +43,17 @@ serializing behind long-running executions, and the execution stops being
 the reentrancy window the transport layer's busy predicate documents as
 its blind spot -- that blind spot now covers only classic spawns.
 
-Each direct-async spawn opens its own connection: authentication must be
-non-interactive (an agent, a key, or user-configured connection sharing
-in `~/.ssh/config`), and every spawn pays a handshake.  On Emacs 30.2 the
-spawn carries no ControlMaster options at all, so the isolation is total
-by default and sharing is the user's `ssh_config` decision.
+Each direct-async spawn is its own ssh process: authentication must be
+non-interactive (an agent, a key, or connection sharing), and a spawn
+without socket sharing pays a handshake.  Emacs 30.2 ships a defect
+here: the spawn asks for its ssh options through a function TRAMP
+renamed, silently receiving none -- which loses not only ControlMaster
+sharing but any option routed through the same-named variable, such as
+the -F config a host alias needs to resolve at all.  mevedel restores
+the intended call with an alias before the first ssh direct-async
+spawn, so the spawn carries the user's options and reuses the master
+socket while still running outside the master shell -- the shell
+channel is the contention this decision removes.
 
 The local process's exit status is the ssh client's: a remote exit 255 is
 indistinguishable from a transport failure.  The zombie-aware group probe

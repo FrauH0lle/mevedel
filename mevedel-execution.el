@@ -632,6 +632,18 @@ nothing depends on the pty's death."
                (not (gethash prefix
                              mevedel-execution--direct-async-properties)))
       (require 'tramp)
+      (require 'tramp-sh)
+      ;; Emacs 30's direct-async spawn still asks for its ssh options
+      ;; through `tramp-ssh-controlmaster-options', but TRAMP renamed
+      ;; that function to `tramp-ssh-or-plink-options' and the
+      ;; compat-funcall silently returns nil -- dropping every option
+      ;; the user routed through the same-named variable, including a
+      ;; -F config a host alias may need to resolve at all.  Restore
+      ;; the intended call.
+      (unless (fboundp 'tramp-ssh-controlmaster-options)
+        (when (fboundp 'tramp-ssh-or-plink-options)
+          (defalias 'tramp-ssh-controlmaster-options
+            'tramp-ssh-or-plink-options)))
       (add-to-list 'tramp-connection-properties
                    (list (regexp-quote prefix) "direct-async" t))
       (puthash prefix t mevedel-execution--direct-async-properties))))
