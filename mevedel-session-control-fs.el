@@ -88,113 +88,6 @@ before the operation ran."
           :parent parent
           :leaf leaf)))
 
-(defconst mevedel-session-control-fs--script
-  (concat
-   "set -eu\n"
-   "parent=$1\n"
-   "leaf=$2\n"
-   "expected_pwd=$3\n"
-   "operation=$4\n"
-   "pause_file=$5\n"
-   "test -e \"$parent\" || exit 78\n"
-   "exec 9<\"$parent\"\n"
-   "cd -- /proc/self/fd/9\n"
-   "test \"$(pwd -P)\" = \"$expected_pwd\"\n"
-   "if test -n \"$pause_file\"; then\n"
-   "  : >\"$pause_file\"\n"
-   "  waited=0\n"
-   "  while test ! -e \"$pause_file.continue\"; do\n"
-   "    sleep 0.01\n"
-   "    waited=$((waited + 1))\n"
-   "    test \"$waited\" -lt 6000 || exit 79\n"
-   "  done\n"
-   "fi\n"
-   "case \"$operation\" in\n"
-   "  read)\n"
-   "    test ! -L \"$leaf\"\n"
-   "    test -e \"$leaf\" || exit 77\n"
-   "    exec 8<\"$leaf\"\n"
-   "    test ! -L \"$leaf\"\n"
-   "    cat <&8\n"
-   "    ;;\n"
-   "  write)\n"
-   "    test ! -L \"$leaf\"\n"
-   "    temporary=$(mktemp -- .mevedel-control-fs-XXXXXX)\n"
-   "    trap 'rm -f -- \"$temporary\"' EXIT\n"
-   "    cat >\"$temporary\"\n"
-   "    mv -fT -- \"$temporary\" \"$leaf\"\n"
-   "    trap - EXIT\n"
-   "    ;;\n"
-   "  create)\n"
-   "    test ! -L \"$leaf\"\n"
-   "    temporary=$(mktemp -- .mevedel-control-fs-XXXXXX)\n"
-   "    trap 'rm -f -- \"$temporary\"' EXIT\n"
-   "    cat >\"$temporary\"\n"
-   "    if test ! -d \"$leaf\" && ln -- \"$temporary\" \"$leaf\"; then\n"
-   "      rm -f -- \"$temporary\"\n"
-   "      trap - EXIT\n"
-   "      exit 0\n"
-   "    fi\n"
-   "    if test -e \"$leaf\" || test -L \"$leaf\"; then\n"
-   "      exit 73\n"
-   "    fi\n"
-   "    exit 75\n"
-   "    ;;\n"
-   "  mkdir)\n"
-   "    test ! -L \"$leaf\"\n"
-   "    if mkdir -- \"$leaf\"; then\n"
-   "      :\n"
-   "    elif test -d \"$leaf\"; then\n"
-   "      exit 73\n"
-   "    else\n"
-   "      exit 75\n"
-   "    fi\n"
-   "    ;;\n"
-
-   "  probe)\n"
-   "    test ! -L \"$leaf\"\n"
-   "    test -e \"$leaf\" || exit 77\n"
-   "    printf '1\\n'\n"
-   "    ;;\n"
-   "  directory)\n"
-   "    test ! -L \"$leaf\"\n"
-   "    test -e \"$leaf\" || exit 77\n"
-   "    test -d \"$leaf\"\n"
-   "    printf '1\\n'\n"
-   "    ;;\n"
-   "  delete-file)\n"
-   "    test ! -L \"$leaf\"\n"
-   "    rm -f -- \"$leaf\"\n"
-   "    ;;\n"
-   "  delete-directory)\n"
-   "    test ! -L \"$leaf\"\n"
-   "    rm -rf -- \"$leaf\"\n"
-   "    ;;\n"
-   "  clock)\n"
-   "    test ! -L \"$leaf\"\n"
-   "    exec 8<\"$leaf\"\n"
-   "    test ! -L \"$leaf\"\n"
-   "    cd -- /proc/self/fd/8\n"
-   "    temporary=$(mktemp -- .mevedel-control-clock-XXXXXX)\n"
-   "    trap 'rm -f -- \"$temporary\"' EXIT\n"
-   "    stat -c '%Y' -- \"$temporary\"\n"
-   "    ;;\n"
-   "  list)\n"
-   "    test ! -L \"$leaf\"\n"
-   "    test -e \"$leaf\" || exit 77\n"
-   "    exec 8<\"$leaf\"\n"
-   "    test ! -L \"$leaf\"\n"
-   "    cd -- /proc/self/fd/8\n"
-   "    for entry in ./* ./.[!.]* ./..?*; do\n"
-   "      if test -L \"$entry\"; then exit 76; fi\n"
-   "      test -e \"$entry\" || continue\n"
-   "      printf '%s\\0' \"${entry#./}\"\n"
-   "    done\n"
-   "    ;;\n"
-   "  *) exit 74 ;;\n"
-   "esac\n")
-  "Target-side descriptor-relative control filesystem script.")
-
 (defconst mevedel-session-control-fs--program-script
   (concat
    "set -eu\n"
@@ -408,84 +301,6 @@ The scripts receive their parent directory as an explicit argument, so the
 working directory only selects the target.  A deleted or never-created
 parent must not turn into a `Setting current directory' failure."
   (concat (or (file-remote-p path) "") "/"))
-
-(defun mevedel-session-control-fs--run
-    (path operation &optional content coding-system)
-  "Run descriptor-relative OPERATION on PATH with optional CONTENT.
-
-One target process performs the whole operation: it opens the parent
-directory, proves the opened directory is the requested physical path, and
-then works only through that descriptor.  Splitting the proof into a separate
-preflight would double the target round trips without narrowing the window,
-because the descriptor, not an earlier observation, is the authority."
-  (mevedel-session-control-fs--assert-idle path)
-  (let* ((descriptor (mevedel-session-control-fs--descriptor path))
-         (parent (plist-get descriptor :parent))
-         (remote (file-remote-p parent))
-         (default-directory
-          (mevedel-session-control-fs--connection-directory parent))
-         ;; The script resolves `stat' itself through the target PATH; this
-         ;; only proves both programs are present before dispatching.
-         (bash (car (mevedel-session-control-fs--programs remote))))
-    (let ((input (and content (make-temp-file ".mevedel-control-fs-input-")))
-          (output (generate-new-buffer " *mevedel-control-fs-output*")))
-      (when (eq coding-system 'no-conversion)
-        (with-current-buffer output
-          (set-buffer-multibyte nil)))
-      (unwind-protect
-          (progn
-            (when input
-              (with-temp-buffer
-                (insert content)
-                (let ((coding-system-for-write
-                       (or coding-system 'utf-8-unix)))
-                  (write-region (point-min) (point-max)
-                                input nil 'silent))))
-            ;; `let*': the process call is one of these initializers, so a
-            ;; plain `let' would run it before the coding system is bound.
-            (let* ((coding-system-for-read
-                    (if (string= operation "read")
-                        (or coding-system 'utf-8-unix)
-                      'utf-8-unix))
-                   (status
-                    (mevedel-transport-with-exclusive-connection
-                      (process-file bash input output nil
-                                    "-p" "-c"
-                                    mevedel-session-control-fs--script
-                                    "mevedel-session-control-fs"
-                                    (file-local-name parent)
-                                    (plist-get descriptor :leaf)
-                                    (directory-file-name
-                                     (file-local-name parent))
-                                    operation
-                                    (or
-                                     mevedel-session-control-fs--test-pause-file
-                                     "")))))
-              (unless (and (integerp status) (zerop status))
-                (cond
-                 ((and (integerp status) (= status 73))
-                  (signal 'mevedel-session-control-fs-conflict (list path)))
-                 ((and (integerp status) (memq status '(77 78)))
-                  (signal 'mevedel-session-control-fs-absent (list path)))
-                 (t
-                  ;; The resolved interpreters are the only cached input to
-                  ;; this call, so a failure that is not a name conflict or
-                  ;; an absent name retries their lookup.
-                  (remhash (or remote "")
-                           mevedel-session-control-fs--programs)
-                  ;; A refused or failed target operation is a filesystem
-                  ;; failure: callers classify publication and recovery
-                  ;; retries by that condition.
-                  (with-current-buffer output
-                    (signal 'file-error
-                            (list "Portable control operation failed"
-                                  path (string-trim (buffer-string))))))))
-              (with-current-buffer output
-                (buffer-string))))
-        (when (and input (file-exists-p input))
-          (delete-file input))
-        (when (buffer-live-p output)
-          (kill-buffer output))))))
 
 (defconst mevedel-session-control-fs--program-verbs
   '((read . "read")
@@ -705,10 +520,6 @@ signal contract of the single-operation wrappers per operation."
       (dolist (other parents)
         (unless (equal other remote)
           (error "Control program crosses execution targets")))
-      ;; A program is one target operation and nests exactly as badly as a
-      ;; single one, so it refuses the same way.
-      (mevedel-session-control-fs--assert-idle
-       (plist-get (car operations) :path))
       (let* ((default-directory
               (mevedel-session-control-fs--connection-directory
                (or remote "/")))
@@ -800,17 +611,29 @@ Each operation proves that spelling target-side; this only rejects a path
 that could never be a control path."
   (mevedel-session-control-fs--physical-spelling path))
 
+(defun mevedel-session-control-fs--run-1 (op path &optional content coding)
+  "Run OP on PATH as a one-operation program and return its decoded value.
+CONTENT and CODING are the operation's payload and coding system.  The
+shared status vocabulary supplies the classification: `conflict' and
+`absent' raise their conditions, everything else failed raises
+`file-error' with the target's own diagnostic."
+  (mevedel-session-control-fs-program-value
+   (car (mevedel-session-control-fs-run-program
+         (list (append (list :op op :path path)
+                       (and content (list :content content))
+                       (and coding (list :coding coding))))))))
+
 (defun mevedel-session-control-fs-read-file
     (path &optional coding-system)
   "Read target control file PATH through its pinned parent directory.
 CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes."
-  (mevedel-session-control-fs--run path "read" nil coding-system))
+  (mevedel-session-control-fs--run-1 'read path nil coding-system))
 
 (defun mevedel-session-control-fs-path-exists-p (path)
   "Return non-nil when target PATH exists as a non-symlink entry."
   (condition-case nil
       (progn
-        (mevedel-session-control-fs--run path "probe")
+        (mevedel-session-control-fs--run-1 'path-exists-p path)
         t)
     (mevedel-session-control-fs-absent nil)))
 
@@ -818,7 +641,7 @@ CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes."
   "Return non-nil when target PATH exists as a non-symlink directory."
   (condition-case nil
       (progn
-        (mevedel-session-control-fs--run path "directory")
+        (mevedel-session-control-fs--run-1 'directory-p path)
         t)
     (mevedel-session-control-fs-absent nil)))
 
@@ -826,7 +649,7 @@ CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes."
     (path content &optional coding-system)
   "Atomically replace target control file PATH with CONTENT.
 CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes."
-  (mevedel-session-control-fs--run path "write" content coding-system)
+  (mevedel-session-control-fs--run-1 'write path content coding-system)
   t)
 
 (defun mevedel-session-control-fs-create-file
@@ -835,7 +658,7 @@ CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes."
 CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes."
   (condition-case nil
       (progn
-        (mevedel-session-control-fs--run path "create" content coding-system)
+        (mevedel-session-control-fs--run-1 'create path content coding-system)
         t)
     (mevedel-session-control-fs-conflict nil)))
 
@@ -848,7 +671,7 @@ its own pinned parent."
   (let ((path (mevedel-session-control-fs-physical-path path)))
     (condition-case nil
         (progn
-          (mevedel-session-control-fs--run path "mkdir")
+          (mevedel-session-control-fs--run-1 'make-directory path)
           t)
       (mevedel-session-control-fs-conflict nil)
       (mevedel-session-control-fs-absent
@@ -866,13 +689,9 @@ An absent DIRECTORY lists nothing, so callers need no separate existence
 round trip.  The directory descriptor is pinned while names are enumerated.
 Symlink entries fail closed before their names can be handed to a caller."
   (let* ((directory (mevedel-session-control-fs-physical-path directory))
-         ;; Names are NUL separated: a newline is a legal filename byte, and
-         ;; a line-separated listing would let one crafted entry present
-         ;; itself to the caller as two.
          (names (condition-case nil
-                    (split-string
-                     (mevedel-session-control-fs--run directory "list")
-                     "\0" t)
+                    (mevedel-session-control-fs--run-1
+                     'list-directory directory)
                   (mevedel-session-control-fs-absent nil)))
          result)
     (dolist (name names (nreverse result))
@@ -881,26 +700,22 @@ Symlink entries fail closed before their names can be handed to a caller."
 
 (defun mevedel-session-control-fs-delete-file (path)
   "Delete target control file PATH without following a final symlink."
-  (mevedel-session-control-fs--run path "delete-file")
+  (mevedel-session-control-fs--run-1 'delete-file path)
   t)
 
 (defun mevedel-session-control-fs-delete-directory (path)
   "Recursively delete target control directory PATH without following its root."
-  (mevedel-session-control-fs--run path "delete-directory")
+  (mevedel-session-control-fs--run-1 'delete-directory path)
   t)
 
 (defun mevedel-session-control-fs-target-time (directory)
   "Return target filesystem seconds from a descriptor-relative marker.
 
-Unreadable output fails closed: a silently substituted zero would make every
-stored deadline look live to this client and every deadline it writes look
-expired to every other client."
-  (let ((value (string-trim
-                (mevedel-session-control-fs--run directory "clock"))))
-    (unless (string-match-p "\\`[0-9]+\\'" value)
-      (signal 'file-error
-              (list "Portable control clock is unavailable" directory)))
-    (string-to-number value)))
+Unreadable output fails closed inside the program value decoder: a
+silently substituted zero would make every stored deadline look live to
+this client and every deadline it writes look expired to every other
+client."
+  (mevedel-session-control-fs--run-1 'target-time directory))
 
 (provide 'mevedel-session-control-fs)
 

@@ -142,13 +142,14 @@
            (mevedel-session-control-fs-read-file
             (file-name-concat root "absent")))
           (should (= 2 lookups))
-          ;; A refused operation may mean the interpreter moved, so the next
-          ;; operation resolves again.
+          ;; A refused operation keeps the pair too: the program process
+          ;; itself ran, so the interpreters demonstrably work.  Only a
+          ;; program that fails as a whole retries the lookup.
           (let ((link (file-name-concat root "link")))
             (make-symbolic-link "absent" link)
             (should-error (mevedel-session-control-fs-read-file link)))
           (mevedel-session-control-fs-target-time root)
-          (should (= 4 lookups)))
+          (should (= 2 lookups)))
       (clrhash mevedel-session-control-fs--programs)
       (when (file-directory-p root)
         (delete-directory root t)))))

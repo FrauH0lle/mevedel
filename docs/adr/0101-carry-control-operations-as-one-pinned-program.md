@@ -58,8 +58,14 @@ on the left of a `||` so it can capture the status, and that suppresses
 refused symlink or a failed descriptor proof continue into the operation it was
 meant to prevent.
 
-The single-operation entry point remains, and its wrappers keep their existing
-error classification and interpreter-cache behaviour.
+The single-operation entry point is gone: every wrapper is a one-operation
+program.  Classification comes from the shared status vocabulary --
+`conflict' and `absent' raise their conditions, anything else failed raises a
+file error carrying the target's own diagnostic -- and wrapper content under
+the argument budget travels on the command line instead of through a local
+temporary file and a remote INFILE copy.  The interpreter lookup retries only
+when the program process itself fails; a refused operation inside a program
+that ran proves the interpreters work.
 
 ## Consequences
 
