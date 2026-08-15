@@ -14,7 +14,9 @@
 (require 'ert)
 (require 'mevedel)
 (require 'mevedel-session-control-fs)
+(require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
+(require 'mevedel-telemetry)
 (require 'mevedel-workspace)
 (require 'mevedel-workspace-identity)
 (require 'helpers
@@ -40,8 +42,10 @@
        ,@body)
      test-mevedel-session-persistence-cost--processes))
 
-(mevedel-deftest mevedel-session-persistence-save/cost
-  (:doc "one portable save stays within its target round-trip budget")
+(mevedel-deftest mevedel-session-persistence-save/cost ()
+  ,test
+  (test)
+  :doc "one portable save stays within its target round-trip budget"
   (let* ((tempdir (file-name-as-directory
                    (make-temp-file "mevedel-save-cost-" t)))
          (workspace (progn
@@ -89,6 +93,59 @@
         (kill-buffer buffer))
       (when (file-directory-p tempdir)
         (delete-directory tempdir t))
+      (mevedel-workspace-clear-registry)))
+
+  :doc "a settled remote save stays bounded and defers telemetry"
+  (let* ((host "save-cost-host")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-remote-save-cost-" t)))
+         (buffer (generate-new-buffer " *remote-save-cost*"))
+         session)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (let* ((remote-root (format "/mevedelmock:%s:%s"
+                                      host local-root))
+                 (workspace (progn
+                              (mevedel-workspace-clear-registry)
+                              (mevedel-workspace-get-or-create
+                               'project remote-root remote-root
+                               "remote-cost"))))
+            (mevedel-workspace-identity-ensure remote-root)
+            (setq session (mevedel-session-create "main" workspace))
+            (mevedel-execution-target-probe
+             (mevedel-session-execution-target session) t 'off)
+            (puthash (mevedel-execution-target-identity
+                      (mevedel-session-execution-target session))
+                     t mevedel-session-durability--disclosed-targets)
+            (with-current-buffer buffer
+              (org-mode)
+              (setq-local mevedel--session session)
+              (insert "*** First prompt\n")
+              (should (eq 'portable
+                          (mevedel-session-authority-mode-for-session
+                           session)))
+              (mevedel-session-persistence-save session buffer)
+              ;; The settled turn a user feels: one transcript change and
+              ;; queued telemetry.  The telemetry flush is a whole remote
+              ;; publication transaction, so it must not run inside the
+              ;; save -- its entries are still queued when save returns.
+              (goto-char (point-max))
+              (insert "*** Second prompt\n")
+              (mevedel-telemetry-record session 'cost-probe)
+              (should (mevedel-session-telemetry-pending session))
+              (let ((processes
+                     (test-mevedel-session-persistence-cost--measure
+                       (mevedel-session-persistence-save session buffer))))
+                (should (<= processes 17)))
+              (should (mevedel-session-telemetry-pending session)))))
+      (when session
+        (ignore-errors
+          (mevedel-session-durability--cancel-renewal session)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
       (mevedel-workspace-clear-registry))))
 
 (provide 'test-mevedel-session-persistence-cost)
