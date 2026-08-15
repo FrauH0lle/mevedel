@@ -131,7 +131,7 @@ key."
   "Return JSON-safe alist representation of RECORD."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
-                   :truncated))
+                       :truncated))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -164,24 +164,24 @@ key."
                      (format "tool-%s" tool-use-id)
                    (mevedel-collaboration--stable-record-id
                     "tool" raw occurrence)))
-           (result (string-trim (if (stringp result) result "")))
-           (status (if (string-match-p
-                        "\\(?:Error:\\|blocked by\\|<tool_call_error>\\)"
-                        result)
-                       "failed"
-                     "completed"))
-           (result (mevedel-collaboration--truncate-bytes
-                    result mevedel-collaboration--max-tool-result-bytes))
-           (truncated (string-suffix-p "\n[truncated]" result)))
-      (mevedel-collaboration--record
-       id "tool"
-       :revision 0
-       :name (format "%s" name)
-       :status status
-       :summary (format "%s" name)
-       :result result
-       :truncated (and truncated t)
-       :identity-fixed (and tool-use-id t))))))
+             (result (string-trim (if (stringp result) result "")))
+             (status (if (string-match-p
+                          "\\(?:Error:\\|blocked by\\|<tool_call_error>\\)"
+                          result)
+                         "failed"
+                       "completed"))
+             (result (mevedel-collaboration--truncate-bytes
+                      result mevedel-collaboration--max-tool-result-bytes))
+             (truncated (string-suffix-p "\n[truncated]" result)))
+        (mevedel-collaboration--record
+         id "tool"
+         :revision 0
+         :name (format "%s" name)
+         :status status
+         :summary (format "%s" name)
+         :result result
+         :truncated (and truncated t)
+         :identity-fixed (and tool-use-id t))))))
 
 (defun mevedel-collaboration--canonical-records (data-buffer)
   "Return allowlisted records reconstructed from DATA-BUFFER."
@@ -294,7 +294,7 @@ canonical transcript record appears.  A pending record's identity is copied
 onto that canonical record, so a viewer updates one card from running through
 completion instead of seeing a duplicate tool card."
   (let* ((canonical (mevedel-collaboration--canonical-records
-                    (plist-get room :data-buffer)))
+                     (plist-get room :data-buffer)))
          (pending (plist-get room :pending-tools))
          (canonical-tools (mevedel-collaboration--tool-records canonical))
          (remaining nil))
@@ -324,7 +324,7 @@ completion instead of seeing a duplicate tool card."
               (setq index found)
               (setf (nth index canonical)
                     (plist-put (plist-put candidate :id
-                                           (plist-get entry :id))
+                                          (plist-get entry :id))
                                :identity-fixed t)))
           (push entry remaining))))
     (setq remaining (nreverse remaining))
@@ -337,9 +337,9 @@ completion instead of seeing a duplicate tool card."
           output)
       (dolist (entry remaining)
         (let* ((baseline (min length
-                               (max 0 (or (plist-get entry
-                                                   :baseline-record-count)
-                                          length))))
+                              (max 0 (or (plist-get entry
+                                                    :baseline-record-count)
+                                         length))))
                (cell (assq baseline pending-at)))
           (if cell
               (setcdr cell (append (cdr cell) (list entry)))
