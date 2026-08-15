@@ -238,15 +238,23 @@
                                               :content "tiny"))))))
           (should (= 1 (length calls)))
           ;; No stdin file exists at all: the fields rode the command line,
-          ;; and they arrive there in the order the script reads them.
+          ;; and they arrive there in the order the script reads them.  The
+          ;; parent travels once, as the physical no-trailing-slash spelling
+          ;; the script both opens and proves against `pwd -P'.
           (should-not (nth 1 (car calls)))
-          (let ((fields (last (car calls) 6)))
+          (let ((fields (last (car calls) 5)))
             (should (equal "write" (nth 0 fields)))
-            (should (equal (file-name-as-directory (nth 2 fields))
+            (should (equal (directory-file-name
+                            (file-name-directory
+                             (file-truename small)))
                            (nth 1 fields)))
-            (should (equal "small" (nth 3 fields)))
-            (should (equal (base64-encode-string "tiny" t) (nth 4 fields)))
-            (should (equal "0" (nth 5 fields))))
+            (should (equal "small" (nth 2 fields)))
+            (should (equal (base64-encode-string "tiny" t) (nth 3 fields)))
+            (should (equal "0" (nth 4 fields))))
+          ;; The root parent keeps its only possible spelling.
+          (should (equal "/" (nth 1 (mevedel-session-control-fs--program-fields
+                                     (list :op 'path-exists-p
+                                           :path "/mevedel-missing")))))
 
           (setq calls nil)
           (should (equal '(ok ok)
