@@ -1427,6 +1427,9 @@ connection charges for, so the program path is proved here too."
       "\"command\":\".mevedel/hooks/accept-read.sh\","
       "\"timeout\":10,\"failClosed\":true}]}]}}")
      nil config nil 'silent)
+    ;; Configured rule layers are memoized per workspace; a hook file
+    ;; written mid-session is picked up after an explicit reload.
+    (mevedel-hooks-reload)
     (should
      (string-match-p
       "acceptance needle"
