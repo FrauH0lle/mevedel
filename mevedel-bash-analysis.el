@@ -51,8 +51,17 @@ user authority may still permit a matching command."
 (defconst mevedel-bash-analysis--allowed-node-types
   '("program" "list" "pipeline" "command" "command_name" "word"
     "string" "string_content" "raw_string" "number" "concatenation"
-    "&&" "||" ";" "|" "\"" "'")
-  "Tree-sitter Bash node types accepted as plain command syntax.")
+    "test_command" "binary_expression" "unary_expression" "test_operator"
+    "&&" "||" ";" "|" "\"" "'" "[" "]" "=" "!=")
+  "Tree-sitter Bash node types accepted as plain command syntax.
+The `test_command' entries cover single-bracket predicates such as
+\"[ 1 = 2 ]\", which the conservative scanner also accepts.  The `[[' and
+`]]' tokens are deliberately absent, so the extended form stays
+unsupported alongside negation and pattern operators.")
+
+(defconst mevedel-bash-analysis--treesit-command-node-types
+  '("command" "test_command")
+  "Tree-sitter Bash node types whose whole text is one command.")
 
 (defconst mevedel-bash-analysis--control-words
   '("case" "coproc" "do" "done" "elif" "else" "esac" "fi" "for"
@@ -527,7 +536,8 @@ quotes or escaped with a backslash do not close the substitution."
 
 (defun mevedel-bash-analysis--treesit-command-texts (node)
   "Return command source strings below NODE in source order."
-  (if (string-equal (treesit-node-type node) "command")
+  (if (member (treesit-node-type node)
+              mevedel-bash-analysis--treesit-command-node-types)
       (list (treesit-node-text node t))
     (let (texts)
       (dotimes (index (treesit-node-child-count node))
@@ -538,27 +548,39 @@ quotes or escaped with a backslash do not close the substitution."
       texts)))
 
 (defun mevedel-bash-analysis--treesit (source)
-  "Analyze SOURCE with the configured Bash Tree-sitter grammar."
+  "Analyze SOURCE with the configured Bash Tree-sitter grammar.
+
+The conservative scanner runs alongside the grammar and keeps ownership of
+the segments whenever the grammar rejects the program.  Discarding them
+would leave `:segments', `:candidates', and `:resources' empty for every
+unsupported construct, and those are the surfaces protected-path checks
+and explicit deny rules match against: an environment assignment in front
+of a denied command would otherwise present nothing to match."
   (require 'treesit)
   (with-temp-buffer
     (insert source)
-    (let* ((scan (mevedel-bash-analysis--scan-segments source))
-           (newline-p
-            (member "Newline command separation is unsupported" (cadr scan)))
-           (parser (treesit-parser-create 'bash))
-           (root (treesit-parser-root-node parser))
-           (supported (and (not newline-p)
-                           (mevedel-bash-analysis--treesit-supported-p root)))
-           (texts (and supported
-                       (mevedel-bash-analysis--treesit-command-texts root)))
-           (parsed (mevedel-bash-analysis--argv texts))
-           (commands (car parsed))
-           (reasons (append
-                     (unless supported
-                       '("Tree-sitter found unsupported or invalid shell syntax"))
-                     (cadr parsed))))
+    (pcase-let* ((`(,scan-segments ,scan-reasons)
+                  (mevedel-bash-analysis--scan-segments source))
+                 (newline-p
+                  (member "Newline command separation is unsupported"
+                          scan-reasons))
+                 (parser (treesit-parser-create 'bash))
+                 (root (treesit-parser-root-node parser))
+                 (supported
+                  (and (not newline-p)
+                       (mevedel-bash-analysis--treesit-supported-p root)))
+                 (segments
+                  (if supported
+                      (mevedel-bash-analysis--treesit-command-texts root)
+                    scan-segments))
+                 (`(,commands ,argv-reasons)
+                  (mevedel-bash-analysis--argv segments))
+                 (reasons (append
+                           (unless supported
+                             '("Tree-sitter found unsupported or invalid shell syntax"))
+                           argv-reasons)))
       (mevedel-bash-analysis--result
-       source 'treesit texts commands
+       source 'treesit segments commands
        (or (not supported) (not (null reasons))) reasons))))
 
 
