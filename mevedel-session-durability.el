@@ -323,48 +323,93 @@ UNSETTLED-MUTATION records target mutation whose outcome is not yet proved."
   "\\`[0-9]\\{20\\}\\.el\\'"
   "Name shape of a lease generation record.")
 
-(defun mevedel-session-durability--generation-paths (directory)
-  "Return DIRECTORY's generation record paths in descending order."
-  (mevedel-session-control-fs-physical-path directory)
-  (sort (mevedel-session-control-fs-list-directory
-         directory mevedel-session-durability--generation-name-regexp)
-        #'string>))
+(defun mevedel-session-durability--generation-paths (directory &optional names)
+  "Return DIRECTORY's generation record paths in descending order.
+
+NAMES, when non-nil, is a listing already observed for DIRECTORY and
+replaces the list round trip: a list carries the observed entries and
+the symbol `none' records that the observation saw an empty directory,
+which a bare nil could not distinguish from no observation at all.
+Only entries shaped like a generation record survive either way."
+  (let ((physical (mevedel-session-control-fs-physical-path directory)))
+    (sort (cond
+           ((eq names 'none) nil)
+           (names
+            (let (paths)
+              (dolist (name names paths)
+                (when (string-match-p
+                       mevedel-session-durability--generation-name-regexp
+                       (file-name-nondirectory name))
+                  (push (expand-file-name name physical) paths)))))
+           (t
+            (mevedel-session-control-fs-list-directory
+             directory
+             mevedel-session-durability--generation-name-regexp)))
+          #'string>)))
 
 (defun mevedel-session-durability--generation (path)
   "Return the generation number encoded by lease record PATH."
   (string-to-number (file-name-base path)))
 
-(defun mevedel-session-durability--lease-head (directory)
+(defun mevedel-session-durability--observed-names (observed)
+  "Return OBSERVED's listing as a names argument for the path helpers.
+An observation that saw an empty directory answers `none', so its
+consumer does not list again; a failed observation answers nil, which
+falls back to a fresh listing."
+  (and (plist-get observed :listed)
+       (or (plist-get observed :names) 'none)))
+
+(defun mevedel-session-durability--read-records (paths)
+  "Read every lease record among PATHS in one target program.
+
+Return parsed records or nil in PATHS order.  An absent or unreadable
+record is nil rather than the program's end, so a vanished newest
+record can never hide an older live one."
+  (when paths
+    (mapcar
+     (lambda (result)
+       (and (eq 'ok (plist-get result :status))
+            (condition-case nil
+                (car (read-from-string (plist-get result :value)))
+              (error nil))))
+     (mevedel-session-control-fs-run-program
+      (mapcar (lambda (path)
+                (list :op 'read :path path :optional t))
+              paths)))))
+
+(defun mevedel-session-durability--head-of-records (records)
+  "Return the first non-aborted record among RECORDS, newest first."
+  (catch 'head
+    (dolist (record records)
+      (when (and record (not (eq 'aborted (plist-get record :status))))
+        (throw 'head record)))))
+
+(defun mevedel-session-durability--lease-head (directory &optional names)
   "Return DIRECTORY's latest non-aborted lease record.
 
-A generation whose record cannot be read is skipped rather than reported as
-\"no lease\": a vanished or unreadable newest record must never hide an older
-live one, because the generation compare-and-set is what keeps two writers
-apart."
-  (catch 'head
-    (dolist (path (mevedel-session-durability--generation-paths directory))
-      (when-let ((record (mevedel-session-durability--read-plist path)))
-        (unless (eq 'aborted (plist-get record :status))
-          (throw 'head record))))))
+NAMES, when non-nil, is an already-observed listing that replaces the
+list round trip; all records are then read in one program.  A
+generation whose record cannot be read is skipped rather than reported
+as \"no lease\": a vanished or unreadable newest record must never hide
+an older live one, because the generation compare-and-set is what keeps
+two writers apart."
+  (mevedel-session-durability--head-of-records
+   (mevedel-session-durability--read-records
+    (mevedel-session-durability--generation-paths directory names))))
 
-(defun mevedel-session-durability--lease-head-before (directory generation)
+(defun mevedel-session-durability--lease-head-before
+    (directory generation &optional names)
   "Return DIRECTORY's latest non-aborted record older than GENERATION.
 
-An unreadable record is skipped for the same reason as in
+NAMES and the skip rule are as in
 `mevedel-session-durability--lease-head\='."
-  (catch 'head
-    (dolist (path (mevedel-session-durability--generation-paths directory))
-      (when (< (mevedel-session-durability--generation path) generation)
-        (when-let ((record (mevedel-session-durability--read-plist path)))
-          (unless (eq 'aborted (plist-get record :status))
-            (throw 'head record)))))))
-
-(defun mevedel-session-durability--maximum-generation (directory)
-  "Return the highest generation allocated below DIRECTORY, or zero."
-  (if-let ((path (car (mevedel-session-durability--generation-paths
-                       directory))))
-      (mevedel-session-durability--generation path)
-    0))
+  (mevedel-session-durability--head-of-records
+   (mevedel-session-durability--read-records
+    (seq-filter (lambda (path)
+                  (< (mevedel-session-durability--generation path)
+                     generation))
+                (mevedel-session-durability--generation-paths
+                 directory names)))))
 
 (defun mevedel-session-durability--ensure-lease-directory (directory)
   "Ensure that lease generation DIRECTORY exists."
@@ -394,16 +439,6 @@ An unreadable record is skipped for the same reason as in
    (mevedel-session-durability--generation-path
     directory (plist-get record :generation))
    record))
-
-(defun mevedel-session-durability--prune-generations-before
-    (directory generation)
-  "Best-effort delete DIRECTORY records older than GENERATION."
-  (dolist (path (mevedel-session-durability--generation-paths directory))
-    (when (< (mevedel-session-durability--generation path) generation)
-      (condition-case nil
-          (progn
-            (mevedel-session-control-fs-delete-file path))
-        (error nil)))))
 
 (defun mevedel-session-durability--record-bytes (record)
   "Return the exact content RECORD occupies as a lease generation file."
@@ -466,6 +501,7 @@ last so an absent record still leaves the clock and the listing answered."
     (list :now (and (eq 'ok (plist-get clock :status))
                     (mevedel-session-durability--note-target-time
                      (plist-get clock :value)))
+          :listed (eq 'ok (plist-get listing :status))
           :names (and (eq 'ok (plist-get listing :status))
                       (plist-get listing :value))
           :bytes bytes
@@ -597,9 +633,30 @@ otherwise it is marked aborted and removed best-effort.  STATUS defaults to
 `active'.  When UNSETTLED-MUTATION-P is non-nil, the successor records
 UNSETTLED-MUTATION instead of preserving EXPECTED's value."
   (let* ((status (or status 'active))
-         (now (mevedel-session-durability--target-time directory))
+         ;; One observation answers the clock and the known generations.
+         ;; Any record created after it is a foreign claim at the same
+         ;; next generation, which collides with the exclusive create
+         ;; below and fails it -- no generation older than the candidate
+         ;; can appear in between, so the observed name set is the
+         ;; complete predecessor universe.
+         (observed (mevedel-session-durability--observe-lease directory nil))
+         ;; The observed reading flows through the clock seam, so a test
+         ;; that stubs the seam still governs every deadline.
+         (now (let ((mevedel-session-durability--observed-time
+                     (plist-get observed :now)))
+                (mevedel-session-durability--target-time directory)))
+         (names (mevedel-session-durability--observed-names observed))
          (generation
-          (1+ (mevedel-session-durability--maximum-generation directory)))
+          (1+ (mevedel-session-durability--newest-generation
+               (plist-get observed :names))))
+         (candidate-path (mevedel-session-durability--generation-path
+                          directory generation))
+         (older (seq-filter
+                 (lambda (path)
+                   (< (mevedel-session-durability--generation path)
+                      generation))
+                 (mevedel-session-durability--generation-paths
+                  directory names)))
          (candidate
           (let ((mevedel-session-lease-seconds
                  (if (eq status 'publishing)
@@ -611,27 +668,60 @@ UNSETTLED-MUTATION instead of preserving EXPECTED's value."
              (if unsettled-mutation-p
                  unsettled-mutation
                (plist-get expected :unsettled-mutation))
-             now))))
-    (when (mevedel-session-durability--create-generation directory candidate)
+             now)))
+         ;; The fencing create and the predecessor reads are one program:
+         ;; the create is first, so a lost race skips the reads.
+         (results
+          (mevedel-session-control-fs-run-program
+           (cons (list :op 'create :path candidate-path
+                       :content (mevedel-session-durability--record-bytes
+                                 candidate))
+                 (mapcar (lambda (path)
+                           (list :op 'read :path path :optional t))
+                         older))))
+         (created (car results)))
+    (cond
+     ((eq 'conflict (plist-get created :status)) nil)
+     ((not (eq 'ok (plist-get created :status)))
+      (mevedel-session-control-fs-program-value created))
+     (t
       (let ((predecessor
-             (mevedel-session-durability--lease-head-before
-              directory generation)))
+             (mevedel-session-durability--head-of-records
+              (mapcar
+               (lambda (result)
+                 (and (eq 'ok (plist-get result :status))
+                      (condition-case nil
+                          (car (read-from-string
+                                (plist-get result :value)))
+                        (error nil))))
+               (cdr results)))))
         (if (equal expected predecessor)
             (progn
               (setq candidate (plist-put candidate :status status))
-              (mevedel-session-durability--write-generation
-               directory candidate)
-              (mevedel-session-durability--prune-generations-before
-               directory generation)
+              ;; Settling the claim and pruning superseded generations
+              ;; share one program; a prune that fails is best-effort,
+              ;; but a failed settle write must still raise.
+              (mevedel-session-control-fs-program-value
+               (car (mevedel-session-control-fs-run-program
+                     (cons (list :op 'write :path candidate-path
+                                 :content
+                                 (mevedel-session-durability--record-bytes
+                                  candidate))
+                           (mapcar (lambda (path)
+                                     (list :op 'delete-file :path path
+                                           :optional t))
+                                   older)))))
               candidate)
           (setq candidate (plist-put candidate :status 'aborted))
-          (mevedel-session-durability--write-generation directory candidate)
-          (condition-case nil
-              (let ((path (mevedel-session-durability--generation-path
-                           directory generation)))
-                (mevedel-session-control-fs-delete-file path))
-            (error nil))
-          nil)))))
+          (mevedel-session-control-fs-program-value
+           (car (mevedel-session-control-fs-run-program
+                 (list (list :op 'write :path candidate-path
+                             :content
+                             (mevedel-session-durability--record-bytes
+                              candidate))
+                       (list :op 'delete-file :path candidate-path
+                             :optional t)))))
+          nil))))))
 
 (defun mevedel-session-durability--owned-lease-record-p
     (lease directory &optional now)
@@ -660,8 +750,15 @@ When SESSION is non-nil, record the resulting lease state on it."
          (_ (mevedel-session-durability--assert-no-pid-lock session-dir))
          (directory (mevedel-session-durability--lease-path session-dir))
          (_ (mevedel-session-durability--ensure-lease-directory directory))
-         (now (mevedel-session-durability--target-time directory))
-         (existing (mevedel-session-durability--lease-head directory))
+         ;; One observation answers the clock and the listing the head
+         ;; reads work from.
+         (observed (mevedel-session-durability--observe-lease directory nil))
+         (now (let ((mevedel-session-durability--observed-time
+                     (plist-get observed :now)))
+                (mevedel-session-durability--target-time directory)))
+         (existing (mevedel-session-durability--lease-head
+                    directory
+                    (mevedel-session-durability--observed-names observed)))
          (lease
           (cond
            ((null existing)
@@ -912,16 +1009,25 @@ Return non-nil only when the current owned lease generation commits VALUE."
   (when-let ((session-dir (mevedel-session-save-path session)))
     (let* ((remote-file-name-inhibit-cache t)
            (directory (mevedel-session-durability--lease-path session-dir))
-           (now (mevedel-session-durability--target-time directory))
            (bound (mevedel-session-lease session))
-           (existing
-            (condition-case nil
-                (when-let ((generation (plist-get bound :generation)))
-                  (mevedel-session-durability--read-plist
-                   (mevedel-session-durability--generation-path
-                    directory generation)))
-              (error nil)))
-           (head (mevedel-session-durability--lease-head directory))
+           ;; One observation answers the clock, the listing, and the
+           ;; bound generation's record.
+           (observed (mevedel-session-durability--observe-lease
+                      directory (plist-get bound :generation)))
+           (now (let ((mevedel-session-durability--observed-time
+                       (plist-get observed :now)))
+                  (mevedel-session-durability--target-time directory)))
+           (existing (plist-get observed :record))
+           (head
+            (if (and existing
+                     (not (eq 'aborted (plist-get existing :status)))
+                     (equal (plist-get existing :generation)
+                            (mevedel-session-durability--newest-generation
+                             (plist-get observed :names))))
+                existing
+              (mevedel-session-durability--lease-head
+               directory
+               (mevedel-session-durability--observed-names observed))))
            (status (plist-get existing :status)))
       (if (and (equal existing head)
                (mevedel-session-durability--owned-lease-record-p

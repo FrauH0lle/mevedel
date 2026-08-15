@@ -3206,13 +3206,20 @@ must materialize a snapshot rather than record a change."
     ;; recovery marker, and nothing in between can install one.
     (require 'mevedel-session-recovery)
     (let ((mevedel-session-recovery--mutation-cache
-           (or mevedel-session-recovery--mutation-cache (list nil)))
+           (or (bound-and-true-p mevedel-session-recovery--mutation-cache)
+               (list nil)))
           ;; One save is one durable transaction, so its lease operations
           ;; share the target clock reading rather than each paying for one.
+          ;; The durability module loads lazily, so the outer values are
+          ;; read tolerantly: a save may run before anything durable ever
+          ;; loaded it.
           (mevedel-session-durability--transaction-clock
-           (or mevedel-session-durability--transaction-clock (list nil)))
+           (or (bound-and-true-p mevedel-session-durability--transaction-clock)
+               (list nil)))
           (mevedel-session-durability--asserted-directories
-           (or mevedel-session-durability--asserted-directories (list nil))))
+           (or (bound-and-true-p
+                mevedel-session-durability--asserted-directories)
+               (list nil))))
       ;; The whole save is one transaction on one connection, and every
       ;; segment write, sidecar rewrite, modtime stat, and file-history read
       ;; below is a command on it.  A foreign idle timer that sends its own

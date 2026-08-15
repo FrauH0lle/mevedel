@@ -746,10 +746,14 @@ lets both share one round trip."
         ;; One drain is one transaction: the per-artifact lease renewals
         ;; inside it share the clock reading and the pid-lock assertions,
         ;; which is what lets a renewal assume instead of re-observing.
+        ;; Read tolerantly: the durability module loads lazily.
         (mevedel-session-durability--transaction-clock
-         (or mevedel-session-durability--transaction-clock (list nil)))
+         (or (bound-and-true-p mevedel-session-durability--transaction-clock)
+             (list nil)))
         (mevedel-session-durability--asserted-directories
-         (or mevedel-session-durability--asserted-directories (list nil)))
+         (or (bound-and-true-p
+              mevedel-session-durability--asserted-directories)
+             (list nil)))
         current
         committed
         result)
