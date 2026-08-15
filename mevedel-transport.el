@@ -106,10 +106,13 @@ belonging to other packages, but not one issued straight to TRAMP's internal
 command senders.  The connection lock sees those, but only during the instants
 TRAMP holds it.
 
-Neither sees a remote process created by `make-process' whose filter runs on a
-separate connection, nor operations on another thread.  A caller that must not
-corrupt durable state therefore treats this as necessary, not sufficient, and
-fails closed when a target operation misbehaves anyway."
+Neither sees a classic remote process created by `make-process' on the
+shared connection, nor operations on another thread.  Direct-async Bash
+executions run on their own connection and no longer occupy this one, so
+the blind spot covers only classic spawns -- TTY executions, oversized
+commands, and targets without direct-async.  A caller that must not
+corrupt durable state therefore treats this as necessary, not sufficient,
+and fails closed when a target operation misbehaves anyway."
   (or (mevedel-transport-nested-p)
       (mevedel-transport--connection-locked-p path)))
 
