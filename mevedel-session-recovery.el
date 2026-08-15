@@ -38,6 +38,8 @@
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-directory-p
                   "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-run-program
+                  "mevedel-session-control-fs" (operations))
 (declare-function mevedel-session-control-fs-physical-path
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-write-file
@@ -114,26 +116,27 @@ recovery does not discover session buffers by scanning Emacs global state."
        (string-prefix-p ".recovery/" path)
        (not (string-suffix-p "/" path))))
 
-(defun mevedel-session-recovery--marker-file-p (path)
-  "Return non-nil when PATH names a specialized recovery marker file."
-  (and (mevedel-session-control-fs-path-exists-p path)
-       (string-match-p
-        "\\`recovery-[0-9a-f]+\\.el\\'"
-        (file-name-nondirectory path))))
+(defun mevedel-session-recovery--marker-name-p (path)
+  "Return non-nil when PATH is shaped like a recovery marker file name."
+  (string-match-p "\\`recovery-[0-9a-f]+\\.el\\'"
+                  (file-name-nondirectory path)))
 
 (defun mevedel-session-recovery--read-marker
     (session-dir marker-path)
   "Read and validate target recovery MARKER-PATH for SESSION-DIR."
   (setq marker-path
         (mevedel-session-control-fs-physical-path marker-path))
+  ;; The name is validated before anything is read: a junk entry must
+  ;; not cost a target round trip, and the listing that produced the
+  ;; name already proved the entry exists and is no symlink.
+  (unless (mevedel-session-recovery--marker-name-p marker-path)
+    (error "Invalid specialized recovery marker: %s" marker-path))
   (let* ((root (mevedel-session-recovery--root session-dir))
          (marker (mevedel-session-durability--read-plist marker-path))
          (relative (and marker (plist-get marker :directory)))
          (directory (and relative
                          (expand-file-name relative session-dir))))
-    (unless (and (mevedel-session-recovery--marker-file-p
-                  marker-path)
-                 (proper-list-p marker)
+    (unless (and (proper-list-p marker)
                  (equal (plist-get marker :version) 1)
                  (eq (plist-get marker :kind) 'rewind)
                  (stringp (plist-get marker :reason))
@@ -150,20 +153,25 @@ recovery does not discover session buffers by scanning Emacs global state."
           :created-at (plist-get marker :created-at))))
 
 (defun mevedel-session-recovery--markers (session-dir)
-  "Return validated specialized recovery markers below SESSION-DIR."
-  (let ((root (mevedel-session-recovery--root session-dir)))
-    (mevedel-session-control-fs-physical-path root)
-    (cond
-     ((not (mevedel-session-control-fs-path-exists-p root)) nil)
-     ((not (mevedel-session-control-fs-directory-p root))
-      (error "Invalid specialized recovery root: %s" root))
-     (t
-      (mapcar
-       (lambda (path)
-         (mevedel-session-recovery--read-marker
-          session-dir path))
-       (mevedel-session-control-fs-list-directory
-        root "\\`recovery-[0-9a-f]+\\.el\\'"))))))
+  "Return validated specialized recovery markers below SESSION-DIR.
+
+One directory operation answers existence and kind together, so the
+common no-recovery case costs one target process instead of two."
+  (let* ((root (mevedel-session-control-fs-physical-path
+                (mevedel-session-recovery--root session-dir)))
+         (result (car (mevedel-session-control-fs-run-program
+                       (list (list :op 'directory-p :path root
+                                   :optional t))))))
+    (pcase (plist-get result :status)
+      ('absent nil)
+      ('ok
+       (mapcar
+        (lambda (path)
+          (mevedel-session-recovery--read-marker
+           session-dir path))
+        (mevedel-session-control-fs-list-directory
+         root "\\`recovery-[0-9a-f]+\\.el\\'")))
+      (_ (error "Invalid specialized recovery root: %s" root)))))
 
 (defun mevedel-session-recovery-read (session-dir)
   "Return the first target-side specialized recovery for SESSION-DIR.

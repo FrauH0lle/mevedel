@@ -15,6 +15,9 @@
 ;; filesystem, so its feature is a hard load-time dependency rather than a
 ;; lazily reachable one.
 (require 'mevedel-session-control-fs)
+;; The durable-transaction macro must expand for interpreted loads too,
+;; so this is a load-time dependency rather than a lazy one.
+(require 'mevedel-session-durability)
 
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-directory-p
@@ -43,8 +46,14 @@
                   "mevedel-session-durability" (path plist))
 (declare-function mevedel-session-durability--ensure-lease-directory
                   "mevedel-session-durability" (directory))
+(declare-function mevedel-session-durability--newest-generation
+                  "mevedel-session-durability" (names))
+(declare-function mevedel-session-durability--observe-lease
+                  "mevedel-session-durability" (directory generation))
+(declare-function mevedel-session-durability--observed-names
+                  "mevedel-session-durability" (observed))
 (declare-function mevedel-session-durability--lease-head
-                  "mevedel-session-durability" (directory))
+                  "mevedel-session-durability" (directory &optional names))
 (declare-function mevedel-session-durability--lease-path
                   "mevedel-session-durability" (session-dir))
 (declare-function mevedel-session-durability--owned-lease-record-p
@@ -53,6 +62,7 @@
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability--read-plist
                   "mevedel-session-durability" (path))
+(defvar mevedel-session-durability--observed-time)
 (declare-function mevedel-session-durability--target-time
                   "mevedel-session-durability" (directory))
 (declare-function mevedel-session-durability--valid-lease-p
@@ -415,15 +425,37 @@ request is granted once its deadline passes, but grant does not release the
 lease or transfer authority."
   (unless (mevedel-session-durability--portable-session-p session)
     (error "Control transfer requires a portable project session"))
-  (let* ((session-dir (mevedel-session-save-path session))
-         (session-id (mevedel-session-session-id session))
-         (bound (mevedel-session-lease session))
-         (directory (and session-dir
-                         (mevedel-session-durability--lease-path session-dir)))
-         (current (and directory
-                       (mevedel-session-durability--lease-head directory)))
-         (now (and current
-                   (mevedel-session-durability--target-time directory))))
+  (mevedel-session-durability-with-transaction
+    (let* ((session-dir (mevedel-session-save-path session))
+           (session-id (mevedel-session-session-id session))
+           (bound (mevedel-session-lease session))
+           (directory (and session-dir
+                           (mevedel-session-durability--lease-path
+                            session-dir)))
+           ;; One observation answers the clock, the listing, and the
+           ;; bound generation's record; the poll used to pay each as its
+           ;; own target process on every tick.
+           (observed (and directory
+                          (mevedel-session-durability--observe-lease
+                           directory (plist-get bound :generation))))
+           (current
+            (and observed
+                 (let ((record (plist-get observed :record)))
+                   (if (and record
+                            (not (eq 'aborted (plist-get record :status)))
+                            (equal (plist-get record :generation)
+                                   (mevedel-session-durability--newest-generation
+                                    (plist-get observed :names))))
+                       record
+                     (mevedel-session-durability--lease-head
+                      directory
+                      (mevedel-session-durability--observed-names
+                       observed))))))
+           (now (and current
+                     (let ((mevedel-session-durability--observed-time
+                            (plist-get observed :now)))
+                       (mevedel-session-durability--target-time
+                        directory)))))
     (when (and session-dir session-id
                (mevedel-session-durability--valid-lease-p current)
                (equal mevedel-session-durability--client-id
@@ -440,19 +472,19 @@ lease or transfer authority."
                    (mevedel-session-transfer--decision-path
                     directory (plist-get request :generation))))
              (decision
-              (when (and decision-path
-                         (mevedel-session-control-fs-path-exists-p
-                          decision-path))
-                (let ((value (mevedel-session-durability--read-plist
-                              decision-path)))
-                  (unless
-                      (and (mevedel-session-transfer--valid-decision-p
-                            value)
-                           (mevedel-session-transfer--record-matches-p
-                            request value))
-                    (error "Invalid portable control-transfer decision: %s"
-                           decision-path))
-                  value))))
+              ;; An absent decision reads as nil, so the existence probe
+              ;; was a second target process answering the same question.
+              (when-let* ((decision-path)
+                          (value (mevedel-session-durability--read-plist
+                                  decision-path)))
+                (unless
+                    (and (mevedel-session-transfer--valid-decision-p
+                          value)
+                         (mevedel-session-transfer--record-matches-p
+                          request value))
+                  (error "Invalid portable control-transfer decision: %s"
+                         decision-path))
+                value)))
         (when (and request (not decision)
                    (progn
                      (unless
@@ -496,7 +528,7 @@ lease or transfer authority."
            session 'quiescing request decision))
          (t
           (mevedel-session-transfer--set-state
-           session 'rejected request decision)))))))
+           session 'rejected request decision))))))))
 
 (defun mevedel-session-transfer-decide
     (session decision)

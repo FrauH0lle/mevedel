@@ -301,6 +301,13 @@ files are renamed to `.bad', warned about once, and ignored."
         (when-let* (((not (bound-and-true-p
                            mevedel-view--agent-transcript-p)))
                     ((not (mevedel-view-history--read-only-p)))
+                    ;; This buffer contributed nothing since it last read
+                    ;; or wrote the file, and no earlier save is owed a
+                    ;; retry: the read-merge-write would reproduce what is
+                    ;; already stored, at a held exclusive connection.
+                    ((not (and (not mevedel-view-history--save-failed)
+                               (equal (mevedel-view-history--entries)
+                                      mevedel-view-history--loaded-entries))))
                     (session (mevedel-view-history--session))
                     (path (mevedel-view-history--path session)))
           (condition-case err
