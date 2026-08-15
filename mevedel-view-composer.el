@@ -10,6 +10,10 @@
 (eval-when-compile
   (require 'cl-lib))
 
+;; The durable-transaction macro must expand for interpreted loads too,
+;; so this is a load-time dependency rather than a compile-time one.
+(require 'mevedel-session-durability)
+
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
 
@@ -2306,32 +2310,34 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
     (user-error "Save or cancel the pending-input edit first"))
   (unless (and mevedel--data-buffer (buffer-live-p mevedel--data-buffer))
     (user-error "No live data buffer associated with this view"))
-  (let* ((session (buffer-local-value 'mevedel--session
-                                      mevedel--data-buffer))
-         (occupied
-          (or (buffer-local-value 'mevedel--current-request
+  (mevedel-session-durability-with-transaction
+   (mevedel-session-durability-with-transaction
+    (let* ((session (buffer-local-value 'mevedel--session
+					mevedel--data-buffer))
+           (occupied
+            (or (buffer-local-value 'mevedel--current-request
+                                    mevedel--data-buffer)
+		(mevedel-session-pending-follow-ups session)
+		(mevedel-view--occupied-root-workflow-p session)
+		mevedel-view--prompt-hook-pending
+		mevedel-view--pending-skill-submission
+		(buffer-local-value 'mevedel--compaction-in-flight
+                                    mevedel--data-buffer))))
+      (require 'mevedel-session-persistence)
+      (mevedel-session-persistence-assert-new-mutation-authority session)
+      (if (not occupied)
+          (mevedel-view-send)
+	(when (buffer-local-value 'mevedel-session--read-only-mode
                                   mevedel--data-buffer)
-              (mevedel-session-pending-follow-ups session)
-              (mevedel-view--occupied-root-workflow-p session)
-              mevedel-view--prompt-hook-pending
-              mevedel-view--pending-skill-submission
-              (buffer-local-value 'mevedel--compaction-in-flight
-                                  mevedel--data-buffer))))
-    (require 'mevedel-session-persistence)
-    (mevedel-session-persistence-assert-new-mutation-authority session)
-    (if (not occupied)
-        (mevedel-view-send)
-      (when (buffer-local-value 'mevedel-session--read-only-mode
-                                mevedel--data-buffer)
-        (user-error "Session is open read-only (another host holds the lock)"))
-      (let ((input (if mevedel-view--composer-scope
-                       (mevedel-view--input-text)
-                     (mevedel-view--bind-input-mentions session))))
-        (when (string-empty-p input)
-          (user-error "Nothing to send"))
-        (when (mevedel-skills--parse-slash-line input)
-          (user-error "Slash commands cannot be queued as follow-ups"))
-        (mevedel-view--queue-follow-up input))))
+          (user-error "Session is open read-only (another host holds the lock)"))
+	(let ((input (if mevedel-view--composer-scope
+			 (mevedel-view--input-text)
+                       (mevedel-view--bind-input-mentions session))))
+          (when (string-empty-p input)
+            (user-error "Nothing to send"))
+          (when (mevedel-skills--parse-slash-line input)
+            (user-error "Slash commands cannot be queued as follow-ups"))
+          (mevedel-view--queue-follow-up input))))))
   (goto-char (point-max)))
 
 (defun mevedel-view--submit-armed-session-fork
@@ -2516,119 +2522,119 @@ their local dispatch path."
     (if mevedel-view--composer-scope
         (mevedel-view--send-directive-input input)
       (let* ((slash-parsed (mevedel-skills--parse-slash-line input))
-           (fork-target mevedel-view--armed-session-fork)
-           (active-request
-            (buffer-local-value 'mevedel--current-request
-                                mevedel--data-buffer)))
-      (when (and slash-parsed (mevedel-view-historical-segment-p))
-        (user-error
-         "Slash commands are unavailable while viewing a historical segment"))
-      (when (and fork-target (not slash-parsed))
-        (require 'mevedel-session-persistence)
-        (mevedel-session-persistence--assert-stable-source
-         session mevedel--data-buffer "forking"))
-      (if (or active-request
-              (and (not slash-parsed)
-                   (mevedel-view--occupied-root-workflow-p session)))
-          (let ((restore
-                 (lambda ()
-                   (when snapshot
-                     (mevedel-view--restore-composer-snapshot
-                      snapshot session)))))
-            (cond
-             ((and slash-parsed
-                   (mevedel-skills-local-command-active-request-p
-                    (nth 0 slash-parsed) (nth 1 slash-parsed)))
-              (let ((result (with-current-buffer mevedel--data-buffer
-                              (funcall (cdr (assoc (nth 0 slash-parsed)
-                                                  mevedel-slash-commands))
-                                       (nth 1 slash-parsed)))))
-                (unless (eq result 'mevedel-view-sent)
-                  (when (stringp result) (message "%s" result))
-                  (mevedel-view-history-add input)
-                  (mevedel-view--clear-input))))
-             (slash-parsed
-              (funcall restore)
-              (user-error
-               "A request is already active -- wait or abort first"))
-             ((not active-request)
-              (funcall restore)
-              (user-error
-               "The workflow is occupied -- use C-c TAB for a follow-up"))
-             ((not (mevedel-view--steerable-root-request-p active-request))
-              (funcall restore)
-              (user-error
-               "This workflow cannot be steered -- use C-c TAB"))
-             (t
-              (condition-case err
-                  (mevedel-view--submit-planned-input
-                   input nil
+             (fork-target mevedel-view--armed-session-fork)
+             (active-request
+              (buffer-local-value 'mevedel--current-request
+                                  mevedel--data-buffer)))
+	(when (and slash-parsed (mevedel-view-historical-segment-p))
+          (user-error
+           "Slash commands are unavailable while viewing a historical segment"))
+	(when (and fork-target (not slash-parsed))
+          (require 'mevedel-session-persistence)
+          (mevedel-session-persistence--assert-stable-source
+           session mevedel--data-buffer "forking"))
+	(if (or active-request
+		(and (not slash-parsed)
+                     (mevedel-view--occupied-root-workflow-p session)))
+            (let ((restore
                    (lambda ()
-                     (funcall restore)
-                     (message
-                      "mevedel: steering preparation failed; use C-c TAB"))
-                   (lambda (submission)
-                     (unless
-                         (mevedel-view--queue-prepared-steering
-                          submission active-request)
-                       (funcall restore))))
-                (error
-                 (funcall restore)
-                 (user-error "%s; use C-c TAB for a follow-up"
-                             (error-message-string err)))))))
-        (cond
-         (slash-parsed
-          (let* ((name (nth 0 slash-parsed))
-                 (args (nth 1 slash-parsed))
-                 (local (assoc name mevedel-slash-commands)))
-            (cond
-             ((and local
-                   (string= name "goal")
+                     (when snapshot
+                       (mevedel-view--restore-composer-snapshot
+			snapshot session)))))
+              (cond
+               ((and slash-parsed
+                     (mevedel-skills-local-command-active-request-p
+                      (nth 0 slash-parsed) (nth 1 slash-parsed)))
+		(let ((result (with-current-buffer mevedel--data-buffer
+				(funcall (cdr (assoc (nth 0 slash-parsed)
+                                                     mevedel-slash-commands))
+					 (nth 1 slash-parsed)))))
+                  (unless (eq result 'mevedel-view-sent)
+                    (when (stringp result) (message "%s" result))
+                    (mevedel-view-history-add input)
+                    (mevedel-view--clear-input))))
+               (slash-parsed
+		(funcall restore)
+		(user-error
+		 "A request is already active -- wait or abort first"))
+               ((not active-request)
+		(funcall restore)
+		(user-error
+		 "The workflow is occupied -- use C-c TAB for a follow-up"))
+               ((not (mevedel-view--steerable-root-request-p active-request))
+		(funcall restore)
+		(user-error
+		 "This workflow cannot be steered -- use C-c TAB"))
+               (t
+		(condition-case err
+                    (mevedel-view--submit-planned-input
+                     input nil
+                     (lambda ()
+                       (funcall restore)
+                       (message
+			"mevedel: steering preparation failed; use C-c TAB"))
+                     (lambda (submission)
+                       (unless
+                           (mevedel-view--queue-prepared-steering
+                            submission active-request)
+			 (funcall restore))))
+                  (error
+                   (funcall restore)
+                   (user-error "%s; use C-c TAB for a follow-up"
+                               (error-message-string err)))))))
+          (cond
+           (slash-parsed
+            (let* ((name (nth 0 slash-parsed))
+                   (args (nth 1 slash-parsed))
+                   (local (assoc name mevedel-slash-commands)))
+              (cond
+               ((and local
+                     (string= name "goal")
+                     args
+                     (not (string-blank-p args))
+                     (not (member
+                           (car (split-string args "[ \t\n]+" t))
+                           '("edit" "pause" "resume" "clear"))))
+		(mevedel-view--send-local-goal input args))
+               ((and local
+                     (string= name "plan")
+                     args
+                     (not (string-blank-p args)))
+		(let ((data-buffer mevedel--data-buffer))
+                  (mevedel-view--submit-planned-input
                    args
-                   (not (string-blank-p args))
-                   (not (member
-                         (car (split-string args "[ \t\n]+" t))
-                         '("edit" "pause" "resume" "clear"))))
-              (mevedel-view--send-local-goal input args))
-             ((and local
-                   (string= name "plan")
-                   args
-                   (not (string-blank-p args)))
-              (let ((data-buffer mevedel--data-buffer))
-                (mevedel-view--submit-planned-input
-                 args
-                 (lambda ()
-                   (with-current-buffer data-buffer
-                     (require 'mevedel-plan-mode)
-                     (mevedel-plan-mode-enter))
-                   (mevedel-view-history-add input)))))
-             (local
-              (let ((result (with-current-buffer mevedel--data-buffer
-                              (funcall (cdr local) args))))
-                ;; Most local slash commands don't send a turn.  A command may
-                ;; return this sentinel when it took ownership of the input.
-                (unless (eq result 'mevedel-view-sent)
-                  (when (stringp result)
-                    (message "%s" result))
-                  (mevedel-view-history-add input)
-                  (mevedel-view--clear-input))))
-             (t
-              (message "Unknown slash command: /%s" name)))))
-         (t
-          (let ((source-view (current-buffer)))
-            (if fork-target
-                (progn
-                  ;; Parsing stays in Source so malformed skill syntax cannot
-                  ;; publish a child.  Expansion and hooks belong to Child.
-                  (require 'mevedel-skills-plan)
-                  (with-current-buffer mevedel--data-buffer
-                    (mevedel-skills-plan-user-input input session))
-                  (mevedel-view--submit-armed-session-fork
-                   source-view input fork-target snapshot))
-              (mevedel-view--submit-planned-input
-               input
-               (lambda ()
-                 (mevedel-view-history-add input)))))))))))
+                   (lambda ()
+                     (with-current-buffer data-buffer
+                       (require 'mevedel-plan-mode)
+                       (mevedel-plan-mode-enter))
+                     (mevedel-view-history-add input)))))
+               (local
+		(let ((result (with-current-buffer mevedel--data-buffer
+				(funcall (cdr local) args))))
+                  ;; Most local slash commands don't send a turn.  A command may
+                  ;; return this sentinel when it took ownership of the input.
+                  (unless (eq result 'mevedel-view-sent)
+                    (when (stringp result)
+                      (message "%s" result))
+                    (mevedel-view-history-add input)
+                    (mevedel-view--clear-input))))
+               (t
+		(message "Unknown slash command: /%s" name)))))
+           (t
+            (let ((source-view (current-buffer)))
+              (if fork-target
+                  (progn
+                    ;; Parsing stays in Source so malformed skill syntax cannot
+                    ;; publish a child.  Expansion and hooks belong to Child.
+                    (require 'mevedel-skills-plan)
+                    (with-current-buffer mevedel--data-buffer
+                      (mevedel-skills-plan-user-input input session))
+                    (mevedel-view--submit-armed-session-fork
+                     source-view input fork-target snapshot))
+		(mevedel-view--submit-planned-input
+		 input
+		 (lambda ()
+                   (mevedel-view-history-add input)))))))))))
   ;; Accepted sends clear the draft and land at the new composer end.
   ;; Rejected sends preserve the exact input-relative point.
   (unless (mevedel-view--point-in-input-region-p)
@@ -2818,96 +2824,97 @@ replaces INPUT only in the temporary request prompt."
   (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")
     (user-error "Compaction in progress"))
-  (let* ((input (mevedel--normalize-message-text input))
-         (display-text (and display-text
-                            (mevedel--normalize-message-text display-text)))
-         (hook-context
-          (and submission
-               (mevedel-prompt-submission-context submission)))
-         (hook-audits
-          (and submission
-               (mevedel-prompt-submission-audits submission)))
-         (prompt-summary-body
-          (mevedel-view--inline-skill-prompt-summary-body
-           (or model-input input)))
-         (data-buffer mevedel--data-buffer)
-         (session (mevedel-view--session))
-         (dropped-file-grants
-          (progn
-            (mevedel-request-assert-target-ready session)
-            (mevedel-view--pop-dropped-file-grants-for-input
-             input session))))
-    (let (data-turn-start
-          hook-audits-with-source
-          prompt-summary-source)
-      ;; Forward to the data buffer first so immediate inline-skill
-      ;; Prompt handles can expand through the same source-backed fold
-      ;; path as a full rerender.
-      (with-current-buffer mevedel--data-buffer
-        (goto-char (point-max))
-        (let ((user-turn-start (point))
-              body-start)
-          ;; Insert response separator
-          (insert gptel-response-separator)
-          ;; Insert prompt prefix if needed (e.g., org heading marker)
-          (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-            (let ((prefix-length (length prefix)))
-              (unless (and (>= (point) (+ (point-min) prefix-length))
-                           (string= (buffer-substring-no-properties
-                                     (- (point) prefix-length) (point))
-                                    prefix))
-                (unless (bolp) (insert "\n"))
-                (insert prefix))))
-          (setq body-start (point))
-          (insert input "\n")
-          (when-let* ((prompt-summary-body)
-                      (block
-                       (car (last
-                             (mevedel-pipeline--render-data-blocks input)))))
-            (setq prompt-summary-source
-                  (mevedel-view--source-range
-                   data-buffer
-                   (+ body-start (car block))
-                   (+ body-start (cadr block)))))
-          (mevedel--clear-user-turn-gptel-properties
-           user-turn-start (point)))
-        (dolist (audit hook-audits)
-          (let ((audit-start (point)))
-            (insert (mevedel--format-hook-audit-record audit))
-            (push (append audit
-                          (list :source
-                                (mevedel-view--source-range
-                                 data-buffer audit-start (point))))
-                  hook-audits-with-source)))
-        (setq hook-audits-with-source (nreverse hook-audits-with-source))
-        ;; Anchor the data-side marker after the forwarded prompt so
-        ;; incremental renders extract only the in-flight assistant
-        ;; segments from here forward.  Pushed onto the view buffer's
-        ;; buffer-local so it is readable from `--render-incremental'
-        ;; without switching buffers.
-        (setq data-turn-start (copy-marker (point) nil)))
-      (mevedel-collaboration--safe-accepted-prompt data-buffer)
-      (when submission
-        (mevedel-prompt-submission-commit submission))
-      (when after-insert
-        (funcall after-insert))
-      ;; Render the user's message in the view after the data source is
-      ;; known, but before the model request starts.
-      (let ((turn-start
-             (mevedel-view--insert-user-message
-              (or display-text input) nil hook-context
-              prompt-summary-body prompt-summary-source
-              hook-audits-with-source)))
-        (mevedel-view-stream-begin-turn turn-start data-turn-start)
-        ;; Clear composer text.
-        (mevedel-view--clear-input))
-      (with-current-buffer mevedel--data-buffer
-        (mevedel-view--activate-dropped-file-grants
-         dropped-file-grants session)
-        (setq-local mevedel--pending-model-input model-input)
-        (unwind-protect
-            (gptel-send)
-          (setq-local mevedel--pending-model-input nil))))))
+  (mevedel-session-durability-with-transaction
+   (let* ((input (mevedel--normalize-message-text input))
+          (display-text (and display-text
+                             (mevedel--normalize-message-text display-text)))
+          (hook-context
+           (and submission
+		(mevedel-prompt-submission-context submission)))
+          (hook-audits
+           (and submission
+		(mevedel-prompt-submission-audits submission)))
+          (prompt-summary-body
+           (mevedel-view--inline-skill-prompt-summary-body
+            (or model-input input)))
+          (data-buffer mevedel--data-buffer)
+          (session (mevedel-view--session))
+          (dropped-file-grants
+           (progn
+             (mevedel-request-assert-target-ready session)
+             (mevedel-view--pop-dropped-file-grants-for-input
+              input session))))
+     (let (data-turn-start
+           hook-audits-with-source
+           prompt-summary-source)
+       ;; Forward to the data buffer first so immediate inline-skill
+       ;; Prompt handles can expand through the same source-backed fold
+       ;; path as a full rerender.
+       (with-current-buffer mevedel--data-buffer
+         (goto-char (point-max))
+         (let ((user-turn-start (point))
+               body-start)
+           ;; Insert response separator
+           (insert gptel-response-separator)
+           ;; Insert prompt prefix if needed (e.g., org heading marker)
+           (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+             (let ((prefix-length (length prefix)))
+               (unless (and (>= (point) (+ (point-min) prefix-length))
+                            (string= (buffer-substring-no-properties
+                                      (- (point) prefix-length) (point))
+                                     prefix))
+                 (unless (bolp) (insert "\n"))
+                 (insert prefix))))
+           (setq body-start (point))
+           (insert input "\n")
+           (when-let* ((prompt-summary-body)
+                       (block
+			(car (last
+                              (mevedel-pipeline--render-data-blocks input)))))
+             (setq prompt-summary-source
+                   (mevedel-view--source-range
+                    data-buffer
+                    (+ body-start (car block))
+                    (+ body-start (cadr block)))))
+           (mevedel--clear-user-turn-gptel-properties
+            user-turn-start (point)))
+         (dolist (audit hook-audits)
+           (let ((audit-start (point)))
+             (insert (mevedel--format-hook-audit-record audit))
+             (push (append audit
+                           (list :source
+                                 (mevedel-view--source-range
+                                  data-buffer audit-start (point))))
+                   hook-audits-with-source)))
+         (setq hook-audits-with-source (nreverse hook-audits-with-source))
+         ;; Anchor the data-side marker after the forwarded prompt so
+         ;; incremental renders extract only the in-flight assistant
+         ;; segments from here forward.  Pushed onto the view buffer's
+         ;; buffer-local so it is readable from `--render-incremental'
+         ;; without switching buffers.
+         (setq data-turn-start (copy-marker (point) nil)))
+       (mevedel-collaboration--safe-accepted-prompt data-buffer)
+       (when submission
+         (mevedel-prompt-submission-commit submission))
+       (when after-insert
+         (funcall after-insert))
+       ;; Render the user's message in the view after the data source is
+       ;; known, but before the model request starts.
+       (let ((turn-start
+              (mevedel-view--insert-user-message
+               (or display-text input) nil hook-context
+               prompt-summary-body prompt-summary-source
+               hook-audits-with-source)))
+         (mevedel-view-stream-begin-turn turn-start data-turn-start)
+         ;; Clear composer text.
+         (mevedel-view--clear-input))
+       (with-current-buffer mevedel--data-buffer
+         (mevedel-view--activate-dropped-file-grants
+          dropped-file-grants session)
+         (setq-local mevedel--pending-model-input model-input)
+         (unwind-protect
+             (gptel-send)
+           (setq-local mevedel--pending-model-input nil)))))))
 
 (defun mevedel-view--transform-model-input (fsm)
   "Replace the latest stored prompt with its one-shot model input for FSM."
@@ -2938,95 +2945,96 @@ replaces INPUT only in the temporary request prompt."
 Each bound entry is planned and prepared as its own turn.  The queue entry is
 removed only when the resulting prompt reaches its transcript commit boundary."
   (when (buffer-live-p data-buffer)
-    (let* ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
-           (session (buffer-local-value 'mevedel--session data-buffer)))
-      (when (and session
-                 (buffer-live-p view-buffer)
-                 (not (buffer-local-value 'mevedel--current-request
-                                          data-buffer)))
-        (with-current-buffer view-buffer
-	  (when (and (not mevedel-view--agent-transcript-p)
-                     (not mevedel-view--prompt-hook-pending)
-                     (not mevedel-view--pending-skill-submission)
-                     (not (mevedel-view--follow-up-auto-drain-blocked-p
-                           session))
-                     (string-empty-p (mevedel-view--input-text)))
-            (require 'mevedel-session-persistence)
-            (mevedel-session-persistence-assert-new-mutation-authority
-             session)
-            (when-let* ((queue (mevedel-view--pending-follow-ups session)))
-              (let* ((workflow (mevedel-session-directive-planning session))
-                     (entry
-                      (if workflow
-                          (cl-find-if
-                           (lambda (candidate)
-                             (let ((scope (plist-get candidate :scope)))
-                               (and (eq (plist-get scope :action) 'plan)
-                                    (equal (plist-get scope :directive-id)
-                                           (plist-get workflow
-                                                      :directive-id)))))
-                           queue)
-                        (car queue)))
-                     (input (mevedel-view--pending-input-text entry))
-                     (scope (plist-get entry :scope))
-                     (submission (plist-get entry :submission))
-                     (dropped-file-grants
-                      (plist-get entry :dropped-file-grants)))
-                (let ((before-send
-                       (lambda ()
-                         (mevedel-view--activate-dropped-file-grants
-                          dropped-file-grants session)))
-                      (after-insert
-                       (lambda ()
-                         (when (fboundp 'mevedel-telemetry-record)
-                           (mevedel-telemetry-record
-                            session 'user-message-dequeued
-                            :message-hash (secure-hash 'sha256 input)
-                            :queue-depth-before
-                            (length (mevedel-view--pending-follow-ups session))
-                            :queue-duration-ms
-                            (and (numberp (plist-get entry :queued-at-time))
-                                 (round
-                                  (* 1000.0
-                                     (- (float-time)
-                                        (plist-get entry
-                                                   :queued-at-time)))))
-                            :enqueue-goal-id
-                            (plist-get entry :queued-at-goal-id)
-                            :dequeue-goal-id
-                            (and (mevedel-session-goal session)
-                                 (mevedel-goal-id
-                                  (mevedel-session-goal session)))))
-                         (mevedel-view--set-pending-follow-ups
-                          (delq entry
-                                (mevedel-view--pending-follow-ups session))
-                          session)
-                         (mevedel-view--interaction-rebuild))))
-                  (cond
-                   (scope
-                    (condition-case err
-                        (progn
-                          (funcall before-send)
-                          (mevedel-view--dispatch-directive-input scope input)
-                          (funcall after-insert))
-                      (error
-                       (mevedel-view--interaction-rebuild)
-                       (message
-                        "mevedel: queued directive follow-up failed: %s"
-                        (error-message-string err)))))
-                   (submission
-                    (mevedel-view--dispatch-prepared-outcome
-                     submission data-buffer
-                     :before-send before-send
-                     :after-insert after-insert
-                     :on-block (lambda ()
-                                 (mevedel-view--interaction-rebuild))))
-                   (t
-                    (mevedel-view--submit-planned-input
-                     input before-send
-                     (lambda ()
-                       (mevedel-view--interaction-rebuild))
-                     nil after-insert))))))))))))
+    (mevedel-session-durability-with-transaction
+     (let* ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
+            (session (buffer-local-value 'mevedel--session data-buffer)))
+       (when (and session
+                  (buffer-live-p view-buffer)
+                  (not (buffer-local-value 'mevedel--current-request
+                                           data-buffer)))
+         (with-current-buffer view-buffer
+	   (when (and (not mevedel-view--agent-transcript-p)
+                      (not mevedel-view--prompt-hook-pending)
+                      (not mevedel-view--pending-skill-submission)
+                      (not (mevedel-view--follow-up-auto-drain-blocked-p
+                            session))
+                      (string-empty-p (mevedel-view--input-text)))
+             (require 'mevedel-session-persistence)
+             (mevedel-session-persistence-assert-new-mutation-authority
+              session)
+             (when-let* ((queue (mevedel-view--pending-follow-ups session)))
+               (let* ((workflow (mevedel-session-directive-planning session))
+                      (entry
+                       (if workflow
+                           (cl-find-if
+                            (lambda (candidate)
+                              (let ((scope (plist-get candidate :scope)))
+				(and (eq (plist-get scope :action) 'plan)
+                                     (equal (plist-get scope :directive-id)
+                                            (plist-get workflow
+                                                       :directive-id)))))
+                            queue)
+                         (car queue)))
+                      (input (mevedel-view--pending-input-text entry))
+                      (scope (plist-get entry :scope))
+                      (submission (plist-get entry :submission))
+                      (dropped-file-grants
+                       (plist-get entry :dropped-file-grants)))
+                 (let ((before-send
+			(lambda ()
+                          (mevedel-view--activate-dropped-file-grants
+                           dropped-file-grants session)))
+                       (after-insert
+			(lambda ()
+                          (when (fboundp 'mevedel-telemetry-record)
+                            (mevedel-telemetry-record
+                             session 'user-message-dequeued
+                             :message-hash (secure-hash 'sha256 input)
+                             :queue-depth-before
+                             (length (mevedel-view--pending-follow-ups session))
+                             :queue-duration-ms
+                             (and (numberp (plist-get entry :queued-at-time))
+                                  (round
+                                   (* 1000.0
+                                      (- (float-time)
+                                         (plist-get entry
+                                                    :queued-at-time)))))
+                             :enqueue-goal-id
+                             (plist-get entry :queued-at-goal-id)
+                             :dequeue-goal-id
+                             (and (mevedel-session-goal session)
+                                  (mevedel-goal-id
+                                   (mevedel-session-goal session)))))
+                          (mevedel-view--set-pending-follow-ups
+                           (delq entry
+                                 (mevedel-view--pending-follow-ups session))
+                           session)
+                          (mevedel-view--interaction-rebuild))))
+                   (cond
+                    (scope
+                     (condition-case err
+                         (progn
+                           (funcall before-send)
+                           (mevedel-view--dispatch-directive-input scope input)
+                           (funcall after-insert))
+                       (error
+			(mevedel-view--interaction-rebuild)
+			(message
+                         "mevedel: queued directive follow-up failed: %s"
+                         (error-message-string err)))))
+                    (submission
+                     (mevedel-view--dispatch-prepared-outcome
+                      submission data-buffer
+                      :before-send before-send
+                      :after-insert after-insert
+                      :on-block (lambda ()
+                                  (mevedel-view--interaction-rebuild))))
+                    (t
+                     (mevedel-view--submit-planned-input
+                      input before-send
+                      (lambda ()
+			(mevedel-view--interaction-rebuild))
+                      nil after-insert)))))))))))))
 
 (defun mevedel-view--run-follow-up-drain (data-buffer)
   "Drain one pending follow-up for DATA-BUFFER if it is live.
