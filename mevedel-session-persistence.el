@@ -1415,7 +1415,7 @@ render time."
                             (and (integerp pt) (> pt fork-turn))))
                         entries))))
 
-(defun mevedel-session-persistence--flush-diagnostic-logs (session)
+(defun mevedel-session-persistence--flush-diagnostic-logs-now (session)
   "Retry SESSION diagnostics queued before or after materialization."
   (when (fboundp 'mevedel-telemetry-flush)
     (mevedel-telemetry-flush session))
@@ -1425,6 +1425,30 @@ render time."
     (mevedel-tool-repair-flush-log session))
   (when (fboundp 'mevedel-permission-log-flush)
     (mevedel-permission-log-flush session)))
+
+(defun mevedel-session-persistence--flush-diagnostic-logs (session)
+  "Flush SESSION diagnostics, keeping target I/O off the caller's path.
+
+A remote diagnostic flush is a whole publication transaction carrying
+data nothing reads live, so it waits for an idle transport instead of
+extending the save or settlement that queued it.  A local flush is one
+append and runs inline.  Emacs exit flushes inline either way."
+  (let ((save-path (mevedel-session-save-path session)))
+    (if (and save-path (file-remote-p save-path))
+        ;; The zero timer lets the save or settlement that queued the
+        ;; diagnostics return first; transport idleness alone would run
+        ;; the flush inline, because the transport is usually idle by
+        ;; the time a save reaches its cleanup.
+        (run-at-time
+         0 nil
+         (lambda ()
+           (require 'mevedel-transport)
+           (mevedel-transport-run-when-idle
+            (list 'diagnostic-flush session) save-path
+            (lambda ()
+              (mevedel-session-persistence--flush-diagnostic-logs-now
+               session)))))
+      (mevedel-session-persistence--flush-diagnostic-logs-now session))))
 
 (defun mevedel-session-persistence--allocate-session-id (name sessions-dir)
   "Return a fresh session id for NAME below SESSIONS-DIR."
@@ -8380,6 +8404,11 @@ bad buffer can't block exit."
               (condition-case _
                   (mevedel-session-persistence-save mevedel--session buf)
                 (error nil)))
+            ;; An unmodified buffer still owes its queued diagnostics: a
+            ;; deferred remote flush never fires once Emacs is exiting.
+            (ignore-errors
+              (mevedel-session-persistence--flush-diagnostic-logs-now
+               mevedel--session))
             (when-let ((dir (mevedel-session-save-path mevedel--session)))
               (cl-pushnew dir lock-dirs :test #'equal))))))
     ;; Keep live locks through cleanup so an exit-save failure cannot expose

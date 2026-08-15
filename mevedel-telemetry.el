@@ -370,8 +370,10 @@ keys are always discarded.  Return the sanitized event plist."
                    (not (mevedel-telemetry--remote-p session))
                    (mevedel-telemetry--persist session entry))
               nil
+            ;; Newest first: appending kept the queue chronological but
+            ;; cost the whole list per event; the flush restores order.
             (setf (mevedel-session-telemetry-pending session)
-                  (append pending (list entry))))
+                  (cons entry pending)))
           entry)
       (error
        (message "mevedel: telemetry event failed: %s"
@@ -400,7 +402,8 @@ anything crosses into the durable target."
 (defun mevedel-telemetry-flush (session)
   "Persist SESSION's queued telemetry, retaining failed entries."
   (when session
-    (let ((pending (mevedel-session-telemetry-pending session)))
+    ;; The queue is stored newest first; flush in recording order.
+    (let ((pending (reverse (mevedel-session-telemetry-pending session))))
       (if (and pending (mevedel-telemetry--remote-p session))
           (when (mevedel-telemetry--persist-content
                  session (mapconcat #'mevedel-telemetry--entry-text
@@ -411,7 +414,7 @@ anything crosses into the durable target."
             (unless (mevedel-telemetry--persist session entry)
               (push entry remaining)))
           (setf (mevedel-session-telemetry-pending session)
-                (nreverse remaining)))))))
+                remaining))))))
 
 
 ;;

@@ -161,6 +161,60 @@
                           (plist-get (read (current-buffer)) :stage))))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-telemetry--queue-order
+  ()
+  ,test
+  (test)
+  :doc "queues newest first and flushes in recording order"
+  (let* ((root (make-temp-file "mevedel-telemetry-order-" t))
+         (session (test-mevedel-telemetry--session root)))
+    (unwind-protect
+        (progn
+          (dolist (event '(request-queued request-start request-end))
+            (mevedel-telemetry-record session event))
+          (should (equal '(request-end request-start request-queued)
+                         (mapcar (lambda (entry) (plist-get entry :event))
+                                 (mevedel-session-telemetry-pending
+                                  session))))
+          (setf (mevedel-session-save-path session) root)
+          (mevedel-telemetry-flush session)
+          (should-not (mevedel-session-telemetry-pending session))
+          (should (equal '(request-queued request-start request-end)
+                         (mapcar (lambda (entry) (plist-get entry :event))
+                                 (test-mevedel-telemetry--read
+                                  (file-name-concat root
+                                                    "telemetry-log.el"))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-persistence--flush-diagnostic-logs
+  ()
+  ,test
+  (test)
+  :doc "defers a remote flush off the caller's path and keeps local inline"
+  (let* ((root (make-temp-file "mevedel-flush-defer-" t))
+         (session (test-mevedel-telemetry--session root))
+         (flushes 0))
+    (require 'mevedel-session-persistence)
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-session-persistence--flush-diagnostic-logs-now)
+                   (lambda (_session) (cl-incf flushes))))
+          ;; Local: inline.
+          (setf (mevedel-session-save-path session) root)
+          (mevedel-session-persistence--flush-diagnostic-logs session)
+          (should (= 1 flushes))
+          ;; Remote: nothing runs inside the caller's extent; the zero
+          ;; timer hands the flush to the idle transport afterwards.
+          (setf (mevedel-session-save-path session)
+                "/mevedelmock:flush-host:/tmp/flush/")
+          (mevedel-session-persistence--flush-diagnostic-logs session)
+          (should (= 1 flushes))
+          (let ((deadline (+ (float-time) 2)))
+            (while (and (= 1 flushes) (< (float-time) deadline))
+              (accept-process-output nil 0.02)))
+          (should (= 2 flushes)))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-telemetry-finish
   (:doc "pairs asynchronous span events and records elapsed duration")
   (let* ((root (make-temp-file "mevedel-telemetry-span-" t))

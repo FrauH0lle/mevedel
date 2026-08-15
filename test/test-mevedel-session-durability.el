@@ -2938,7 +2938,12 @@
                     (lambda (_type message &rest _)
                       (setq warning message))))
                 (should (mevedel-session-persistence-save
-                         session (current-buffer))))
+                         session (current-buffer)))
+                ;; The diagnostic flush is deferred off the save; drive
+                ;; the timer until its failure warning lands.
+                (let ((deadline (+ (float-time) 2)))
+                  (while (and (not warning) (< (float-time) deadline))
+                    (accept-process-output nil 0.02))))
               (should warning)
               (should (mevedel-session-hook-log-pending session))
               (should-not (mevedel-session-pending-publication session))
@@ -2953,7 +2958,11 @@
                         (cl-incf diagnostic-publications))
                       (funcall publish-artifact artifact))))
                 (should (mevedel-session-persistence-save
-                         session (current-buffer))))
+                         session (current-buffer)))
+                (let ((deadline (+ (float-time) 2)))
+                  (while (and (zerop diagnostic-publications)
+                              (< (float-time) deadline))
+                    (accept-process-output nil 0.02))))
               (should (= 1 diagnostic-publications))
               (should-not (mevedel-session-hook-log-pending session))
               (should-not (mevedel-session-pending-publication session))
