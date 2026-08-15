@@ -254,12 +254,21 @@ having registered it."
 
 (mevedel-test--ensure-mock-tramp-method)
 
+(defvar mevedel-execution--child-kill-delay)
+
 (defmacro mevedel-test--with-local-shell-tramp (hosts &rest body)
-  "Run BODY through a local-shell TRAMP method for HOSTS."
+  "Run BODY through a local-shell TRAMP method for HOSTS.
+
+The TERM-to-KILL grace is shortened for the body: a stopped remote group
+whose members are already dead still rides the full grace timer, because
+the liveness probe (`kill -0' on the group) counts zombies as live, and
+at the production value of 2 seconds every remote stop in a test pays
+it twice."
   (declare (indent 1) (debug (form body)))
   `(progn
      (mevedel-test--ensure-mock-tramp-method)
-     (let ((tramp-local-host-regexp
+     (let ((mevedel-execution--child-kill-delay 0.25)
+           (tramp-local-host-regexp
             (concat "\\`"
                     (regexp-opt (append ,hosts (list (system-name))))
                     "\\'")))

@@ -86,6 +86,17 @@ recommends those elements while leaving Codex room to choose the next action.
 - Find a better folder for the tool description markdown files
 - Ensure all tools have the examples and their descriptions in markdown files
 
+- Report the batch file-notify defect upstream to Emacs: in a
+  noninteractive Emacs (30.2), the first filesystem notification on any
+  watched directory permanently stops process sentinel delivery for the
+  whole session. Twenty-line repro: `emacs -Q --batch`, add a
+  `file-notify-add-watch` on a temp directory, `make-directory` under it,
+  then spawn any process with a sentinel -- the sentinel never runs (the
+  notify callback never runs either; batch has no command loop to deliver
+  the event). mevedel works around it by refusing to install watchers when
+  `noninteractive` (`mevedel-skills--ensure-watcher`,
+  `mevedel-skills--filenotify-supported-p`); revisit if upstream fixes it.
+
 ## Entry format
 
 Each entry records its source, owed change, reason for deferral, current
@@ -179,6 +190,30 @@ become implemented, obsolete, or unjustified.
   invocation records and replay, skill inspection UI, permissions/hooks, and
   parser/security tests. A loose origin or generated-text rule could let a
   model or untrusted input bypass a user-only skill restriction.
+
+## Execution
+
+### Remote stop settlement waits out the kill grace on dead groups
+
+- **Source:** `mevedel-execution.el` (`mevedel-execution--group-live-p`,
+  `mevedel-execution--child-kill-delay`); measured while profiling the
+  test suite.
+- **What's owed:** A liveness probe that does not count zombies.
+  `signal-process` 0 on the process group succeeds while a reaped-but-
+  unwaited member remains, so a remote stop whose TERM already killed
+  everything still schedules the full 2 s force timer and often the 2 s
+  settle timer after it. A target-side check (`ps -o stat= -g GID`
+  filtering `Z`) or a control-fs program op would settle immediately.
+- **Why deferred:** It changes remote settlement semantics and the
+  target-side surface; the grace itself is correct when members really
+  survive TERM. Tests stopped paying it via a 0.25 s binding in
+  `mevedel-test--with-local-shell-tramp`.
+- **Status check:** `mevedel-execution-start-bash/remote/test@6` dropped
+  from 9.7 s to 2.7 s under the shortened grace, confirming the waits are
+  grace timers, not work.
+- **Blast radius:** Every interactive remote stop pays up to ~4 s of
+  latency it does not need; each wait window also invites foreign TRAMP
+  reentrancy.
 
 ## Request lifecycle
 
