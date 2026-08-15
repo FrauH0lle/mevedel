@@ -235,6 +235,52 @@ cat file"
       (should-not (plist-get (mevedel-bash-analysis-analyze source)
                              :background-p)))))
 
+(mevedel-deftest mevedel-bash-analysis--treesit ()
+  ,test
+  (test)
+  :doc "scanner parity:
+`mevedel-bash-analysis--treesit' matches the scanner on syntax it rejects"
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    ;; A configured grammar must not make analysis less precise than the
+    ;; conservative scanner alone.  Every source here is one the grammar
+    ;; either rejects outright or, for single-bracket predicates, must
+    ;; accept exactly as the scanner does.
+    (dolist (source '("NODE_ENV=test npm run test"
+                      "DOCKER_HOST=tcp://example docker ps"
+                      "FOO='bar baz' rm file"
+                      "A+=1 cmd"
+                      "[ 1 = 2 ]"
+                      "[ -f x ]"
+                      "[ ! -f x ]"
+                      "[[ 1 = 2 ]]"
+                      "grep needle >out"
+                      "for f in *; do echo $f; done"))
+      (let ((treesit (mevedel-bash-analysis--treesit source))
+            (heuristic (mevedel-bash-analysis--heuristic source)))
+        (dolist (key '(:class :commands :segments :candidates :resources))
+          (should (equal (plist-get heuristic key)
+                         (plist-get treesit key)))))))
+  :doc "deny surface:
+`mevedel-bash-analysis--treesit' keeps candidates for rejected syntax"
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    ;; An environment assignment must not hide the command it prefixes,
+    ;; because explicit deny rules match against `:candidates'.
+    (let ((analysis (mevedel-bash-analysis--treesit "FOO='bar baz' rm file")))
+      (should (equal 'treesit (plist-get analysis :parser)))
+      (should (member "rm file" (plist-get analysis :candidates)))))
+  :doc "single-bracket predicates:
+`mevedel-bash-analysis--treesit' reports `[' as a plain command"
+  (progn
+    (skip-unless (treesit-language-available-p 'bash))
+    (let ((analysis (mevedel-bash-analysis--treesit "[ 1 = 2 ]")))
+      (should (equal '(("[" "1" "=" "2" "]")) (plist-get analysis :commands)))
+      (should-not (plist-get analysis :complex-p)))
+    ;; The extended form, negation, and patterns stay unsupported.
+    (dolist (source '("[[ 1 = 2 ]]" "[ ! -f x ]" "[ a != b* ]"))
+      (should (plist-get (mevedel-bash-analysis--treesit source) :complex-p)))))
+
 (provide 'test-mevedel-bash-analysis)
 
 ;;; test-mevedel-bash-analysis.el ends here
