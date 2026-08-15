@@ -314,7 +314,7 @@ separate from passive event hooks; the context is never published to them.")
      "pid=${member%% *}"
      "tail=${member##*) }"
      "set -- $tail"
-     "[ \"$pid\" != \"$$\" ] && [ \"$3\" = \"$$\" ] && return 0"
+     "[ \"$pid\" != \"$$\" ] && [ \"$3\" = \"$$\" ] && [ \"$1\" != \"Z\" ] && return 0"
      "done"
      "return 1"
      "}"
@@ -323,17 +323,32 @@ separate from passive event hooks; the context is never published to them.")
    "; ")
   "Target-side launcher that reports a private process-group identity.")
 
-(defconst mevedel-execution--remote-group-identity-script
+(defconst mevedel-execution--remote-group-status-script
   (string-join
-   '("pid=$1"
+   '("group=$1"
      "expected=$2"
-     "[ -r \"/proc/$pid/stat\" ] || exit 1"
-     "read -r stat < \"/proc/$pid/stat\" || exit 1"
+     "live=0"
+     "for path in /proc/[0-9]*/stat"
+     "do read -r member 2>/dev/null < \"$path\" || continue"
+     "rest=${member##*) }"
+     "set -- $rest"
+     "[ \"$3\" = \"$group\" ] || continue"
+     "[ \"$1\" = \"Z\" ] && continue"
+     "live=1"
+     "break"
+     "done"
+     "[ \"$live\" = 1 ] || exit 1"
+     "[ -r \"/proc/$group/stat\" ] || exit 2"
+     "read -r stat < \"/proc/$group/stat\" || exit 2"
      "rest=${stat##*) }"
      "set -- $rest"
      "[ \"${20}\" = \"$expected\" ] || exit 2")
    "; ")
-  "Target-side check for a captured process-group leader identity.")
+  "Target-side zombie-aware group liveness and identity probe.
+Exit 0: a non-zombie member remains and the leader identity matches.
+Exit 1: no non-zombie member remains -- zombies count as settled.
+Exit 2: live members without a matching leader identity; never signal
+such a group, because the leader PID may have been reused.")
 
 
 ;;
@@ -592,9 +607,14 @@ the client environment."
                 (funcall filter record rest))))
         (setf (mevedel-execution--record-group-marker-buffer record) chunk)))))
 
-(defun mevedel-execution--remote-group-identity-status (record)
-  "Return RECORD's target group identity status.
-The result is `match', `missing', or `mismatch'.  Transport failures signal."
+(defun mevedel-execution--remote-group-status (record)
+  "Return RECORD's target group status in one probe round trip.
+
+The result is `live' (a non-zombie member remains and the leader
+identity matches -- safe to signal), `dead' (no non-zombie member
+remains -- safe to settle; zombies count as settled), or `ambiguous'
+\(live members without a matching leader identity, or the record lacks
+the data to probe -- never signal).  Transport failures signal."
   (let ((group-id (mevedel-execution--record-group-id record))
         (start-time (mevedel-execution--record-group-start-time record))
         (workdir (mevedel-execution--record-workdir record))
@@ -602,21 +622,21 @@ The result is `match', `missing', or `mismatch'.  Transport failures signal."
     (if (not (and (integerp group-id) (> group-id 0)
                   (stringp start-time) (stringp workdir)
                   (file-remote-p workdir)))
-        'missing
+        'ambiguous
       (with-timeout
           (mevedel-execution--remote-control-timeout
-           (error "Target process identity check timed out"))
+           (error "Target process status probe timed out"))
         (with-temp-buffer
           (setq default-directory workdir)
           (pcase
               (process-file
                "bash" nil nil nil "-c"
-               mevedel-execution--remote-group-identity-script
+               mevedel-execution--remote-group-status-script
                "mevedel-process-group" (number-to-string group-id)
                start-time)
-            (0 'match)
-            (1 'missing)
-            (_ 'mismatch)))))))
+            (0 'live)
+            (1 'dead)
+            (_ 'ambiguous)))))))
 
 (defun mevedel-execution--settle-unknown (record)
   "End RECORD's lost transport and schedule unknown-outcome settlement."
@@ -712,20 +732,15 @@ The result is `match', `missing', or `mismatch'.  Transport failures signal."
          ((and (or remote (not (eq system-type 'windows-nt)))
                (integerp group-id) (> group-id 0))
           (if remote
-              (pcase (mevedel-execution--remote-group-identity-status record)
-                ('match
+              (pcase (mevedel-execution--remote-group-status record)
+                ('live
                  (with-timeout
                      (mevedel-execution--remote-control-timeout
                       (error "Target process signal timed out"))
                    (signal-process (- group-id) signal workdir)))
-                (identity
-                 (if (zerop
-                      (with-timeout
-                          (mevedel-execution--remote-control-timeout
-                           (error "Target process liveness check timed out"))
-                        (signal-process (- group-id) 0 workdir)))
-                     (error "Remote process-group identity is %s" identity)
-                   -1)))
+                ('dead -1)
+                (status
+                 (error "Remote process-group status is %s" status)))
             (signal-process (- group-id) signal)))
          (remote
           (error "Remote process-group identity is unavailable"))
@@ -740,7 +755,12 @@ The result is `match', `missing', or `mismatch'.  Transport failures signal."
            (ignore-errors (signal-process process signal))))))))
 
 (defun mevedel-execution--group-live-p (record)
-  "Return non-nil when RECORD's process group still has a member."
+  "Return non-nil when RECORD's process group still has a live member.
+
+Remote groups are probed zombie-aware: a group whose only remaining
+members are zombies reports dead, so settlement does not ride the kill
+grace for work that already ended.  An ambiguous probe reports live --
+safety over latency -- and keeps the bounded escalation in charge."
   (let* ((workdir (mevedel-execution--record-workdir record))
          (remote (and workdir (file-remote-p workdir)))
          (group-id (mevedel-execution--record-group-id record)))
@@ -749,20 +769,17 @@ The result is `match', `missing', or `mismatch'.  Transport failures signal."
       (mevedel-execution--mark-unknown
        record '(error "Remote process-group identity was not received"))
       nil)
-     ((not (and (not remote) (eq system-type 'windows-nt)))
+     (remote
+      (condition-case err
+          (not (eq 'dead (mevedel-execution--remote-group-status record)))
+        (error
+         (mevedel-execution--mark-unknown record err)
+         nil)))
+     ((not (eq system-type 'windows-nt))
       (when group-id
-        (condition-case err
-            (zerop
-             (if remote
-                 (with-timeout
-                     (mevedel-execution--remote-control-timeout
-                      (error "Target process liveness check timed out"))
-                   (signal-process (- group-id) 0 workdir))
-               (signal-process (- group-id) 0)))
-          (error
-           (when remote
-             (mevedel-execution--mark-unknown record err))
-           nil)))))))
+        (condition-case nil
+            (zerop (signal-process (- group-id) 0))
+          (error nil)))))))
 
 (defun mevedel-execution--append-output (record chunk)
   "Append bounded raw output CHUNK to RECORD's spool."
@@ -976,6 +993,29 @@ unprovable outcome and is recorded as such before settlement."
        record (or (mevedel-execution--record-termination record) 'exited))
     (mevedel-execution--finish-managed record)))
 
+(defun mevedel-execution--settle-stop-main-exit (record)
+  "Finish stopping RECORD early when its remote group already settled.
+
+A probe that reports the group dead cancels the pending kill grace and
+settles now.  A live, ambiguous, or failed probe changes nothing: the
+bounded escalation stays in charge, and no unknown outcome is latched
+here -- a transient transport failure at this moment must not poison a
+record the escalation could still settle cleanly."
+  (setf (mevedel-execution--record-settle-timer record) nil)
+  (unless (mevedel-execution--record-finished-p record)
+    (when (eq 'dead (condition-case nil
+                        (mevedel-execution--remote-group-status record)
+                      (error nil)))
+      (let ((timer (mevedel-execution--record-force-timer record)))
+        (when (timerp timer)
+          (cancel-timer timer))
+        (setf (mevedel-execution--record-force-timer record) nil))
+      (if (mevedel-execution--record-execution-id record)
+          (mevedel-execution--finish-managed record)
+        (mevedel-execution--finish-record
+         record
+         (or (mevedel-execution--record-exit-code record) -1))))))
+
 (defun mevedel-execution--process-ended (record process)
   "Settle RECORD when PROCESS reaches a terminal state."
   (when (eq process (mevedel-execution--record-process record))
@@ -986,25 +1026,30 @@ unprovable outcome and is recorded as such before settlement."
           (when (and (not (mevedel-execution--record-termination record))
                      (eq status 'signal))
             (setf (mevedel-execution--record-termination record) 'signaled)))
-        (if (mevedel-execution--record-execution-id record)
-            (unless (or (and (mevedel-execution--record-stop-p record)
-                             (timerp
-                              (mevedel-execution--record-force-timer record)))
-                        (timerp
-                         (mevedel-execution--record-settle-timer record)))
-              (setf (mevedel-execution--record-settle-timer record)
-                    (run-at-time
-                     0.02 nil
-                     #'mevedel-execution--settle-managed-main-exit record)))
-          (unless (or (and (mevedel-execution--record-stop-p record)
-                           (timerp
-                            (mevedel-execution--record-force-timer record)))
-                      (timerp
-                       (mevedel-execution--record-settle-timer record)))
+        (cond
+         ((timerp (mevedel-execution--record-settle-timer record)))
+         ((and (mevedel-execution--record-stop-p record)
+               (timerp (mevedel-execution--record-force-timer record)))
+          ;; A stop is escalating.  For a remote record the wrapper only
+          ;; exits once its group has drained of non-zombies, so the main
+          ;; exit is the moment to confirm with one probe and settle early
+          ;; instead of riding the kill grace.
+          (when (file-remote-p
+                 (or (mevedel-execution--record-workdir record) ""))
             (setf (mevedel-execution--record-settle-timer record)
                   (run-at-time
-                   0.02 nil #'mevedel-execution--finish-record record
-                   (mevedel-execution--record-exit-code record)))))))))
+                   0.02 nil
+                   #'mevedel-execution--settle-stop-main-exit record))))
+         ((mevedel-execution--record-execution-id record)
+          (setf (mevedel-execution--record-settle-timer record)
+                (run-at-time
+                 0.02 nil
+                 #'mevedel-execution--settle-managed-main-exit record)))
+         (t
+          (setf (mevedel-execution--record-settle-timer record)
+                (run-at-time
+                 0.02 nil #'mevedel-execution--finish-record record
+                 (mevedel-execution--record-exit-code record)))))))))
 
 (defun mevedel-execution--launch-record
     (record name command workdir coding filter)

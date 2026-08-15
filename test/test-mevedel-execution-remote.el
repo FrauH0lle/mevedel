@@ -491,6 +491,45 @@ connection charges for, so the program path is proved here too."
 ;;
 ;;; Remote execution
 
+(mevedel-deftest mevedel-execution--remote-group-status ()
+  ,test
+  (test)
+  :doc "the probe script distinguishes live, settled, and reused groups"
+  (let* ((default-directory temporary-file-directory)
+         (process-environment nil)
+         (probe (lambda (group expected)
+                  (call-process
+                   "bash" nil nil nil "-c"
+                   mevedel-execution--remote-group-status-script
+                   "mevedel-process-group"
+                   (number-to-string group) expected)))
+         ;; A pipe subprocess is its own process group, so its pid is
+         ;; the group and its stat line supplies the identity token.
+         (leader (make-process :name "mevedel-test-group-status"
+                               :buffer nil
+                               :command '("sh" "-c" "sleep 30")
+                               :connection-type 'pipe
+                               :noquery t))
+         (pid (process-id leader))
+         (starttime
+          (with-temp-buffer
+            (insert-file-contents (format "/proc/%d/stat" pid))
+            (nth 19 (split-string
+                     (car (last (split-string (buffer-string) ") "))))))))
+    (unwind-protect
+        (progn
+          (should (= 0 (funcall probe pid starttime)))
+          ;; Live members under a leader whose identity does not match.
+          (should (= 2 (funcall probe pid "0")))
+          (delete-process leader)
+          (let ((deadline (+ (float-time) 2)))
+            (while (and (process-live-p leader) (< (float-time) deadline))
+              (accept-process-output nil 0.02)))
+          ;; No member remains at all: settled.
+          (should (= 1 (funcall probe pid starttime))))
+      (when (process-live-p leader)
+        (delete-process leader)))))
+
 (mevedel-deftest mevedel-execution-run-one-shot/remote ()
   ,test
   (test)
@@ -658,8 +697,8 @@ connection charges for, so the program path is proved here too."
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
           (cl-letf (((symbol-function
-                      'mevedel-execution--remote-group-identity-status)
-                     (lambda (_record) 'mismatch))
+                      'mevedel-execution--remote-group-status)
+                     (lambda (_record) 'ambiguous))
                     ((symbol-function 'signal-process)
                      (lambda (&rest args)
                        (push args calls)
@@ -1090,6 +1129,66 @@ connection charges for, so the program path is proved here too."
              (string-suffix-p
               "/tool-results/executions/exec-000001.log"
               output-path))))
+      (when session
+        (mevedel-execution-teardown-session session))
+      (delete-directory root t)))
+
+  :doc "a stop settles fast when only zombies remain in the group"
+  (let* ((root (make-temp-file "mevedel-remote-zombie-settle-" t))
+         (remote-root
+          (format "/mevedelmock:%s:%s/" (system-name) root))
+         (holder-file (expand-file-name "holder.pid" root))
+         (original-signal-process (symbol-function 'signal-process))
+         (mevedel-sandbox-mode 'off)
+         ;; The production grace: the assertion is that a settled group
+         ;; does not ride it.
+         (mevedel-execution--child-kill-delay 2)
+         session result group-id holder-pid stopped)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (setq session (test-mevedel-execution--session remote-root))
+          ;; The inner holder forks a short-lived child inside the managed
+          ;; group, then leaves the group via setsid while keeping the
+          ;; child unreaped: a held zombie whose pgrp stays the managed
+          ;; group for as long as the holder lives.
+          (cl-letf (((symbol-function
+                      'mevedel-session-persistence-publish-text)
+                     (lambda (&rest _) 'queued)))
+            (setq result
+                  (test-mevedel-execution--start-managed
+                   session remote-root
+                   (list "sh" "-c"
+                         (concat "sh -c 'sleep 0.05 & echo $$ > holder.pid; "
+                                 "exec setsid sleep 300' & "
+                                 "printf ready; exec sleep 300"))
+                   :yield-time-ms 10))
+            (setq group-id (plist-get (plist-get result :facts) :group-id))
+            (test-mevedel-execution--wait
+             (lambda () (file-exists-p holder-file)))
+            (setq holder-pid
+                  (string-to-number
+                   (string-trim
+                    (with-temp-buffer
+                      (insert-file-contents holder-file)
+                      (buffer-string)))))
+            ;; Let the short-lived child become the held zombie.
+            (let ((deadline (+ (float-time) 0.3)))
+              (while (< (float-time) deadline)
+                (accept-process-output nil 0.02)))
+            (let ((start (float-time)))
+              (mevedel-execution-stop
+               session "main"
+               (plist-get (plist-get result :facts) :execution-id)
+               (lambda (value) (setq stopped value)))
+              (test-mevedel-execution--wait (lambda () stopped))
+              (should (< (- (float-time) start) 1.0))))
+          ;; The zombie still answers the raw group probe: only
+          ;; zombie-awareness settled this stop early.
+          (when (and (integerp group-id) (> group-id 0))
+            (should (zerop (funcall original-signal-process (- group-id) 0))))
+          (should-not (mevedel-execution-unsettled-mutation-p session)))
+      (when (and (integerp holder-pid) (> holder-pid 0))
+        (ignore-errors (funcall original-signal-process holder-pid 'KILL)))
       (when session
         (mevedel-execution-teardown-session session))
       (delete-directory root t))))
