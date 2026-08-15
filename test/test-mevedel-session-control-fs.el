@@ -118,8 +118,10 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
-(mevedel-deftest mevedel-session-control-fs--programs
-  (:doc "resolves the target interpreters once and retries after a failure")
+(mevedel-deftest mevedel-session-control-fs--programs ()
+  ,test
+  (test)
+  :doc "resolves the target interpreters once and retries after a failure"
   (let ((root (make-temp-file "mevedel-control-fs-programs-" t))
         (real (symbol-function 'executable-find))
         (lookups 0))
@@ -150,6 +152,20 @@
             (should-error (mevedel-session-control-fs-read-file link)))
           (mevedel-session-control-fs-target-time root)
           (should (= 2 lookups)))
+      (clrhash mevedel-session-control-fs--programs)
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "refuses a non-Linux local host with a named constraint"
+  (let ((root (make-temp-file "mevedel-control-fs-darwin-" t)))
+    (unwind-protect
+        (let ((system-type 'darwin))
+          (clrhash mevedel-session-control-fs--programs)
+          (let ((err (should-error
+                      (mevedel-session-control-fs-target-time root)
+                      :type 'user-error)))
+            (should (string-match-p "Linux host" (cadr err)))
+            (should (string-match-p "darwin" (cadr err)))))
       (clrhash mevedel-session-control-fs--programs)
       (when (file-directory-p root)
         (delete-directory root t)))))

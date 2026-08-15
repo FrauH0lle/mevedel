@@ -286,6 +286,17 @@ operation, which drops the entry.")
 
 (defun mevedel-session-control-fs--programs (remote)
   "Return a cons of target `bash' and `stat' paths for REMOTE."
+  ;; Every remote target is readiness-gated to Linux already; a local
+  ;; target never is, yet the scripts need procfs descriptor pinning and
+  ;; GNU stat, mv, and base64 semantics.  Refusing here covers every
+  ;; portable entry point -- lease, recovery, transfer, publication --
+  ;; with one message instead of an inscrutable script exit.
+  (when (and (null remote) (not (eq system-type 'gnu/linux)))
+    (user-error
+     (concat "Portable session storage requires a Linux host: the "
+             "control filesystem needs procfs, GNU stat, and bash "
+             "(this host: %s)")
+     system-type))
   (let ((key (or remote "")))
     (or (gethash key mevedel-session-control-fs--programs)
         (let ((bash (executable-find "bash" remote))
