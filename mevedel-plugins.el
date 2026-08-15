@@ -598,7 +598,12 @@ Relative identities are requalified through the live WORKSPACE root."
       (push (cons name plist) state))
     (mevedel-plugins--write-state
      (sort state (lambda (a b) (string< (car a) (car b))))
-     workspace)))
+     workspace)
+    ;; Enablement decides which plugin hooks resolve, so the memoized
+    ;; hook configuration is stale from here.  Guarded rather than
+    ;; required: hooks depends on plugins, not the other way around.
+    (when (boundp 'mevedel-hooks--config-rules-cache)
+      (clrhash mevedel-hooks--config-rules-cache))))
 
 (defun mevedel-plugins--remove-state-for-source
     (name root &optional workspace)

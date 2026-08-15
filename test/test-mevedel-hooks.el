@@ -543,6 +543,52 @@
 		     (delete-directory root t)
 		     (delete-directory user-dir t))))
 
+(mevedel-deftest mevedel-hooks--config-rules
+  (:doc "memoizes the configured layers until an explicit invalidation")
+  (let* ((root (make-temp-file "mevedel-hooks-cache-ws" t))
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-hooks-cache-user" t)))
+         (workspace (mevedel-hooks-test--workspace root))
+         (mevedel-user-dir user-dir)
+         (mevedel-hooks-require-project-trust t)
+         (reads 0)
+         (project-files-function
+          (symbol-function 'mevedel-hooks--project-config-files)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat root ".mevedel") t)
+          (with-temp-file (file-name-concat root ".mevedel" "hooks.el")
+            (prin1
+             '((PreToolUse
+                ((:matcher "Bash"
+                  :hooks ((:type command :command "echo project"))))))
+             (current-buffer)))
+          (mevedel-test--with-captured-messages nil
+            (mevedel-hooks-trust-project workspace))
+          (cl-letf (((symbol-function 'mevedel-hooks--project-config-files)
+                     (lambda (ws)
+                       (cl-incf reads)
+                       (funcall project-files-function ws))))
+            (should (= 1 (length (mevedel-hooks--matching-handlers
+                                  'PreToolUse '(:tool-name "Bash")
+                                  (mevedel-hooks-effective-rules
+                                   nil workspace)))))
+            (mevedel-hooks-effective-rules nil workspace)
+            (should (= 1 reads))
+            (mevedel-test--with-captured-messages nil
+              (mevedel-hooks-reload))
+            (mevedel-hooks-effective-rules nil workspace)
+            (should (= 2 reads))
+            ;; Trusting the project invalidates too.
+            (mevedel-test--with-captured-messages nil
+              (mevedel-hooks-trust-project workspace))
+            (mevedel-hooks-effective-rules nil workspace)
+            (should (= 3 reads))))
+      (clrhash mevedel-hooks--config-rules-cache)
+      (delete-directory root t)
+      (when (file-directory-p user-dir)
+        (delete-directory user-dir t)))))
+
 (mevedel-deftest mevedel-hooks-effective-rules/agents-hook-roots
   (:doc "loads standalone agents hook roots in precedence order and trusts project agents files")
   (let* ((root (make-temp-file "mevedel-hooks-agents-ws" t))
