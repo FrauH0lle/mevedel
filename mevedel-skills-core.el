@@ -836,8 +836,12 @@ No name fallback is attempted."
   "Return non-nil when this Emacs has filesystem-notification support.
 Probes for any of the backend `*-add-watch' primitives Emacs uses to
 implement `file-notify-add-watch'.  Avoids depending on internals
-\\(`file-notify--library') which moved between Emacs versions."
-  (and (require 'filenotify nil 'noerror)
+\\(`file-notify--library') which moved between Emacs versions.
+
+A batch Emacs reports no support: a notification arrives as an input
+event, and without a command loop nothing delivers it."
+  (and (not noninteractive)
+       (require 'filenotify nil 'noerror)
        (or (fboundp 'inotify-add-watch)
            (fboundp 'kqueue-add-watch)
            (fboundp 'gfile-add-watch)
@@ -1105,13 +1109,22 @@ SKILL.md files in one walk.  The `stopped' action is ignored."
                    (mevedel-skills--mark-dir-dirty dir)))
                mevedel-skills--watchers))))
 
-(defun mevedel-skills--ensure-watcher (dir &optional target)
+(cl-defun mevedel-skills--ensure-watcher (dir &optional target)
   "Install a `file-notify' watcher on DIR if none is live yet.
 Silently no-ops on platforms without filenotify support, when DIR does
 not exist, or when matching remote TARGET has neither `inotifywait'
 nor `gio'.  Errors during watcher installation are downgraded to
 warnings -- a missing watcher only degrades hot-reload, it never
-breaks normal operation."
+breaks normal operation.
+
+A batch Emacs never installs a watcher.  File-notification arrives as
+an input event, and without a command loop nothing ever delivers it;
+worse, the first pending notification stops process sentinel dispatch
+for the rest of the session (Emacs 30.2, reproducible with emacs -Q
+--batch: watch a directory, touch it, and every later subprocess
+sentinel is silently dropped)."
+  (when noninteractive
+    (cl-return-from mevedel-skills--ensure-watcher))
   (let* ((dir (file-name-as-directory (expand-file-name dir)))
          (remote-prefix (file-remote-p dir))
          (watch-supported-p t))
