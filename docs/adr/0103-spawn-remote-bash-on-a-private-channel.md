@@ -9,11 +9,15 @@ asynchronous process path: a local `ssh` (or container client) invocation
 of its own, carrying `cd` into the working directory and the execution
 environment, instead of a handler spawn multiplexed over the shared
 control connection.  Eligible means: the option is on (its default), the
-execution is not a TTY, the target is a single-hop ssh, scp, docker, or
-podman connection, and the wrapped command fits the remote pipe buffer
-with margin.  Everything else -- TTY executions, oversized commands,
-hops, other methods -- keeps the classic shared-channel spawn, decided
-per record at launch.
+execution is not a TTY, the target is a single-hop ssh or scp
+connection, and the wrapped command fits the remote pipe buffer with
+margin.  Everything else -- TTY executions, oversized commands, hops,
+container and other methods -- keeps the classic shared-channel spawn,
+decided per record at launch.  The container methods carry the
+direct-async parameter too, but their per-spawn client exec allocates
+a tty and prints its own notices ahead of the command; carriage
+returns and interleaved client output corrupt the group marker
+protocol, so they stay classic until that protocol tolerates them.
 
 The channel is forced per spawn rather than through a connection-local
 profile.  A profile flips every `make-process` on that host for the whole

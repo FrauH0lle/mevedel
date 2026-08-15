@@ -210,14 +210,16 @@ A nil TARGET is the local environment, so it is not remote."
 (defun mevedel-execution-target-direct-async-capable-p (target)
   "Return non-nil when TARGET can host direct-async process spawns.
 
-Single-hop ssh, scp, docker, and podman connections qualify: their
-TRAMP methods carry the direct-async parameter, and a hop disqualifies
+Single-hop ssh and scp connections qualify.  The container methods
+carry the direct-async parameter too, but their per-spawn client exec
+allocates a tty and prints its own notices ahead of the command --
+carriage returns and interleaved client output corrupt the group
+marker protocol -- so they keep the classic spawn.  A hop disqualifies
 the whole connection.  This is a pure capability statement; whether an
 individual spawn uses it is the execution layer's decision."
   (and target
        (mevedel-execution-target-remote-p target)
-       (memq (mevedel-execution-target-method target)
-             '(ssh scp docker podman))
+       (memq (mevedel-execution-target-method target) '(ssh scp))
        (not (plist-get (mevedel-execution-target-identity target) :hop))))
 
 (defun mevedel-execution-target-label (target)

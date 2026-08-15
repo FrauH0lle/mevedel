@@ -159,10 +159,10 @@ Values below 0.25 are clamped so the UI receives at most four per second."
 (defcustom mevedel-execution-remote-direct-async t
   "When non-nil, eligible remote Bash spawns run on a private channel.
 
-An eligible spawn is a non-TTY execution on a single-hop ssh, scp,
-docker, or podman target whose wrapped command fits the remote pipe
-buffer.  It runs over its own connection instead of the shared TRAMP
-control connection, so a live execution stops serializing durable
+An eligible spawn is a non-TTY execution on a single-hop ssh or scp
+target whose wrapped command fits the remote pipe buffer.  It runs
+over its own connection instead of the shared TRAMP control
+connection, so a live execution stops serializing durable
 session work behind it and stops being a reentrancy window.  Each
 spawn opens its own connection, so authentication must be
 non-interactive (an agent, a key, or user-configured connection
