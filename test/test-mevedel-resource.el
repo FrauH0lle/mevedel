@@ -171,7 +171,7 @@
            (mevedel-resource-prepare
             'read "local://escape/missing.txt" (list :session session))))
       (delete-directory save-path t)
-      (delete-directory outside t)))
+      (delete-directory outside t))))
 
 (mevedel-deftest mevedel-resource-artifact-address ()
   ,test
@@ -298,7 +298,7 @@
              (lambda (path _authored)
                (setq physical path)))
             (should (equal (file-name-concat renamed-save "local" "note.md")
-                           physical))))
+                           physical)))
           (setf (mevedel-session-save-path session) save-path)
           (let ((attempt (mevedel-resource-prepare
                           'read address (list :session session))))
