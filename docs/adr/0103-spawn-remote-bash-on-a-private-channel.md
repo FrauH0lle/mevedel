@@ -53,11 +53,12 @@ without socket sharing pays a handshake.  Emacs 30.2 ships a defect
 here: the spawn asks for its ssh options through a function TRAMP
 renamed, silently receiving none -- which loses not only ControlMaster
 sharing but any option routed through the same-named variable, such as
-the -F config a host alias needs to resolve at all.  mevedel restores
-the intended call with an alias before the first ssh direct-async
-spawn, so the spawn carries the user's options and reuses the master
-socket while still running outside the master shell -- the shell
-channel is the contention this decision removes.
+the -F config a host alias needs to resolve at all.  mevedel routes
+the intended call for each direct-async spawn's extent -- a scoped
+rebinding, not a global alias -- so the spawn carries the user's
+options and reuses the master socket while still running outside the
+master shell, and a fixed Emacs later loses the shim without a trace.
+The shell channel is the contention this decision removes.
 
 The local process's exit status is the ssh client's: a remote exit 255 is
 indistinguishable from a transport failure.  The zombie-aware group probe

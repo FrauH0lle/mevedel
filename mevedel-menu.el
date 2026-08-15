@@ -136,9 +136,9 @@
 (declare-function mevedel-review "mevedel-review" (&optional instructions))
 (declare-function mevedel-verify "mevedel-review" (&optional instructions))
 
-;; `mevedel-session-durability'
+;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-status
-                  "mevedel-session-durability" (session))
+                  "mevedel-session-publication" (session))
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills-count-label "mevedel-skills-ui" (session))
