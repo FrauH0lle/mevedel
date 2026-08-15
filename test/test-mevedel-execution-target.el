@@ -118,20 +118,22 @@
 (mevedel-deftest mevedel-execution-target-direct-async-capable-p ()
   ,test
   (test)
-  :doc "accepts single-hop ssh, scp, docker, and podman targets only"
+  :doc "accepts single-hop ssh and scp targets only"
   (progn
     (dolist (root '("/ssh:dev:/workspace/"
-                    "/scp:dev:/workspace/"
-                    "/docker:dev:/workspace/"
-                    "/podman:dev:/workspace/"))
+                    "/scp:dev:/workspace/"))
       (should
        (mevedel-execution-target-direct-async-capable-p
         (mevedel-execution-target-create root))))
     ;; sshx and scpx spawn through RemoteCommand, which direct-async
-    ;; cannot use; a hop disqualifies the whole connection; local has
-    ;; no channel to privatize.
+    ;; cannot use; the container clients allocate a tty per exec and
+    ;; print notices ahead of the command, corrupting the marker
+    ;; protocol; a hop disqualifies the whole connection; local has no
+    ;; channel to privatize.
     (dolist (root '("/sshx:dev:/workspace/"
                     "/scpx:dev:/workspace/"
+                    "/docker:dev:/workspace/"
+                    "/podman:dev:/workspace/"
                     "/ssh:jump|ssh:dev:/workspace/"
                     "/tmp/"))
       (should-not

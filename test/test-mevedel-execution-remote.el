@@ -2404,8 +2404,10 @@ work in flight genuinely unprovable rather than merely finished."
     (should (stringp root-id))
     (should (stringp agent-id))
     ;; Eligible pipe executions took the private channel, not a silent
-    ;; fallback to the shared connection.
-    (should (plist-get (plist-get root-result :facts) :direct-async))
+    ;; fallback to the shared connection; container targets stay classic.
+    (should (eq (mevedel-execution-target-direct-async-capable-p
+                 (mevedel-session-execution-target session))
+                (plist-get (plist-get root-result :facts) :direct-async)))
     (should
      (equal '("/root" "/root/acceptance")
             (sort
