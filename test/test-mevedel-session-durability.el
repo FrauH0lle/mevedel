@@ -1408,15 +1408,18 @@
             (setf (mevedel-session-save-path session) session-dir)
             (should (mevedel-session-durability-lease-acquire
                      session-dir "*publisher*" session))
-            (should-error
-             (mevedel-session-publication-publish
-              session (list (list :path target :content "critical")))
-             :type 'file-error)
+            (mevedel-test--with-captured-diagnostics nil
+              (should-error
+               (mevedel-session-publication-publish
+                session (list (list :path target :content "critical")))
+               :type 'file-error))
             (let* ((pending (mevedel-session-pending-publication session))
                    (batch (car (plist-get pending :batches)))
                    (recovery (plist-get batch :directory)))
               (should (file-directory-p recovery))
-              (mevedel-session-durability-lease-release session-dir session)
+              (mevedel-test--with-captured-diagnostics nil
+                (mevedel-session-durability-lease-release
+                 session-dir session))
               (should (eq pending
                           (mevedel-session-pending-publication session)))
               (should (file-directory-p recovery))
@@ -1439,16 +1442,19 @@
         (progn
           (should (mevedel-session-durability-lease-acquire
                    session-dir "*publisher*" session))
-          (should
-           (mevedel-session-durability-call-with-reserved-lease
-            session
-            (lambda ()
-              (should
-               (eq 'queued
-                   (mevedel-session-publication-publish
-                    session (list (list :path target :content "critical")))))
-              (mevedel-session-durability-lease-release session-dir session)
-              t)))
+          (mevedel-test--with-captured-diagnostics nil
+            (should
+             (mevedel-session-durability-call-with-reserved-lease
+              session
+              (lambda ()
+                (should
+                 (eq 'queued
+                     (mevedel-session-publication-publish
+                      session
+                      (list (list :path target :content "critical")))))
+                (mevedel-session-durability-lease-release
+                 session-dir session)
+                t))))
           (let* ((pending (mevedel-session-pending-publication session))
                  (batch (car (plist-get pending :batches))))
             (should pending)
@@ -2070,7 +2076,10 @@
             session "../external.el")
            :type 'error))
       (setf (mevedel-session-publication-active-p session) nil)
-      (mevedel-session-durability-lease-release session-dir session)
+      ;; The queued publication is deliberately never drained; releasing
+      ;; over it reports the retained recovery, which this teardown owns.
+      (mevedel-test--with-captured-diagnostics nil
+        (mevedel-session-durability-lease-release session-dir session))
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
@@ -2103,11 +2112,12 @@
               (((symbol-function
                  'mevedel-session-durability-commit-publication-head)
                 (lambda (&rest _) nil)))
-            (should-error
-             (mevedel-session-publication-publish
-              session
-              (list (list :path sidecar :content "new" :commit-marker t)))
-             :type 'user-error))
+            (mevedel-test--with-captured-diagnostics nil
+              (should-error
+               (mevedel-session-publication-publish
+                session
+                (list (list :path sidecar :content "new" :commit-marker t)))
+               :type 'user-error)))
           (setq recovery
                 (mapcar
                  (lambda (batch) (plist-get batch :directory))
@@ -2505,12 +2515,13 @@
               (((symbol-function
                  'mevedel-session-durability-commit-publication-head)
                 (lambda (&rest _) nil)))
-            (should-error
-             (mevedel-session-publication-publish
-              session
-              (list (list :path sidecar :content "sidecar"
-                          :commit-marker t)))
-             :type 'user-error))
+            (mevedel-test--with-captured-diagnostics nil
+              (should-error
+               (mevedel-session-publication-publish
+                session
+                (list (list :path sidecar :content "sidecar"
+                            :commit-marker t)))
+               :type 'user-error)))
           (let ((batches
                  (plist-get (mevedel-session-pending-publication session)
                             :batches)))
@@ -2658,14 +2669,15 @@
           (setf (mevedel-session-save-path session) session-dir)
           (should (mevedel-session-persistence-lock-acquire
                    session-dir "*publisher*" session))
-          (should-error
-           (mevedel-session-publication-publish
-            session
-            (list (list :path first :content "first")
-                  (list :path second :content "second")
-                  (list :path sidecar :content "sidecar"
-                        :commit-marker t)))
-           :type 'file-error)
+          (mevedel-test--with-captured-diagnostics nil
+            (should-error
+             (mevedel-session-publication-publish
+              session
+              (list (list :path first :content "first")
+                    (list :path second :content "second")
+                    (list :path sidecar :content "sidecar"
+                          :commit-marker t)))
+             :type 'file-error))
           (let* ((pending (mevedel-session-pending-publication session))
                  (batch (car (plist-get pending :batches)))
                  (recovery (plist-get batch :directory)))
@@ -2710,10 +2722,11 @@
           (setf (mevedel-session-save-path session) session-dir)
           (should (mevedel-session-persistence-lock-acquire
                    session-dir "*publisher*" session))
-          (should-error
-           (mevedel-session-publication-publish
-            session (list (list :path target :content "state")))
-           :type 'file-error)
+          (mevedel-test--with-captured-diagnostics nil
+            (should-error
+             (mevedel-session-publication-publish
+              session (list (list :path target :content "state")))
+             :type 'file-error))
           (let* ((pending (mevedel-session-pending-publication session))
                  (recovery
                   (plist-get (car (plist-get pending :batches)) :directory)))
@@ -2814,10 +2827,11 @@
               (((symbol-function
                  'mevedel-session-durability--renew-publication-lease)
                 (lambda (&rest _) nil)))
-            (should-error
-             (mevedel-session-publication-publish
-              session (list (list :path target :content "state")))
-             :type 'user-error))
+            (mevedel-test--with-captured-diagnostics nil
+              (should-error
+               (mevedel-session-publication-publish
+                session (list (list :path target :content "state")))
+               :type 'user-error)))
           (should-not (file-exists-p target))
           (let* ((pending (mevedel-session-pending-publication session))
                  (batch (car (plist-get pending :batches))))
@@ -2866,10 +2880,11 @@
                         (should
                          (mevedel-session-durability-lease-acquire
                           session-dir "*successor*"))))))))
-            (should-error
-             (mevedel-session-publication-publish
-              session (list (list :path target :content "state")))
-             :type 'user-error))
+            (mevedel-test--with-captured-diagnostics nil
+              (should-error
+               (mevedel-session-publication-publish
+                session (list (list :path target :content "state")))
+               :type 'user-error)))
           (should (string-match-p "critical write may still be in flight"
                                   takeover-prompt))
           (should (string-match-p "prior client is stopped"
@@ -2998,10 +3013,11 @@
                         (setq fail-finish nil)
                         nil)
                     (funcall finish-publication current)))))
-            (should-error
-             (mevedel-session-publication-append-diagnostic
-              session diagnostic "diagnostic")
-             :type 'user-error)
+            (mevedel-test--with-captured-diagnostics nil
+              (should-error
+               (mevedel-session-publication-append-diagnostic
+                session diagnostic "diagnostic")
+               :type 'user-error))
             (let ((batches
                    (plist-get (mevedel-session-pending-publication session)
                               :batches)))
@@ -3025,6 +3041,9 @@
 (mevedel-deftest mevedel-session-persistence-publish-agent-terminal-state
   (:doc "publishes transcript and final registry sidecar as one retryable batch")
   (let* ((host "agent-terminal-host")
+         ;; The transcript buffer visits a mock-remote file; a lockfile
+         ;; there survives into teardown and warns on removal.
+         (create-lockfiles nil)
          (local-root
           (file-name-as-directory
            (make-temp-file "mevedel-remote-agent-terminal-" t)))
@@ -3120,10 +3139,11 @@
                         (signal 'file-error
                                 '("Injected agent sidecar failure"))
                       (funcall publish-artifact artifact)))))
-              (should-error
-               (mevedel-session-persistence-publish-agent-terminal-state
-                invocation)
-               :type 'file-error)))
+              (mevedel-test--with-captured-diagnostics nil
+                (should-error
+                 (mevedel-session-persistence-publish-agent-terminal-state
+                  invocation)
+                 :type 'file-error))))
           (let* ((pending (mevedel-session-pending-publication session))
                  (batches (plist-get pending :batches))
                  (artifacts (plist-get (car batches) :artifacts)))
@@ -3274,10 +3294,11 @@
                            save-path "segment-0002.chat.org")))
                 (delete-directory instructions t)
                 (with-temp-file instructions (insert "blocker"))
-                (should-error
-                 (mevedel-session-persistence-rotate-segment
-                  session (current-buffer) "Pending handoff.")
-                 :type 'file-error)
+                (mevedel-test--with-captured-diagnostics nil
+                  (should-error
+                   (mevedel-session-persistence-rotate-segment
+                    session (current-buffer) "Pending handoff.")
+                   :type 'file-error))
                 (should (mevedel-session-pending-publication session))
                 (should (= 2 (mevedel-session-current-segment session)))
                 (should (equal new buffer-file-name))
