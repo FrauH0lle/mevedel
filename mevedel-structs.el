@@ -399,7 +399,7 @@ workspace."
   repair-log         ; transient bounded tool-input repair telemetry
   repair-log-pending ; transient repair diagnostics awaiting persistence
   permission-log-pending ; transient diagnostics awaiting materialization
-  telemetry-pending  ; transient lifecycle telemetry awaiting materialization
+  telemetry-pending  ; queued telemetry entries, newest first
   hook-context-pending ; transient hook context injected into the next prompt
   execution-state   ; transient opaque state owned by `mevedel-execution'
   audit-session     ; transient durable parent for audit and mutation authority
