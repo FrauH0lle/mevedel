@@ -227,6 +227,32 @@ and one transaction reaches several entry points that each prove its absence.
 A caller that spans one transaction binds this to a fresh `(list nil)';
 outside such a binding every call proves it against the target.")
 
+;; `mevedel-session-recovery' declares this cache; the transaction macro
+;; below binds it together with this file's own transaction scopes.
+(defvar mevedel-session-recovery--mutation-cache)
+
+(defmacro mevedel-session-durability-with-transaction (&rest body)
+  "Run BODY as one durable transaction sharing clock, probe, and recovery reads.
+
+The target clock reading, the pid-lock assertions, and the recovery
+mutation lookups repeat across the entry points one user action reaches;
+inside this scope each is paid once.  The bindings nest: an inner
+transaction joins the outer one instead of starting fresh, and the reads
+are tolerant so the scope works before the lazily loaded modules that own
+the variables are in."
+  (declare (indent 0) (debug t))
+  `(let ((mevedel-session-durability--transaction-clock
+          (or (bound-and-true-p mevedel-session-durability--transaction-clock)
+              (list nil)))
+         (mevedel-session-durability--asserted-directories
+          (or (bound-and-true-p
+               mevedel-session-durability--asserted-directories)
+              (list nil)))
+         (mevedel-session-recovery--mutation-cache
+          (or (bound-and-true-p mevedel-session-recovery--mutation-cache)
+              (list nil))))
+     ,@body))
+
 (defun mevedel-session-durability--assert-no-pid-lock (session-dir)
   "Signal when portable SESSION-DIR also contains the obsolete PID lock."
   (setq session-dir (mevedel-session-control-fs-physical-path
