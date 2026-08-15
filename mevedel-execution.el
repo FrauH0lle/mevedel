@@ -742,7 +742,8 @@ the data to probe -- never signal).  Transport failures signal."
 
 (defun mevedel-execution--settle-unknown (record)
   "End RECORD's lost transport and schedule unknown-outcome settlement."
-  (unless (timerp (mevedel-execution--record-settle-timer record))
+  (unless (mevedel-execution--timer-pending-p
+           (mevedel-execution--record-settle-timer record))
     (setf (mevedel-execution--record-settle-timer record)
           (run-at-time mevedel-execution--child-kill-delay nil
                        #'mevedel-execution--settle-after-kill record)))
@@ -1015,7 +1016,7 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
          "Remote process group survived the final KILL signal")))
     (if (mevedel-execution--record-execution-id record)
         (unless (and (mevedel-execution--record-stop-p record)
-                     (timerp
+                     (mevedel-execution--timer-pending-p
                       (mevedel-execution--record-force-timer record)))
           (mevedel-execution--finish-managed record))
       (mevedel-execution--finish-record
@@ -1026,7 +1027,8 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
   (unless (mevedel-execution--record-finished-p record)
     (setf (mevedel-execution--record-force-timer record) nil)
     (mevedel-execution--signal-record record 'KILL)
-    (unless (timerp (mevedel-execution--record-settle-timer record))
+    (unless (mevedel-execution--timer-pending-p
+             (mevedel-execution--record-settle-timer record))
       (setf (mevedel-execution--record-settle-timer record)
             (run-at-time mevedel-execution--child-kill-delay nil
                          #'mevedel-execution--settle-after-kill record)))))
@@ -1118,6 +1120,16 @@ record the escalation could still settle cleanly."
          record
          (or (mevedel-execution--record-exit-code record) -1))))))
 
+(defun mevedel-execution--timer-pending-p (timer)
+  "Return non-nil when TIMER is armed and still due to fire.
+
+A slot can hold a timer object that will never run: one armed from a
+process sentinel that fired inside a TRAMP wait lands on a let-bound
+`timer-list' and vanishes when the binding exits.  Treating such a
+stranded object as already scheduled would wedge settlement, so the
+watchdog checks list membership, not just the slot."
+  (and (timerp timer) (memq timer timer-list) t))
+
 (defun mevedel-execution--process-ended (record process)
   "Settle RECORD when PROCESS reaches a terminal state."
   (when (eq process (mevedel-execution--record-process record))
@@ -1129,9 +1141,11 @@ record the escalation could still settle cleanly."
                      (eq status 'signal))
             (setf (mevedel-execution--record-termination record) 'signaled)))
         (cond
-         ((timerp (mevedel-execution--record-settle-timer record)))
+         ((mevedel-execution--timer-pending-p
+           (mevedel-execution--record-settle-timer record)))
          ((and (mevedel-execution--record-stop-p record)
-               (timerp (mevedel-execution--record-force-timer record)))
+               (mevedel-execution--timer-pending-p
+                (mevedel-execution--record-force-timer record)))
           ;; A stop is escalating.  For a remote record the wrapper only
           ;; exits once its group has drained of non-zombies, so the main
           ;; exit is the moment to confirm with one probe and settle early

@@ -814,8 +814,10 @@
               session command-text command))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-execution--process-ended
-  (:doc "ignores a terminal sentinel from a replaced process")
+(mevedel-deftest mevedel-execution--process-ended ()
+  ,test
+  (test)
+  :doc "ignores a terminal sentinel from a replaced process"
   (let* ((old
           (make-process
            :name "mevedel-test-old-process"
@@ -837,7 +839,33 @@
           (should-not (mevedel-execution--record-exit-code record))
           (should-not (mevedel-execution--record-settle-timer record)))
       (mevedel-execution--release-runtime record)
-      (ignore-errors (delete-process old)))))
+      (ignore-errors (delete-process old))))
+
+  :doc "reschedules settlement when the armed settle timer was stranded"
+  (let* ((process
+          (make-process
+           :name "mevedel-test-stranded-process"
+           :command '("sh" "-c" "exit 0")
+           :buffer nil :sentinel #'ignore :noquery t))
+         (stranded (run-at-time 30 nil #'ignore))
+         (record
+          (mevedel-execution--record-create
+           :execution-id "exec-stranded" :process process
+           :settle-timer stranded)))
+    ;; A sentinel that fires inside a TRAMP wait arms its settle timer
+    ;; on a let-bound `timer-list', so the object survives while the
+    ;; scheduling is lost.  A canceled timer is observably identical.
+    (cancel-timer stranded)
+    (unwind-protect
+        (progn
+          (test-mevedel-execution--wait
+           (lambda () (memq (process-status process) '(exit signal))))
+          (mevedel-execution--process-ended record process)
+          (let ((timer (mevedel-execution--record-settle-timer record)))
+            (should (mevedel-execution--timer-pending-p timer))
+            (should-not (eq timer stranded))))
+      (mevedel-execution--release-runtime record)
+      (ignore-errors (delete-process process)))))
 
 (mevedel-deftest mevedel-execution-start-bash
   (:doc "runs managed commands through fallback and resource capture")
