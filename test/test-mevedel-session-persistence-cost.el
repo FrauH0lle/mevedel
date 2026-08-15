@@ -29,13 +29,10 @@
   "Run BODY and return the number of target processes it started."
   (declare (indent 0) (debug t))
   `(let ((test-mevedel-session-persistence-cost--processes 0)
-         (single (symbol-function 'mevedel-session-control-fs--run))
          (program (symbol-function 'mevedel-session-control-fs-run-program)))
-     (cl-letf (((symbol-function 'mevedel-session-control-fs--run)
-                (lambda (&rest arguments)
-                  (cl-incf test-mevedel-session-persistence-cost--processes)
-                  (apply single arguments)))
-               ((symbol-function 'mevedel-session-control-fs-run-program)
+     ;; Every control operation is a program now; each program is one
+     ;; target process regardless of its operation count.
+     (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
                 (lambda (&rest arguments)
                   (cl-incf test-mevedel-session-persistence-cost--processes)
                   (apply program arguments))))
