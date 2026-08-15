@@ -231,11 +231,22 @@ Bash scheduler. The Bash adapter also captures its analyzed exit-outcome
 resolver at spawn, so later observations derive the same canonical facts
 without moving command semantics into the process module.
 
+`mevedel-transport.el` answers one question: is this Emacs already inside a
+remote operation?  Durable target I/O started from a timer, a process
+filter, or redisplay must not nest inside an in-flight TRAMP command, so
+callers route deferrable work through `mevedel-transport-run-when-idle`
+and it runs when the connection is quiet.
+
 `mevedel-session-durability.el` owns portable project lease and storage
 primitives.  `mevedel-session-recovery.el` owns specialized recovery markers,
 `mevedel-session-transfer.el` owns cooperative control-transfer records, and
 `mevedel-session-publication.el` serializes immutable authoritative
-publication and diagnostics.  `mevedel-session-save-as.el` owns the portable
+publication and diagnostics.  All of them bottom out in
+`mevedel-session-control-fs.el`, which performs control filesystem
+operations through a target-side directory descriptor pinning the parent
+while the relative operation runs; `mevedel-session-control-transfer.el`
+coordinates cooperative control transfer above the transfer records --
+persistence calls it for polling, admission, and committed-state adoption.  `mevedel-session-save-as.el` owns the portable
 Save As transaction and live-session adoption.  Project sessions use the same
 authority profile on local and TRAMP targets: a renewable `.lease/` and an
 immutable publication head.  File-workspace sessions use the explicit
@@ -413,7 +424,7 @@ durable plans, notes, findings, contracts, and handoffs for the parent and
 retained agents. There is no migration or compatibility reader for an older
 standalone plan layout.
 See [`address-to-resource.md`](address-to-resource.md) and
-[`ADR 0099`](adr/0099-keep-resource-addresses-closed-and-capability-neutral.md).
+[`ADR 0104`](adr/0104-keep-resource-addresses-closed-and-capability-neutral.md).
 
 ## Persistent memory
 

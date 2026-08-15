@@ -273,4 +273,4 @@ See [`tools.md`](tools.md#resource-addresses-in-filesystem-shaped-tools),
 [`agents.md`](agents.md#agent-resource-results), and
 [`sessions.md`](sessions.md#session-owned-local-state) for subsystem
 contracts. The closed resolver and capability boundary are recorded in
-[`ADR 0099`](adr/0099-keep-resource-addresses-closed-and-capability-neutral.md).
+[`ADR 0104`](adr/0104-keep-resource-addresses-closed-and-capability-neutral.md).
