@@ -79,9 +79,9 @@
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
 
-;; `mevedel-session-durability'
+;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-status
-                  "mevedel-session-durability" (session))
+                  "mevedel-session-publication" (session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)

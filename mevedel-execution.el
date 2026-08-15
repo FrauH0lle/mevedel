@@ -632,18 +632,6 @@ nothing depends on the pty's death."
                (not (gethash prefix
                              mevedel-execution--direct-async-properties)))
       (require 'tramp)
-      (require 'tramp-sh)
-      ;; Emacs 30's direct-async spawn still asks for its ssh options
-      ;; through `tramp-ssh-controlmaster-options', but TRAMP renamed
-      ;; that function to `tramp-ssh-or-plink-options' and the
-      ;; compat-funcall silently returns nil -- dropping every option
-      ;; the user routed through the same-named variable, including a
-      ;; -F config a host alias may need to resolve at all.  Restore
-      ;; the intended call.
-      (unless (fboundp 'tramp-ssh-controlmaster-options)
-        (when (fboundp 'tramp-ssh-or-plink-options)
-          (defalias 'tramp-ssh-controlmaster-options
-            'tramp-ssh-or-plink-options)))
       (add-to-list 'tramp-connection-properties
                    (list (regexp-quote prefix) "direct-async" t))
       (puthash prefix t mevedel-execution--direct-async-properties))))
@@ -655,11 +643,26 @@ classic channel, which keeps a TTY or oversized spawn classic even on
 a connection where something else enabled direct-async.  Local spawns
 run THUNK untouched."
   (if (and remote (fboundp 'tramp-direct-async-process-p))
-      (cl-letf (((symbol-function 'tramp-direct-async-process-p)
-                 (if direct-async
-                     (lambda (&rest _) t)
-                   (lambda (&rest _) nil))))
-        (funcall thunk))
+      ;; Emacs 30's direct-async spawn still asks for its ssh options
+      ;; through `tramp-ssh-controlmaster-options', but TRAMP renamed
+      ;; that function to `tramp-ssh-or-plink-options' and the
+      ;; compat-funcall silently returns nil -- dropping every option
+      ;; the user routed through the same-named variable, including a
+      ;; -F config a host alias may need to resolve at all.  Route the
+      ;; call for this spawn's extent only; a no-shim spawn rebinds the
+      ;; symbol to its current definition, which is a no-op.
+      (let ((shim (and direct-async
+                       (not (fboundp 'tramp-ssh-controlmaster-options))
+                       (fboundp 'tramp-ssh-or-plink-options))))
+        (cl-letf (((symbol-function 'tramp-direct-async-process-p)
+                   (if direct-async
+                       (lambda (&rest _) t)
+                     (lambda (&rest _) nil)))
+                  ((symbol-function 'tramp-ssh-controlmaster-options)
+                   (if shim
+                       (symbol-function 'tramp-ssh-or-plink-options)
+                     (symbol-function 'tramp-ssh-controlmaster-options))))
+          (funcall thunk)))
     (funcall thunk)))
 
 (defun mevedel-execution--direct-async-p (record command workdir)
