@@ -732,7 +732,7 @@
                   (mevedel-session-durability--lease-record
                    "*paused-claim*" 2 'claiming nil nil
                    (mevedel-session-durability--target-time
-                    (file-name-concat session-dir ".lease")))))
+                    (file-name-concat session-dir ".lease"))))))
               (should-not
                (mevedel-session-durability-lease-acquire
                 session-dir "*contender*" (and bind-session session))))
@@ -858,7 +858,7 @@
          (session
           (test-mevedel-session-durability--remote-session host local-root))
          (client-id (make-string 64 ?a))
-         write-generation
+         run-program-function
          injected
          initial-generation)
     (make-directory session-dir-local t)
@@ -872,21 +872,21 @@
               session-dir "*owner*" session))
             (setq initial-generation
                   (plist-get (mevedel-session-lease session) :generation)
-                  write-generation
-                  (symbol-function
-                   'mevedel-session-durability--write-generation))
+                  run-program-function
+                  (symbol-function 'mevedel-session-control-fs-run-program))
+            ;; The renewal's settling write is the commit program opened
+            ;; by its verify; arming the latch immediately before it runs
+            ;; is the reentrant race this case pins.
             (cl-letf
-                (((symbol-function
-                   'mevedel-session-durability--write-generation)
-                  (lambda (directory record)
+                (((symbol-function 'mevedel-session-control-fs-run-program)
+                  (lambda (operations)
                     (when (and (not injected)
-                               (eq 'active (plist-get record :status))
-                               (not (plist-get record :unsettled-mutation)))
+                               (eq 'verify (plist-get (car operations) :op)))
                       (setq injected t)
                       (should
                        (mevedel-session-durability-set-unsettled-mutation
                         session t)))
-                    (funcall write-generation directory record))))
+                    (funcall run-program-function operations))))
               (mevedel-session-durability-lease-renew session))
             (should injected)
             (should
@@ -934,7 +934,7 @@
                           :type 'user-error)
             (should-not mevedel--current-request)))
       (when (file-directory-p local-root)
-        (delete-directory local-root t))))))
+        (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-session-durability-lease-renew ()
   ,test
@@ -1176,7 +1176,7 @@
               lease-directory
               (mevedel-session-durability--lease-record
                "*successor*" 2 'active nil nil
-               (mevedel-session-durability--target-time lease-directory))))
+               (mevedel-session-durability--target-time lease-directory)))))
           ;; The renewal observes the generation listing inside its own
           ;; target program, so that is where consulting it is proved.
           (cl-letf
@@ -1273,7 +1273,8 @@
          (mevedel-session-durability--client-id owner)
          (now 0.0)
          (triggered nil)
-         (rename-file-function (symbol-function 'rename-file)))
+         (run-program-function
+          (symbol-function 'mevedel-session-control-fs-run-program)))
     (make-directory session-dir t)
     (setf (mevedel-session-save-path owner-session) session-dir
           (mevedel-session-save-path successor-session) session-dir)
@@ -1295,18 +1296,20 @@
                       (should
                        (mevedel-session-durability-lease-acquire
                         session-dir "*successor*" successor-session)))))))
+            ;; The release's first mutating program -- its fencing create
+            ;; or settling write -- is the last moment a takeover can land
+            ;; ahead of it; the observation before it must not trigger.
             (cl-letf
-                (((symbol-function 'rename-file)
-                  (lambda (file newname &optional ok-if-exists)
+                (((symbol-function 'mevedel-session-control-fs-run-program)
+                  (lambda (operations)
                     (when (and (not triggered)
-                               (string-prefix-p
-                                (file-name-concat session-dir ".lease")
-                                newname))
+                               (memq (plist-get (car operations) :op)
+                                     '(create write verify)))
                       (trigger-successor))
-                    (funcall rename-file-function
-                             file newname ok-if-exists))))
+                    (funcall run-program-function operations))))
               (mevedel-session-durability-lease-release
-               session-dir owner-session)))
+               session-dir owner-session))
+            (should triggered))
           (let ((mevedel-session-durability--client-id successor))
             (should
              (mevedel-session-durability-lease-renew successor-session))
@@ -1656,7 +1659,8 @@
          (mevedel-session-publication-lease-seconds 100)
          (now 0.0)
          (triggered nil)
-         (rename-file-function (symbol-function 'rename-file)))
+         (run-program-function
+          (symbol-function 'mevedel-session-control-fs-run-program)))
     (make-directory session-dir t)
     (setf (mevedel-session-save-path owner-session) session-dir
           (mevedel-session-save-path successor-session) session-dir)
@@ -1672,10 +1676,14 @@
            (mevedel-session-durability-commit-publication-head
             owner-session ".publications/old/manifest.el"))
           (setq now 80.0)
+          ;; The stale commit states its precondition as the `verify'
+          ;; opening its program; a successor takeover immediately before
+          ;; that program runs is the last moment the race can happen.
           (cl-letf
-              (((symbol-function 'rename-file)
-                (lambda (file newname &optional ok-if-exists)
-                  (unless triggered
+              (((symbol-function 'mevedel-session-control-fs-run-program)
+                (lambda (operations)
+                  (when (and (not triggered)
+                             (eq 'verify (plist-get (car operations) :op)))
                     (setq triggered t
                           now 101.0)
                     (let ((mevedel-session-durability--client-id successor))
@@ -1684,11 +1692,11 @@
                         (should
                          (mevedel-session-durability-lease-acquire
                           session-dir "*successor*" successor-session)))))
-                  (funcall rename-file-function
-                           file newname ok-if-exists))))
+                  (funcall run-program-function operations))))
             (should-not
              (mevedel-session-durability-commit-publication-head
               owner-session ".publications/stale/manifest.el")))
+          (should triggered)
           (should
            (equal ".publications/old/manifest.el"
                   (plist-get (mevedel-session-lease successor-session)
@@ -1708,7 +1716,7 @@
       (mevedel-session-durability--cancel-renewal owner-session)
       (mevedel-session-durability--cancel-renewal successor-session)
       (when (file-directory-p local-root)
-        (delete-directory local-root t))))))
+        (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-session-durability-publication-head ()
   ,test
@@ -1735,14 +1743,14 @@
               lease-directory
               (mevedel-session-durability--lease-record
                "*old*" 1 'active ".publications/old/manifest.el" nil
-               (mevedel-session-durability--target-time lease-directory))))
+               (mevedel-session-durability--target-time lease-directory)))))
           (let ((mevedel-session-durability--client-id (make-string 64 ?b)))
             (should
              (mevedel-session-durability--create-generation
               lease-directory
               (mevedel-session-durability--lease-record
                "*new*" 2 'active ".publications/new/manifest.el" nil
-               (mevedel-session-durability--target-time lease-directory))))
+               (mevedel-session-durability--target-time lease-directory)))))
           (cl-letf
               (((symbol-function 'mevedel-session-control-fs-list-directory)
                 (lambda (directory regexp)
@@ -1755,6 +1763,37 @@
                     (mevedel-session-durability-publication-head
                      session-dir))))
           (should helper-called))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t)))))
+
+(mevedel-deftest mevedel-session-publication--publish-artifact ()
+  ,test
+  (test)
+  :doc "builds a missing parent chain instead of failing the artifact"
+  (let* ((local-root (file-name-as-directory
+                      (make-temp-file "mevedel-publication-chain-" t)))
+         (session-dir (file-name-as-directory
+                       (file-name-concat local-root "session")))
+         ;; Two missing levels below the session directory: the
+         ;; single-level optional ensure alone cannot create them.
+         (artifact (file-name-concat session-dir "tool-results"
+                                     "executions" "exec-000001.log"))
+         (session (test-mevedel-session-durability--local-session local-root))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*publisher*" session))
+          (should (mevedel-session-publication-publish
+                   session
+                   (list (list :path artifact :content "execution log"))))
+          (should (equal "execution log"
+                         (with-temp-buffer
+                           (insert-file-contents artifact)
+                           (buffer-string))))
+          (mevedel-session-durability-lease-release session-dir session))
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
@@ -2187,8 +2226,8 @@
           (format "/mevedelmock:%s:%s/" host session-dir-local))
          (session nil)
          (mevedel-session-durability--client-id (make-string 64 ?a))
-         (make-directory-function
-          (symbol-function 'mevedel-session-control-fs-make-directory))
+         (run-program-function
+          (symbol-function 'mevedel-session-control-fs-run-program))
          (immutable-directories 0))
     (make-directory session-dir-local t)
     (unwind-protect
@@ -2200,12 +2239,19 @@
           (setf (mevedel-session-save-path session) session-dir)
           (should (mevedel-session-durability-lease-acquire
                    session-dir "*publisher*" session))
+          ;; The generation directories ride the write-generation program
+          ;; as make-directory operations rather than wrapper calls.
           (cl-letf
-              (((symbol-function 'mevedel-session-control-fs-make-directory)
-                (lambda (path &optional parents)
-                  (when (string-match-p "/\\.publications/" path)
-                    (cl-incf immutable-directories))
-                  (funcall make-directory-function path parents))))
+              (((symbol-function 'mevedel-session-control-fs-run-program)
+                (lambda (operations)
+                  (dolist (operation operations)
+                    (when (and (eq 'make-directory
+                                   (plist-get operation :op))
+                               (string-match-p
+                                "/\\.publications"
+                                (plist-get operation :path)))
+                      (cl-incf immutable-directories)))
+                  (funcall run-program-function operations))))
             (should
              (mevedel-session-publication-publish
               session
@@ -3381,7 +3427,7 @@
                (mevedel-session-publication-abandon session))))
           (should-not (mevedel-session-pending-publication session)))
       (when (file-directory-p root)
-        (delete-directory root t)))))))
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-session-durability-specialized-recovery/remote ()
   ,test
