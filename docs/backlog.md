@@ -193,28 +193,6 @@ become implemented, obsolete, or unjustified.
 
 ## Execution
 
-### Remote stop settlement waits out the kill grace on dead groups
-
-- **Source:** `mevedel-execution.el` (`mevedel-execution--group-live-p`,
-  `mevedel-execution--child-kill-delay`); measured while profiling the
-  test suite.
-- **What's owed:** A liveness probe that does not count zombies.
-  `signal-process` 0 on the process group succeeds while a reaped-but-
-  unwaited member remains, so a remote stop whose TERM already killed
-  everything still schedules the full 2 s force timer and often the 2 s
-  settle timer after it. A target-side check (`ps -o stat= -g GID`
-  filtering `Z`) or a control-fs program op would settle immediately.
-- **Why deferred:** It changes remote settlement semantics and the
-  target-side surface; the grace itself is correct when members really
-  survive TERM. Tests stopped paying it via a 0.25 s binding in
-  `mevedel-test--with-local-shell-tramp`.
-- **Status check:** `mevedel-execution-start-bash/remote/test@6` dropped
-  from 9.7 s to 2.7 s under the shortened grace, confirming the waits are
-  grace timers, not work.
-- **Blast radius:** Every interactive remote stop pays up to ~4 s of
-  latency it does not need; each wait window also invites foreign TRAMP
-  reentrancy.
-
 ### Run remote Bash over tramp-direct-async-process
 
 - **Source:** `mevedel-execution.el` (`mevedel-execution--start-process`
