@@ -491,6 +491,61 @@ connection charges for, so the program path is proved here too."
 ;;
 ;;; Remote execution
 
+(mevedel-deftest mevedel-execution--direct-async-p ()
+  ,test
+  (test)
+  :doc "gates the private channel on flag, tty, capability, and size"
+  (let ((record (mevedel-execution--record-create))
+        (tty-record (mevedel-execution--record-create :tty-p t))
+        (command '("sh" "-c" "printf ok"))
+        (remote "/ssh:user@host:/srv/project/"))
+    (should (mevedel-execution--direct-async-p record command remote))
+    (let ((mevedel-execution-remote-direct-async nil))
+      (should-not
+       (mevedel-execution--direct-async-p record command remote)))
+    (should-not (mevedel-execution--direct-async-p tty-record command remote))
+    (should-not (mevedel-execution--direct-async-p record command "/tmp/"))
+    (should-not (mevedel-execution--direct-async-p
+                 record command "/sshx:user@host:/srv/project/"))
+    (should-not (mevedel-execution--direct-async-p
+                 record command "/ssh:jump|ssh:host:/srv/project/"))
+    (should-not (mevedel-execution--direct-async-p
+                 record
+                 (list "sh" "-c" (make-string 4096 ?x))
+                 remote))))
+
+(mevedel-deftest mevedel-execution--with-spawn-channel ()
+  ,test
+  (test)
+  :doc "forces the TRAMP spawn predicate per record, both directions"
+  (progn
+    (require 'tramp)
+    (should (mevedel-execution--with-spawn-channel
+             "/ssh:host:" t
+             (lambda () (tramp-direct-async-process-p))))
+    (should-not (mevedel-execution--with-spawn-channel
+                 "/ssh:host:" nil
+                 (lambda () (tramp-direct-async-process-p))))
+    ;; A local spawn leaves the predicate alone.
+    (should (eq 'untouched
+                (mevedel-execution--with-spawn-channel
+                 nil t (lambda () 'untouched))))))
+
+(mevedel-deftest mevedel-execution--remote-command ()
+  ,test
+  (test)
+  :doc "a direct-async wrapper carries its environment explicitly"
+  (let ((direct (mevedel-execution--record-create :direct-async-p t))
+        (classic (mevedel-execution--record-create)))
+    (let ((command (mevedel-execution--remote-command
+                    direct '("sh" "-c" "printf ok"))))
+      (should (equal "env" (car command)))
+      (should (member "NO_COLOR=1" command))
+      (should (member "setsid" command)))
+    (should (equal "setsid"
+                   (car (mevedel-execution--remote-command
+                         classic '("sh" "-c" "printf ok")))))))
+
 (mevedel-deftest mevedel-execution--remote-group-status ()
   ,test
   (test)
@@ -1184,8 +1239,9 @@ connection charges for, so the program path is proved here too."
               (should (< (- (float-time) start) 1.0))))
           ;; The zombie still answers the raw group probe: only
           ;; zombie-awareness settled this stop early.
-          (when (and (integerp group-id) (> group-id 0))
-            (should (zerop (funcall original-signal-process (- group-id) 0))))
+          (should (integerp group-id))
+          (should (> group-id 0))
+          (should (zerop (funcall original-signal-process (- group-id) 0)))
           (should-not (mevedel-execution-unsettled-mutation-p session)))
       (when (and (integerp holder-pid) (> holder-pid 0))
         (ignore-errors (funcall original-signal-process holder-pid 'KILL)))
@@ -2301,6 +2357,9 @@ work in flight genuinely unprovable rather than merely finished."
            :tty t :tool-args '(:command "real PTY acceptance")
            :yield-time-ms 250))
     (should-not (plist-get initial :error))
+    ;; A TTY execution keeps the classic shared-channel spawn: the
+    ;; remote pty comes from the connection, not from direct-async.
+    (should-not (plist-get (plist-get initial :facts) :direct-async))
     (setq execution-id
           (plist-get (plist-get initial :facts) :execution-id))
     (should (stringp execution-id))
@@ -2344,6 +2403,9 @@ work in flight genuinely unprovable rather than merely finished."
          (agent-id (plist-get (plist-get agent-result :facts) :execution-id)))
     (should (stringp root-id))
     (should (stringp agent-id))
+    ;; Eligible pipe executions took the private channel, not a silent
+    ;; fallback to the shared connection.
+    (should (plist-get (plist-get root-result :facts) :direct-async))
     (should
      (equal '("/root" "/root/acceptance")
             (sort

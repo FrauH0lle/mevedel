@@ -207,6 +207,19 @@ A nil TARGET is the local environment, so it is not remote."
   "Return non-nil when TARGET has the supported tier."
   (eq 'supported (mevedel-execution-target-support-tier target)))
 
+(defun mevedel-execution-target-direct-async-capable-p (target)
+  "Return non-nil when TARGET can host direct-async process spawns.
+
+Single-hop ssh, scp, docker, and podman connections qualify: their
+TRAMP methods carry the direct-async parameter, and a hop disqualifies
+the whole connection.  This is a pure capability statement; whether an
+individual spawn uses it is the execution layer's decision."
+  (and target
+       (mevedel-execution-target-remote-p target)
+       (memq (mevedel-execution-target-method target)
+             '(ssh scp docker podman))
+       (not (plist-get (mevedel-execution-target-identity target) :hop))))
+
 (defun mevedel-execution-target-label (target)
   "Return a compact user-facing identity for TARGET."
   (let* ((identity (mevedel-execution-target-identity target))

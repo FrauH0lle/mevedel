@@ -191,33 +191,6 @@ become implemented, obsolete, or unjustified.
   parser/security tests. A loose origin or generated-text rule could let a
   model or untrusted input bypass a user-only skill restriction.
 
-## Execution
-
-### Run remote Bash over tramp-direct-async-process
-
-- **Source:** `mevedel-execution.el` (`mevedel-execution--start-process`
-  spawns with `make-process` `:file-handler t`); test-suite performance
-  round, 2026-08-15.
-- **What's owed:** Evaluate `tramp-direct-async-process` for the Bash
-  tool. The spawn goes through TRAMP's handler `make-process`, which is
-  exactly the path direct-async rewrites: the execution would run over
-  its own `ssh` invocation instead of the shared control connection, so
-  a live Bash stops competing with durable work for the channel and
-  stops being a reentrancy window at all -- a bigger structural win than
-  any single round trip removed so far.
-- **Why deferred:** A real change to the execution layer, not a variable
-  flip. Remote process-group tracking is already special-cased
-  (`record-group-id` is captured locally for local processes; remote
-  identity arrives through the filter group marker), the wrapping in
-  `mevedel-execution--remote-command` has to survive `ssh host <cmd>`
-  delivery, and it needs coverage in the real-SSH acceptance file before
-  it can be trusted.
-- **Status check:** Not started; needs proper scoping first.
-- **Blast radius:** Today every live remote execution shares the control
-  connection, so a long-running Bash serializes against saves, leases,
-  and publication, and every in-flight command is a window in which a
-  foreign package's remote operation is refused as reentrant.
-
 ## Request lifecycle
 
 ### Prevent system sleep during active requests

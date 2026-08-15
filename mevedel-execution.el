@@ -36,6 +36,8 @@
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
                   "mevedel-execution-target" (workspace-root))
+(declare-function mevedel-execution-target-direct-async-capable-p
+                  "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-native-path
                   "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-prefix
@@ -107,6 +109,9 @@
                   "mevedel-utilities"
                   (head tail total-length &optional preview-size))
 
+;; `tramp'
+(defvar tramp-connection-properties)
+
 
 ;;
 ;;; Configuration and private state
@@ -150,6 +155,27 @@ the complete spool remains at the path in the execution facts."
 Values below 0.25 are clamped so the UI receives at most four per second."
   :type 'number
   :group 'mevedel)
+
+(defcustom mevedel-execution-remote-direct-async t
+  "When non-nil, eligible remote Bash spawns run on a private channel.
+
+An eligible spawn is a non-TTY execution on a single-hop ssh, scp,
+docker, or podman target whose wrapped command fits the remote pipe
+buffer.  It runs over its own connection instead of the shared TRAMP
+control connection, so a live execution stops serializing durable
+session work behind it and stops being a reentrancy window.  Each
+spawn opens its own connection, so authentication must be
+non-interactive (an agent, a key, or user-configured connection
+sharing).  TTY executions and oversized commands always keep the
+classic shared-channel spawn."
+  :type 'boolean
+  :group 'mevedel)
+
+(defconst mevedel-execution--direct-async-command-limit 3584
+  "Largest quoted remote command, in bytes, spawned direct-async.
+The remote side receives the command as one string bounded by the
+target's pipe buffer, typically 4096 bytes; the margin covers TRAMP's
+cd-and-env prefix.  A longer command falls back to the classic spawn.")
 
 (defconst mevedel-execution-live-limit 64
   "Maximum number of live managed Bash processes in one session.")
@@ -208,6 +234,7 @@ Values below 0.25 are clamped so the UI receives at most four per second."
   "Private state for one operating-system process."
   callback
   delivery-state
+  direct-async-p
   error-data
   execution-id
   exit-code
@@ -575,9 +602,69 @@ the client environment."
   (let ((marker (make-temp-name "MEVEDEL_PROCESS_GROUP_")))
     (setf (mevedel-execution--record-group-marker record) marker
           (mevedel-execution--record-group-marker-buffer record) "")
-    (append (list "setsid" "-f" "-w" "bash" "-c"
-                  mevedel-execution--remote-group-script marker)
-            command)))
+    (append
+     ;; A direct-async spawn carries its environment explicitly: TRAMP
+     ;; only transfers the difference against the top-level environment,
+     ;; which silently drops any default the user's own environment
+     ;; happens to share.
+     (when (mevedel-execution--record-direct-async-p record)
+       (cons "env"
+             (mapcar (lambda (entry)
+                       (format "%s=%s" (car entry) (cdr entry)))
+                     mevedel-execution--environment)))
+     (list "setsid" "-f" "-w" "bash" "-c"
+           mevedel-execution--remote-group-script marker)
+     command)))
+
+(defvar mevedel-execution--direct-async-properties (make-hash-table :test #'equal)
+  "TRAMP prefixes whose ssh direct-async spawns drop the remote pty.")
+
+(defun mevedel-execution--ensure-direct-async-property (workdir)
+  "Make direct-async spawns below WORKDIR binary-faithful, once per prefix.
+The ssh and scp methods default the direct-async parameter to two -t
+options, which allocate a remote pty and mangle binary output; the
+documented override is the connection property t, which drops the pty.
+Signals still reach the group through the control connection, so
+nothing depends on the pty's death."
+  (when-let* ((prefix (file-remote-p workdir))
+              (method (file-remote-p workdir 'method)))
+    (when (and (member method '("ssh" "scp"))
+               (not (gethash prefix
+                             mevedel-execution--direct-async-properties)))
+      (require 'tramp)
+      (add-to-list 'tramp-connection-properties
+                   (list (regexp-quote prefix) "direct-async" t))
+      (puthash prefix t mevedel-execution--direct-async-properties))))
+
+(defun mevedel-execution--with-spawn-channel (remote direct-async thunk)
+  "Call THUNK with the spawn channel forced for a REMOTE launch.
+DIRECT-ASYNC non-nil forces the private channel; nil forces the shared
+classic channel, which keeps a TTY or oversized spawn classic even on
+a connection where something else enabled direct-async.  Local spawns
+run THUNK untouched."
+  (if (and remote (fboundp 'tramp-direct-async-process-p))
+      (cl-letf (((symbol-function 'tramp-direct-async-process-p)
+                 (if direct-async
+                     (lambda (&rest _) t)
+                   (lambda (&rest _) nil))))
+        (funcall thunk))
+    (funcall thunk)))
+
+(defun mevedel-execution--direct-async-p (record command workdir)
+  "Return non-nil when RECORD's COMMAND below WORKDIR spawns direct-async.
+COMMAND is the localized argv before the group wrapper; the length
+check adds the wrapper's own size."
+  (and mevedel-execution-remote-direct-async
+       (not (mevedel-execution--record-tty-p record))
+       (fboundp 'tramp-direct-async-process-p)
+       (require 'mevedel-execution-target nil t)
+       (mevedel-execution-target-direct-async-capable-p
+        (mevedel-execution-target-create workdir))
+       (< (+ (string-bytes
+              (mapconcat #'shell-quote-argument command " "))
+             (string-bytes mevedel-execution--remote-group-script)
+             256)
+          mevedel-execution--direct-async-command-limit)))
 
 (defun mevedel-execution--filter-group-marker (record filter chunk)
   "Strip RECORD's target process-group marker from CHUNK before FILTER."
@@ -1057,6 +1144,13 @@ record the escalation could still settle cleanly."
   (let* ((remote (file-remote-p workdir))
          (command (mevedel-execution--localize-command
                    record command workdir))
+         (direct-async
+          (and remote
+               (mevedel-execution--direct-async-p record command workdir)))
+         (_ (setf (mevedel-execution--record-direct-async-p record)
+                  direct-async))
+         (_ (when direct-async
+              (mevedel-execution--ensure-direct-async-property workdir)))
          (command (if remote
                       (mevedel-execution--remote-command record command)
                     command))
@@ -1074,18 +1168,27 @@ record the escalation could still settle cleanly."
         (signal 'file-missing (list "Executable not found" executable)))
       (setf (mevedel-execution--record-launch-attempted-p record) t)
       (setf (mevedel-execution--record-process record)
-            (make-process
-             :name name :buffer nil :command command
-             :coding coding
-             :connection-type
-             (if (mevedel-execution--record-tty-p record) 'pty 'pipe)
-             :file-handler t
-             :filter (lambda (_process chunk)
-                       (mevedel-execution--filter-group-marker
-                        record filter chunk))
-             :noquery t
-             :sentinel (lambda (process _event)
-                         (mevedel-execution--process-ended record process)))))
+            ;; The spawn channel is decided here, per record, rather than
+            ;; through a connection-local profile: a profile flips every
+            ;; make-process on the host, including other packages', and a
+            ;; TTY spawn on an enabled connection must still be classic.
+            ;; The predicate has a single caller inside TRAMP's handler
+            ;; and is fboundp-gated in the eligibility check.
+            (mevedel-execution--with-spawn-channel remote direct-async
+              (lambda ()
+                (make-process
+                 :name name :buffer nil :command command
+                 :coding coding
+                 :connection-type
+                 (if (mevedel-execution--record-tty-p record) 'pty 'pipe)
+                 :file-handler t
+                 :filter (lambda (_process chunk)
+                           (mevedel-execution--filter-group-marker
+                            record filter chunk))
+                 :noquery t
+                 :sentinel (lambda (process _event)
+                             (mevedel-execution--process-ended
+                              record process)))))))
     (unless remote
       (setf (mevedel-execution--record-group-id record)
             (process-id (mevedel-execution--record-process record))))
@@ -1534,6 +1637,9 @@ does not depend on the local spool the target never wrote to."
           :omitted-output-bytes
           (or (mevedel-execution--record-omitted-output-bytes record) 0)
           :tty (and (mevedel-execution--record-tty-p record) t)
+          :direct-async
+          (and (mevedel-execution--record-direct-async-p record) t)
+          :group-id (mevedel-execution--record-group-id record)
           :output-path (mevedel-execution--artifact-address record))))
 
 (defun mevedel-execution--event (record type &rest properties)
