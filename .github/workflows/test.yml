@@ -73,6 +73,20 @@ jobs:
     - name: Verify ripgrep
       run: rg --version
 
+    # The Bash analyzer behaves differently once a grammar is present, and the
+    # cases covering that path skip without one.  A skip renders as "passed",
+    # so without this step a green run is no evidence they ran.  Linux only:
+    # the accepted node types do not vary by OS.
+    - name: Install Bash tree-sitter grammar (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        emacs -Q --batch --eval "(progn
+          (require 'treesit)
+          (setq treesit-language-source-alist
+                '((bash \"https://github.com/tree-sitter/tree-sitter-bash\" \"v0.6.0\")))
+          (treesit-install-language-grammar 'bash \"$HOME/ts-grammars\"))"
+        echo "LD_LIBRARY_PATH=$HOME/ts-grammars" >> "$GITHUB_ENV"
+
     - name: Clean Eask state
       run: eask clean all
 
