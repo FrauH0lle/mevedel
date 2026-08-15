@@ -938,6 +938,45 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t))))
 
+  :doc "a renewal under a bound transaction clock assumes instead of observing"
+  (let* ((host "renew-assume-host")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-renew-assume-" t)))
+         (session-dir-local
+          (file-name-as-directory (file-name-concat local-root "session")))
+         (session-dir
+          (format "/mevedelmock:%s:%s/" host session-dir-local))
+         (session (test-mevedel-session-durability--remote-session
+                   host local-root))
+         (mevedel-session-durability--client-id (make-string 64 ?c))
+         (mevedel-session-durability--transaction-clock (list nil))
+         (mevedel-session-durability--asserted-directories (list nil))
+         (programs nil)
+         (program-function
+          (symbol-function 'mevedel-session-control-fs-run-program)))
+    (make-directory session-dir-local t)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (test-mevedel-session-durability--accept-storage session)
+          (setf (mevedel-session-save-path session) session-dir)
+          (should (mevedel-session-persistence-lock-acquire
+                   session-dir "*assume*" session))
+          ;; The first renewal may still observe; its commit's trailing
+          ;; clock operation is what arms the assumption for the next one.
+          (should (mevedel-session-durability-lease-renew session))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (operations)
+                       (push (mapcar (lambda (op) (plist-get op :op))
+                                     operations)
+                             programs)
+                       (funcall program-function operations))))
+            (should (mevedel-session-durability-lease-renew session)))
+          (should (equal '((verify write list-directory target-time))
+                         programs))
+          (mevedel-session-persistence-lock-release session-dir session))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
   :doc "a stale renewal cannot overwrite a newer takeover"
   (let* ((local-root (file-name-as-directory
                       (make-temp-file "mevedel-renew-race-" t)))
