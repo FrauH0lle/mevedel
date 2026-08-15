@@ -3217,7 +3217,7 @@ cover, so the permission step's warning about it is captured here."
          read-handler-called
          (mutating-tool
           (mevedel-tool--create
-           :name "ApplyPatch" :read-only-p nil
+           :name "WriteThing" :read-only-p nil
            :check-permission-async
            (lambda (_tool _input cont)
              (setq mutation-permission-called t)
@@ -4935,9 +4935,17 @@ cover, so the permission step's warning about it is captured here."
 				 (should (equal result content))
 				 (should (eq 'utf-8-unix coding))
 				 (should (file-remote-p path))
+				 ;; The model sees the logical artifact address, never a
+				 ;; target path and never a client TRAMP prefix.
 				 (should (string-search
-					  (file-remote-p path 'localname 'never)
+					  (concat "artifact://"
+						  (file-name-nondirectory path))
 					  preview))
+				 (should-not
+				  (string-search
+				   (file-name-directory
+				    (file-remote-p path 'localname 'never))
+				   preview))
 				 (should-not
 				  (string-search "/mevedelmock:" preview)))))))
 		     (delete-directory tmpdir t)))

@@ -31,6 +31,7 @@
 (defun mevedel-resource-capf-test--session (save-path)
   "Return a throwaway session rooted at SAVE-PATH."
   (mevedel-session--create
+   :authority-mode 'pid-lock
    :name "resource-capf"
    :save-path save-path
    :agent-registry nil

@@ -730,16 +730,36 @@ target path signals for the pipeline runner to handle."
       (when-let* ((getter (mevedel-tool-get-paths tool)))
         (let ((default-directory (or directory default-directory))
               path-map)
-          (dolist (path
-                   (let ((mevedel-pipeline--canonical-path-map nil))
-                     (delete-dups
-                      (delq nil (funcall getter
-                                         (plist-get normalized-context
-                                                    :args))))))
-            (push (cons path
-                        (mevedel-pipeline--canonicalize-path-value
-                         path target))
-                  path-map))
+          (if (eq (mevedel-pipeline--resource-operation tool) 'apply-patch)
+              ;; Parse the patch once for the whole request and canonicalize
+              ;; the proposal in place.  The resource step reuses it, so a
+              ;; symlink swapped during patch review cannot redirect an
+              ;; already authorized destination.
+              (let ((proposal
+                     (mevedel-tool-patch--parse
+                      (plist-get (plist-get normalized-context :args) :patch)
+                      directory)))
+                (dolist (operation (plist-get proposal :operations))
+                  (dolist (key '(:path :move-path))
+                    (when-let* ((path (plist-get operation key))
+                                (canonical
+                                 (mevedel-pipeline--canonicalize-path-value
+                                  path target)))
+                      (unless (equal path canonical)
+                        (push (cons path canonical) path-map))
+                      (plist-put operation key canonical))))
+                (setq normalized-context
+                      (plist-put normalized-context :patch-parse proposal)))
+            (dolist (path
+                     (let ((mevedel-pipeline--canonical-path-map nil))
+                       (delete-dups
+                        (delq nil (funcall getter
+                                           (plist-get normalized-context
+                                                      :args))))))
+              (push (cons path
+                          (mevedel-pipeline--canonicalize-path-value
+                           path target))
+                    path-map)))
           (setq normalized-context
                 (plist-put normalized-context :canonical-path-map
                            (nreverse path-map)))))
@@ -772,9 +792,10 @@ permission or handler work begins."
                (plist-get context :resource-attempts-cell)))
           (setq patch-proposal
                 (mevedel-tool-patch--prepare-resources
-                 (mevedel-tool-patch--parse
-                  (plist-get args :patch)
-                  (plist-get context :default-directory)))))
+                 (or (plist-get context :patch-parse)
+                     (mevedel-tool-patch--parse
+                      (plist-get args :patch)
+                      (plist-get context :default-directory))))))
       (when operation
       (dolist (spec (mevedel-tool-args tool))
         (when (eq (cadr spec) 'path-or-resource)

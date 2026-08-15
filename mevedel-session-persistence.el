@@ -214,8 +214,6 @@
 (defvar mevedel-pipeline--render-data-open)
 
 ;; `mevedel-plan'
-(declare-function mevedel-plan-read-artifact "mevedel-plan"
-                  (session artifact))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders"
@@ -6467,7 +6465,8 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     agent-root-activity agent-root-waiter agent-turn-capacity pending-steering
     pending-follow-ups pending-input-next-id pending-input-paused
     pending-input-failure-paused dropped-file-grants active-dropped-file-grants
-    mentions-shown skills hook-rules hook-log hook-log-pending repair-log
+    mentions-shown workspace-instruction-hashes skills hook-rules hook-log
+    hook-log-pending repair-log
     repair-log-pending permission-log-pending telemetry-pending
     hook-context-pending execution-state audit-session pending-publication
     publication publication-queue publication-uncommitted-batches
@@ -6721,16 +6720,24 @@ caches never become fork authority."
                       (<= accepted-turn picked-cum-turn)))
                 (relative-path (plist-get metadata :accepted-path))
                 ((stringp relative-path))
-                (source-path
-                 (expand-file-name relative-path parent-save-path))
-                ((file-in-directory-p
-                  source-path
-                  (file-name-concat parent-save-path "local" "plans"))))
-      ;; Reading the artifact validates its accepted hash before the fork
-      ;; inherits it.
-      (mevedel-plan-read-artifact
-       source (list :path relative-path
-                    :hash (plist-get metadata :accepted-hash)))
+                ;; A normalized session-relative path is the whole
+                ;; containment rule: it cannot escape the session store or
+                ;; name another target.
+                ((mevedel-plan-artifact-path-p relative-path)))
+      ;; A fork must not inherit an artifact that no longer matches the hash
+      ;; the source accepted.  Only committed bytes are authority here; an
+      ;; absent artifact is reported by the materialization below.
+      (when (mevedel-session-persistence-artifact-present-p
+             source relative-path t)
+        (let ((body
+               (mevedel--normalize-message-text
+                (decode-coding-string
+                 (mevedel-session-persistence-read-artifact
+                  source relative-path t)
+                 'utf-8-unix))))
+          (unless (equal (plist-get metadata :accepted-hash)
+                         (mevedel-plan-hash body))
+            (error "Accepted plan artifact hash does not match"))))
       (mevedel-session-persistence--materialize-fork-artifact
        source relative-path staging-path t))
     (cl-loop for i from 1 below picked-segment do

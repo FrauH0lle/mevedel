@@ -9339,7 +9339,7 @@ The result is a plist whose :tempdir owns every created file."
 (mevedel-deftest mevedel-session-persistence--clone-session
   (:doc "covers every session slot and isolates both clone policies")
   (progn
-    (should (= 89
+    (should (= 90
              (length
               (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-persistence--assert-clone-slot-completeness))
@@ -10048,7 +10048,8 @@ The result is a plist whose :tempdir owns every created file."
                 :status completed))
              (mevedel-session-plan-metadata source)
              `(:status accepted :accepted-turn 2
-               :accepted-path ,plan-relative))
+               :accepted-path ,plan-relative
+               :accepted-hash ,(mevedel-plan-hash "published accepted plan")))
             (should
              (mevedel-session-durability-lease-acquire
               parent-path "*remote-stage-parent*" source))
@@ -10738,7 +10739,7 @@ The result is a plist whose :tempdir owns every created file."
           (file-name-as-directory
            (make-temp-file "mevedel-worktree-store-session-" t)))
          (source
-          (mevedel-session--create :save-path save-path))
+          (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
          (child
           (mevedel-session--create
            :worktree-source-root source-root

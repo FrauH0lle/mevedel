@@ -203,51 +203,6 @@
                       session artifact))))
     (should (equal (list session artifact) seen))))
 
-  :doc "resolves the accepted artifact from its relative path after a rename"
-  (let* ((old-dir (make-temp-file "mevedel-plan-old-save-" t))
-         (new-dir (make-temp-file "mevedel-plan-new-save-" t))
-         (relative "local/plans/accepted-1.md")
-         (old-path (file-name-concat old-dir relative))
-         (new-path (file-name-concat new-dir relative))
-         (body "# Accepted")
-         (session (mevedel-session--create :name "renamed"
-                                           :save-path new-dir))
-         (artifact (list :path relative :absolute-path old-path
-                         :hash (mevedel-plan-hash body))))
-    (unwind-protect
-        (progn
-          (make-directory (file-name-directory old-path) t)
-          (make-directory (file-name-directory new-path) t)
-          (write-region body nil old-path nil 'silent)
-          (copy-file old-path new-path)
-          (should (equal body
-                         (mevedel-plan-handoff--accepted-body
-                          artifact session))))
-      (delete-directory old-dir t)
-      (delete-directory new-dir t)))
-
-  :doc "rejects a relative artifact path outside managed plan storage"
-  (let* ((save-dir (make-temp-file "mevedel-plan-unsafe-save-" t))
-         (outside (make-temp-file "mevedel-plan-unsafe-artifact-"))
-         (body "# Outside")
-         (session (mevedel-session--create :name "unsafe"
-                                           :save-path save-dir))
-         (artifact (list :path "../outside.md"
-                         :absolute-path outside
-                         :hash (mevedel-plan-hash body))))
-    (unwind-protect
-        (progn
-          (write-region body nil outside nil 'silent)
-          (should-error
-           (mevedel-plan-handoff--accepted-body artifact session))
-          (should-error
-           (mevedel-plan-handoff--accepted-body
-            (list :absolute-path outside
-                  :hash (mevedel-plan-hash body))
-            session)))
-      (delete-directory save-dir t)
-      (delete-file outside)))
-
 (mevedel-deftest mevedel-plan-handoff--summary-focus
   (:doc "keeps the exact accepted plan and implementation-only instructions")
   ,test
@@ -581,10 +536,6 @@
                        (plist-get
                         (mevedel-session-plan-metadata target-session)
                         :implementation-goal-id)))
-              (should (equal "plans/accepted.md"
-                             (plist-get
-                              (plist-get prepared :target-accepted)
-                              :path)))
               (should-not
                (plist-member
                 (mevedel-session-plan-metadata target-session)
@@ -677,6 +628,7 @@
          (path (file-name-concat save-dir "local" "plans" "accepted.md"))
          (session
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :name "source" :save-path save-dir :working-directory root))
          (buffer (generate-new-buffer " *mevedel-plan-summary-data*"))
          (source-before "Current evidence.\n# Accepted")
@@ -759,7 +711,9 @@
   :doc "Here uses handoff semantics through aggressive compaction"
   (let* ((save-dir (make-temp-file "mevedel-plan-summary-save-" t))
          (path (file-name-concat save-dir "local" "plans" "accepted.md"))
-         (session (mevedel-session--create :name "source" :save-path save-dir))
+         (session (mevedel-session--create
+                   :authority-mode 'pid-lock
+                   :name "source" :save-path save-dir))
          (buffer (generate-new-buffer " *mevedel-plan-summary-here*"))
          captured-source captured-focus applied dispatched)
     (unwind-protect

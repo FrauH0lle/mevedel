@@ -214,21 +214,21 @@
     (unwind-protect
         (with-temp-buffer
           (let* ((session
-                  (mevedel-session--create :authority-mode 'pid-lock :name "test" :save-path save-dir))
+                  (mevedel-session--create
+                   :authority-mode 'pid-lock :name "test"
+                   :save-path save-dir))
                  (artifact
                   (mevedel-plan-write-current
                    "# Plan" session (current-buffer)))
-                 (accepted
-                  (mevedel-plan-archive-accepted
-                   artifact session "goals/g1/cycle-001-plan.md")))
-            (should (file-exists-p
-                     (file-name-concat
-                      save-dir "goals" "g1" "cycle-001-plan.md")))
+                 (accepted (mevedel-plan-archive-accepted artifact session)))
             (should-not (plist-member accepted :absolute-path))
             (should (equal (plist-get artifact :hash)
                            (plist-get accepted :hash)))
-            (should (string-match-p "\\`local/plans/accepted-[0-9]+-[0-9]+\\.md\\'"
-                                    (plist-get accepted :path)))
+            (should (string-match-p
+                     "\\`local/plans/accepted-[0-9]+-[0-9]+\\.md\\'"
+                     (plist-get accepted :path)))
+            (should (file-exists-p
+                     (file-name-concat save-dir (plist-get accepted :path))))
             ;; Every archive stays serializable as a canonical address.
             (should (string-prefix-p
                      "local://plans/accepted-"
@@ -236,18 +236,19 @@
                       (plist-get accepted :path))))
             ;; A second archive never overwrites the immutable first one.
             (let ((second (mevedel-plan-archive-accepted artifact session)))
-              (should-not (equal (plist-get second :absolute-path)
-                                 (plist-get accepted :absolute-path)))
-              (should (file-exists-p (plist-get accepted :absolute-path)))
-              (should (string-prefix-p
-                       "local://plans/accepted-"
-                       (mevedel-plan-resource-address
-                        (plist-get second :path)))))
-            ;; A caller-chosen destination is not part of the contract.
-            (should-error
-             (mevedel-plan-archive-accepted
-              artifact session "local/plans/cycle-001-plan.md")
-             :type 'wrong-number-of-arguments)
+              (should-not (equal (plist-get second :path)
+                                 (plist-get accepted :path)))
+              (should (file-exists-p
+                       (file-name-concat save-dir
+                                         (plist-get accepted :path)))))
+            ;; A caller-chosen destination is deterministic and immutable.
+            (let ((named (mevedel-plan-archive-accepted
+                          artifact session "goals/g1/cycle-001-plan.md")))
+              (should (equal "goals/g1/cycle-001-plan.md"
+                             (plist-get named :path)))
+              (should (file-exists-p
+                       (file-name-concat
+                        save-dir "goals" "g1" "cycle-001-plan.md"))))
             (should-error
              (mevedel-plan-archive-accepted '(:path "local/plans/current.md")
                                             session)
@@ -263,6 +264,7 @@
          (stale-path (file-name-concat save-dir "plans" "current.md")))
     (unwind-protect
         (progn
+          (make-directory (file-name-directory path) t)
           (write-region "# Poisoned cache" nil path nil 'silent)
           (let ((session
                  (mevedel-session--create
@@ -270,6 +272,11 @@
                   :name "test" :save-path save-dir
                   :plan-metadata '(:path "current.md"))))
             (cl-letf (((symbol-function
+                        'mevedel-session-persistence-artifact-present-p)
+                       (lambda (_session logical)
+                         (should (equal "current.md" logical))
+                         t))
+                      ((symbol-function
                         'mevedel-session-persistence-read-artifact)
                        (lambda (seen-session logical &optional _committed-only)
                          (should (eq session seen-session))
@@ -296,9 +303,10 @@
                       'mevedel-session-persistence-artifact-present-p)
                      (lambda (seen-session logical)
                        (should (eq session seen-session))
-                       (should (equal "current.md" logical))
+                       (should (equal "local/plans/current.md" logical))
                        t)))
             (should (mevedel-plan-current-exists-p session)))
+          (make-directory (file-name-directory path) t)
           (write-region "# Poisoned cache" nil path nil 'silent)
           (cl-letf (((symbol-function
                       'mevedel-session-persistence-artifact-present-p)
@@ -341,11 +349,6 @@
                    (accepted (plist-get result :accepted))
                    (metadata (mevedel-session-plan-metadata session)))
               (should (eq 'accepted (plist-get metadata :status)))
-              (should (file-exists-p
-                       (file-name-concat save-dir "goals" "g1" "current.md")))
-              (should (file-exists-p
-                       (file-name-concat
-                        save-dir "goals" "g1" "cycle-001-plan.md")))
               (should-not (plist-member current :absolute-path))
               (should-not (plist-member accepted :absolute-path))
               (should-not (plist-member metadata :absolute-path))
@@ -354,21 +357,30 @@
                              (plist-get current :hash)))
               (should (equal "local/plans/current.md"
                              (plist-get current :path)))
-              (should (string-match-p "\\`local/plans/accepted-[0-9]+-[0-9]+\\.md\\'"
-                                      (plist-get accepted :path)))
-              (should (equal (file-name-concat save-dir "local" "plans"
-                                                "current.md")
-                             (plist-get current :absolute-path)))
-              (should (equal (file-name-concat save-dir
-                                                (plist-get accepted :path))
-                             (plist-get accepted :absolute-path)))
-              (should (string-prefix-p "local/plans/accepted-"
-                                       (plist-get accepted :path)))
-              (should-error
-               (mevedel-plan-accept
-                "# Plan\n\nDo it." session (current-buffer) t
-                "local/plans/accepted.md")
-               :type 'wrong-number-of-arguments))))
+              (should (string-match-p
+                       "\\`local/plans/accepted-[0-9]+-[0-9]+\\.md\\'"
+                       (plist-get accepted :path)))
+              (should (file-exists-p
+                       (file-name-concat save-dir
+                                         (plist-get current :path))))
+              (should (file-exists-p
+                       (file-name-concat save-dir
+                                         (plist-get accepted :path)))))
+            ;; Explicit destinations let a Goal cycle own its own artifacts.
+            (let* ((result (mevedel-plan-accept
+                            "# Plan\n\nDo it." session (current-buffer) t
+                            "goals/g1/current.md"
+                            "goals/g1/cycle-001-plan.md"))
+                   (current (plist-get result :current))
+                   (accepted (plist-get result :accepted)))
+              (should (equal "goals/g1/current.md" (plist-get current :path)))
+              (should (equal "goals/g1/cycle-001-plan.md"
+                             (plist-get accepted :path)))
+              (should (file-exists-p
+                       (file-name-concat save-dir "goals" "g1" "current.md")))
+              (should (file-exists-p
+                       (file-name-concat
+                        save-dir "goals" "g1" "cycle-001-plan.md"))))))
       (delete-directory save-dir t))))
 
 (provide 'test-mevedel-plan)

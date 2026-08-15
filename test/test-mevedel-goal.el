@@ -90,7 +90,8 @@
   (progn
    (let* ((root (make-temp-file "mevedel-goal-plan-" t))
          (plan-file (file-name-concat root "accepted-plan.md"))
-         (session (mevedel-session--create :name "main" :save-path root))
+         (session (mevedel-session--create
+                   :authority-mode 'pid-lock :name "main" :save-path root))
          (goal (mevedel-goal--create
                 :id "goal-1" :objective "Ship" :status 'active
                 :tokens-used 0 :time-used-seconds 0 :turns-run 0
@@ -139,7 +140,8 @@
   (let* ((root (make-temp-file "mevedel-goal-plan-address-" t))
          (relative "local/plans/accepted-20260813-120000.md")
          (plan-file (file-name-concat root relative))
-         (session (mevedel-session--create :name "main" :save-path root))
+         (session (mevedel-session--create
+                   :authority-mode 'pid-lock :name "main" :save-path root))
          (goal (mevedel-goal--create
                 :id "goal-1" :objective "Ship" :status 'active
                 :tokens-used 0 :time-used-seconds 0 :turns-run 0

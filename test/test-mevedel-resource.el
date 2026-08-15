@@ -133,7 +133,7 @@
   :doc "returns an opaque attempt whose execution keeps the authored address"
   (let* ((save-path (make-temp-file "mevedel-resource-session-" t))
          (local (file-name-concat save-path "local"))
-         (session (mevedel-session--create :save-path save-path))
+         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
          (address "local://notes.md")
          path seen-address)
     (unwind-protect
@@ -161,7 +161,7 @@
   :doc "rejects symlink escapes before the handler receives an attempt"
   (let* ((save-path (make-temp-file "mevedel-resource-session-" t))
          (outside (make-temp-file "mevedel-resource-outside-" t))
-         (session (mevedel-session--create :save-path save-path)))
+         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path)))
     (unwind-protect
         (progn
           (make-directory (file-name-concat save-path "local") t)
@@ -178,7 +178,7 @@
   (test)
   :doc "encodes artifact path components while retaining separators"
   (let* ((save-path (make-temp-file "mevedel-resource-artifact-" t))
-         (session (mevedel-session--create :save-path save-path))
+         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
          (directory (file-name-concat save-path "tool-results" "part one"))
          (path (file-name-concat directory "result.txt")))
     (unwind-protect
@@ -194,7 +194,7 @@
   (test)
   :doc "prepares a new local ApplyPatch target without materializing its root"
   (let* ((save-path (make-temp-file "mevedel-resource-patch-" t))
-         (session (mevedel-session--create :save-path save-path))
+         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
          (address "local://notes/new.txt")
          (local-root (file-name-concat save-path "local"))
          (expected (file-name-concat local-root "notes" "new.txt")))
@@ -217,7 +217,7 @@
   (test)
   :doc "includes the authored address without exposing session storage"
   (let* ((save-path (make-temp-file "mevedel-resource-validation-" t))
-         (session (mevedel-session--create :save-path save-path))
+         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
          (address "local://notes/../bad.txt")
          message)
     (unwind-protect
@@ -238,7 +238,7 @@
   (test)
   (let* ((save-path (make-temp-file "mevedel-resource-lifecycle-" t))
          (outside (make-temp-file "mevedel-resource-outside-" t))
-         (session (mevedel-session--create :save-path save-path))
+         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
          (local-root (file-name-concat save-path "local"))
          (artifact-root (file-name-concat save-path "tool-results"))
          (pending (file-name-concat artifact-root
@@ -319,7 +319,7 @@
   (test)
   :doc "lists local and artifact roots through logical addresses"
   (let* ((save-path (make-temp-file "mevedel-resource-provider-" t))
-         (session (mevedel-session--create :save-path save-path))
+         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
          (local-root (file-name-concat save-path "local"))
          (artifact-root (file-name-concat save-path "tool-results")))
     (unwind-protect
@@ -569,7 +569,7 @@
                   :parent-path "/root" :role "reviewer"
                   :configuration configuration :activity 'idle
                   :conversation-location "agents/reviewer.chat.org"))
-         (session (mevedel-session--create :save-path root))
+         (session (mevedel-session--create :authority-mode 'pid-lock :save-path root))
          (root-buffer (generate-new-buffer " *mevedel-resource-cold-root*")))
     (unwind-protect
         (progn

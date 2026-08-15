@@ -334,12 +334,15 @@ SKIP-VERIFICATION is non-nil, do not leave verification pending."
     metadata))
 
 (defun mevedel-plan-accept
-    (plan-markdown session buffer &optional skip-verification)
+    (plan-markdown session buffer &optional skip-verification
+                   current-relative-path accepted-relative-path)
   "Persist and accept PLAN-MARKDOWN for SESSION and BUFFER.
+CURRENT-RELATIVE-PATH and ACCEPTED-RELATIVE-PATH override artifact locations.
 Return `(:current ARTIFACT :accepted ARTIFACT)' for later dispatch."
   (let* ((current (mevedel-plan-write-current
-                   plan-markdown session buffer))
-         (accepted (mevedel-plan-archive-accepted current session)))
+                   plan-markdown session buffer current-relative-path))
+         (accepted (mevedel-plan-archive-accepted
+                    current session accepted-relative-path)))
     (mevedel-plan-mark-accepted
      session current accepted skip-verification)
     (list :current current :accepted accepted)))

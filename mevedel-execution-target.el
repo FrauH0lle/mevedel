@@ -198,8 +198,10 @@ This is side-effect free and never opens a TRAMP connection."
                      process-environment))))))
 
 (defun mevedel-execution-target-remote-p (target)
-  "Return non-nil when TARGET is remote through TRAMP."
-  (and (mevedel-execution-target-prefix target) t))
+  "Return non-nil when TARGET is remote through TRAMP.
+
+A nil TARGET is the local environment, so it is not remote."
+  (and target (mevedel-execution-target-prefix target) t))
 
 (defun mevedel-execution-target-supported-p (target)
   "Return non-nil when TARGET has the supported tier."

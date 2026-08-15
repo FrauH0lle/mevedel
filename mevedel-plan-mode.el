@@ -33,7 +33,8 @@
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-accept "mevedel-plan"
-		  (plan-markdown session buffer &optional skip-verification))
+		  (plan-markdown session buffer &optional skip-verification
+				 current-relative-path accepted-relative-path))
 (declare-function mevedel-plan-current-body "mevedel-plan"
 		  (&optional session))
 (declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))

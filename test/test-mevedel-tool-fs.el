@@ -241,7 +241,7 @@
   (test)
   :doc "reads local and artifact resources without exposing backing paths"
   (let* ((save-path (make-temp-file "mevedel-fs-resource-" t))
-         (session (mevedel-session--create :save-path save-path))
+         (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
          (local-root (file-name-concat save-path "local" "src"))
          (artifact-root (file-name-concat save-path "tool-results" "part one"))
          (local-file (file-name-concat local-root "notes.md"))
