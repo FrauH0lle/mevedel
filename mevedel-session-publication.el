@@ -23,6 +23,8 @@
 (defvar remote-file-name-inhibit-cache)
 
 ;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-make-directory
+                  "mevedel-session-control-fs" (path &optional parents))
 (declare-function mevedel-session-control-fs-physical-path
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-program-value
@@ -195,9 +197,17 @@
       (user-error "No active mevedel session")))
 
 (defun mevedel-session-publication--valid-published-path-p (path)
-  "Return non-nil when PATH names immutable publication storage."
+  "Return non-nil when PATH names immutable publication storage.
+
+The shape is pinned to one artifact name directly inside one
+generation directory: a manifest entry naming any other spelling under
+the publication root -- such as a planted directory a symlink routes
+elsewhere -- could route a read through storage the generation's
+immutability never covered."
   (and (mevedel-session-durability--valid-relative-path-p path)
-       (string-prefix-p ".publications/" path)))
+       (string-match-p
+        "\\`\\.publications/generation-[0-9a-f]\\{20\\}/[^/]+\\'"
+        path)))
 
 (defun mevedel-session-publication--within-p (path directory)
   "Return non-nil when canonical PATH lies strictly below canonical DIRECTORY.
@@ -226,9 +236,13 @@ target-side instead, in the same process that performs the operation."
           (file-name-as-directory
            (mevedel-session-control-fs-physical-path
             (file-name-concat session-dir ".publications"))))
-         (path (file-name-concat session-dir relative)))
+         ;; The containment proof compares spellings, so the candidate is
+         ;; taken in the same physical spelling as the roots: a session
+         ;; directory carrying a doubled slash must not defeat the prefix
+         ;; test, and a relative carrying dot components must not pass it.
+         (path (mevedel-session-control-fs-physical-path
+                (file-name-concat session-dir relative))))
     (mevedel-session-control-fs-physical-path root)
-    (mevedel-session-control-fs-physical-path path)
     (unless (and (not (equal (directory-file-name root)
                              (directory-file-name session-root)))
                  (mevedel-session-publication--within-p root session-root))
@@ -694,7 +708,10 @@ such a binding every call reaches the target.")
 
 Ensuring the parent and writing the bytes are one target process.  The ensure
 is optional so an existing directory does not end the program, which is what
-lets both share one round trip."
+lets both share one round trip.  That single-level ensure cannot create a
+chain of missing parents -- each pinned operation needs its own live parent
+directory -- so a write the chain refuses builds the chain component by
+component and retries once."
   (let* ((path (plist-get artifact :path))
          (source (plist-get artifact :source))
          (directory (file-name-directory (expand-file-name path)))
@@ -704,24 +721,31 @@ lets both share one round trip."
                     (set-buffer-multibyte nil)
                     (insert-file-contents-literally source)
                     (buffer-string)))
-         results)
+         (write-operation
+          (list :op 'write
+                :path (mevedel-session-control-fs-physical-path path)
+                :content content
+                :coding 'no-conversion))
+         result)
     (mevedel-session-control-fs-physical-path directory)
-    (mevedel-session-control-fs-physical-path path)
-    (setq results
-          (mevedel-session-control-fs-run-program
-           (append
-            (when ensure
-              (list (list :op 'make-directory
-                          :path (directory-file-name directory)
-                          :optional t)))
-            (list (list :op 'write
-                        :path (mevedel-session-control-fs-physical-path path)
-                        :content content
-                        :coding 'no-conversion)))))
+    (setq result
+          (car (last (mevedel-session-control-fs-run-program
+                      (append
+                       (when ensure
+                         (list (list :op 'make-directory
+                                     :path (directory-file-name directory)
+                                     :optional t)))
+                       (list write-operation))))))
+    (when (eq 'absent (plist-get result :status))
+      (mevedel-session-control-fs-make-directory
+       (directory-file-name directory) t)
+      (setq result
+            (car (mevedel-session-control-fs-run-program
+                  (list write-operation)))))
     (when (and ensure mevedel-session-publication--ensured-directories)
       (push directory
             (car mevedel-session-publication--ensured-directories)))
-    (mevedel-session-control-fs-program-value (car (last results)))))
+    (mevedel-session-control-fs-program-value result)))
 
 (defun mevedel-session-publication--publish-batch (session batch)
   "Publish every staged artifact in BATCH while SESSION remains owner."
