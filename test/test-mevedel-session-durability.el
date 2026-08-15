@@ -1584,6 +1584,41 @@
         (mevedel-session-durability-lease-release
          session-dir successor-session))
       (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
+  :doc "drains a deferred release when reserved work exits nonlocally"
+  (let* ((local-root (file-name-as-directory
+                      (make-temp-file "mevedel-reserved-throw-" t)))
+         (session-dir (file-name-as-directory
+                       (file-name-concat local-root "session")))
+         (session (test-mevedel-session-durability--local-session local-root))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*owner*" session))
+          (should
+           (eq 'out
+               (catch 'nonlocal
+                 (mevedel-session-durability-call-with-reserved-lease
+                  session
+                  (lambda ()
+                    (mevedel-session-durability-lease-release
+                     session-dir session)
+                    (should (plist-get (mevedel-session-lease session)
+                                       :release-pending))
+                    (throw 'nonlocal 'out))))))
+          (should-not (mevedel-session-lease-renewal-timer session))
+          (should
+           (eq 'released
+               (plist-get
+                (mevedel-session-durability--lease-head
+                 (file-name-concat session-dir ".lease"))
+                :status))))
+      (mevedel-session-durability--cancel-renewal session)
+      (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-session-durability-commit-publication-head ()

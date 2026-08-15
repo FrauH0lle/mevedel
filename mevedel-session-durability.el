@@ -423,20 +423,6 @@ two writers apart."
    (mevedel-session-durability--read-records
     (mevedel-session-durability--generation-paths directory names))))
 
-(defun mevedel-session-durability--lease-head-before
-    (directory generation &optional names)
-  "Return DIRECTORY's latest non-aborted record older than GENERATION.
-
-NAMES and the skip rule are as in
-`mevedel-session-durability--lease-head\='."
-  (mevedel-session-durability--head-of-records
-   (mevedel-session-durability--read-records
-    (seq-filter (lambda (path)
-                  (< (mevedel-session-durability--generation path)
-                     generation))
-                (mevedel-session-durability--generation-paths
-                 directory names)))))
-
 (defun mevedel-session-durability--ensure-lease-directory (directory)
   "Ensure that lease generation DIRECTORY exists."
   (mevedel-session-control-fs-physical-path directory)
@@ -1266,14 +1252,19 @@ manifest, or drain SESSION's publication queue."
         (setq failure
               '(user-error
                 "Portable session lease was lost during publication")))
-      (setf (mevedel-session-publication-active-p session) nil))
-    (when (plist-get (mevedel-session-lease session) :release-pending)
-      (condition-case err
-          (mevedel-session-durability-lease-release
-           (mevedel-session-save-path session) session)
-        (error
-         (unless failure
-           (setq failure err)))))
+      (setf (mevedel-session-publication-active-p session) nil)
+      ;; The pending-release drain lives in the cleanup: a quit or throw
+      ;; out of FUNCTION is not an `error' the condition-case sees, and
+      ;; it must not strand a lease another client already asked for.
+      ;; It runs after the active flag clears, because release defers
+      ;; itself behind that flag.
+      (when (plist-get (mevedel-session-lease session) :release-pending)
+        (condition-case err
+            (mevedel-session-durability-lease-release
+             (mevedel-session-save-path session) session)
+          (error
+           (unless failure
+             (setq failure err))))))
     (when failure
       (signal (car failure) (cdr failure)))
     result))
