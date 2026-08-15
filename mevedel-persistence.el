@@ -360,26 +360,39 @@ up-to-date, not the actual file on the disk being outdated."
                                (buffer-substring-no-properties
                                 (point-min) (point-max)))))))))))
 
+(defvar-local mevedel--buffer-hooks-setup nil
+  "Non-nil once `mevedel--setup-buffer-hooks' has run in this buffer.")
+
+(defvar-local mevedel--buffer-instructions-reverted nil
+  "Non-nil between a revert stashing instructions and their restoration.")
+
+(defun mevedel--stash-instructions-on-kill ()
+  "Stash the killed buffer's instructions, keyed by its file.
+
+Runs on the global `kill-buffer-hook' for the buffer being killed.
+It must be one named function registered once: a per-buffer closure
+per instruction buffer grows the global hook without bound and runs
+every closure on every kill in Emacs."
+  (let ((buffer (current-buffer)))
+    (mevedel--instruction-activate-buffer buffer)
+    (when (mevedel--buffer-has-instructions-p buffer)
+      (when-let* ((file (buffer-file-name buffer)))
+        (if (file-exists-p file)
+            (let ((file-contents
+                   (with-temp-buffer
+                     (insert-file-contents file)
+                     (buffer-substring-no-properties (point-min) (point-max)))))
+              (mevedel--stash-buffer buffer file-contents))
+          (mevedel--mark-buffer-source-missing buffer))))))
+
 (defun mevedel--setup-buffer-hooks (buffer)
   "Set up buffer hooks for instruction restoration on kill/revert.
 
 Sets up hooks to preserve mevedel instructions when BUFFER is killed or
 reverted, and restores them afterward."
+  (add-hook 'kill-buffer-hook #'mevedel--stash-instructions-on-kill)
   (with-current-buffer buffer
-    (unless (bound-and-true-p mevedel--buffer-hooks-setup)
-      (add-hook 'kill-buffer-hook
-                (lambda ()
-                  (mevedel--instruction-activate-buffer (current-buffer))
-                  (when (mevedel--buffer-has-instructions-p (current-buffer))
-                    (when-let* ((file (buffer-file-name buffer)))
-                      (if (file-exists-p file)
-                          (let ((file-contents
-                                 (with-temp-buffer
-                                   (insert-file-contents file)
-                                   (buffer-substring-no-properties (point-min) (point-max)))))
-                            (mevedel--stash-buffer buffer file-contents))
-                        (mevedel--mark-buffer-source-missing buffer))))))
-                nil t)
+    (unless mevedel--buffer-hooks-setup
       (add-hook 'post-command-hook
                 (lambda ()
                   ;; Remote files are skipped: this runs after every command,
@@ -392,22 +405,22 @@ reverted, and restores them afterward."
                               ((not (file-exists-p file)))
                               ((mevedel--buffer-has-instructions-p buffer)))
                     (mevedel--mark-buffer-source-missing buffer)))
-                nil t))
-    (add-hook 'before-revert-hook
-              (lambda ()
-                (mevedel--instruction-activate-buffer buffer)
-                (when (mevedel--buffer-has-instructions-p buffer)
-                  (mevedel--stash-buffer buffer)
-                  (setq-local mevedel--buffer-instructions-reverted t)))
-              nil t)
-    (add-hook 'after-revert-hook
-              (lambda ()
-                (mevedel--instruction-activate-buffer buffer)
-                (when (bound-and-true-p mevedel--buffer-instructions-reverted)
-                  (mevedel--restore-file-instructions (buffer-file-name buffer) t)
-                  (setq-local mevedel--buffer-instructions-reverted nil)))
-              nil t)
-    (setq-local mevedel--buffer-hooks-setup t))
+                nil t)
+      (add-hook 'before-revert-hook
+                (lambda ()
+                  (mevedel--instruction-activate-buffer buffer)
+                  (when (mevedel--buffer-has-instructions-p buffer)
+                    (mevedel--stash-buffer buffer)
+                    (setq-local mevedel--buffer-instructions-reverted t)))
+                nil t)
+      (add-hook 'after-revert-hook
+                (lambda ()
+                  (mevedel--instruction-activate-buffer buffer)
+                  (when mevedel--buffer-instructions-reverted
+                    (mevedel--restore-file-instructions (buffer-file-name buffer) t)
+                    (setq-local mevedel--buffer-instructions-reverted nil)))
+                nil t)
+      (setq-local mevedel--buffer-hooks-setup t))))
 
 (defun mevedel--instruction-current-file-hash ()
   "Return a sha256 hash of the current buffer contents."

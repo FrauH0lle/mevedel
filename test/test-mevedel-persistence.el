@@ -232,5 +232,48 @@
            :type 'user-error))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel--setup-buffer-hooks
+  ()
+  ,test
+  (test)
+  :doc "keeps the global kill hook at one entry and the rest buffer-local"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-buffer-hooks-" t)))
+         (preinstalled (memq #'mevedel--stash-instructions-on-kill
+                             (default-value 'kill-buffer-hook)))
+         buffers)
+    (unwind-protect
+        (progn
+          (dotimes (i 3)
+            (let ((file (file-name-concat root (format "source-%d.el" i))))
+              (with-temp-file file (insert ";; hook target\n"))
+              (push (find-file-noselect file) buffers)))
+          (let ((baseline (length (default-value 'kill-buffer-hook))))
+            (dolist (buffer buffers)
+              (mevedel--setup-buffer-hooks buffer)
+              (mevedel--setup-buffer-hooks buffer))
+            ;; Six setups may add at most the one named function; a
+            ;; per-buffer closure on the global hook is the leak this
+            ;; test exists to catch.
+            (should (<= (length (default-value 'kill-buffer-hook))
+                        (1+ baseline)))
+            (should (= 1 (cl-count #'mevedel--stash-instructions-on-kill
+                                   (default-value 'kill-buffer-hook)))))
+          (dolist (buffer buffers)
+            (with-current-buffer buffer
+              (should mevedel--buffer-hooks-setup)
+              (should (local-variable-p 'post-command-hook))
+              (should (local-variable-p 'before-revert-hook))
+              (should (local-variable-p 'after-revert-hook)))))
+      (unless preinstalled
+        (remove-hook 'kill-buffer-hook #'mevedel--stash-instructions-on-kill))
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (setq-local kill-buffer-hook nil)
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (delete-directory root t))))
+
 (provide 'test-mevedel-persistence)
 ;;; test-mevedel-persistence.el ends here
