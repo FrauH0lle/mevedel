@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'mevedel)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-session-persistence)
 (require 'mevedel-workspace)
@@ -64,7 +65,7 @@
           (let ((processes
                  (test-mevedel-session-persistence-cost--measure
                    (mevedel-session-persistence-save session buffer))))
-            (should (<= processes 60)))
+            (should (<= processes 45)))
           ;; A save that carries a change publishes it; the artifacts whose
           ;; bytes the target already holds are not republished.
           (goto-char (point-max))
@@ -72,17 +73,17 @@
           (let ((processes
                  (test-mevedel-session-persistence-cost--measure
                    (mevedel-session-persistence-save session buffer))))
-            (should (<= processes 20)))
+            (should (<= processes 17)))
           ;; A save with nothing to record owes the target no transaction.
           (let ((processes
                  (test-mevedel-session-persistence-cost--measure
                    (mevedel-session-persistence-save session buffer))))
-            (should (<= processes 5)))
+            (should (<= processes 4)))
           ;; Forcing publishes even when the state is already committed.
           (let ((processes
                  (test-mevedel-session-persistence-cost--measure
                    (mevedel-session-persistence-save session buffer nil t))))
-            (should (> processes 5))))
+            (should (> processes 4))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))

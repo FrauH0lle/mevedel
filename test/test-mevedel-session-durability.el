@@ -374,6 +374,32 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-session-durability--claim-next ()
+  ,test
+  (test)
+  :doc "one claim is bounded by three target programs"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-claim-cost-" t)))
+         (directory (file-name-as-directory
+                     (file-name-concat root ".lease")))
+         (mevedel-session-durability--client-id (make-string 64 ?a))
+         (programs 0)
+         (run-program-function
+          (symbol-function 'mevedel-session-control-fs-run-program)))
+    (make-directory directory t)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (operations)
+                       (cl-incf programs)
+                       (funcall run-program-function operations))))
+            (should (mevedel-session-durability--claim-next
+                     directory nil "*claim-cost*")))
+          ;; Observation, fencing create with predecessor reads, and the
+          ;; settling write with its prunes: one program each.
+          (should (<= programs 3)))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-durability-lease-state ()
   ,test
   (test)
@@ -629,9 +655,8 @@
          (claim-generations nil)
          (result-mutex (make-mutex "mevedel lease results"))
          (results nil)
-         (create-generation-function
-          (symbol-function
-           'mevedel-session-durability--create-generation))
+         (run-program-function
+          (symbol-function 'mevedel-session-control-fs-run-program))
          threads)
     (make-directory session-dir t)
     (unwind-protect
@@ -644,17 +669,21 @@
           (cl-letf
               (((symbol-function 'y-or-n-p)
                 (lambda (&rest _) t))
-               ((symbol-function
-                 'mevedel-session-durability--create-generation)
-                (lambda (directory record)
-                  (with-mutex claim-mutex
-                    (cl-incf claim-count)
-                    (push (plist-get record :generation)
-                          claim-generations)
-                    (condition-notify claim-condition t)
-                    (while (< claim-count 2)
-                      (condition-wait claim-condition)))
-                  (funcall create-generation-function directory record))))
+               ;; A claim states its fence as the exclusive `create'
+               ;; opening its program; both contenders are held at that
+               ;; exact point so the races collide for real.
+               ((symbol-function 'mevedel-session-control-fs-run-program)
+                (lambda (operations)
+                  (when (eq 'create (plist-get (car operations) :op))
+                    (with-mutex claim-mutex
+                      (cl-incf claim-count)
+                      (push (mevedel-session-durability--generation
+                             (plist-get (car operations) :path))
+                            claim-generations)
+                      (condition-notify claim-condition t)
+                      (while (< claim-count 2)
+                        (condition-wait claim-condition))))
+                  (funcall run-program-function operations))))
             (dolist (client (list (make-string 64 ?b) (make-string 64 ?c)))
               (push
                (make-thread
@@ -723,21 +752,25 @@
          (mevedel-session-durability--client-id (make-string 64 ?a))
          (mevedel-session-lease-seconds 10)
          (now 0.0)
-         (write-file-function
-          (symbol-function 'mevedel-session-control-fs-write-file))
+         (run-program-function
+          (symbol-function 'mevedel-session-control-fs-run-program))
          (fail-finalization t)
          (confirmed nil))
     (make-directory session-dir t)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-session-durability--target-time)
                    (lambda (&optional _) now))
-                  ((symbol-function 'mevedel-session-control-fs-write-file)
-                   (lambda (path content)
-                     (if fail-finalization
+                  ;; A claim finalizes through the program whose first
+                  ;; operation is the settle write; the fencing create and
+                  ;; the lease commits open with other verbs.
+                  ((symbol-function 'mevedel-session-control-fs-run-program)
+                   (lambda (operations)
+                     (if (and fail-finalization
+                              (eq 'write (plist-get (car operations) :op)))
                          (progn
                            (setq fail-finalization nil)
                            (error "Injected claim finalization crash"))
-                       (funcall write-file-function path content)))))
+                       (funcall run-program-function operations)))))
           (should-error
            (mevedel-session-durability-lease-acquire
             session-dir "*interrupted*")
