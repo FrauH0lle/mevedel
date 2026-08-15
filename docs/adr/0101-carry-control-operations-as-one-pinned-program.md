@@ -64,9 +64,13 @@ error classification and interpreter-cache behaviour.
 ## Consequences
 
 Durable session work is bounded by target round trips, and this is what makes
-the count tractable.  One lease compare-and-set is one round trip rather than
-seven; a publication generation with its artifacts and manifest is one rather
-than one per file.  The documented ownership-proof cadence is unchanged --
+the count tractable.  A steady-state lease renewal is one round trip: the
+commit program proves the precondition with its opening `verify`, writes,
+lists, and refreshes the transaction clock with a trailing optional clock
+operation, so the next renewal in the same transaction can assume its
+observation instead of repeating it.  Only a cold, contested, or stale-clock
+renewal pays a preceding observation program.  A publication generation with
+its artifacts and manifest is one round trip rather than one per file.  The documented ownership-proof cadence is unchanged --
 publication still proves ownership immediately before every artifact write and
 once after the last -- because the cost of a proof, not its frequency, was the
 problem.

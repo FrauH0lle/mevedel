@@ -485,16 +485,25 @@ client can slip between them.  Return the record names observed afterwards, or
 nil when the proof failed."
   (let* ((path (mevedel-session-durability--generation-path
                 directory generation))
+         ;; `verify' stays first: the takeover race tests key on the commit
+         ;; program by its opening operation.  The clock rides last so a
+         ;; successful renewal refreshes the transaction clock's reuse
+         ;; window and the next renewal can assume instead of observing.
          (results
           (mevedel-session-control-fs-run-program
            (list (list :op 'verify :path path :content expected)
                  (list :op 'write :path path
                        :content (mevedel-session-durability--record-bytes
                                  record))
-                 (list :op 'list-directory :path directory))))
+                 (list :op 'list-directory :path directory)
+                 (list :op 'target-time :path directory :optional t))))
          (proof (nth 0 results))
          (write (nth 1 results))
-         (listing (nth 2 results)))
+         (listing (nth 2 results))
+         (clock (nth 3 results)))
+    (when (eq 'ok (plist-get clock :status))
+      (mevedel-session-durability--note-target-time
+       (plist-get clock :value)))
     (cond
      ((memq (plist-get proof :status) '(mismatch absent)) nil)
      ((not (eq 'ok (plist-get proof :status)))
@@ -1102,7 +1111,11 @@ its lease state."
 Timer renewal performs no target I/O while FUNCTION runs.  The final ownership
 check fails closed.  This wrapper does not publish artifacts, commit a
 manifest, or drain SESSION's publication queue."
-  (let (entered failure result)
+  (let ((mevedel-session-durability--transaction-clock
+         (or mevedel-session-durability--transaction-clock (list nil)))
+        (mevedel-session-durability--asserted-directories
+         (or mevedel-session-durability--asserted-directories (list nil)))
+        entered failure result)
     (setf (mevedel-session-publication-active-p session) t)
     (unwind-protect
         (condition-case err

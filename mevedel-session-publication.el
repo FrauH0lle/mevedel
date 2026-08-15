@@ -58,6 +58,8 @@
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-publication-head
                   "mevedel-session-durability" (session-dir))
+(defvar mevedel-session-durability--asserted-directories)
+(defvar mevedel-session-durability--transaction-clock)
 (declare-function mevedel-session-recovery-refresh
                   "mevedel-session-recovery" (session))
 
@@ -741,6 +743,13 @@ lets both share one round trip."
   "Publish BATCHES and any batches queued reentrantly for SESSION."
   (let ((remaining batches)
         (mevedel-session-publication--ensured-directories (list nil))
+        ;; One drain is one transaction: the per-artifact lease renewals
+        ;; inside it share the clock reading and the pid-lock assertions,
+        ;; which is what lets a renewal assume instead of re-observing.
+        (mevedel-session-durability--transaction-clock
+         (or mevedel-session-durability--transaction-clock (list nil)))
+        (mevedel-session-durability--asserted-directories
+         (or mevedel-session-durability--asserted-directories (list nil)))
         current
         committed
         result)
