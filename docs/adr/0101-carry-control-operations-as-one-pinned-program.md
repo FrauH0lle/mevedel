@@ -31,7 +31,11 @@ result record.
 A request reaches the target as arguments when it fits and through a stdin file
 when it does not.  One argument carries one field, because NUL -- the framing
 byte -- is the one byte a filename cannot contain and therefore cannot be
-embedded in an argument.  An argument run whose shell-quoted size exceeds
+embedded in an argument.  An operation is five fields -- verb, parent, leaf,
+payload, optional flag -- and the parent travels once, in its physical
+no-trailing-slash spelling: the script both opens that name and proves it
+against `pwd -P`, which prints exactly that form, with the root spelled `/`
+on both sides.  An argument run whose shell-quoted size exceeds
 3 KiB, or any field outside ASCII, sends the request to the file instead.
 Either way a program is one target process; an oversized request changes how the
 request travels, never how many calls carry it.

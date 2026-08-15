@@ -102,14 +102,16 @@ before the operation ran."
    ;; guard would silently continue into the operation it was meant to refuse.
    "run_op() {\n"
    "  op=$1\n"
+   ;; One parent spelling serves both the open and the proof: it is the
+   ;; physical no-trailing-slash form, which is exactly what `pwd -P'
+   ;; prints, and the root is spelled `/' on both sides.
    "  parent=$2\n"
-   "  expected=$3\n"
-   "  leaf=$4\n"
-   "  payload=$5\n"
+   "  leaf=$3\n"
+   "  payload=$4\n"
    "  test -e \"$parent\" || exit 78\n"
    "  exec 9<\"$parent\" || exit 70\n"
    "  cd -- /proc/self/fd/9 || exit 70\n"
-   "  test \"$(pwd -P)\" = \"$expected\" || exit 70\n"
+   "  test \"$(pwd -P)\" = \"$parent\" || exit 70\n"
    "  if test -n \"$pause_file\"; then\n"
    "    : >\"$pause_file\"\n"
    "    waited=0\n"
@@ -233,14 +235,14 @@ before the operation ran."
    "  index=$((index + 1))\n"
    "  status=0\n"
    ;; The operation never reads the program's own stdin.
-   "  out=$(run_op \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" "
+   "  out=$(run_op \"$1\" \"$2\" \"$3\" \"$4\" "
    "</dev/null 2>>\"$diagnostics\") || status=$?\n"
    "  printf '%s %s\\0%s\\0' \"$index\" \"$status\" \"$out\"\n"
    ;; A failed operation ends the program: a compare-and-set expresses its
    ;; precondition as an earlier operation, so later ones must not run.  An
    ;; operation marked optional is one whose failure the caller expects to
    ;; interpret itself, such as ensuring a directory that already exists.
-   "  if test \"$status\" -ne 0 && test \"$6\" != 1; then\n"
+   "  if test \"$status\" -ne 0 && test \"$5\" != 1; then\n"
    "    exit 0\n"
    "  fi\n"
    "}\n"
@@ -251,19 +253,18 @@ before the operation ran."
    ;; is one argument because NUL, the framing byte, is the one byte a
    ;; filename cannot contain and so cannot be embedded in one.
    "if test \"$#\" -gt 0; then\n"
-   "  while test \"$#\" -ge 6; do\n"
-   "    emit \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" \"$6\"\n"
-   "    shift 6\n"
+   "  while test \"$#\" -ge 5; do\n"
+   "    emit \"$1\" \"$2\" \"$3\" \"$4\" \"$5\"\n"
+   "    shift 5\n"
    "  done\n"
    "  test \"$#\" -eq 0 || exit 71\n"
    "else\n"
    "  while IFS= read -r -d '' op; do\n"
    "    IFS= read -r -d '' parent || exit 71\n"
-   "    IFS= read -r -d '' expected || exit 71\n"
    "    IFS= read -r -d '' leaf || exit 71\n"
    "    IFS= read -r -d '' payload || exit 71\n"
    "    IFS= read -r -d '' optional || exit 71\n"
-   "    emit \"$op\" \"$parent\" \"$expected\" \"$leaf\" \"$payload\" \"$optional\"\n"
+   "    emit \"$op\" \"$parent\" \"$leaf\" \"$payload\" \"$optional\"\n"
    "  done\n"
    "fi\n")
   "Target-side script running a whole program of pinned control operations.
@@ -341,7 +342,7 @@ parent must not turn into a `Setting current directory' failure."
     (_ nil)))
 
 (defun mevedel-session-control-fs--program-fields (op)
-  "Return OP encoded as the six request fields the target script reads."
+  "Return OP encoded as the five request fields the target script reads."
   (let* ((verb (or (cdr (assq (plist-get op :op)
                               mevedel-session-control-fs--program-verbs))
                    (error "Unknown control program operation: %S"
@@ -359,22 +360,21 @@ parent must not turn into a `Setting current directory' failure."
               content (or (plist-get op :coding) 'utf-8-unix))
              t))
            (t (base64-encode-string content t)))))
+    ;; The parent travels once, in its physical no-trailing-slash
+    ;; spelling: the script both opens it and proves it against
+    ;; `pwd -P', which prints exactly that form, root included.
     (list verb
-          (file-local-name parent)
           (directory-file-name (file-local-name parent))
           (plist-get descriptor :leaf)
           payload
           (if (plist-get op :optional) "1" "0"))))
 
-(defun mevedel-session-control-fs--program-request (operations)
-  "Return the NUL-framed target request encoding OPERATIONS."
+(defun mevedel-session-control-fs--program-request (fields)
+  "Return the NUL-framed target request encoding per-operation FIELDS."
   (mapconcat
-   (lambda (op)
-     (mapconcat #'identity
-                (append (mevedel-session-control-fs--program-fields op)
-                        (list ""))
-                "\0"))
-   operations
+   (lambda (op-fields)
+     (mapconcat #'identity (append op-fields (list "")) "\0"))
+   fields
    ""))
 
 (defconst mevedel-session-control-fs--argument-budget 3072
@@ -399,8 +399,8 @@ double.  `shell-quote-argument' stands in for TRAMP's variant, which differs
 only in newline handling -- and a newline can only help, because it ends the
 line being measured.")
 
-(defun mevedel-session-control-fs--program-arguments (operations)
-  "Return OPERATIONS as target argument fields, or nil to use the request file.
+(defun mevedel-session-control-fs--program-arguments (fields)
+  "Return FIELDS as target argument fields, or nil to use the request file.
 
 Arguments are the cheap delivery: they ride the command line TRAMP already
 sends, where a request file costs a remote temporary and a copy into it.  They
@@ -409,8 +409,7 @@ and for a field carrying bytes the command line cannot represent -- TRAMP
 encodes the command line with the connection coding system, while the request
 file is written without conversion, so a name outside ASCII is only
 byte-transparent through the file."
-  (let ((fields (mapcan #'mevedel-session-control-fs--program-fields
-                        operations))
+  (let ((fields (apply #'append fields))
         (total 0))
     (catch 'oversized
       (dolist (field fields)
@@ -524,8 +523,12 @@ signal contract of the single-operation wrappers per operation."
               (mevedel-session-control-fs--connection-directory
                (or remote "/")))
              (bash (car (mevedel-session-control-fs--programs remote)))
+             ;; Encoded once: the oversized path used to re-encode every
+             ;; payload a second time for the request file.
+             (fields (mapcar #'mevedel-session-control-fs--program-fields
+                             operations))
              (arguments
-              (mevedel-session-control-fs--program-arguments operations))
+              (mevedel-session-control-fs--program-arguments fields))
              (input (unless arguments
                       (make-temp-file ".mevedel-control-fs-program-")))
              (output (generate-new-buffer " *mevedel-control-fs-output*")))
@@ -535,7 +538,7 @@ signal contract of the single-operation wrappers per operation."
               (when input
                 (let ((coding-system-for-write 'no-conversion)
                       (request (mevedel-session-control-fs--program-request
-                                operations)))
+                                fields)))
                   (with-temp-buffer
                     (set-buffer-multibyte nil)
                     (insert request)
