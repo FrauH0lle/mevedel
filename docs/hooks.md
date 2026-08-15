@@ -678,6 +678,13 @@ Useful commands:
 - `mevedel-hooks-run-dry`: show which native and declarative hooks would
   run for an event/matcher target without executing Elisp or shell
   handlers.
+- `mevedel-hooks-reload`: forget the memoized hook configuration so the
+  next event re-reads every config file.  The user, plugin, and project
+  layers are remembered per workspace for the process — re-resolving
+  them costs several target round trips per event on a remote workspace
+  — so an edit to a hook file needs this command (or trusting the
+  project, or toggling a plugin, each of which invalidates) to take
+  effect.
 
 Quiet successful hooks do not clutter the normal workflow.
 

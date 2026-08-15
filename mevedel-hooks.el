@@ -689,6 +689,55 @@ Plugin runtime data is scoped to WORKSPACE when provided."
                            plugin
                            workspace)))))))))
 
+(defvar mevedel-hooks--config-rules-cache (make-hash-table :test #'equal)
+  "Configured hook rules memoized per workspace root and user directory.
+
+Resolving the user, plugin, and project layers re-reads and re-hashes
+every config file, which on a remote workspace is several target round
+trips -- and hook events fire many times per turn.  The answer is
+remembered for the process, so edits to hook files need
+`mevedel-hooks-reload' (or trusting the project, which re-reads anyway)
+to be picked up; the same bargain the workspace ignore-file memo makes.")
+
+(defun mevedel-hooks--config-rules (workspace)
+  "Return the configured user, plugin, and project rules for WORKSPACE.
+
+Memoized in `mevedel-hooks--config-rules-cache'; the returned list is a
+fresh copy, so a caller appending dynamic layers cannot corrupt the
+memo."
+  (let* ((key (list (and workspace (mevedel-workspace-root workspace))
+                    mevedel-user-dir))
+         (cached (gethash key mevedel-hooks--config-rules-cache 'missing)))
+    (copy-tree
+     (if (not (eq cached 'missing))
+         cached
+       (let (rules)
+         (dolist (file (mevedel-hooks--user-config-files))
+           (setq rules
+                 (append rules
+                         (mevedel-hooks-annotate-rules-source
+                          (mevedel-hooks--read-config-file file)
+                          'user-file file (file-name-directory file)))))
+         (setq rules
+               (append rules
+                       (mevedel-hooks--plugin-config-rules workspace)))
+         (dolist (file (mevedel-hooks--project-config-files workspace))
+           (setq rules
+                 (append rules
+                         (mevedel-hooks-annotate-rules-source
+                          (mevedel-hooks--read-config-file file)
+                          'project-file file
+                          (file-name-as-directory
+                           (mevedel-workspace-root workspace))))))
+         (puthash key rules mevedel-hooks--config-rules-cache))))))
+
+;;;###autoload
+(defun mevedel-hooks-reload ()
+  "Forget every memoized hook configuration so the next event re-reads it."
+  (interactive)
+  (clrhash mevedel-hooks--config-rules-cache)
+  (message "mevedel: hook configuration will be re-read"))
+
 (defun mevedel-hooks-effective-rules
     (&optional session workspace request invocation)
   "Return effective hook rules for SESSION, WORKSPACE, REQUEST, and INVOCATION."
@@ -697,26 +746,14 @@ Plugin runtime data is scoped to WORKSPACE when provided."
     (let* ((workspace (or workspace
                           (and session (mevedel-session-workspace session))))
            rules)
+      ;; The defcustom layer stays live: it is pure memory, and tests as
+      ;; well as users rebind it per context.
       (setq rules
             (append rules
                     (mevedel-hooks-annotate-rules-source
                      (mevedel-hooks-normalize-rules mevedel-hook-rules)
                      'user nil user-emacs-directory)))
-      (dolist (file (mevedel-hooks--user-config-files))
-        (setq rules
-              (append rules
-                      (mevedel-hooks-annotate-rules-source
-                       (mevedel-hooks--read-config-file file)
-                       'user-file file (file-name-directory file)))))
-      (setq rules (append rules (mevedel-hooks--plugin-config-rules workspace)))
-      (dolist (file (mevedel-hooks--project-config-files workspace))
-        (setq rules
-              (append rules
-                      (mevedel-hooks-annotate-rules-source
-                       (mevedel-hooks--read-config-file file)
-                       'project-file file
-                       (file-name-as-directory
-                        (mevedel-workspace-root workspace))))))
+      (setq rules (append rules (mevedel-hooks--config-rules workspace)))
       (when session
         (setq rules (mevedel-hooks--append-rule-layer
                      rules (mevedel-session-hook-rules session))))
@@ -759,6 +796,9 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
           (push entry db)
           (cl-incf count)))
       (mevedel-hooks--write-trust-db (nreverse db))
+      ;; Trust changes which project files resolve, so the memoized
+      ;; configuration is stale from here.
+      (clrhash mevedel-hooks--config-rules-cache)
       (message "mevedel: trusted %d project hook file(s)" count))))
 
 
