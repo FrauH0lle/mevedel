@@ -1449,10 +1449,24 @@ paths:
 ;;; File watchers
 
 (mevedel-deftest mevedel-skills--ensure-watcher
-  (:before-each (mevedel-skills-test--reset-watchers)
+  (:vars ((noninteractive nil))
+   :before-each (mevedel-skills-test--reset-watchers)
    :after-each (mevedel-skills-test--reset-watchers))
   ,test
   (test)
+  :doc "a batch Emacs never installs a watcher"
+  (let ((noninteractive t)
+        (watch-calls 0))
+    (cl-letf (((symbol-function 'file-directory-p) (lambda (_dir) t))
+              ((symbol-function 'file-notify-add-watch)
+               (lambda (&rest _args)
+                 (cl-incf watch-calls)
+                 'descriptor)))
+      (mevedel-skills--ensure-watcher
+       (file-name-as-directory temporary-file-directory)))
+    (should (= 0 watch-calls))
+    (should (= 0 (hash-table-count mevedel-skills--watchers))))
+
   :doc "skips unsupported remote watches and reports once per target state"
   (let* ((target (mevedel-execution-target-create
                   "/ssh:user@host:/srv/project/"))
@@ -1522,7 +1536,8 @@ paths:
       (when (buffer-live-p other) (kill-buffer other)))))
 
 (mevedel-deftest mevedel-skills--register-buffer
-  (:before-each (mevedel-skills-test--reset-watchers)
+  (:vars ((noninteractive nil))
+   :before-each (mevedel-skills-test--reset-watchers)
    :after-each (mevedel-skills-test--reset-watchers))
   ,test
   (test)
