@@ -163,28 +163,28 @@ is rescanned on every later chunk."
                                  :mevedel-collaboration-preupgrade-children))
             mevedel-collaboration--max-preupgrade-children)
         (delete-process process)
-    (let ((state (list :owner listener :bytes 0)))
-    (process-put process :mevedel-collaboration-preupgrade-owner listener)
-    (process-put process :mevedel-collaboration-preupgrade-bytes 0)
-    (process-put listener :mevedel-collaboration-preupgrade-children
-                 (cons process
-                       (process-get listener
-                                    :mevedel-collaboration-preupgrade-children)))
-    (set-process-filter process #'mevedel-collaboration--preupgrade-filter)
-    (set-process-sentinel process #'mevedel-collaboration--preupgrade-sentinel)
-      (setf (plist-get state :idle)
-            (run-at-time mevedel-collaboration--preupgrade-idle-timeout nil
-                         #'mevedel-collaboration--preupgrade-timeout process
-                         :mevedel-collaboration-preupgrade-idle)
-            (plist-get state :total)
-            (run-at-time mevedel-collaboration--preupgrade-total-timeout nil
-                         #'mevedel-collaboration--preupgrade-timeout process
-                         :mevedel-collaboration-preupgrade-total))
-      (puthash process state mevedel-collaboration--preupgrade-state)
-      (process-put process :mevedel-collaboration-preupgrade-idle
-                   (plist-get state :idle))
-      (process-put process :mevedel-collaboration-preupgrade-total
-                   (plist-get state :total))))))
+      (let ((state (list :owner listener :bytes 0)))
+        (process-put process :mevedel-collaboration-preupgrade-owner listener)
+        (process-put process :mevedel-collaboration-preupgrade-bytes 0)
+        (process-put listener :mevedel-collaboration-preupgrade-children
+                     (cons process
+                           (process-get listener
+                                        :mevedel-collaboration-preupgrade-children)))
+        (set-process-filter process #'mevedel-collaboration--preupgrade-filter)
+        (set-process-sentinel process #'mevedel-collaboration--preupgrade-sentinel)
+        (setf (plist-get state :idle)
+              (run-at-time mevedel-collaboration--preupgrade-idle-timeout nil
+                           #'mevedel-collaboration--preupgrade-timeout process
+                           :mevedel-collaboration-preupgrade-idle)
+              (plist-get state :total)
+              (run-at-time mevedel-collaboration--preupgrade-total-timeout nil
+                           #'mevedel-collaboration--preupgrade-timeout process
+                           :mevedel-collaboration-preupgrade-total))
+        (puthash process state mevedel-collaboration--preupgrade-state)
+        (process-put process :mevedel-collaboration-preupgrade-idle
+                     (plist-get state :idle))
+        (process-put process :mevedel-collaboration-preupgrade-total
+                     (plist-get state :total))))))
 
 (defun mevedel-collaboration--ws-start (handler port)
   "Start web-server HANDLER with a scoped native accept callback."
@@ -263,7 +263,7 @@ this reads the slot itself."
    ((eq reason 'guest-too-slow) 1013)
    ((memq reason '(message-too-large incoming-too-large)) 1009)
    ((memq reason '(invalid too-large malformed-frame fragmented-message
-                   unexpected-continuation)) 1002)
+                           unexpected-continuation)) 1002)
    (t 1000)))
 
 (defun mevedel-collaboration--send-close-frame (process reason)
@@ -275,7 +275,7 @@ this reads the slot itself."
 (defun mevedel-collaboration--guest-cancel-timers (guest)
   "Cancel all timers owned by GUEST and clear their slots."
   (dolist (slot '(:auth-timer :pump-timer :snapshot-timer
-                  :receive-timer :close-timer))
+                              :receive-timer :close-timer))
     (when-let ((timer (plist-get guest slot)))
       (cancel-timer timer)
       (setf (plist-get guest slot) nil)))
@@ -328,8 +328,8 @@ REASON is only retained for debugging and is never sent to the browser."
     (when-let ((timer (plist-get guest :receive-timer)))
       (cancel-timer timer))
     (let ((timer (run-at-time mevedel-collaboration--frame-idle-timeout nil
-                             #'mevedel-collaboration--receive-timeout
-                             (plist-get guest :process))))
+                              #'mevedel-collaboration--receive-timeout
+                              (plist-get guest :process))))
       (setf (plist-get guest :receive-timer) timer)
       (process-put (plist-get guest :process)
                    'mevedel-collaboration-guest guest))))
@@ -353,7 +353,7 @@ REASON is only retained for debugging and is never sent to the browser."
          (ack-token (mevedel-collaboration--random-token))
          (json (mevedel-collaboration--json-string
                 (append object (list (cons "seq" sequence)
-                                      (cons "ack-token" ack-token))))))
+                                     (cons "ack-token" ack-token))))))
     (list :sequence sequence :ack-token ack-token :json json)))
 
 (defun mevedel-collaboration--guest-pump (guest)
@@ -387,33 +387,33 @@ application limit instead of being treated as drained by elapsed time."
           (setf (plist-get guest :pump-timer)
                 (run-at-time mevedel-collaboration--send-interval nil
                              #'mevedel-collaboration--guest-pump guest))))))
-    (when (and (mevedel-collaboration--guest-live-p guest)
-               (null (plist-get guest :in-flight)))
-      (let ((item (car (plist-get guest :queue))))
-        (cond
-         ((and item
-               (> (- (float-time) (plist-get item :enqueued-at))
-                  mevedel-collaboration--max-pending-age))
-          (mevedel-collaboration--guest-close guest 'guest-too-slow))
-         (item
-          (setq guest (plist-put guest :queue
-                                 (cdr (plist-get guest :queue))))
-          (setq guest (plist-put guest :in-flight item))
-          (let ((process (plist-get guest :process)))
-            (process-put process 'mevedel-collaboration-guest guest)
-            (condition-case nil
-                (progn
-                  (process-send-string process (plist-get item :frame))
-                  (setf (plist-get guest :pump-timer)
-                        (run-at-time mevedel-collaboration--send-interval nil
-                                     #'mevedel-collaboration--guest-pump guest)))
-              (error (mevedel-collaboration--guest-close guest)))
-            (when (process-live-p process)
-              (process-put process 'mevedel-collaboration-guest guest))))
-         ((plist-get guest :snapshot-queue)
-          (setf (plist-get guest :snapshot-timer)
-                (run-at-time 0 nil #'mevedel-collaboration--snapshot-pump
-                             guest)))))))
+  (when (and (mevedel-collaboration--guest-live-p guest)
+             (null (plist-get guest :in-flight)))
+    (let ((item (car (plist-get guest :queue))))
+      (cond
+       ((and item
+             (> (- (float-time) (plist-get item :enqueued-at))
+                mevedel-collaboration--max-pending-age))
+        (mevedel-collaboration--guest-close guest 'guest-too-slow))
+       (item
+        (setq guest (plist-put guest :queue
+                               (cdr (plist-get guest :queue))))
+        (setq guest (plist-put guest :in-flight item))
+        (let ((process (plist-get guest :process)))
+          (process-put process 'mevedel-collaboration-guest guest)
+          (condition-case nil
+              (progn
+                (process-send-string process (plist-get item :frame))
+                (setf (plist-get guest :pump-timer)
+                      (run-at-time mevedel-collaboration--send-interval nil
+                                   #'mevedel-collaboration--guest-pump guest)))
+            (error (mevedel-collaboration--guest-close guest)))
+          (when (process-live-p process)
+            (process-put process 'mevedel-collaboration-guest guest))))
+       ((plist-get guest :snapshot-queue)
+        (setf (plist-get guest :snapshot-timer)
+              (run-at-time 0 nil #'mevedel-collaboration--snapshot-pump
+                           guest)))))))
 
 (defun mevedel-collaboration--record-coalesce-key (object)
   "Return the unsent-update key for record OBJECT, or nil."
@@ -452,39 +452,39 @@ browser must acknowledge before another frame is sent."
                         (- frame-bytes (plist-get existing :bytes))
                       frame-bytes)))))
       (cond
-     ((or (> bytes mevedel-collaboration--max-message-bytes)
-          (null frame))
-      (mevedel-collaboration--guest-close guest 'message-too-large)
-      nil)
-     ((> new-pending-bytes mevedel-collaboration--max-pending-bytes)
-      (mevedel-collaboration--guest-close guest 'guest-too-slow)
-      nil)
-     ((not (mevedel-collaboration--guest-live-p guest)) nil)
-     (t
-      (if existing
-          (setf (plist-get existing :frame) frame
-                (plist-get existing :bytes) frame-bytes
-                (plist-get existing :sequence) sequence
-                (plist-get existing :ack-token) ack-token
-                (plist-get existing :enqueued-at) (float-time))
+       ((or (> bytes mevedel-collaboration--max-message-bytes)
+            (null frame))
+        (mevedel-collaboration--guest-close guest 'message-too-large)
+        nil)
+       ((> new-pending-bytes mevedel-collaboration--max-pending-bytes)
+        (mevedel-collaboration--guest-close guest 'guest-too-slow)
+        nil)
+       ((not (mevedel-collaboration--guest-live-p guest)) nil)
+       (t
+        (if existing
+            (setf (plist-get existing :frame) frame
+                  (plist-get existing :bytes) frame-bytes
+                  (plist-get existing :sequence) sequence
+                  (plist-get existing :ack-token) ack-token
+                  (plist-get existing :enqueued-at) (float-time))
+          (setq guest
+                (plist-put guest :queue
+                           (append queue
+                                   (list (list :frame frame
+                                               :bytes frame-bytes
+                                               :sequence sequence
+                                               :ack-token ack-token
+                                               :coalesce-key coalesce-key
+                                               :enqueued-at (float-time)))))))
         (setq guest
-              (plist-put guest :queue
-                         (append queue
-                                 (list (list :frame frame
-                                             :bytes frame-bytes
-                                             :sequence sequence
-                                             :ack-token ack-token
-                                             :coalesce-key coalesce-key
-                                             :enqueued-at (float-time)))))))
-      (setq guest
-            (plist-put guest :pending-bytes
-                       new-pending-bytes))
-      (process-put (plist-get guest :process)
-                   'mevedel-collaboration-guest guest)
-      (unless (or (plist-get guest :pump-timer)
-                  (plist-get guest :in-flight))
-        (setf (plist-get guest :pump-timer)
-              (run-at-time 0 nil #'mevedel-collaboration--guest-pump guest)))
+              (plist-put guest :pending-bytes
+                         new-pending-bytes))
+        (process-put (plist-get guest :process)
+                     'mevedel-collaboration-guest guest)
+        (unless (or (plist-get guest :pump-timer)
+                    (plist-get guest :in-flight))
+          (setf (plist-get guest :pump-timer)
+                (run-at-time 0 nil #'mevedel-collaboration--guest-pump guest)))
         t)))))
 
 (defun mevedel-collaboration--guest-send (guest object)
@@ -524,25 +524,25 @@ browser must acknowledge before another frame is sent."
                           frame-bytes)))))
           (if (or (null frame)
                   (null new-after-bytes)
-                (> (+ (or (plist-get guest :pending-bytes) 0)
-                      new-after-bytes)
-                   mevedel-collaboration--max-pending-bytes))
-            (progn
-              (mevedel-collaboration--guest-close guest 'guest-too-slow)
-              nil)
-          (if existing
-              (setf (plist-get existing :json) json
-                    (plist-get existing :bytes) frame-bytes
-                    (plist-get existing :sequence) sequence
-                    (plist-get existing :ack-token) ack-token)
-            (setf (plist-get guest :after-snapshot)
-                  (append messages
-                          (list (list :json json
-                                      :bytes frame-bytes
-                                      :sequence sequence
-                                      :ack-token ack-token
-                                      :coalesce-key coalesce-key)))))
-          (setf (plist-get guest :after-snapshot-bytes) new-after-bytes)
+                  (> (+ (or (plist-get guest :pending-bytes) 0)
+                        new-after-bytes)
+                     mevedel-collaboration--max-pending-bytes))
+              (progn
+                (mevedel-collaboration--guest-close guest 'guest-too-slow)
+                nil)
+            (if existing
+                (setf (plist-get existing :json) json
+                      (plist-get existing :bytes) frame-bytes
+                      (plist-get existing :sequence) sequence
+                      (plist-get existing :ack-token) ack-token)
+              (setf (plist-get guest :after-snapshot)
+                    (append messages
+                            (list (list :json json
+                                        :bytes frame-bytes
+                                        :sequence sequence
+                                        :ack-token ack-token
+                                        :coalesce-key coalesce-key)))))
+            (setf (plist-get guest :after-snapshot-bytes) new-after-bytes)
             t))))
      (t (mevedel-collaboration--guest-enqueue
          guest json coalesce-key sequence ack-token)))))
@@ -591,14 +591,14 @@ browser must acknowledge before another frame is sent."
              (ack-token (plist-get sequenced :ack-token)))
         (unless (mevedel-collaboration--guest-enqueue
                  guest (plist-get sequenced :json) nil sequence ack-token)
-        (setf (plist-get guest :snapshot-queue) nil))
-      (when (null (plist-get guest :snapshot-queue))
-        (mevedel-collaboration--flush-after-snapshot guest))))))
+          (setf (plist-get guest :snapshot-queue) nil))
+        (when (null (plist-get guest :snapshot-queue))
+          (mevedel-collaboration--flush-after-snapshot guest))))))
 
 (defun mevedel-collaboration--snapshot-chunks (records)
   "Return bounded JSON snapshot messages for RECORDS."
   (let ((snapshot-id (format "s-%s" (substring (secure-hash 'sha1
-                                                               (format "%s" records))
+                                                            (format "%s" records))
                                                0 16)))
         chunks
         current)
@@ -616,11 +616,11 @@ browser must acknowledge before another frame is sent."
                         ("version" . ,mevedel-collaboration--protocol-version)
                         ("snapshot" . ,snapshot-id)
                         ("records" . ,(mapcar #'mevedel-collaboration--json-record
-                                               candidate))))
+                                              candidate))))
              (bytes (string-bytes (mevedel-collaboration--json-string message))))
         (when (> (+ single-bytes
                     mevedel-collaboration--sequence-overhead-bytes)
-                   mevedel-collaboration--max-message-bytes)
+                 mevedel-collaboration--max-message-bytes)
           (user-error "A collaboration snapshot record exceeds 1 MiB"))
         (if (and current
                  (> (+ bytes mevedel-collaboration--sequence-overhead-bytes)
@@ -638,7 +638,7 @@ browser must acknowledge before another frame is sent."
                ("version" . ,mevedel-collaboration--protocol-version)
                ("snapshot" . ,snapshot-id)
                ("records" . ,(mapcar #'mevedel-collaboration--json-record
-                                      chunk))))
+                                     chunk))))
            chunks))))
 
 (defun mevedel-collaboration--send-snapshot (guest room)
@@ -781,7 +781,7 @@ prevents it from slicing an incomplete frame before the package sees it."
 (defun mevedel-collaboration--ws-filter (process string)
   "Bound and defragment raw WebSocket input before package parsing."
   (let ((pending (concat (or (process-get
-                             process 'mevedel-collaboration-pending)
+                              process 'mevedel-collaboration-pending)
                              "")
                          string))
         done)
@@ -1013,9 +1013,9 @@ prevents it from slicing an incomplete frame before the package sees it."
   "Upgrade REQUEST for ROOM, or send a bounded rejection."
   (let* ((process (mevedel-collaboration--web-server-slot request 'process))
          (upgrade (downcase (or (mevedel-collaboration--request-header
-                                request "upgrade") "")))
+                                 request "upgrade") "")))
          (connection (downcase (or (mevedel-collaboration--request-header
-                                   request "connection") "")))
+                                    request "connection") "")))
          (version (mevedel-collaboration--request-header
                    request "sec-websocket-version"))
          (origin (mevedel-collaboration--request-header request "origin"))
@@ -1077,7 +1077,7 @@ prevents it from slicing an incomplete frame before the package sees it."
                  (timer (run-at-time mevedel-collaboration--auth-timeout nil
                                      #'mevedel-collaboration--auth-timeout
                                      process)))
-                 (setq guest (plist-put guest :auth-timer timer))
+            (setq guest (plist-put guest :auth-timer timer))
             (process-put process 'mevedel-collaboration-guest guest)
             (process-put process 'mevedel-collaboration-pending "")
             (process-put process 'mevedel-collaboration-message-bytes 0)
