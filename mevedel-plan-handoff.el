@@ -390,7 +390,7 @@ needs no session."
                 existing)
             (mevedel-plan-archive-accepted
              source-artifact target-session
-             (file-name-concat "local" "plans" "accepted.md") session)))
+             (file-name-concat "local" "plans" "accepted-handoff.md") session)))
          (prepared (copy-tree record)))
     (unless existing
       (setf (mevedel-session-preset-name target-session)

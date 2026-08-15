@@ -267,7 +267,7 @@
           (dolist (needle '("Ship the feature" "Status: paused"
                             "Provider credits exhausted" "400/1000"
                             "Turns: 3" "Elapsed: 12s" "local/plans/accepted.md"))
-            (should (string-match-p (regexp-quote needle) text))))))))
+            (should (string-match-p (regexp-quote needle) text)))))))
   :doc "shows an unbounded Goal budget consistently"
   (mevedel-menu-test--with-buffers
     (setf (mevedel-session-goal session)

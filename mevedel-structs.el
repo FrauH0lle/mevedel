@@ -468,12 +468,17 @@ workspace."
   goal)
 
 (defun mevedel-session-authority-mode-for-workspace (workspace)
-  "Return the durable authority mode required by WORKSPACE."
+  "Return the durable authority mode required by WORKSPACE.
+
+Only a project workspace owns a portable, target-side store.  Every other
+category is process-local, which is also the safe default for a category
+added later: it claims no lease protocol.  A missing workspace has no
+category to derive from and returns nil, so its caller can reject the
+session instead of guessing."
   (pcase (and workspace (mevedel-workspace-type workspace))
+    ('nil nil)
     ('project 'portable)
-    ('file 'pid-lock)
-    (_ (error "Unsupported workspace category for session authority: %S"
-               (and workspace (mevedel-workspace-type workspace))))))
+    (_ 'pid-lock)))
 
 (defun mevedel-session-authority-mode-for-session (session)
   "Return and normalize SESSION's explicit durable authority mode.

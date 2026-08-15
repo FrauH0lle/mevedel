@@ -966,7 +966,7 @@
   :doc "surfaces verified plan contents instead of a poisoned fixed cache"
   (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))
          (ws (mevedel-workspace-get-or-create
-              'project (file-name-as-directory tmp)
+              'file (file-name-as-directory tmp)
               (file-name-as-directory tmp) "pr"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-plan-reference))
