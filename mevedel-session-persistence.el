@@ -7742,17 +7742,37 @@ its previously parsed summary."
                    mevedel-session-persistence--summary-cache))
         summary))))
 
-(defun mevedel-session-persistence-list-sessions (workspace)
+(defvar mevedel-session-persistence--list-sessions-cache
+  (make-hash-table :test #'equal)
+  "Last live session enumeration per workspace root, as (t . SESSIONS).
+
+Enumerating a workspace costs several target round trips per session,
+so decorative consumers reuse the newest live listing instead of
+paying that on every redraw.  Every live enumeration refreshes it.")
+
+(defun mevedel-session-persistence-list-sessions (workspace &optional cached)
   "Return a list of `(:save-path :summary)' plists for WORKSPACE's sessions.
 
 Sorted by `:updated-at' descending.  Sessions whose sidecar can't be
 parsed are silently dropped.  Portable sessions are listed only when their
-lease names a valid immutable publication; fixed portable sidecars are ignored."
-  (let* ((sessions-dir (mevedel-session-persistence--sessions-dir workspace))
-         (authority-mode
-          (mevedel-session-persistence--workspace-authority-mode workspace))
-         (portable-p (eq authority-mode 'portable))
-         (results nil))
+lease names a valid immutable publication; fixed portable sidecars are ignored.
+
+When CACHED is non-nil, reuse this process's last live enumeration for
+WORKSPACE when one exists.  Only decorations tolerant of a listing as
+old as the last picker, resume, or fork should pass it; anything that
+decides authority or names sessions to the user enumerates live."
+  (let ((root (mevedel-workspace-root workspace)))
+    (or (and cached
+             (cdr (gethash
+                   root
+                   mevedel-session-persistence--list-sessions-cache)))
+        (let* ((sessions-dir
+                (mevedel-session-persistence--sessions-dir workspace))
+               (authority-mode
+                (mevedel-session-persistence--workspace-authority-mode
+                 workspace))
+               (portable-p (eq authority-mode 'portable))
+               (results nil))
     (when (file-directory-p sessions-dir)
       (dolist (entry
                (directory-files
@@ -7790,11 +7810,17 @@ lease names a valid immutable publication; fixed portable sidecars are ignored."
                       (setq item (plist-put item :publication publication)))
                     (push item results))))
             (error nil)))))
-    (sort results
-          (lambda (a b)
-            (string-greaterp
-             (or (plist-get (plist-get a :summary) :updated-at) "")
-             (or (plist-get (plist-get b :summary) :updated-at) ""))))))
+          (setq results
+                (sort results
+                      (lambda (a b)
+                        (string-greaterp
+                         (or (plist-get (plist-get a :summary) :updated-at)
+                             "")
+                         (or (plist-get (plist-get b :summary) :updated-at)
+                             "")))))
+          (puthash root (cons t results)
+                   mevedel-session-persistence--list-sessions-cache)
+          results))))
 
 (defun mevedel-session-persistence-conversation-variants
     (session fork-point-id &optional sessions)

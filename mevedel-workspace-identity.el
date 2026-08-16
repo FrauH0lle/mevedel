@@ -18,19 +18,32 @@
   (file-name-concat (file-name-as-directory (expand-file-name root))
                     ".mevedel" "workspace-id"))
 
+(defvar mevedel-workspace-identity--cache (make-hash-table :test #'equal)
+  "Durable identities keyed by identity file path.
+
+An identity never changes once created -- the first atomic creator
+wins and nothing rewrites it -- so one successful read is
+authoritative for the rest of the process.  On a remote workspace the
+uncached read is a full TRAMP round trip on every save.")
+
 (defun mevedel-workspace-identity-read (root)
   "Return ROOT's durable workspace identity, or nil when none exists.
 
-Signal an error when the identity file exists but is malformed."
+Signal an error when the identity file exists but is malformed.  A
+successful read is cached for the process; an absent identity is not,
+so a later creator is still observed."
   (let ((path (mevedel-workspace-identity--path root)))
-    (when (file-exists-p path)
-      (let ((contents
-             (with-temp-buffer
-               (insert-file-contents path)
-               (buffer-string))))
-        (unless (string-match-p mevedel-workspace-identity--regexp contents)
-          (error "Invalid workspace identity at %s" path))
-        (substring contents 0 -1)))))
+    (or (gethash path mevedel-workspace-identity--cache)
+        (when (file-exists-p path)
+          (let ((contents
+                 (with-temp-buffer
+                   (insert-file-contents path)
+                   (buffer-string))))
+            (unless (string-match-p mevedel-workspace-identity--regexp
+                                    contents)
+              (error "Invalid workspace identity at %s" path))
+            (puthash path (substring contents 0 -1)
+                     mevedel-workspace-identity--cache))))))
 
 (defun mevedel-workspace-identity-ensure (root)
   "Return ROOT's durable workspace identity, creating it when absent.

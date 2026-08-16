@@ -93,7 +93,7 @@
 		  "mevedel-session-persistence"
 		  (buffer source-start source-end))
 (declare-function mevedel-session-persistence-list-sessions
-                  "mevedel-session-persistence" (workspace))
+                  "mevedel-session-persistence" (workspace &optional cached))
 (declare-function mevedel-session-persistence-read-segment
                   "mevedel-session-persistence" (session number))
 (declare-function mevedel-session-persistence-restore
@@ -6377,17 +6377,17 @@ turn.  SAVED-STATES restores matching disclosure state."
                            (mevedel-session-save-path session)
                            (mevedel-session-workspace session))
                   (require 'mevedel-session-persistence)
-                  ;; Enumerating a workspace's sessions costs several target
-                  ;; round trips per session, and all of them are wasted
-                  ;; unless a fork point exists for a variant button to hang
-                  ;; on.  The spans are cached against this buffer's
-                  ;; modification tick, so asking first is free -- and asking
-                  ;; here populates that cache under the same narrowing the
-                  ;; buttons will read it through.
+                  ;; Every settled turn carries a fork point, so this runs
+                  ;; on every full re-render.  Enumerating the workspace
+                  ;; live would cost several target round trips per
+                  ;; persisted session each time; the buttons only decorate
+                  ;; settled history, so they tolerate the last live
+                  ;; listing (picker, resume, fork), and activating one
+                  ;; enumerates live anyway.
                   (when (mevedel-session-persistence--fork-point-spans
                          data-buf)
                     (mevedel-session-persistence-list-sessions
-                     (mevedel-session-workspace session)))))
+                     (mevedel-session-workspace session) 'cached))))
                last-assistant-turn-start
                last-current-assistant-turn-start
                last-turn-role)
