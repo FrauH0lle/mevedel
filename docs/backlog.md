@@ -258,3 +258,39 @@ become implemented, obsolete, or unjustified.
   once or twice per transport.
 - **Blast radius:** Noise in *Messages* during normal remote sessions;
   users may mistake a routine retry for data loss.
+
+### Keep oversized control programs off the remote-temp copy path
+
+- **Source:** `mevedel-session-control-fs-run-program` /
+  `--argument-budget` (3072 bytes)
+- **What's owed:** A request over the argument budget moves to
+  `process-file`'s stdin file, which TRAMP delivers by creating a remote
+  temporary and copying into it -- one extra transfer plus cleanup per
+  oversized program, visible as `Copying /tmp/.mevedel-control-fs-program-*`
+  during every save that ships artifact bytes.  The budget guards one
+  physical pty line (4 KiB canonical-mode truncation), not total size;
+  newline-wrapped base64 payloads would keep every physical line short
+  while staying on the command line TRAMP already sends, since quoted
+  argument fields may contain newlines and the script's NUL framing
+  ignores them.  Requires measuring the budget per line instead of per
+  field and proving the reader tolerant of wrapped payloads.
+- **Why deferred:** Surgery on the pinned-program framing that the
+  real-remote acceptance suite proves; not a punch-list-sized change.
+- **Status check:** Saves with artifact content still log 2-4 remote
+  temp copies per settled turn.
+- **Blast radius:** ~2-4 avoidable round trips in every settled-turn
+  save on remote targets.
+
+### Attribute and dedupe the doubled publication read at settle
+
+- **Source:** settled-turn save path (exact caller unattributed)
+- **What's owed:** The Messages log shows the same publication artifact
+  (`.publications/generation-*/000001.data`) inserted twice back to
+  back around a settled turn's save.  Trace which two callers read it
+  and give them one shared read or a cache.
+- **Why deferred:** Needs a live trace to attribute; two candidate
+  callers (`--persisted-first-user-message`, artifact dedup) both look
+  cached on paper.
+- **Status check:** Remote smoke test still logs the artifact insert
+  twice per settle.
+- **Blast radius:** One avoidable full-file TRAMP read per settled turn.
