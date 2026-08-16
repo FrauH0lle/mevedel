@@ -2547,7 +2547,18 @@ re-verified on every save."
   (let* ((first-preview
           (or (mevedel-session-persistence--persisted-first-user-message
                session)
-              (mevedel-session-persistence--first-user-message buffer)))
+              ;; The buffer's first message is exactly what this sidecar
+              ;; is about to persist, and the committed field never
+              ;; changes afterwards -- so it is authoritative now.
+              ;; Without this, an owner whose committed sidecar predates
+              ;; its first turn re-reads the whole artifact over TRAMP
+              ;; on every save, twice.
+              (when-let* ((preview
+                           (mevedel-session-persistence--first-user-message
+                            buffer)))
+                (setf (mevedel-session-persisted-first-user-message
+                       session)
+                      preview))))
          (latest-preview
           (or (mevedel-session-persistence--latest-user-message-from-index
                (mevedel-session-prompt-index session))

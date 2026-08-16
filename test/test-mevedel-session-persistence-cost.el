@@ -133,10 +133,25 @@
               (insert "*** Second prompt\n")
               (mevedel-telemetry-record session 'cost-probe)
               (should (mevedel-session-telemetry-pending session))
-              (let ((processes
-                     (test-mevedel-session-persistence-cost--measure
-                       (mevedel-session-persistence-save session buffer))))
-                (should (<= processes 17)))
+              (let ((raw-reads 0)
+                    (read-raw
+                     (symbol-function 'mevedel-file-history--read-file-raw))
+                    processes)
+                ;; Publication bytes ride raw TRAMP reads, not control
+                ;; programs, so the process budget alone cannot see them.
+                ;; A settled save of an owned session must not read any
+                ;; published artifact back.
+                (cl-letf (((symbol-function
+                            'mevedel-file-history--read-file-raw)
+                           (lambda (path)
+                             (cl-incf raw-reads)
+                             (funcall read-raw path))))
+                  (setq processes
+                        (test-mevedel-session-persistence-cost--measure
+                          (mevedel-session-persistence-save
+                           session buffer))))
+                (should (<= processes 17))
+                (should (= 0 raw-reads)))
               (should (mevedel-session-telemetry-pending session)))))
       (when session
         (ignore-errors
