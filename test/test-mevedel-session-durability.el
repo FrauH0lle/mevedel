@@ -3008,6 +3008,41 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t))))
 
+  :doc "quietly retains a diagnostic while the lease cannot carry it"
+  ;; A renewal the transport cannot run right now is a retry, not a
+  ;; failure: nothing reads a diagnostic live, and echoing an error per
+  ;; attempt buries real failures in expected noise.
+  (let* ((local-root (file-name-as-directory
+                      (make-temp-file "mevedel-diagnostic-quiet-" t)))
+         (session-dir (file-name-as-directory
+                       (file-name-concat local-root "session")))
+         (session (test-mevedel-session-durability--local-session local-root))
+         (mevedel-session-durability--client-id (make-string 64 ?a))
+         (captured nil))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*owner*" session))
+          (mevedel-test--with-captured-diagnostics captured
+            (cl-letf (((symbol-function
+                        'mevedel-session-durability-lease-renew)
+                       (lambda (_session) nil)))
+              (should-not
+               (mevedel-session-publication-append-diagnostic
+                session
+                (file-name-concat session-dir "telemetry-log.el")
+                "(:event probe)\n"))))
+          (should (string-empty-p captured))
+          ;; The lease itself is untouched; the next attempt may publish.
+          (should (mevedel-session-durability-lease-owned-p session)))
+      (mevedel-session-durability--cancel-renewal session)
+      (ignore-errors
+        (mevedel-session-durability-lease-release session-dir session))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
   :doc "final lease loss retains queued critical bytes as retryable batches"
   (let* ((host "diagnostic-critical-host")
          (local-root

@@ -982,22 +982,23 @@ state or publication head."
 (defun mevedel-session-publication-append-diagnostic (session path content)
   "Atomically append diagnostic CONTENT to PATH for portable project SESSION.
 
-Return nil when a critical publication is active or pending so the caller can
-retain CONTENT for a later retry.  Diagnostic failure never creates critical
-pending publication; any local staging bytes are discarded before the error is
-returned to the caller."
+Return nil when the lease cannot carry a diagnostic right now -- a critical
+publication is active or pending, renewal is momentarily unavailable, or the
+lease is waiting to be reacquired -- so the caller retains CONTENT for a
+later retry.  A diagnostic is best-effort data nothing reads live, so an
+unavailable moment is a quiet retry, not an error echoed per attempt.
+Diagnostic failure never creates critical pending publication; any local
+staging bytes are discarded before the error is returned to the caller."
   (unless (and (stringp path) (stringp content))
     (error "Diagnostic publication requires string path and content"))
   (require 'mevedel-session-recovery)
   (mevedel-session-recovery-refresh session)
   (cond
    ((or (mevedel-session-pending-publication session)
-        (mevedel-session-publication-active-p session))
+        (mevedel-session-publication-active-p session)
+        (not (mevedel-session-durability-lease-renew session))
+        (not (mevedel-session-durability-lease-owned-p session)))
     nil)
-   ((not (mevedel-session-durability-lease-renew session))
-    (error "Portable project diagnostic publication could not renew the session lease"))
-   ((not (mevedel-session-durability-lease-owned-p session))
-    (error "Portable project diagnostic publication requires the live session lease"))
    (t
     (let (batch diagnostic-error published result)
       (unwind-protect
