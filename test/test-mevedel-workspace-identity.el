@@ -39,7 +39,21 @@
     (make-directory (file-name-directory path) t)
     (write-region "not-an-identity\n" nil path nil 'silent)
     (should-error (mevedel-workspace-identity-read root)
-                  :type 'error)))
+                  :type 'error))
+
+  :doc "caches a read identity and never caches absence"
+  (let ((path (file-name-concat root ".mevedel" "workspace-id"))
+        (identity (make-string 64 ?b)))
+    ;; Absence is answered live, so a later creator is observed.
+    (should-not (mevedel-workspace-identity-read root))
+    (make-directory (file-name-directory path) t)
+    (write-region (concat identity "\n") nil path nil 'silent)
+    (should (equal identity (mevedel-workspace-identity-read root)))
+    ;; One successful read is authoritative for the process.
+    (delete-file path)
+    (should (equal identity (mevedel-workspace-identity-read root)))
+    (clrhash mevedel-workspace-identity--cache)
+    (should-not (mevedel-workspace-identity-read root))))
 
 (mevedel-deftest mevedel-workspace-identity-ensure
   (:vars* ((root (file-name-as-directory

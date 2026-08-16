@@ -11451,7 +11451,45 @@ The result is a plist whose :tempdir owns every created file."
             (test-mevedel-session-persistence--release-and-kill b1 s1)
             (test-mevedel-session-persistence--release-and-kill b2 s2)))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
+      (mevedel-workspace-clear-registry)
+      (clrhash mevedel-session-persistence--list-sessions-cache)))
+  :doc "reuses the last live enumeration only when asked"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((s1 (mevedel-session-create "one" workspace))
+               (b1 (generate-new-buffer "*test-session-one*"))
+               (s2 (mevedel-session-create "two" workspace))
+               (b2 (generate-new-buffer "*test-session-two*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer b1
+                  (org-mode)
+                  (insert "First\n")
+                  (mevedel-session-persistence-save s1 b1))
+                (should (= 1 (length
+                              (mevedel-session-persistence-list-sessions
+                               workspace))))
+                (with-current-buffer b2
+                  (org-mode)
+                  (insert "Second\n")
+                  (mevedel-session-persistence-save s2 b2))
+                ;; The cached listing is as old as the last live one.
+                (should (= 1 (length
+                              (mevedel-session-persistence-list-sessions
+                               workspace 'cached))))
+                (should (= 2 (length
+                              (mevedel-session-persistence-list-sessions
+                               workspace))))
+                ;; A live enumeration refreshes what cached readers see.
+                (should (= 2 (length
+                              (mevedel-session-persistence-list-sessions
+                               workspace 'cached)))))
+            (test-mevedel-session-persistence--release-and-kill b1 s1)
+            (test-mevedel-session-persistence--release-and-kill b2 s2)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)
+      (clrhash mevedel-session-persistence--list-sessions-cache)))
   :doc "returns nil for a workspace with no sessions"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)

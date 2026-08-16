@@ -2147,7 +2147,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
         (cl-letf
             (((symbol-function
                'mevedel-session-persistence-list-sessions)
-              (lambda (_workspace)
+              (lambda (_workspace &optional _cached)
                 (cl-incf calls)
                 entries)))
           (mevedel-view--full-rerender))
@@ -2181,7 +2181,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
         (cl-letf
             (((symbol-function
                'mevedel-session-persistence-list-sessions)
-              (lambda (_workspace)
+              (lambda (_workspace &optional _cached)
                 (cl-incf calls)
                 nil)))
           (mevedel-view--full-rerender))

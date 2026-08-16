@@ -347,6 +347,13 @@ recovery, and latest-prompt context. Switching uses ordinary session restore,
 rerenders source-backed history, and positions the target at the exact stable
 fork point. Each view retains its own composer draft and working directory.
 
+Rendering the buttons reuses the process's last live session enumeration
+rather than re-listing the workspace on every redraw — a live listing costs
+several target round trips per persisted session. Any live enumeration (the
+session picker, resume, fork creation, or activating a variant button)
+refreshes what the decoration shows, so a variant created by another client
+appears after the next such action rather than instantly.
+
 ## Ephemeral `/btw` Side Conversations
 
 `/btw [PROMPT]` opens one multi-turn side conversation owned by the current
