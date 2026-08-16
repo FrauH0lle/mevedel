@@ -580,6 +580,27 @@
         (should (string-match-p
                  "timed out" (plist-get readiness :error))))))
 
+  :doc "suspends foreign timers while probe commands wait"
+  ;; A foreign timer that fires during a probe wait starts its own
+  ;; remote operation on the shared connection and consumes the probe's
+  ;; reply; the whole probe runs with outside timers held while its own
+  ;; deadline stays armed.
+  (let ((timer (run-at-time 3600 nil #'ignore))
+        (target (mevedel-execution-target-create "/srv/project/"))
+        observed)
+    (unwind-protect
+        (cl-letf (((symbol-function 'process-file)
+                   ;; The last call is a probe command inside the
+                   ;; suspension; the first is the local hostname read
+                   ;; before it.
+                   (lambda (&rest _)
+                     (setq observed (cons t timer-list))
+                     0)))
+          (mevedel-execution-target-probe target)
+          (should (car observed))
+          (should-not (memq timer (cdr observed))))
+      (cancel-timer timer)))
+
   :doc "blocks a remote session when required Bubblewrap is unavailable"
   (let ((target (mevedel-execution-target-create
                  "/ssh:user@host:/srv/project/")))
