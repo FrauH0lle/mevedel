@@ -279,12 +279,38 @@
                                   (list (list :op 'write :path large
                                               :content bulk)
                                         (list :op 'read :path large))))))
-          ;; An oversized request moves to the file; it does not become a
-          ;; second call.
+          ;; A large payload still rides the command line: its base64 is
+          ;; newline-wrapped, so no physical line outgrows the pty budget.
           (should (= 1 (length calls)))
-          (should (stringp (nth 1 (car calls))))
+          (should-not (nth 1 (car calls)))
           (should (equal bulk
-                         (mevedel-session-control-fs-read-file large))))
+                         (mevedel-session-control-fs-read-file large)))
+          ;; A wrapped verify payload compares equal to the unwrapped
+          ;; observation, and still proves a mismatch.
+          (should (equal '(ok)
+                         (mapcar (lambda (r) (plist-get r :status))
+                                 (mevedel-session-control-fs-run-program
+                                  (list (list :op 'verify :path large
+                                              :content bulk))))))
+          (should (eq 'mismatch
+                      (plist-get
+                       (car (mevedel-session-control-fs-run-program
+                             (list (list :op 'verify :path large
+                                         :content (concat bulk "y")))))
+                       :status)))
+          ;; Only a field past the kernel's one-argument ceiling moves the
+          ;; request to the stdin file; it does not become a second call.
+          (setq calls nil)
+          (let ((huge (make-string (* 128 1024) ?z)))
+            (should (equal '(ok)
+                           (mapcar (lambda (r) (plist-get r :status))
+                                   (mevedel-session-control-fs-run-program
+                                    (list (list :op 'write :path large
+                                                :content huge))))))
+            (should (= 1 (length calls)))
+            (should (stringp (nth 1 (car calls))))
+            (should (equal huge
+                           (mevedel-session-control-fs-read-file large)))))
       (when (file-directory-p root)
         (delete-directory root t))))
 
