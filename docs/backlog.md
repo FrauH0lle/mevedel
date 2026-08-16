@@ -258,17 +258,3 @@ become implemented, obsolete, or unjustified.
   once or twice per transport.
 - **Blast radius:** Noise in *Messages* during normal remote sessions;
   users may mistake a routine retry for data loss.
-
-### Attribute and dedupe the doubled publication read at settle
-
-- **Source:** settled-turn save path (exact caller unattributed)
-- **What's owed:** The Messages log shows the same publication artifact
-  (`.publications/generation-*/000001.data`) inserted twice back to
-  back around a settled turn's save.  Trace which two callers read it
-  and give them one shared read or a cache.
-- **Why deferred:** Needs a live trace to attribute; two candidate
-  callers (`--persisted-first-user-message`, artifact dedup) both look
-  cached on paper.
-- **Status check:** Remote smoke test still logs the artifact insert
-  twice per settle.
-- **Blast radius:** One avoidable full-file TRAMP read per settled turn.
