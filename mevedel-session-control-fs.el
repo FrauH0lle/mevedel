@@ -135,7 +135,9 @@ before the operation ran."
    "      exec 8<\"$leaf\" || exit 67\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      observed=$(base64 -w0 <&8) || exit 67\n"
-   "      test \"$observed\" = \"$payload\" || exit 72\n"
+   ;; The expected payload may arrive newline-wrapped so the command
+   ;; line's physical lines stay short; the observation is unwrapped.
+   "      test \"$observed\" = \"$(printf '%s' \"$payload\" | tr -d '\\n')\" || exit 72\n"
    "      ;;\n"
    "    write)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
@@ -248,10 +250,11 @@ before the operation ran."
    "}\n"
    ;; A request arrives as arguments when it fits and on stdin when it does
    ;; not.  Arguments cost nothing, while a stdin file costs TRAMP a remote
-   ;; temporary and a copy into it on every program -- but an argument list
-   ;; has a size ceiling that a file does not, so both readers stay.  A field
-   ;; is one argument because NUL, the framing byte, is the one byte a
-   ;; filename cannot contain and so cannot be embedded in one.
+   ;; temporary and a copy into it on every program -- but a single argument
+   ;; and the exec line have kernel size ceilings a file does not, so both
+   ;; readers stay.  A field is one argument because NUL, the framing byte,
+   ;; is the one byte a filename cannot contain and so cannot be embedded in
+   ;; one; payload fields may carry newline-wrapped base64.
    "if test \"$#\" -gt 0; then\n"
    "  while test \"$#\" -ge 5; do\n"
    "    emit \"$1\" \"$2\" \"$3\" \"$4\" \"$5\"\n"
@@ -362,15 +365,19 @@ parent must not turn into a `Setting current directory' failure."
           (mevedel-session-control-fs--descriptor (plist-get op :path)))
          (parent (plist-get descriptor :parent))
          (content (plist-get op :content))
+         ;; Wrapped base64: every 76-column line ends in a newline, so a
+         ;; payload of any size never contributes an over-budget physical
+         ;; line to the command TRAMP writes.  Both target readers are
+         ;; newline-transparent -- decode ignores the wrapping and verify
+         ;; strips it before comparing.
          (payload
           (cond
            ((null content) "")
            ((multibyte-string-p content)
             (base64-encode-string
              (encode-coding-string
-              content (or (plist-get op :coding) 'utf-8-unix))
-             t))
-           (t (base64-encode-string content t)))))
+              content (or (plist-get op :coding) 'utf-8-unix))))
+           (t (base64-encode-string content)))))
     ;; The parent travels once, in its physical no-trailing-slash
     ;; spelling: the script both opens it and proves it against
     ;; `pwd -P', which prints exactly that form, root included.
@@ -389,7 +396,7 @@ parent must not turn into a `Setting current directory' failure."
    ""))
 
 (defconst mevedel-session-control-fs--argument-budget 3072
-  "Largest quoted argument run, in bytes, that may travel on the command line.
+  "Largest physical line, in bytes, that the argument list may contribute.
 
 The binding constraint is not the target's `ARG_MAX' -- that is megabytes.  It
 is one physical line of the command TRAMP writes to the connection process:
@@ -398,38 +405,72 @@ that process talks over a pty, and a pty in canonical mode truncates past
 `process-send-string' blocks inside the write, which no timer interrupts and
 no timeout unwinds, so the connection is wedged for the life of the process.
 
-Only the arguments are budgeted, because only they are one unbroken line.
-`tramp-send-string' preserves newlines, so the script -- far larger than this
-budget -- reaches the pty as a hundred short lines and never approaches the
-ceiling.  The arguments follow the script's last line, so a kilobyte of the
-4 KiB is left to it and to TRAMP's own prefix.
+Lines are what is budgeted, not fields: payload fields arrive as wrapped
+base64, so a large payload crosses the pty as many short lines the way the
+script itself does -- `tramp-send-string' preserves newlines, and a quoted
+argument keeps its embedded newlines as line breaks.  Paths and verbs never
+contain newlines, so any one physical line holds at most a handful of short
+fields or one 76-column payload slice.  The arguments follow the script's
+last line, so a kilobyte of the 4 KiB is left to it and to TRAMP's own
+prefix.
 
 The size is measured after shell quoting, which is what actually lands on the
-line: base64 grows about two percent, but a path holding spaces can nearly
-double.  `shell-quote-argument' stands in for TRAMP's variant, which differs
-only in newline handling -- and a newline can only help, because it ends the
-line being measured.")
+line: a path holding spaces can nearly double.  `shell-quote-argument' stands
+in for TRAMP's variant, which differs only in newline handling -- and a
+newline can only help, because it ends the line being measured.")
+
+(defconst mevedel-session-control-fs--argument-field-budget 98304
+  "Largest quoted field, in bytes, that may travel as one argument.
+
+One `execve' argument is capped by the kernel's `MAX_ARG_STRLEN', 128 KiB
+on Linux, and exceeding it fails the exec outright.  The margin below it
+absorbs quoting growth measured before TRAMP's own variant runs.")
+
+(defconst mevedel-session-control-fs--argument-total-budget 524288
+  "Largest quoted request, in bytes, that may travel as arguments.
+
+`ARG_MAX' is about two megabytes less the environment; staying well under
+it keeps a many-artifact program from failing the exec, and past this size
+the request file's out-of-band copy is no longer the slower path.")
 
 (defun mevedel-session-control-fs--program-arguments (fields)
   "Return FIELDS as target argument fields, or nil to use the request file.
 
 Arguments are the cheap delivery: they ride the command line TRAMP already
 sends, where a request file costs a remote temporary and a copy into it.  They
-are refused for a request over `mevedel-session-control-fs--argument-budget',
-and for a field carrying bytes the command line cannot represent -- TRAMP
+are refused when any physical line would exceed
+`mevedel-session-control-fs--argument-budget', when one field or the whole
+request would exceed the kernel's exec limits, and for a field carrying
+bytes the command line cannot represent -- TRAMP
 encodes the command line with the connection coding system, while the request
 file is written without conversion, so a name outside ASCII is only
 byte-transparent through the file."
   (let ((fields (apply #'append fields))
+        (line 0)
         (total 0))
     (catch 'oversized
       (dolist (field fields)
         (unless (string-match-p "\\`[[:ascii:]]*\\'" field)
           (throw 'oversized nil))
-        ;; One byte for the separator the command line will need anyway.
-        (setq total (+ total (string-bytes (shell-quote-argument field)) 1))
-        (when (> total mevedel-session-control-fs--argument-budget)
-          (throw 'oversized nil)))
+        (let* ((quoted (shell-quote-argument field))
+               (bytes (string-bytes quoted))
+               (segments (split-string quoted "\n")))
+          (when (> bytes
+                   mevedel-session-control-fs--argument-field-budget)
+            (throw 'oversized nil))
+          (setq total (+ total bytes 1))
+          (when (> total
+                   mevedel-session-control-fs--argument-total-budget)
+            (throw 'oversized nil))
+          ;; One byte for the separator the command line will need
+          ;; anyway; each embedded newline starts a fresh physical line.
+          (setq line (+ line 1 (string-bytes (car segments))))
+          (when (> line mevedel-session-control-fs--argument-budget)
+            (throw 'oversized nil))
+          (dolist (segment (cdr segments))
+            (setq line (string-bytes segment))
+            (when (> line mevedel-session-control-fs--argument-budget)
+              (throw 'oversized nil)))))
       fields)))
 
 (defconst mevedel-session-control-fs--diagnostic-header "diagnostic 0"
