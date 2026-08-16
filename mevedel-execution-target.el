@@ -10,6 +10,10 @@
 
 (eval-when-compile (require 'cl-lib))
 
+;; Probe commands wait on the shared connection with timers suspended,
+;; and the suspension is a macro, so this is a load-time dependency.
+(require 'mevedel-transport)
+
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-invalidate-probe-cache
                   "mevedel-sandbox" (&optional workdir))
@@ -428,10 +432,13 @@ Bash capability that probe established."
           (error "Target readiness has not established a Bash capability"))
         (mevedel-execution-target--record-incarnation
          target
-         (with-timeout (mevedel-execution-target--probe-timeout
-                        (signal 'mevedel-execution-target-error
-                                (list "Target incarnation probe timed out")))
-           (mevedel-execution-target--probe-incarnation target bash))))
+         ;; Same discipline as the readiness probe: hold foreign timers
+         ;; while this command waits, with the deadline armed inside.
+         (mevedel-transport-with-exclusive-connection
+           (with-timeout (mevedel-execution-target--probe-timeout
+                          (signal 'mevedel-execution-target-error
+                                  (list "Target incarnation probe timed out")))
+             (mevedel-execution-target--probe-incarnation target bash)))))
     (mevedel-execution-target-refresh-incarnation target))
   target)
 
@@ -620,10 +627,18 @@ reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
                      (mevedel-execution-target-support-tier target))
                  '(:status blocked :reason unsupported-target)
                (condition-case err
-                   (with-timeout
-                       (mevedel-execution-target--probe-timeout
-                        (signal 'mevedel-execution-target-error
-                                (list "Target readiness probe timed out")))
+                   ;; Every probe command waits on the shared connection;
+                   ;; a foreign timer that starts its own remote operation
+                   ;; mid-wait consumes a probe reply and both readers
+                   ;; desync -- a flycheck stat has been observed parsing
+                   ;; this probe's `env -0' dump.  One suspension covers
+                   ;; the whole probe; the deadline below is armed inside
+                   ;; it and still fires.
+                   (mevedel-transport-with-exclusive-connection
+                     (with-timeout
+                         (mevedel-execution-target--probe-timeout
+                          (signal 'mevedel-execution-target-error
+                                  (list "Target readiness probe timed out")))
                      (let* ((environment
                              (mevedel-execution-target--parse-environment
                               (mevedel-execution-target--process-output
@@ -698,7 +713,7 @@ reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
                              :capabilities capabilities
                              :missing-dependencies missing
                              :incompatible-dependencies incompatible
-                             :incarnation incarnation)))
+                             :incarnation incarnation))))
                  (error
                   (list :status 'blocked
                         :reason 'probe-failed
