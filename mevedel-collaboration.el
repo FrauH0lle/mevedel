@@ -871,10 +871,16 @@ The early return below needs the block a `cl-defun' establishes; a plain
                          :baseline-tool-count
                          (length (mevedel-collaboration--tool-records canonical))
                          :baseline-record-count (length canonical)
-                         (when-let ((detail
-                                     (mevedel-collaboration--tool-detail
-                                      (plist-get info :args))))
-                           (list :detail detail)))))
+                         (append
+                          (when-let ((detail
+                                      (mevedel-collaboration--tool-detail
+                                       (plist-get info :args))))
+                            (list :detail detail))
+                          (when-let (((equal name "ApplyPatch"))
+                                     (patch (plist-get
+                                             (plist-get info :args) :patch))
+                                     ((stringp patch)))
+                            (list :diff patch))))))
             (puthash call-key (1+ occurrence) occurrences)
             (setq room (plist-put room :pending-tools
                                   (append pending (list entry))))

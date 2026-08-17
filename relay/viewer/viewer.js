@@ -403,9 +403,16 @@
     summary.append(el('span', `chip ${record.status || ''}`,
                       record.status || ''));
     details.append(summary);
+    // A patch travels as a dedicated diff field; the result text is only
+    // the application summary.
+    if (record.diff) {
+      const body = renderDiff(record.diff);
+      body.className = 'result diff';
+      details.append(body);
+    }
     const result = record.result || '';
     if (result) {
-      if (record.name === 'ApplyPatch' || looksLikeDiff(result)) {
+      if (!record.diff && looksLikeDiff(result)) {
         const body = renderDiff(result);
         body.className = 'result diff';
         details.append(body);

@@ -253,7 +253,30 @@
       (let ((record (mevedel-collaboration--tool-record
                      (current-buffer) '(tool 1 5))))
         (should (equal "completed" (plist-get record :status)))
-        (should (equal "" (plist-get record :result)))))))
+        (should (equal "" (plist-get record :result)))))
+    ;; Leading spaces on the first result line are significant alignment
+    ;; (Read's right-aligned line numbers); only newlines are trimmed.
+    (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
+               (lambda (_buffer _start _end)
+                 '(:name "Read" :args (:file_path "/tmp/a.el")
+                   :result "\n  1\t;;; header\n  2\tbody\n"))))
+      (let ((record (mevedel-collaboration--tool-record
+                     (current-buffer) '(tool 1 5))))
+        (should (string-prefix-p "  1\t" (plist-get record :result)))
+        (should (equal "/tmp/a.el" (plist-get record :detail)))))
+    ;; ApplyPatch carries the authored patch as a dedicated diff field.
+    (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
+               (lambda (_buffer _start _end)
+                 '(:name "ApplyPatch"
+                   :args (:patch "@@ -1 +1 @@\n-old\n+new")
+                   :result "Applied patch: 1 changes"))))
+      (let ((record (mevedel-collaboration--tool-record
+                     (current-buffer) '(tool 1 5))))
+        (should (equal "@@ -1 +1 @@\n-old\n+new" (plist-get record :diff)))
+        (should (equal "@@ -1 +1 @@\n-old\n+new"
+                       (cdr (assoc "diff"
+                                   (mevedel-collaboration--json-record
+                                    record)))))))))
 
 (mevedel-deftest mevedel-collaboration--pre-tool
   (:doc "publishes one stable running tool record before settled completion")
@@ -391,13 +414,32 @@
              (first-user (nth 0 records))
              (second-user (nth 2 records)))
         ;; The attribution block sits after both prompts, so it names the
-        ;; nearest preceding user turn: the second one.
+        ;; last user turn starting before it: the second one.
         (should-not (plist-member first-user :guest))
         (should (equal "phone" (plist-get second-user :guest)))
         (should (equal "phone"
                        (cdr (assoc "guest"
                                    (mevedel-collaboration--json-record
-                                    second-user)))))))))
+                                    second-user)))))))
+    ;; Segment repair can grow a user turn's END past its own audit block
+    ;; (absorbing the trailing hidden records); attribution anchors on the
+    ;; turn's START, so the badge must stay on the second turn even then.
+    (cl-letf (((symbol-function 'mevedel-transcript-segments)
+               (lambda (_start _end)
+                 ;; The audit block written earlier sits after position 34;
+                 ;; the second user segment's end has drifted beyond it.
+                 (list (list 'user 1 13) (list 'response 14 20)
+                       (list 'user 21 4000))))
+              ((symbol-function 'mevedel-view--user-turn-text)
+               (lambda (segments _buffer)
+                 (if (= 1 (cadr (car segments))) "first prompt"
+                   "second prompt")))
+              ((symbol-function 'mevedel-view--visible-response-text)
+               (lambda (_text) "answer")))
+      (let* ((records (mevedel-collaboration--canonical-records
+                       (current-buffer))))
+        (should-not (plist-member (nth 0 records) :guest))
+        (should (equal "phone" (plist-get (nth 2 records) :guest)))))))
 
 (mevedel-deftest mevedel-collaboration--safe-accepted-prompt
   (:doc "publishes accepted prompt insertion and isolates observer failure")

@@ -198,6 +198,11 @@ When EXPANDED is non-nil, include record details."
                    "")))
              "  ◇ tool input repair audit unavailable\n"))
        (error "  ◇ tool input repair audit unavailable\n")))
+    ('guest-prompt
+     ;; Collaboration guest attribution: the name is display-only and the
+     ;; compact line is the badge, so it shows without expansion.
+     (format "  \u25c7 prompt from guest %s\n"
+             (or (plist-get record :name) "guest")))
     ('prompt-rewrite
      (concat
       "  \u25c7 hook changed prompt\n"
