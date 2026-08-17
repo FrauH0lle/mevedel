@@ -65,6 +65,11 @@
 ;; `mevedel-directive'
 (declare-function mevedel-directive-actions "mevedel-directive" (directive))
 
+;; `mevedel-directive-frame'
+(declare-function mevedel-directive-frame-display
+                  "mevedel-directive-frame"
+                  (directive view-buffer &optional focus))
+
 ;; `mevedel-goal'
 (declare-function mevedel-goal-start "mevedel-goal"
 		  (objective &optional prompt-submission))
@@ -614,7 +619,12 @@ rows remain visually distinct from the editable composer."
               (propertize " · " 'font-lock-face 'shadow)
               (propertize "Plan paused"
                           'font-lock-face 'mevedel-view-plan-mode)))
-           (propertize " · C-c C-k Back\n" 'font-lock-face 'shadow)
+           (propertize " · C-c C-k Back" 'font-lock-face 'shadow)
+           ;; The frame's own keys are only reachable while it is showing.
+           (when (bound-and-true-p mevedel-directive-frame-mode)
+             (propertize " · C-c C-f Filter · C-c C-z Close"
+                         'font-lock-face 'shadow))
+           (propertize "\n" 'font-lock-face 'shadow)
            (propertize "◆ > "
                        'font-lock-face 'mevedel-view-directive-scope)))
       (if mevedel-view--pending-input-edit
@@ -1594,7 +1604,8 @@ When FORCE is non-nil, replace the current draft unconditionally."
       (with-current-buffer view-buffer
         (mevedel-view--switch-composer-scope scope)
         (goto-char (point-max)))
-      (pop-to-buffer view-buffer)
+      (require 'mevedel-directive-frame)
+      (mevedel-directive-frame-display directive view-buffer t)
       view-buffer)))
 
 (defun mevedel-view--clear-input ()
