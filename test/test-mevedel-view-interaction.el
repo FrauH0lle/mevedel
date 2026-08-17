@@ -1371,10 +1371,76 @@ READ-ONLY sets the data buffer's read-only session mode."
              (setq-local mevedel-session--read-only-mode ,read-only))
            (with-current-buffer view
              (setq-local mevedel--data-buffer data)
+             (setq-local mevedel-view--agent-transcript-p nil)
              ,@body))
        (dolist (buffer (list data view))
          (when (buffer-live-p buffer)
            (kill-buffer buffer))))))
+
+(mevedel-deftest mevedel-view--control-transfer-body ()
+  ,test
+  (test)
+  :doc "frames the transfer line and keeps its text read-only"
+  (let* ((session (mevedel-session--create :name "control"))
+         (rendered nil))
+    (setf (mevedel-session-control-transfer session)
+          '(:state requested :request (:requester-label "Laptop")))
+    (test-mevedel-view-interaction--with-pair session nil
+      (cl-letf (((symbol-function 'mevedel-view--interaction-register)
+                 (lambda (descriptor) (setq rendered descriptor)))
+                ((symbol-function
+                  'mevedel-view--interaction-clear-for-rebuild)
+                 #'ignore)
+                ((symbol-function
+                  'mevedel-view--interaction-delete-stale-overlays)
+                 #'ignore)
+                ((symbol-function 'mevedel-view--session)
+                 (lambda () session)))
+        (mevedel-view--interaction-rebuild)))
+    (should rendered)
+    (let ((body (plist-get rendered :body)))
+      (should (string-match-p "Laptop" body))
+      ;; The keys carry the same face the permission prompts use, so a
+      ;; transfer reads as a decision rather than as transcript text.
+      (should
+       (cl-loop
+        for index from 0 below (length body)
+        thereis (let ((face (get-text-property index 'font-lock-face body)))
+                  (member 'help-key-binding
+                          (if (proper-list-p face) face (list face)))))))
+    ;; The rendered line is not editable: it shares the input zone with the
+    ;; composer, and a stray keystroke must not land in it.
+    (let ((rendered-body (mevedel-view--interaction-body rendered nil)))
+      (should (get-text-property 0 'read-only rendered-body)))))
+
+(mevedel-deftest mevedel-view--interaction-rebuild ()
+  ,test
+  (test)
+  :doc "reads read-only session mode from the data buffer, not the view"
+  ;; The flag is buffer-local to the data buffer.  Asking the view answered
+  ;; nil on every client, so a requester rendered the owner's grant prompt
+  ;; for its own request.
+  (let ((session (mevedel-session--create :name "control"))
+        (read-only-args nil))
+    (setf (mevedel-session-control-transfer session)
+          '(:state requested :request (:requester-label "Laptop")))
+    (cl-letf (((symbol-function 'mevedel-session-control-transfer-descriptor)
+               (lambda (_session read-only-p)
+                 (push read-only-p read-only-args)
+                 nil))
+              ((symbol-function 'mevedel-view--interaction-clear-for-rebuild)
+               #'ignore)
+              ((symbol-function
+                'mevedel-view--interaction-delete-stale-overlays)
+               #'ignore)
+              ((symbol-function 'mevedel-view--session)
+               (lambda () session)))
+      (test-mevedel-view-interaction--with-pair session t
+        (mevedel-view--interaction-rebuild))
+      (should (equal '(t) read-only-args))
+      (test-mevedel-view-interaction--with-pair session nil
+        (mevedel-view--interaction-rebuild))
+      (should (equal '(nil t) read-only-args)))))
 
 (mevedel-deftest mevedel-take-control ()
   ,test

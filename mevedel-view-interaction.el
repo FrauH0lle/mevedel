@@ -136,6 +136,11 @@
                   "mevedel-session-persistence"
                   (session buffer &optional settled))
 
+;; `mevedel-interaction-prompt'
+(declare-function mevedel--prompt-framed-body
+                  "mevedel-interaction-prompt" (content face))
+(declare-function mevedel--prompt-key "mevedel-interaction-prompt" (key))
+
 ;; `mevedel-view-render'
 (declare-function mevedel-view--debug-log "mevedel-view-render"
                   (event &rest data))
@@ -457,6 +462,38 @@ this view follows."
           (mevedel-view--interaction-rebuild)
           (message "mevedel: advanced to the owner's newest published state"))
       (message "mevedel: already at the owner's newest published state"))))
+
+(defun mevedel-view--control-transfer-body (descriptor)
+  "Return the rendered interaction body for control-transfer DESCRIPTOR.
+
+Control transfer is one of the few things in the view that takes the session
+away from the user, so it is framed like a permission prompt rather than
+printed as a line of transcript.  The states waiting on a person are framed
+in `warning\='; the ones merely reporting protocol progress are not, because
+a permanent read-only banner in the same colour as a live decision teaches
+the user to stop seeing both."
+  (require 'mevedel-interaction-prompt)
+  (let* ((attention (plist-get descriptor :attention))
+         (detail (plist-get descriptor :detail))
+         (keys (plist-get descriptor :keys)))
+    (mevedel--prompt-framed-body
+     (concat
+      (propertize (plist-get descriptor :title)
+                  'font-lock-face
+                  (if attention
+                      '(:inherit warning :weight bold)
+                    '(:inherit mevedel-view-header :weight bold)))
+      "\n"
+      (when detail
+        (concat (propertize detail 'font-lock-face 'shadow) "\n"))
+      (when keys
+        (concat
+         (mapconcat (lambda (entry)
+                      (concat (mevedel--prompt-key (car entry))
+                              " " (cdr entry)))
+                    keys "   ")
+         "\n")))
+     (if attention 'warning 'shadow))))
 
 (defvar-keymap mevedel-view--control-transfer-status-map
   :doc "Inert keymap for a control-transfer status line.")
@@ -1017,10 +1054,18 @@ This deletes only interaction UI overlays and never settles callbacks."
             (when-let ((descriptor
                         (mevedel-session-control-transfer-descriptor
                          session
-                         (bound-and-true-p mevedel-session--read-only-mode))))
+                         ;; Read-only mode lives on the data buffer.  Asking
+                         ;; the view for it always answered nil, so both
+                         ;; clients rendered the owner's side of a transfer.
+                         (when-let ((data
+                                     (mevedel-view--control-transfer-data-buffer)))
+                           (buffer-local-value 'mevedel-session--read-only-mode
+                                               data)))))
               (mevedel-view--interaction-register
                (append descriptor
                        (list :id 'control-transfer
+                             :body
+                             (mevedel-view--control-transfer-body descriptor)
                              :keymap
                              (pcase (plist-get descriptor :action)
                                ('grant mevedel-view--control-transfer-map)

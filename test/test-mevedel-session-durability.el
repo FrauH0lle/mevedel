@@ -230,6 +230,15 @@
                   owner)))
               (setq now 1.0)
               (let ((mevedel-session-transfer-prompt-timeout 0.01))
+                ;; The first poll is the one that could display the request,
+                ;; so the notice window starts there rather than at the
+                ;; requester's clock.
+                (should
+                 (eq 'requested
+                     (plist-get
+                      (mevedel-session-transfer-poll owner)
+                      :state)))
+                (setq now 2.0)
                 (should
                  (eq 'quiescing
                      (plist-get

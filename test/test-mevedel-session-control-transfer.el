@@ -44,46 +44,46 @@
 (mevedel-deftest mevedel-session-control-transfer-descriptor ()
   ,test
   (test)
-  :doc "publishes semantic transfer actions without view presentation state"
+  :doc "gives the owner the decision and the requester its own status"
   (let ((session (mevedel-session--create :name "transfer")))
     (setf (mevedel-session-control-transfer session)
           '(:state requested
-            :request (:requester-label "/worker")))
-    (should
-     (equal
-      '(:kind control-transfer
-        :action grant
-        :body "Control transfer requested by /worker  [g]rant  [k]eep"
-        :help-echo "Grant or keep the current lease")
-      (mevedel-session-control-transfer-descriptor session nil)))
-    ;; The requester is in the same durable state as the owner and has
-    ;; nothing to grant; showing it the owner's prompt offers a decision it
-    ;; cannot make.
-    (should
-     (eq 'requested
-         (plist-get (mevedel-session-control-transfer-descriptor session t)
-                    :action)))
+            :request (:requester-label "Laptop")))
+    (let ((owner (mevedel-session-control-transfer-descriptor session nil)))
+      (should (eq 'grant (plist-get owner :action)))
+      (should (plist-get owner :attention))
+      (should (string-match-p "Laptop" (plist-get owner :title)))
+      (should (equal '("g" "k") (mapcar #'car (plist-get owner :keys)))))
+    ;; The requester shares the durable state but can decide nothing; the
+    ;; owner's prompt on its screen offers a choice it does not have.
+    (let ((requester (mevedel-session-control-transfer-descriptor session t)))
+      (should (eq 'status (plist-get requester :action)))
+      (should-not (plist-get requester :keys))
+      (should-not (plist-get requester :attention)))
     (setf (mevedel-session-control-transfer session)
-          '(:state quiescing :request (:requester-label "/worker")))
+          '(:state quiescing :request (:requester-label "Laptop")))
     (should
      (string-match-p
-      "finishing"
+      "Publishing\\|Finishing"
       (plist-get (mevedel-session-control-transfer-descriptor session nil)
-                 :body)))
+                 :detail)))
     (should
      (string-match-p
-      "waiting for the owner"
+      "finish"
       (plist-get (mevedel-session-control-transfer-descriptor session t)
-                 :body)))
+                 :detail)))
+    (setf (mevedel-session-control-transfer session) '(:state rejected))
+    (let ((declined (mevedel-session-control-transfer-descriptor session t)))
+      (should (eq 'request (plist-get declined :action)))
+      (should (plist-get declined :attention)))
     (setf (mevedel-session-control-transfer session) '(:state released))
-    (should
-     (equal
-      '(:kind control-transfer
-        :action request
-        :body "Session is read-only  [r]equest control"
-        :help-echo "Request cooperative control")
-      (mevedel-session-control-transfer-descriptor session t)))
-    ;; A writable session with no request has nothing to say at all.
+    (let ((idle (mevedel-session-control-transfer-descriptor session t)))
+      (should (eq 'request (plist-get idle :action)))
+      ;; A permanent banner in the same colour as a live decision teaches
+      ;; the user to stop seeing both.
+      (should-not (plist-get idle :attention))
+      (should (equal '("r") (mapcar #'car (plist-get idle :keys)))))
+    ;; A writable session with no request has nothing to say.
     (should-not
      (mevedel-session-control-transfer-descriptor session nil))))
 
