@@ -7959,12 +7959,15 @@ one field with no bound on its length."
     (mevedel-session-control-transfer-root-buffer-for-id session-id)))
 
 (defun mevedel-session-persistence--entry-authority (workspace entry)
-  "Return `(:action LABEL :detail TEXT)' for WORKSPACE session ENTRY.
+  "Return `(:action LABEL :detail TEXT :held BOOL)' for WORKSPACE session ENTRY.
 
 The verb names the outcome of choosing this row, which the lease decides:
 whether anyone is writing the session right now, not whether its files
 happen to be local or reached over TRAMP.  DETAIL names the machine
-involved, which is the part a verb cannot carry.
+involved, which is the part a verb cannot carry.  HELD says whether some
+client is writing this session now, which is a narrower question than
+whether the row resumes: an expired lease offers a takeover precisely
+because nobody is writing it any more.
 
 A whole lease observation per candidate is one target round trip per row, so
 the state and the holder are read together."
@@ -7974,7 +7977,8 @@ the state and the holder are read together."
             :detail (if (buffer-local-value 'mevedel-session--read-only-mode
                                             buffer)
                         "already open here, read-only"
-                      "already open here"))))
+                      "already open here")
+            :held t)))
    ((eq (mevedel-session-persistence--workspace-authority-mode workspace)
         'portable)
     (require 'mevedel-session-durability)
@@ -7985,19 +7989,22 @@ the state and the holder are read together."
       (pcase (plist-get status :state)
         ('foreign
          (list :action "Join"
-               :detail (format "held by %s" (or host "another client"))))
+               :detail (format "held by %s" (or host "another client"))
+               :held t))
         ('expired
          (list :action "Take over"
                :detail (if host
                            (format "lease expired, was %s" host)
-                         "lease expired")))
+                         "lease expired")
+               :held nil))
         (_
          (list :action "Resume"
                :detail (and elsewhere
-                            (format "last held by %s" elsewhere)))))))
+                            (format "last held by %s" elsewhere))
+               :held nil)))))
    ((mevedel-session-persistence--active-lock-p (plist-get entry :save-path))
-    (list :action "Join" :detail "locked by another process"))
-   (t (list :action "Resume"))))
+    (list :action "Join" :detail "locked by another process" :held t))
+   (t (list :action "Resume" :detail nil :held nil))))
 
 (defun mevedel-session-persistence--entry-action (workspace entry)
   "Return the entry action label for WORKSPACE session ENTRY."
@@ -8027,10 +8034,10 @@ and follows the owner from there, and an expired lease is taken over."
                        (mevedel-session-persistence--entry-authority
                         workspace entry))
                       (action (plist-get authority :action)))
-                 ;; Whether some other writer is live is already answered by
+                 ;; Whether another writer is live is already answered by
                  ;; the row's own authority read; asking the target again per
                  ;; candidate is a second round trip for the same fact.
-                 (unless (equal action "Resume")
+                 (when (plist-get authority :held)
                    (setq held-p t))
                  (cons
                   (format "%-10s %s" action
