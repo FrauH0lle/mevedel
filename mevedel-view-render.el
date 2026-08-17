@@ -188,6 +188,8 @@
 
 
 (autoload 'mevedel--strip-hook-audit-blocks "mevedel-transcript-audit")
+(declare-function mevedel-transcript-audit-guest-prompts
+                  "mevedel-transcript-audit" ())
 (declare-function mevedel-transcript-audit-only-p
                   "mevedel-transcript-audit" (text))
 (declare-function mevedel-transcript-buffer-directive-ranges
@@ -196,6 +198,10 @@
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties
                   "mevedel-transcript-restore" (&optional only-if-missing))
+
+;; `mevedel-utilities'
+(defvar mevedel--hook-audit-close)
+(defvar mevedel--hook-audit-open)
 
 ;; `mevedel-view'
 (declare-function mevedel-view--header-string
@@ -4044,6 +4050,34 @@ dialogue, because the following Agent Task is the authoritative one."
            :initially-collapsed-p t)
      turn-source)))
 
+(defun mevedel-view--user-turn-guest-name (segments data-buf)
+  "Return the collaboration guest name owning this user turn, or nil.
+SEGMENTS are the turn's data-buffer spans.  The attribution block sits
+in the turn's trailing audit strip, or inside the turn's own span when
+segment repair absorbed it, so the lookup covers the turn extent plus
+the contiguous run of audit blocks that follows it."
+  (when (and segments (buffer-live-p data-buf))
+    (with-current-buffer data-buf
+      (require 'mevedel-transcript-audit)
+      (let* ((start (cadr (car segments)))
+             (end (apply #'max (mapcar #'caddr segments)))
+             (strip-end
+              (save-excursion
+                (goto-char end)
+                (catch 'done
+                  (while t
+                    (skip-chars-forward " \t\r\n")
+                    (if (looking-at-p (regexp-quote mevedel--hook-audit-open))
+                        (unless (search-forward mevedel--hook-audit-close
+                                                nil t)
+                          (throw 'done nil))
+                      (throw 'done nil))))
+                (point))))
+        (cl-loop for (position . name)
+                 in (mevedel-transcript-audit-guest-prompts)
+                 when (and (>= position start) (< position strip-end))
+                 return name)))))
+
 (defun mevedel-view--render-user-turn (segments data-buf &optional directive)
   "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."
   (require 'mevedel-transcript)
@@ -4086,7 +4120,10 @@ dialogue, because the following Agent Task is the authoritative one."
                            (mevedel--directive-action-label
                             (plist-get directive :action))
                            (or (plist-get directive :turn) "?"))
-                   "You\n")
+                   (if-let* ((guest (mevedel-view--user-turn-guest-name
+                                     segments data-buf)))
+                       (format "%s (guest)\n" guest)
+                     "You\n"))
                  'font-lock-face 'mevedel-view-user-header
                  'mevedel-view-type 'turn-header
                  'mevedel-view-turn-role
@@ -6601,7 +6638,7 @@ view chrome."
 
 (defun mevedel-view--insert-user-message
     (text &optional kind hook-context prompt-summary-body
-          prompt-summary-source hook-audits)
+          prompt-summary-source hook-audits guest-name)
   "Render TEXT as a user message in the history region.
 Inserts at the history boundary with read-only protection.
 KIND may be `directive' to fontify directive-specific display text.
@@ -6609,6 +6646,8 @@ HOOK-CONTEXT is model-visible hook context to summarize in the view.
 PROMPT-SUMMARY-BODY, when non-nil, is shown as a collapsed Prompt
 section backed by PROMPT-SUMMARY-SOURCE when available.  HOOK-AUDITS
 is a list of hook audit records to render under the user turn.
+GUEST-NAME, when non-nil, names the collaboration guest whose queued
+prompt this is; the turn heading carries it instead of \"You\".
 
 Sets `mevedel-view--user-pre-rendered' so the post-response render
 path knows to skip the user turn it would otherwise extract for this
@@ -6621,7 +6660,10 @@ marker at the end of the inserted block."
       (let ((inhibit-read-only t)
             (start (point))
             user-end)
-        (insert (propertize "You\n" 'font-lock-face 'mevedel-view-user-header))
+        (insert (propertize (if guest-name
+                                (format "%s (guest)\n" guest-name)
+                              "You\n")
+                            'font-lock-face 'mevedel-view-user-header))
         (insert (if (eq kind 'directive)
                     (mevedel-view--fontify-directive-display-text text)
                   text))
