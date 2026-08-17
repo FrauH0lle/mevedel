@@ -166,6 +166,36 @@
           (should-not (string-search "directive-turn-boundary" all))
           (should (equal '("user" "assistant" "user") roles)))))))
 
+(mevedel-deftest mevedel-transcript-audit-guest-prompts
+  (:doc "returns hidden model-invisible attributions in order, ignoring other record types")
+  (let ((buffer (generate-new-buffer " *guest-prompt-list*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (insert "first prompt")
+          (insert (mevedel--format-hook-audit-record
+                   (list :type 'prompt-rewrite :event "x"
+                         :original "a" :submitted "b")))
+          (insert (mevedel--format-hook-audit-record
+                   (list :type 'guest-prompt :name "phone")))
+          (insert "second prompt")
+          (insert (mevedel--format-hook-audit-record
+                   (list :type 'guest-prompt :name "laptop")))
+          (let ((prompts (mevedel-transcript-audit-guest-prompts)))
+            (should (equal '("phone" "laptop") (mapcar #'cdr prompts)))
+            (should (apply #'< (mapcar #'car prompts)))
+            ;; The block sits after its prompt and never reaches model
+            ;; context.
+            (should (> (car (car prompts)) (length "first prompt")))
+            (should (get-text-property (car (car prompts)) 'invisible))
+            (should (eq 'ignore (get-text-property (car (car prompts))
+                                                   'gptel)))
+            ;; Stripping removes every block from visible text.
+            (should (equal "first promptsecond prompt"
+                           (string-trim
+                            (mevedel--strip-hook-audit-blocks
+                             (buffer-string)))))))
+      (kill-buffer buffer))))
+
 (provide 'test-mevedel-transcript-audit)
 
 ;;; test-mevedel-transcript-audit.el ends here

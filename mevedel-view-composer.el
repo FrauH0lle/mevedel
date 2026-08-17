@@ -407,6 +407,16 @@
                   "mevedel-view-render" (&optional data-buf))
 (defvar mevedel-view--display-map)
 
+(defvar mevedel-view--pending-guest-attribution nil
+  "Guest name owning the follow-up currently being submitted, or nil.
+
+Set by the follow-up drain when it dispatches a collaboration guest's
+entry and consumed exactly once where the prompt and its hook audits are
+inserted, so attribution lands inside the user turn before the response
+marker exists regardless of asynchronous submit hooks.  Blocked or
+failed submissions clear it so the next host prompt is never
+mis-attributed.")
+
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--stop-request-progress
                   "mevedel-view-stream" ())
@@ -2898,6 +2908,16 @@ replaces INPUT only in the temporary request prompt."
                                   data-buffer audit-start (point))))
                    hook-audits-with-source)))
          (setq hook-audits-with-source (nreverse hook-audits-with-source))
+         ;; A collaboration guest's attribution must land here, with the
+         ;; hook audits, before the response marker below exists: any
+         ;; later insertion at the turn boundary is claimed by the
+         ;; response span and would reach model context.
+         (when mevedel-view--pending-guest-attribution
+           (require 'mevedel-transcript-audit)
+           (insert (mevedel--format-hook-audit-record
+                    (list :type 'guest-prompt
+                          :name mevedel-view--pending-guest-attribution)))
+           (setq mevedel-view--pending-guest-attribution nil))
          ;; Anchor the data-side marker after the forwarded prompt so
          ;; incremental renders extract only the in-flight assistant
          ;; segments from here forward.  Pushed onto the view buffer's
@@ -3021,6 +3041,10 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                                  (mevedel-view--pending-follow-ups session))
                            session)
                           (mevedel-view--interaction-rebuild))))
+                   ;; Consumed where the prompt and its hook audits are
+                   ;; inserted; cleared on every blocked or failed path.
+                   (setq mevedel-view--pending-guest-attribution
+                         (plist-get entry :guest-name))
                    (cond
                     (scope
                      (condition-case err
@@ -3029,6 +3053,7 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                            (mevedel-view--dispatch-directive-input scope input)
                            (funcall after-insert))
                        (error
+                        (setq mevedel-view--pending-guest-attribution nil)
 			(mevedel-view--interaction-rebuild)
 			(message
                          "mevedel: queued directive follow-up failed: %s"
@@ -3038,12 +3063,15 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                       submission data-buffer
                       :before-send before-send
                       :after-insert after-insert
-                      :on-block (lambda ()
-                                  (mevedel-view--interaction-rebuild))))
+                      :on-block
+                      (lambda ()
+                        (setq mevedel-view--pending-guest-attribution nil)
+                        (mevedel-view--interaction-rebuild))))
                     (t
                      (mevedel-view--submit-planned-input
                       input before-send
                       (lambda ()
+                        (setq mevedel-view--pending-guest-attribution nil)
 			(mevedel-view--interaction-rebuild))
                       nil after-insert)))))))))))))
 

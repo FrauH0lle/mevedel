@@ -15,19 +15,21 @@ flowchart TD
     C --> H[Persistent memory and session files]
 ```
 
-The read-only browser collaboration slice is composed of the
+The live browser collaboration slice is composed of the
 `mevedel-collaboration.el` room/public-command facade,
 `mevedel-collaboration-projection.el` canonical record projection, and
-`mevedel-collaboration-transport.el` loopback GNU ELPA `web-server` protocol.
-Together they serve the packaged `collaboration/` HTML, CSS, and JavaScript
-assets. The room has one authenticated guest, fragment bearer authentication,
-an exact Origin allowlist, bounded snapshot and ACK-window output queues. Each
-sequenced frame carries a fresh unpredictable acknowledgement token, and the
-transport advances only for an exact sequence/token pair. It also has
-deterministic session/buffer/Emacs teardown. It is an observer only: its
-post-stream and post-response hooks are failure-isolated so projection or
-transport errors cannot settle a model request. Tool starts publish a stable
-running record immediately and replace it with the settled canonical result;
+`mevedel-collaboration-transport.el` sealed relay client. The host dials the
+self-hosted content-blind Go relay in `relay/` (which also serves the
+`relay/viewer/` HTML, CSS, and JavaScript assets); it never listens. Frames
+are AES-256-GCM sealed under a room key carried only in the bearer links'
+URL fragments; a full link additionally carries a write token granting
+prompting and interrupting. Multiple guests may join; the transport
+reconnects with bounded backoff and guests re-hello for a fresh snapshot.
+It also has deterministic session/buffer/Emacs teardown. It is an observer
+only: its post-stream and post-response hooks are failure-isolated so
+projection or transport errors cannot settle a model request. Tool starts
+publish a stable running record immediately and replace it with the settled
+canonical result;
 the projection never infers running state from empty output. A configured
 public HTTPS origin is operator-managed; without one, generated links are
 loopback-only. See

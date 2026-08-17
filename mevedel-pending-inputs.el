@@ -162,6 +162,8 @@
       (concat
        (when-let* ((scope (plist-get entry :scope)))
          (format "[◆ %s] " (mevedel-view-composer-scope-label scope)))
+       (when-let* ((guest (plist-get entry :guest-name)))
+         (format "[⇄ %s] " guest))
        (mevedel-view--pending-input-preview
         (mevedel-view--pending-input-text entry)))))))
 

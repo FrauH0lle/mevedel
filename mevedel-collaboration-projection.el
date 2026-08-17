@@ -17,6 +17,14 @@
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
 
+;; `mevedel-transcript-audit'
+(declare-function mevedel--strip-hook-audit-blocks
+                  "mevedel-transcript-audit" (text))
+(declare-function mevedel-transcript-audit-guest-prompts
+                  "mevedel-transcript-audit" ())
+(declare-function mevedel-transcript-buffer-directive-ranges
+                  "mevedel-transcript-audit" (&optional allow-open))
+
 ;; `mevedel-view-render'
 (declare-function mevedel-view--tool-call-parse
                   "mevedel-view-render" (data-buf start end &optional raw))
@@ -25,7 +33,7 @@
 (declare-function mevedel-view--visible-response-text
                   "mevedel-view-render" (text))
 
-(defconst mevedel-collaboration--protocol-version 1)
+(defconst mevedel-collaboration--protocol-version 2)
 (defconst mevedel-collaboration--max-message-bytes (* 1 1024 1024))
 (defconst mevedel-collaboration--max-record-text-bytes
   (/ (* 1 1024 1024) 6)
@@ -59,9 +67,13 @@ measuring an encoding that would only be rejected later.")
       (concat (substring string 0 low) marker))))
 
 (defun mevedel-collaboration--clean-response (text)
-  "Return the visible, text-only form of assistant TEXT."
+  "Return the visible, text-only form of assistant TEXT.
+Audit blocks are stripped defensively: a hidden record swallowed into a
+response span must never reach the wire as visible text."
   (require 'mevedel-view-render)
-  (let ((visible (mevedel-view--visible-response-text text)))
+  (require 'mevedel-transcript-audit)
+  (let ((visible (mevedel-view--visible-response-text
+                  (mevedel--strip-hook-audit-blocks text))))
     (unless (stringp visible)
       (error "Canonical response projection failed"))
     (string-trim visible)))
@@ -131,7 +143,7 @@ key."
   "Return JSON-safe alist representation of RECORD."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
-                       :truncated))
+                       :truncated :guest :directive))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -183,56 +195,98 @@ key."
          :truncated (and truncated t)
          :identity-fixed (and tool-use-id t))))))
 
+(defun mevedel-collaboration--directive-at (ranges position)
+  "Return the directive id owning POSITION per directive RANGES, or nil."
+  (cl-loop for range in ranges
+           when (and (<= (plist-get range :start) position)
+                     (< position (plist-get range :end)))
+           return (plist-get range :directive-id)))
+
+(defun mevedel-collaboration--directive-ranges ()
+  "Return the current buffer's directive turn ranges, or nil.
+A malformed audit grammar degrades to untagged records instead of
+failing the whole projection."
+  (require 'mevedel-transcript-audit)
+  (ignore-errors (mevedel-transcript-buffer-directive-ranges t)))
+
+(defun mevedel-collaboration--attribute-guest-prompts (user-ends)
+  "Attach guest names to user records per attribution positions.
+USER-ENDS is an ordered list of (SEGMENT-END . RECORD).  Each guest
+attribution record names the nearest user turn ending at or before it."
+  (dolist (attribution (mevedel-transcript-audit-guest-prompts))
+    (let (owner)
+      (dolist (entry user-ends)
+        (when (<= (car entry) (car attribution))
+          (setq owner (cdr entry))))
+      (when owner
+        (plist-put owner :guest (cdr attribution))))))
+
 (defun mevedel-collaboration--canonical-records (data-buffer)
-  "Return allowlisted records reconstructed from DATA-BUFFER."
+  "Return allowlisted records reconstructed from DATA-BUFFER.
+Records inside a directive turn carry that directive's id so a viewer
+can filter the transcript to one directive client-side; user records
+attributed to a collaboration guest carry that guest's name."
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (require 'mevedel-transcript)
-      (let (records (occurrences (make-hash-table :test #'equal)))
+      (require 'mevedel-transcript-audit)
+      (let ((ranges (mevedel-collaboration--directive-ranges))
+            records user-ends (occurrences (make-hash-table :test #'equal)))
         (dolist (segment (mevedel-transcript-segments
                           (point-min) (point-max)))
-          (cond
-           ((eq (car segment) 'user)
-            (let ((text (mevedel-collaboration--clean-user
-                         segment data-buffer)))
-              (unless (string-empty-p text)
-                (let* ((key (list "user" text))
-                       (occurrence (gethash key occurrences 0)))
-                  (puthash key (1+ occurrence) occurrences)
-                  (push (mevedel-collaboration--record
-                         (mevedel-collaboration--stable-record-id
-                          "user" text occurrence) "user"
-                         :revision 0
-                         :text (mevedel-collaboration--truncate-bytes
-                                text
-                                mevedel-collaboration--max-record-text-bytes))
-                        records)))))
-           ((eq (car segment) 'response)
-            (let ((text (mevedel-collaboration--clean-response
-                         (buffer-substring-no-properties
-                          (cadr segment) (caddr segment)))))
-              (unless (string-empty-p text)
-                (let* ((key (list "assistant" text))
-                       (occurrence (gethash key occurrences 0)))
-                  (puthash key (1+ occurrence) occurrences)
-                  (push (mevedel-collaboration--record
-                         (mevedel-collaboration--stable-record-id
-                          "assistant" text occurrence) "assistant"
-                         :revision 0
-                         :text (mevedel-collaboration--truncate-bytes
-                                text
-                                mevedel-collaboration--max-record-text-bytes))
-                        records)))))
-           ((eq (car segment) 'tool)
-            (let* ((start (cadr segment))
-                   (end (caddr segment))
-                   (raw (buffer-substring-no-properties start end))
-                   (key (list "tool" raw))
-                   (occurrence (gethash key occurrences 0)))
-              (puthash key (1+ occurrence) occurrences)
-              (push (mevedel-collaboration--tool-record
-                     data-buffer segment occurrence)
-                    records)))))
+          (let ((directive (mevedel-collaboration--directive-at
+                            ranges (cadr segment))))
+            (cond
+             ((eq (car segment) 'user)
+              (let ((text (mevedel-collaboration--clean-user
+                           segment data-buffer)))
+                (unless (string-empty-p text)
+                  (let* ((key (list "user" text))
+                         (occurrence (gethash key occurrences 0)))
+                    (puthash key (1+ occurrence) occurrences)
+                    (push (apply
+                           #'mevedel-collaboration--record
+                           (mevedel-collaboration--stable-record-id
+                            "user" text occurrence) "user"
+                           :revision 0
+                           :text (mevedel-collaboration--truncate-bytes
+                                  text
+                                  mevedel-collaboration--max-record-text-bytes)
+                           (when directive (list :directive directive)))
+                          records)
+                    (push (cons (caddr segment) (car records))
+                          user-ends)))))
+             ((eq (car segment) 'response)
+              (let ((text (mevedel-collaboration--clean-response
+                           (buffer-substring-no-properties
+                            (cadr segment) (caddr segment)))))
+                (unless (string-empty-p text)
+                  (let* ((key (list "assistant" text))
+                         (occurrence (gethash key occurrences 0)))
+                    (puthash key (1+ occurrence) occurrences)
+                    (push (apply
+                           #'mevedel-collaboration--record
+                           (mevedel-collaboration--stable-record-id
+                            "assistant" text occurrence) "assistant"
+                           :revision 0
+                           :text (mevedel-collaboration--truncate-bytes
+                                  text
+                                  mevedel-collaboration--max-record-text-bytes)
+                           (when directive (list :directive directive)))
+                          records)))))
+             ((eq (car segment) 'tool)
+              (let* ((start (cadr segment))
+                     (end (caddr segment))
+                     (raw (buffer-substring-no-properties start end))
+                     (key (list "tool" raw))
+                     (occurrence (gethash key occurrences 0)))
+                (puthash key (1+ occurrence) occurrences)
+                (let ((record (mevedel-collaboration--tool-record
+                               data-buffer segment occurrence)))
+                  (when directive
+                    (setq record (plist-put record :directive directive)))
+                  (push record records)))))))
+        (mevedel-collaboration--attribute-guest-prompts (nreverse user-ends))
         (nreverse records)))))
 
 (defun mevedel-collaboration--tool-records (records)
@@ -297,6 +351,7 @@ completion instead of seeing a duplicate tool card."
                      (plist-get room :data-buffer)))
          (pending (plist-get room :pending-tools))
          (canonical-tools (mevedel-collaboration--tool-records canonical))
+         (claimed nil)
          (remaining nil))
     (dolist (entry pending)
       (let* ((status (plist-get entry :status))
@@ -304,19 +359,28 @@ completion instead of seeing a duplicate tool card."
                             (max 0 (or (plist-get entry :baseline-tool-count)
                                        0))))
              (candidates (nthcdr baseline canonical-tools))
-             candidate)
-        (unless (equal status "running")
-          (dolist (record candidates)
-            (when (and (null candidate)
-                       (equal (plist-get record :name)
-                              (plist-get entry :name))
-                       (equal (plist-get record :status) status)
-                       (equal (plist-get record :result)
-                              (plist-get entry :result)))
-              (setq candidate record))))
+             exact candidate)
+        ;; Prefer the exact settled twin, but fall back to the first
+        ;; unclaimed same-name record at or after this entry's baseline:
+        ;; the canonical transcript is authoritative once a record lands
+        ;; there, and an unmatched pending would otherwise duplicate it
+        ;; forever -- as a stuck "running" card when the settlement info
+        ;; missed the pending entry, or as a completed twin when the
+        ;; transcript-formatted result text diverges from the raw result.
+        (dolist (record candidates)
+          (unless (memq record claimed)
+            (when (equal (plist-get record :name) (plist-get entry :name))
+              (unless candidate (setq candidate record))
+              (when (and (null exact)
+                         (equal (plist-get record :status) status)
+                         (equal (plist-get record :result)
+                                (plist-get entry :result)))
+                (setq exact record)))))
+        (setq candidate (or exact candidate))
         (if candidate
             (let ((index 0)
                   found)
+              (push candidate claimed)
               (dolist (record canonical)
                 (when (and (null found) (eq record candidate))
                   (setq found index))

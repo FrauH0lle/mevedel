@@ -519,38 +519,49 @@ main cockpit exposes the same surface as `Executions`, and `/ps` opens it
 directly. Execution start and settlement reconcile this fragment through the
 normal managed-zone path, preserving composer text, point, and windows.
 
-## Read-only browser collaboration
+## Live browser collaboration
 
-`/collab view` starts or redisplays the one process-wide browser room for the
-current session and copies its bearer link to the kill ring. `/collab status`
-reports the room and guest state without printing the credential, and
-`/collab stop` ends the room. A second session cannot replace an active room.
-Killing the data buffer, ending its session, or exiting Emacs also tears down
-the listener and guest.
+`/collab` starts the one process-wide room for the current session, dialing
+the relay at `mevedel-collaboration-relay-url` as a WebSocket client, and
+reports two bearer links (the full-control link is copied to the kill ring).
+`/collab status` reports the room, relay connectivity, and guest names
+without printing any secret, and `/collab stop` ends the room. A second
+session cannot replace an active room. Killing the data buffer, ending its
+session, exiting Emacs, or the `mevedel-collaboration-share-ttl` timer also
+tears the room down; the room id and both links die with it.
 
-The browser is an observer of the canonical data buffer. It receives visible
-user and assistant text plus tool records whose start and settlement state are
-explicitly published, never hidden audit or render data, permission controls,
-composer input, or mutation commands. A tool record keeps one stable identity
-from running through its settled canonical result. Snapshot and incremental
-updates are ordered and bounded by browser acknowledgements carrying an
-unpredictable per-frame token; a slow, non-reading, or forged-ack guest is
-disconnected without blocking the host.
+The relay (the Go binary in `relay/`, which also serves the static viewer)
+is content-blind: every frame is sealed with AES-256-GCM under a room key
+that travels only in the links' URL fragments. A view link carries the bare
+key and grants live read access. A full link appends a 16-byte write token;
+its holder can additionally queue prompts and interrupt the running request.
+Authority follows possession of the link.
 
-Before a connection upgrades it is bounded: 64 KiB of headers, a rearmed
-two-second idle deadline, a fixed ten-second total deadline, and at most eight
-incomplete connections per room. Those bounds are released only when the
-socket actually upgrades, not when its headers end, because an ordinary HTTP
-request can keep the connection open past its header terminator. Room stop
-closes every tracked incomplete connection, and an upgraded socket's request
-record is dropped when that socket dies.
+The browser is an observer of the canonical data buffer plus, for full
+links, a remote input source. It receives visible user and assistant text
+and tool records whose start and settlement state are explicitly published,
+never hidden audit or render data or mutation commands. A tool record keeps
+one stable identity from running through its settled canonical result. A
+guest prompt enters the ordinary pending-input queue as a queued follow-up;
+a hidden `guest-prompt` transcript audit record attributes the inserted
+prompt durably, renders as a badge, and never enters model-visible context.
+Full-link guests are also presented pending interactions as `ui-request`
+frames — generic requests (approve/deny/feedback), permission prompts
+(one-shot allow-once/deny-once/feedback; session, workspace, and always
+authority is never mintable remotely), and plan approval (accept with the
+host-configured axes; Worktree acceptance and feedback drafts stay in
+Emacs) — and the first answer, from Emacs or any guest, settles everywhere.
+`mevedel-collaboration-remote-interactions` gates that surface. Lease
+transfer, save, rewind, fork, publication, and execution-target changes are
+impossible from the browser regardless of link strength.
 
-Starting a room confirms that visible text, paths, and tool results may contain
-credentials or secrets. Without `mevedel-collaboration-public-base-url`, the
-generated HTTP/WebSocket link is loopback-only. A configured value must be an
-exact credential-free HTTPS origin for an operator-managed tunnel; mevedel does
-not start that tunnel, and its local hop remains plaintext to the tunnel
-operator. Anyone holding the URL fragment bearer credential can read the room.
+The host reconnects to the relay with bounded backoff after a network blip;
+the relay garbage-collects the room with the host connection, so guests
+treat `room-closed` as retryable, rejoin the same room id, and re-hello for
+a fresh welcome and snapshot within a bounded give-up window.
+
+Starting a room confirms that visible text, paths, and tool results may
+contain credentials or secrets and that the links are bearer credentials.
 
 ## Managed-zone chrome
 

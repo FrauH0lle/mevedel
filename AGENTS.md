@@ -171,7 +171,7 @@ Chat / view
   mevedel-view-history.el     view input history ring and persistence
   mevedel-collaboration.el    live browser room and lifecycle facade
   mevedel-collaboration-projection.el canonical browser transcript projection
-  mevedel-collaboration-transport.el loopback HTTP/WebSocket transport
+  mevedel-collaboration-transport.el sealed relay WebSocket client
   mevedel-view-markdown.el    Markdown tables, links, images, paths, source panels
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
   mevedel-permissions-list.el remembered authority cockpit and per-row revoke
@@ -227,7 +227,7 @@ Support
 
 ## External dependencies
 
-- **gptel**, **gptel-agent**, **web-server 0.1.2**, **Emacs >=30.2**, **ediff**, **org-mode**
+- **gptel**, **gptel-agent**, **websocket**, **Emacs >=30.2**, **ediff**, **org-mode**
 
 Eask dependency installs can get stale. 
 Run `npx @emacs-eask/cli upgrade PACKAGE` to update. For example:

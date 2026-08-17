@@ -179,3 +179,115 @@ summary:focus-visible, button:focus-visible { outline: 2px solid var(--accent); 
   font-size: .8rem;
   box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
 }
+
+.composer {
+  max-width: 52rem;
+  margin: 0 auto 1rem;
+  padding: 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+
+.composer-input {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  padding: .55rem .7rem;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: .9rem;
+}
+
+.composer-controls {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+}
+
+.composer-name {
+  flex: 1;
+  min-width: 6rem;
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  padding: .45rem .6rem;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: .85rem;
+}
+
+.composer-button {
+  border: 0;
+  border-radius: 999px;
+  padding: .5rem .95rem;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: .85rem;
+  font-weight: 650;
+}
+
+.composer-button.stop { background: var(--failed); }
+
+.guest-badge {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.topbar-side {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+}
+
+.filter {
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  padding: .3rem .5rem;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: .8rem;
+  max-width: 14rem;
+}
+
+.requests {
+  max-width: 52rem;
+  margin: 0 auto 1rem;
+  padding: 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+}
+
+.request-card {
+  border: 1px solid var(--accent);
+  border-radius: .6rem;
+  background: var(--surface);
+  padding: .75rem;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+
+.request-body {
+  margin: 0;
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: .85rem;
+}
+
+.request-controls {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.request-feedback { flex: 1; }

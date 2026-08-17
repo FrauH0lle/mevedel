@@ -14,6 +14,8 @@
 (defvar gptel-reasoning-effort)
 
 ;; `mevedel-interaction-prompt'
+(declare-function mevedel--prompt-announce "mevedel-interaction-prompt"
+                  (overlay))
 (declare-function mevedel--prompt--settle "mevedel-interaction-prompt"
 		  (overlay outcome))
 (declare-function mevedel--prompt-framed-body
@@ -708,7 +710,21 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
             (overlay-put overlay 'mevedel-plan t)
             (overlay-put overlay 'mevedel-user-request t)
             (overlay-put overlay 'mevedel--callback #'deliver)
-            (overlay-put overlay 'keymap keymap)))))))
+            (overlay-put overlay 'keymap keymap)
+            ;; Remote acceptance uses the host-configured axes verbatim;
+            ;; axis editing, feedback drafts, and Worktree acceptance
+            ;; (which prompts for a branch) stay in Emacs.
+            (overlay-put overlay 'mevedel--remote-body
+                         (substring-no-properties body))
+            (overlay-put overlay 'mevedel--remote-options
+                         (list (cons (lambda ()
+                                       (if (eq (plist-get selection :location)
+                                               'worktree)
+                                           (message
+                                            "mevedel: accept the Worktree plan from Emacs")
+                                         (accept)))
+                                     "Accept plan")))
+            (mevedel--prompt-announce overlay)))))))
 
 (defun mevedel-plan-mode--post-response (start end)
   "Present a complete root-assistant proposal from START..END once."

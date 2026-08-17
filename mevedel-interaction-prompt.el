@@ -33,6 +33,23 @@
 Each carries a `mevedel--callback' overlay property -- a one-arg
 thunk receiving `approve' / `deny' / (feedback . TEXT) / `aborted'.")
 
+(defvar mevedel-interaction-prompt-created-hook nil
+  "Run with a prompt OVERLAY after its interaction is registered.
+
+An overlay carrying `mevedel--remote-options' -- an ordered list of
+\(OUTCOME . LABEL) where OUTCOME is a settle value or a zero-arg
+function -- plus `mevedel--remote-body' plain text may be presented on
+another surface, such as a collaboration guest.  `mevedel--remote-feedback'
+non-nil additionally allows free-text feedback, settled as
+\(feedback . TEXT).")
+
+(defvar mevedel-interaction-prompt-settled-hook nil
+  "Run with a prompt OVERLAY after it settled through any path.")
+
+(defun mevedel--prompt-announce (overlay)
+  "Run the creation hook for prompt OVERLAY."
+  (run-hook-with-args 'mevedel-interaction-prompt-created-hook overlay))
+
 (defvar-local mevedel--prompt-canceller-registered-for nil
   "The `mevedel-request' structs we registered dismiss cancellers onto.
 Only the first overlay per request pushes a canceller onto that
@@ -144,6 +161,7 @@ the stored callback."
             (when (and (not interaction-id)
                        start end (>= end start) (not (eq start end)))
               (ignore-errors (delete-region start end))))))
+      (run-hook-with-args 'mevedel-interaction-prompt-settled-hook overlay)
       (when cb
         (funcall cb outcome)))))
 
@@ -283,8 +301,15 @@ optional hover text."
                    :activate callback)))
       (overlay-put overlay 'mevedel-user-request t)
       (overlay-put overlay 'mevedel--callback callback)
+      (overlay-put overlay 'mevedel--remote-body
+                   (substring-no-properties
+                    (format "%s\n\n%s\n\n%s" title content question)))
+      (overlay-put overlay 'mevedel--remote-options
+                   '((approve . "Approve") (deny . "Deny")))
+      (overlay-put overlay 'mevedel--remote-feedback t)
       (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
-      (mevedel--prompt--register-canceller source-buffer overlay))
+      (mevedel--prompt--register-canceller source-buffer overlay)
+      (mevedel--prompt-announce overlay))
     overlay))
 
 (provide 'mevedel-interaction-prompt)

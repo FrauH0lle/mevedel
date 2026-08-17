@@ -738,11 +738,10 @@ Routes through the lifecycle-aware permission transition path."
   "Run the `/collab' command described by ARGS."
   (require 'mevedel-collaboration)
   (pcase (string-trim (or args ""))
-    ("view" (mevedel-collaboration-view) nil)
+    ((or "" "view") (mevedel-collaboration-view) nil)
     ("status" (mevedel-collaboration-status) nil)
     ("stop" (mevedel-collaboration-stop) nil)
-    ("" (message "Usage: /collab [view|status|stop]") nil)
-    (_ (message "Usage: /collab [view|status|stop]") nil)))
+    (_ (message "Usage: /collab [status|stop]") nil)))
 
 (defvar mevedel-slash-commands
   '(("btw"     . mevedel-cmd--btw)

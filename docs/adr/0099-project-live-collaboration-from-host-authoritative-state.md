@@ -1,21 +1,21 @@
 # Project live collaboration from host-authoritative state
 
-Status: accepted
+Status: accepted (amended 2026-08-17)
 
 Live collaboration keeps the original Emacs process authoritative and exposes
 only an allowlisted semantic projection of its canonical session state. A
 browser viewer is an independent presentation adapter: it never receives an
 Emacs server capability, session lease, execution target, filesystem access,
-or tool authority, and its scrolling and disclosure state do not affect the
-host view. Structurally excluded records remain host-only, while included
-visible prompts, responses, paths, source, and tool results are shared verbatim
-and may contain secrets; the projection is not a redaction boundary. This
-rejects terminal or frame mirroring because read-only transport prevents useful
-navigation while writable transport grants Emacs-level authority, and it
+or tool execution authority, and its scrolling and disclosure state do not
+affect the host view. Structurally excluded records remain host-only, while
+included visible prompts, responses, paths, source, and tool results are
+shared verbatim and may contain secrets; the projection is not a redaction
+boundary. This rejects terminal or frame mirroring because a structured
+projection shares exactly what it describes instead of Emacs input, and it
 rejects deriving collaboration from durable publications because those serve
-cold resume rather than a live running host. Reachability and any future relay
-remain transport layers around the same projection and do not acquire host
-authority.
+cold resume rather than a live running host. Reachability and any future
+relay remain transport layers around the same projection and do not acquire
+host authority.
 
 The repository-owned spike covers the loopback listener, packaged viewer,
 WebSocket authentication and lifecycle, exact origin policy, bounded output,
@@ -45,3 +45,45 @@ The product client retains no token or log after the shell trap removes its
 temporary directory. The external HTTPS tunnel and real-browser item remains
 unrun for the availability reason above; the loopback result must not be read
 as evidence for public reachability.
+
+## Amendment: relay transport and write-token interaction input (2026-08-17)
+
+Two decisions moved when the relay transport replaced the loopback listener.
+
+**The host is a dialing client, not a listener.** The loopback HTTP/WebSocket
+listener is replaced by a small self-hosted content-blind relay (`relay/` in
+this repository); Emacs dials it for local and remote sharing alike, and the
+relay serves the static viewer. What moved the decision: the first real usage
+is multi-device (a phone or laptop reaching a session hosted elsewhere),
+which a loopback listener cannot serve without an externally operated tunnel
+this ADR already declined to own; and the listener's defense obligations
+(origin policy, pre-upgrade caps, slowloris deadlines, ACK-window pump,
+single-viewer gate) plus the `web-server` dependency -- whose MELPA recipe
+collides with `simple-httpd` under straight.el -- existed only to make Emacs
+a safe server. Dialing out deletes the obligation rather than servicing it.
+Frames are sealed end to end (AES-256-GCM, key only in the URL fragment), so
+the relay carries strictly less trust than the tunnel the original decision
+contemplated: it routes opaque envelopes by a plaintext peer-id prefix and
+holds no state beyond live connections.
+
+**Write-token bearers may submit input.** A full share link carries a write
+token; its bearer may submit prompts into the ordinary pending-input queue
+(badged with the guest name, which never enters model context) and interrupt
+the running request. What moved the decision: the original "writable
+transport grants Emacs-level authority" dichotomy was about terminal
+mirroring, and the projection architecture dissolved it -- a structured
+guest frame grants exactly the action it describes, not Emacs input. The
+host-user-on-their-own-phone case makes a session that cannot be steered
+until the user returns to Emacs strictly worse than one they can prompt and
+stop remotely, and the authority boundary is explicit: possession of the
+full link is the credential, bounded by per-share random rooms and a
+host-enforced TTL. Execution still happens only on the host, view links
+carry no input authority, and lease transfer, save, rewind, fork,
+publication, and execution-target selection remain impossible from the
+browser regardless of link strength.
+
+The spike evidence above described the loopback listener and remains
+historically accurate for that transport; it does not describe the relay
+implementation. The relay contract is covered by `go test` in `relay/` and
+by the elisp stub-relay suite in
+`test/test-mevedel-collaboration-transport.el`.
