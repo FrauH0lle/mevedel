@@ -4412,17 +4412,20 @@ and the data buffer itself is marked `buffer-read-only'.")
 
 REASON replaces the default explanation.  Handing control away deliberately
 is not the same event as finding someone else already holding the lock, and
-saying the wrong one is how a user learns to ignore the warning.
+saying the wrong one is how a user learns to ignore the notice.
+
+The notice is a message, not a warning: the buffer states its own authority
+in the interaction zone and the cockpit header for as long as it holds, so a
+popped-up window would repeat durably visible state and steal the frame at
+the moment the user is watching the handoff.  A lease that fails or is lost
+is a different matter and still warns.
 See `mevedel-session--read-only-mode' for semantics."
   (with-current-buffer buf
     (setq buffer-read-only t)
     (setq-local mevedel-session--read-only-mode t)
-    (display-warning
-     'mevedel
-     (concat (or reason
-                 "Session opened read-only: another host holds the lock")
-             ". Sends are disabled and nothing will be persisted here.")
-     :warning)))
+    (message "mevedel: %s"
+             (or reason
+                 "session opened read-only; another client holds the lease"))))
 
 (defun mevedel-session-persistence--synthesize-session (session-dir workspace)
   "Build a minimal `mevedel-session' when the sidecar is absent.

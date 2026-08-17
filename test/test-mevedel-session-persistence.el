@@ -4722,8 +4722,11 @@ rotation never saves through a rebound temporary visited filename or prompts"
                        (lambda (&rest _) (setq probed t)))
                       ((symbol-function 'mevedel--run-session-start-hooks)
                        (lambda (&rest _) (setq started t))))
-              (setq restored
-                    (mevedel-session-persistence-restore session-dir)))
+              ;; Read-only restore announces itself; this case asserts the
+              ;; durable state that notice echoes.
+              (mevedel-test--with-captured-messages nil
+                (setq restored
+                      (mevedel-session-persistence-restore session-dir))))
             (with-current-buffer restored
               (should mevedel-session--read-only-mode)
               (should (= 1 (mevedel-session-current-segment
@@ -4826,9 +4829,12 @@ rotation never saves through a rebound temporary visited filename or prompts"
                                'mevedel-session-publication-publish)
                               (lambda (&rest _)
                                 (ert-fail "Foreign restore published"))))
-                          (setq restored
-                                (mevedel-session-persistence-restore
-                                 session-dir nil nil workspace)))
+                          ;; Read-only restore announces itself; this case asserts the
+                          ;; durable state that notice echoes.
+                          (mevedel-test--with-captured-messages nil
+                            (setq restored
+                                  (mevedel-session-persistence-restore
+                                   session-dir nil nil workspace))))
                         (with-current-buffer restored
                           (should mevedel-session--read-only-mode)
                           (should
@@ -4911,9 +4917,12 @@ rotation never saves through a rebound temporary visited filename or prompts"
                              'mevedel-session-persistence--maybe-prune-orphan)
                             (lambda (&rest _)
                               (ert-fail "Foreign restore pruned"))))
-                        (setq restored
-                              (mevedel-session-persistence-restore
-                               session-dir nil nil workspace)))
+                        ;; Read-only restore announces itself; this case asserts the
+                        ;; durable state that notice echoes.
+                        (mevedel-test--with-captured-messages nil
+                          (setq restored
+                                (mevedel-session-persistence-restore
+                                 session-dir nil nil workspace))))
                       (with-current-buffer restored
                         (should mevedel-session--read-only-mode)
                         (should (string-match-p
@@ -5388,8 +5397,11 @@ rotation never saves through a rebound temporary visited filename or prompts"
                       ((symbol-function
                         'mevedel-session-persistence-lock-acquire)
                        (lambda (&rest _) nil)))
-              (setq restored
-                    (mevedel-session-persistence-restore session-dir)))
+              ;; Read-only restore announces itself; this case asserts the
+              ;; durable state that notice echoes.
+              (mevedel-test--with-captured-messages nil
+                (setq restored
+                      (mevedel-session-persistence-restore session-dir))))
             (with-current-buffer restored
               (should mevedel-session--read-only-mode)
               (should (equal replacement-dir default-directory))
@@ -6380,8 +6392,11 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 (lambda (&rest _) (setq released t)))
                ((symbol-function 'ask-user-about-supersession-threat)
                 (lambda (&rest _) (error "Supersession prompt"))))
-            (should
-             (mevedel-session-control-transfer-poll session buffer t))
+            ;; Acquiring control announces itself; the case asserts the
+            ;; durable state that notice echoes.
+            (mevedel-test--with-captured-messages nil
+              (should
+               (mevedel-session-control-transfer-poll session buffer t)))
             (should (= 7 (mevedel-session-turn-count session)))
             (should (equal "fresh transcript" (buffer-string)))
             (should-not buffer-read-only)

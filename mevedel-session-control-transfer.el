@@ -368,7 +368,7 @@ releases the owner's session."
           (mevedel-session-transfer-release session)
           (mevedel-session-persistence--apply-read-only-mode
            buffer
-           (format "Control transferred to %s"
+           (format "control transferred to %s; this session is read-only here"
                    (or (plist-get (plist-get state :request)
                                   :requester-label)
                        "another client"))))))
