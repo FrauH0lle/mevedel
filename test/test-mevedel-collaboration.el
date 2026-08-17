@@ -137,6 +137,21 @@
                                      (mevedel-collaboration--json-record
                                       response))))))))))
 
+(mevedel-deftest mevedel-collaboration--tool-detail
+  (:doc "summarizes the primary operand on one bounded line")
+  (progn
+    (should (equal "head -5 notes.txt"
+                   (mevedel-collaboration--tool-detail
+                    '(:command "head -5 notes.txt\nsecond line"))))
+    (should (equal "/tmp/a.el"
+                   (mevedel-collaboration--tool-detail
+                    '(:file_path "/tmp/a.el"))))
+    (should-not (mevedel-collaboration--tool-detail nil))
+    (should-not (mevedel-collaboration--tool-detail '(:other 42)))
+    (should (<= (length (mevedel-collaboration--tool-detail
+                         (list :command (make-string 900 ?x))))
+                (+ 200 (length "\n[truncated]"))))))
+
 (mevedel-deftest mevedel-collaboration--allowlist
   (:doc "serializes only visible canonical fields from adversarial records")
   (let* ((records
