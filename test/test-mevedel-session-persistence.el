@@ -4592,6 +4592,28 @@ rotation never saves through a rebound temporary visited filename or prompts"
            :type 'error))
       (when (file-exists-p tmp) (delete-file tmp)))))
 
+(mevedel-deftest mevedel-session-persistence--cold-workspace ()
+  ,test
+  (test)
+  :doc "derives a target-side cold workspace from the persisted native root"
+  (let ((workspace
+         (mevedel-session-persistence--cold-workspace
+          "/home/user/project/.mevedel/sessions/main-1/"
+          '(:workspace (:type project
+                        :target-native-root "/home/user/project/"
+                        :name "project")))))
+    (should (equal "/home/user/project/"
+                   (mevedel-workspace-root workspace))))
+  :doc "qualifies the persisted native root with a remote client's own prefix"
+  (let ((workspace
+         (mevedel-session-persistence--cold-workspace
+          "/ssh:user@host:/home/user/project/.mevedel/sessions/main-1/"
+          '(:workspace (:type project
+                        :target-native-root "/home/user/project/"
+                        :name "project")))))
+    (should (equal "/ssh:user@host:/home/user/project/"
+                   (mevedel-workspace-root workspace)))))
+
 (mevedel-deftest mevedel-session-persistence-restore ()
   ,test
   (test)

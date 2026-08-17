@@ -4598,6 +4598,20 @@ sidecar commit marker."
     (when (file-directory-p session-dir)
       (mevedel-session-persistence-restore session-dir nil nil workspace))))
 
+(defun mevedel-session-persistence--cold-workspace (session-dir sidecar)
+  "Return the workspace SIDECAR names, as reachable from SESSION-DIR.
+
+The persisted root is target-native, so it is only a complete path for a
+client whose filesystem authority is the target itself.  SESSION-DIR is a
+live path below that same root, so its TRAMP prefix -- empty on the target,
+the client's spelling of the connection elsewhere -- qualifies the persisted
+root for the client doing the restore."
+  (let* ((saved (plist-get sidecar :workspace))
+         (root (concat (file-remote-p session-dir)
+                       (plist-get saved :target-native-root))))
+    (mevedel-workspace-get-or-create
+     (plist-get saved :type) root root (plist-get saved :name))))
+
 (defun mevedel-session-persistence-restore
     (session-dir &optional lifecycle-source session-override workspace)
   "Restore the chat buffer for the session at SESSION-DIR.
@@ -4671,11 +4685,8 @@ mentions-shown reset to empty hash tables on load."
               (and session-override
                    (mevedel-session-workspace session-override))
               (and sidecar
-                   (let* ((saved (plist-get sidecar :workspace))
-                          (root (plist-get saved :target-native-root)))
-                     (mevedel-workspace-get-or-create
-                      (plist-get saved :type) root root
-                      (plist-get saved :name))))
+                   (mevedel-session-persistence--cold-workspace
+                    session-dir sidecar))
               (mevedel-workspace)))
          (result           (when sidecar
                              (mevedel-session-persistence-deserialize
