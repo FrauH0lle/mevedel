@@ -37,6 +37,8 @@
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context
                   "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-format-header
+                  "mevedel-cockpit" (name scope state))
 (declare-function mevedel-cockpit-open-surface
                   "mevedel-cockpit" (surface &optional context))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
@@ -199,22 +201,21 @@
 (defun mevedel-tools-list--header-line (&optional items context)
   "Return the tools cockpit header line for ITEMS and CONTEXT."
   (require 'mevedel-tools)
+  (require 'mevedel-cockpit)
   (let ((counts nil))
     (dolist (item items)
       (cl-incf (alist-get (plist-get item :state) counts 0)))
-    (format (concat "%s  %s  default TTL:%d  "
-                    "active:%d deferred:%d pending:%d loaded:%d "
-                    "expired:%d    RET details  d defer  a activate  "
-                    "l load  G gptel  g refresh  ? help  q back")
-            (propertize "mevedel: tools"
-                        'face 'font-lock-function-name-face)
-            (mevedel-tools-list--session-label context)
-            mevedel-deferred-tool-ttl
-            (alist-get 'active counts 0)
-            (alist-get 'deferred counts 0)
-            (alist-get 'pending counts 0)
-            (alist-get 'loaded counts 0)
-            (alist-get 'expired counts 0))))
+    (mevedel-cockpit-format-header
+     "tools"
+     (mevedel-tools-list--session-label context)
+     (format (concat "%d active · %d deferred · %d pending · %d loaded · "
+                     "%d expired · TTL %d")
+             (alist-get 'active counts 0)
+             (alist-get 'deferred counts 0)
+             (alist-get 'pending counts 0)
+             (alist-get 'loaded counts 0)
+             (alist-get 'expired counts 0)
+             mevedel-deferred-tool-ttl))))
 
 (defun mevedel-tools-list--context ()
   "Return the current tools cockpit context."

@@ -170,5 +170,7 @@ post-acceptance input second. Worktree source input never transfers to or
 steers the target Goal.
 
 The cockpit and status surface show only objective, status/reason, accounting,
-elapsed time, and accepted-plan reference. Their redraws preserve the active
-composer draft.
+elapsed time, and accepted-plan reference. The cockpit header carries the
+objective, status, turn count, and token accounting; `i` opens the Goal record
+panel with the blocked reason, elapsed time, and accepted-plan reference. Their
+redraws preserve the active composer draft.

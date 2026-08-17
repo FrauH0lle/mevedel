@@ -371,7 +371,43 @@
             (mevedel-cockpit-surface-help))
           (with-current-buffer "*mevedel cockpit test help*"
             (should (string-match-p "test help" (buffer-string)))))
+      (mevedel-cockpit-test--cleanup view-buffer data-buffer)))
+
+  :doc "falls back to generated key help for a surface without help text"
+  (let ((view-buffer (generate-new-buffer " *cockpit-help-view*"))
+        (data-buffer (generate-new-buffer " *cockpit-help-data*"))
+        (surface (plist-put (copy-sequence mevedel-cockpit-test--surface-spec)
+                            :help-text nil)))
+    (unwind-protect
+        (let ((buffer (mevedel-cockpit-open-surface
+                       (plist-put surface :setup
+                                  (lambda (_context)
+                                    (setq mevedel-cockpit-test--items
+                                          '("a" "b"))))
+                       (mevedel-cockpit-test--context
+                        view-buffer data-buffer view-buffer))))
+          (with-current-buffer buffer
+            (mevedel-cockpit-surface-help))
+          (with-current-buffer "*mevedel cockpit test help*"
+            (let ((text (buffer-string)))
+              (should (string-match-p "mevedel test cockpit" text))
+              (should (string-match-p "RET  Show selected test item details"
+                                      text))
+              (should (string-match-p "y    Run described test key" text)))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
+
+(mevedel-deftest mevedel-cockpit-format-header ()
+  ,test
+  (test)
+
+  :doc "shows identity, scope, state, and the pointer to the keys"
+  (let ((header (substring-no-properties
+                 (mevedel-cockpit-format-header
+                  "tools" "main" "24 active"))))
+    (should (string-prefix-p "mevedel: tools" header))
+    (should (string-match-p "main" header))
+    (should (string-match-p "24 active" header))
+    (should (string-suffix-p "? keys" header))))
 
 (mevedel-deftest mevedel-cockpit-surface-key-help-text ()
   ,test

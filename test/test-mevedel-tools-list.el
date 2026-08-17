@@ -242,7 +242,7 @@
   ,test
   (test)
 
-  :doc "summarizes row counts and key hints"
+  :doc "summarizes row counts and points at the keys"
   (with-temp-buffer
     (mevedel-tools-list-mode)
     (let ((line (mevedel-tools-list--header-line
@@ -252,13 +252,15 @@
                    (:state loaded :name "XrefReferences")
                    (:state expired :name "Treesitter"))
                  nil)))
+      (should (string-match-p "mevedel: tools" line))
       (should (string-match-p
-               (format "default TTL:%d" mevedel-deferred-tool-ttl)
+               (format "TTL %d" mevedel-deferred-tool-ttl)
                line))
-      (should (string-match-p "active:1" line))
-      (should (string-match-p "deferred:1" line))
-      (should (string-match-p "RET details" line))
-      (should (string-match-p "q back" line)))))
+      (should (string-match-p "1 active" line))
+      (should (string-match-p "1 deferred" line))
+      (should (string-match-p "? keys" line))
+      ;; The key list belongs in `?' help, not in the header.
+      (should-not (string-match-p "RET details" line)))))
 
 (mevedel-deftest mevedel-tools-list-open
   (:after-each (progn

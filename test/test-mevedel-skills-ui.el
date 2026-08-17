@@ -1034,7 +1034,7 @@ spanning lines")))
 (mevedel-deftest mevedel-skills-list--header-line ()
   ,test
   (test)
-  :doc "summarizes the session skill count and key hints"
+  :doc "summarizes the session skill count and points at the keys"
   (let* ((user-dir (make-temp-file "mevedel-skills-header-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (enabled (mevedel-skill--create :name "enabled"))
@@ -1046,9 +1046,11 @@ spanning lines")))
           (let ((line (mevedel-skills-list--header-line
                        (list enabled disabled)
                        nil)))
+            (should (string-match-p "mevedel: skills" line))
             (should (string-match-p "1/2 enabled" line))
-            (should (string-match-p "RET details" line))
-            (should (string-match-p "q back" line))))
+            (should (string-match-p "? keys" line))
+            ;; The key list belongs in `?' help, not in the header.
+            (should-not (string-match-p "RET details" line))))
       (delete-directory user-dir t))))
 
 (mevedel-deftest mevedel-skills--list-message-text ()

@@ -693,8 +693,9 @@ to continue. Rewind preserves session preset settings but clears Goal state.
 
 ### Archived segment inspection
 
-The session cockpit projects persisted segments in the existing view: `[`
-shows the previous segment, `]` shows the next, and `g` chooses one directly.
+The session cockpit's Navigate submenu projects persisted segments in the
+existing view: `[` shows the previous segment, `]` shows the next, and `g`
+chooses one directly.
 The picker lists the canonical range from segment 1 through the live segment,
 including each segment's latest prompt preview and `readable`, `missing`, or
 `unreadable` status. Adjacent navigation reports the exact broken path instead
@@ -722,8 +723,8 @@ no-op Rewind remain on the archived projection.
 uses the response at point. Both routes show the same impact and require
 explicit confirmation.
 
-The cockpit's `n`/`N` actions move through rendered displays for inspection,
-while `C-n`/`C-p` move through user queries. These navigation actions change
+The Navigate submenu's `n`/`p` actions move through rendered displays for
+inspection, while `C-n`/`C-p` move through user queries. These navigation actions change
 neither transcript nor session state; Rewind remains a separate explicit
 operation.
 

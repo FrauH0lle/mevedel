@@ -16,6 +16,8 @@
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-format-header
+                  "mevedel-cockpit" (name scope state))
 (declare-function mevedel-cockpit-open-surface
                   "mevedel-cockpit" (surface &optional context))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
@@ -42,6 +44,9 @@
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 
 ;; `subr-x'
 (declare-function string-empty-p "subr-x" (string))
@@ -93,10 +98,14 @@
       (truncate-string-to-width
        (or (plist-get item :command) "") 60 nil nil "…")))))
 
-(defun mevedel-executions-list--header (items _context)
-  "Return cockpit header for execution ITEMS."
-  (format "%d live execution%s"
-          (length items) (if (= 1 (length items)) "" "s")))
+(defun mevedel-executions-list--header (items context)
+  "Return cockpit header for execution ITEMS and CONTEXT."
+  (require 'mevedel-cockpit)
+  (let ((session (mevedel-cockpit-context-session context)))
+    (mevedel-cockpit-format-header
+     "executions"
+     (if session (mevedel-session-name session) "")
+     (format "%d live" (length items)))))
 
 (defun mevedel-executions-list--details (item _context)
   "Return detail text for execution ITEM."

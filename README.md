@@ -796,8 +796,9 @@ current invocation, while their Command, Network, and exact-path checkboxes
 independently choose what a session or `Always in this workspace` outcome
 remembers. Session authority survives save/resume; workspace authority is
 shared by that workspace's sessions. Open `u Permissions` from the session
-cockpit to inspect operation rules, network-qualified rules, and exact resource
-grants or revoke any one without changing the others.
+cockpit for a table of operation rules, network-qualified rules, and exact
+resource grants by scope; `d` revokes the selected row without changing the
+others.
 
 ### Hooks
 

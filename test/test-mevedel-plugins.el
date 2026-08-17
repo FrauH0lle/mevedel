@@ -791,8 +791,8 @@ captured instead of being written to the run log."
                              (abbreviate-file-name
                               (file-name-as-directory
                                (expand-file-name winning-root)))))))
-      (should (equal "Enable plugin"
-                     (mevedel-plugins-list--activation-label workspace)))
+      (should-not (mevedel-plugins--enabled-p
+                   (mevedel-plugins--find "demo" workspace) workspace))
       (mevedel-test--with-captured-messages nil
         (mevedel-plugins-list-details)))
     (with-current-buffer "*mevedel plugin details*"
@@ -869,9 +869,6 @@ captured instead of being written to the run log."
                 (mevedel-cockpit-surface-context))))
           (mevedel-test--with-captured-messages nil
             (mevedel-plugins-list-toggle-enabled))
-          (should (equal "Disable plugin"
-                         (mevedel-plugins-list--activation-label
-                          list-workspace)))
           (should (mevedel-plugins--enabled-p
                    (mevedel-plugins--find "demo" list-workspace)
                    list-workspace))
@@ -889,9 +886,9 @@ captured instead of being written to the run log."
                           list-workspace)))
           (mevedel-test--with-captured-messages nil
             (mevedel-plugins-list-toggle-enabled))
-          (should (equal "Enable plugin"
-                         (mevedel-plugins-list--activation-label
-                          list-workspace)))))))
+          (should-not (mevedel-plugins--enabled-p
+                       (mevedel-plugins--find "demo" list-workspace)
+                       list-workspace))))))
 
   :doc "dispatches update and remove actions at point"
   (let ((root (mevedel-plugins-test--github-install-root "owner" "repo"))

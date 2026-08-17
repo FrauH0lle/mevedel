@@ -173,6 +173,7 @@ Chat / view
   mevedel-collaboration-transport.el loopback HTTP/WebSocket transport
   mevedel-view-markdown.el    Markdown tables, links, images, paths, source panels
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
+  mevedel-permissions-list.el remembered authority cockpit and per-row revoke
   mevedel-overlays.el         instruction overlays (references/directives)
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec

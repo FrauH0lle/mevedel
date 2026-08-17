@@ -38,6 +38,8 @@
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context
                   "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-show-help
+                  "mevedel-cockpit" (buffer text))
 
 ;; `mevedel-compact'
 (declare-function mevedel-compact "mevedel-compact"
@@ -104,17 +106,11 @@
 (declare-function mevedel-permission-mode-transition
                   "mevedel-permissions"
                   (mode &optional prompt display-text hook-context))
-(declare-function mevedel-permission-persistent-authority
-                  "mevedel-permissions" (workspace))
-(declare-function mevedel-permission-remove-persistent-resource-grant
-                  "mevedel-permissions" (workspace path access))
-(declare-function mevedel-permission-remove-persistent-rule
-                  "mevedel-permissions" (workspace rule))
-(declare-function mevedel-permission-remove-session-resource-grant
-                  "mevedel-permissions" (session path access))
-(declare-function mevedel-permission-remove-session-rule
-                  "mevedel-permissions" (session rule))
 (defvar mevedel-permission-mode)
+
+;; `mevedel-permissions-list'
+(declare-function mevedel-permissions-list-open "mevedel-permissions-list"
+                  (&optional context))
 
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-approval-render
@@ -158,18 +154,16 @@
                   (&optional buffer))
 (declare-function mevedel-request-state-label "mevedel-structs"
                   (&optional buffer))
+(declare-function mevedel-session-current-segment
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-plan-approval
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-rules
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-resource-grants
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
@@ -206,6 +200,7 @@
 (declare-function mevedel-view-rewind-at-point "mevedel-view-render" ())
 (declare-function mevedel-view-switch-conversation-variant-at-point
                   "mevedel-view-render" ())
+(defvar mevedel-view--historical-segment-number)
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-status-summary "mevedel-worktree"
@@ -214,6 +209,15 @@
 
 (defconst mevedel-menu-help-buffer-name "*mevedel help*"
   "Name of the session cockpit help buffer.")
+
+(defconst mevedel-menu-session-info-buffer-name "*mevedel session info*"
+  "Name of the session info panel buffer.")
+
+(defconst mevedel-menu-preset-report-buffer-name "*mevedel preset*"
+  "Name of the resolved preset policy info panel buffer.")
+
+(defconst mevedel-menu-goal-record-buffer-name "*mevedel goal*"
+  "Name of the Goal record info panel buffer.")
 
 ;;
 ;;; Context resolution
@@ -245,7 +249,7 @@
 
 (defun mevedel-menu--state-description (label value &optional face)
   "Return a padded cockpit row for LABEL and state VALUE."
-  (format "%-9s %s" label (mevedel-menu--value value face)))
+  (format "%-10s %s" label (mevedel-menu--value value face)))
 
 (defun mevedel-menu--mode-symbol (&optional session data-buffer surface-buffer)
   "Return the effective permission mode for the cockpit context."
@@ -298,22 +302,33 @@
   (plist-get (mevedel-worktree-status-summary (mevedel-menu--context))
              :label))
 
+(defconst mevedel-menu--info-indent (make-string 14 ?\s)
+  "Continuation indent for wrapped session info-panel rows.")
+
+(defun mevedel-menu--info-row (label value)
+  "Return an info-panel row for LABEL and VALUE."
+  (format "%-13s %s" label value))
+
 (defun mevedel-menu--target-description (session)
-  "Return SESSION's execution-target status line."
+  "Return SESSION's execution-target info-panel rows."
   (when-let* ((target (and session
                            (mevedel-session-execution-target session))))
     (require 'mevedel-execution-target)
     (let* ((readiness (mevedel-execution-target-readiness target))
            (status (or (plist-get readiness :status) 'not-probed))
            (sandbox (plist-get readiness :sandbox-status)))
-      (format "Target %s · %s · %s%s"
-              (mevedel-execution-target-label target)
-              (mevedel-execution-target-support-tier target)
-              status
-              (if sandbox (format " · sandbox %s" sandbox) "")))))
+      (concat
+       (mevedel-menu--info-row
+        "Target" (mevedel-execution-target-label target))
+       "\n"
+       mevedel-menu--info-indent
+       (format "tier %s · readiness %s%s"
+               (mevedel-execution-target-support-tier target)
+               status
+               (if sandbox (format " · sandbox %s" sandbox) ""))))))
 
 (defun mevedel-menu--durability-description (session)
-  "Return SESSION's persistence, lease, and publication status line."
+  "Return SESSION's persistence, lease, and publication info-panel rows."
   (when (and session (mevedel-session-workspace session))
     (require 'mevedel-execution-target)
     (require 'mevedel-session-durability)
@@ -326,17 +341,58 @@
                                (mevedel-execution-target-remote-p target))
                           'none
                         'local))))
-      (format "Persistence %s · lease %s · publication %s"
-              (if target
-                  (mevedel-execution-target-native-path target path)
-                path)
-              lease
-              (if (plist-get status :pending-publication)
-                  "pending"
-                "published")))))
+      (concat
+       (mevedel-menu--info-row
+        "Persistence"
+        (if target
+            (mevedel-execution-target-native-path target path)
+          path))
+       "\n"
+       mevedel-menu--info-indent
+       (format "lease %s · publication %s"
+               lease
+               (if (plist-get status :pending-publication)
+                   "pending"
+                 "published"))))))
+
+(defun mevedel-menu--alerts (session)
+  "Return SESSION's off-nominal state tokens as a list of strings.
+Nominal state belongs in the session info panel; only conditions the user
+may want to act on earn a line in a cockpit header."
+  (when session
+    (require 'mevedel-execution-target)
+    (require 'mevedel-session-publication)
+    (let* ((target (mevedel-session-execution-target session))
+           (readiness (and target
+                           (mevedel-execution-target-readiness target)))
+           (status (and readiness (plist-get readiness :status)))
+           (sandbox (and readiness (plist-get readiness :sandbox-status)))
+           (publication (and (mevedel-session-workspace session)
+                             (mevedel-session-publication-status session)))
+           (lease (and publication (plist-get publication :lease-state)))
+           alerts)
+      (when (and status (not (eq status 'ready)))
+        (push (format "target %s" status) alerts))
+      (when (memq sandbox '(unavailable unsupported))
+        (push (format "sandbox %s" sandbox) alerts))
+      (when (and lease (not (memq lease '(owned local))))
+        (push (format "lease %s" lease) alerts))
+      (when (and publication (plist-get publication :pending-publication))
+        (push "publication pending" alerts))
+      (nreverse alerts))))
+
+(defun mevedel-menu--alert-line (session)
+  "Return SESSION's warning-face alert line, or nil when all state is nominal."
+  (when-let* ((alerts (mevedel-menu--alerts session)))
+    (concat (mevedel-menu--value
+             (concat "! " (string-join alerts " · "))
+             'warning)
+            "\n")))
 
 (defun mevedel-menu--header ()
-  "Return the cockpit header string."
+  "Return the cockpit header string.
+One identity line, plus an alert line when session state is off-nominal.
+The complete target and durability state lives in the session info panel."
   (let* ((context (mevedel-menu--context))
          (data-buffer (mevedel-cockpit-context-data-buffer context))
          (session (mevedel-cockpit-context-session context))
@@ -347,25 +403,93 @@
                 session data-buffer
                 (mevedel-cockpit-context-view-buffer context)))
          (request-state (mevedel-request-state-label data-buffer)))
+    (when target
+      (require 'mevedel-execution-target))
     (concat
-     (mevedel-menu--face "mevedel:" 'transient-heading)
+     (mevedel-menu--face "mevedel" 'transient-heading)
      " "
      (mevedel-menu--value
       (or (and session (mevedel-session-name session)) "unknown"))
-     "  "
-     (mevedel-menu--value (mevedel-menu--root-label workspace target))
-     "        "
+     " · "
      (mevedel-menu--value (mevedel-menu--mode-label mode))
      " · "
      (mevedel-menu--value
       request-state
       (if (string= request-state "running") 'warning 'transient-value))
+     "    "
+     (mevedel-menu--face (mevedel-menu--root-label workspace target)
+                         'transient-inactive-value)
+     (when target
+       (mevedel-menu--face
+        (format " · %s" (mevedel-execution-target-label target))
+        'transient-inactive-value))
      "\n"
-     (when-let* ((target (mevedel-menu--target-description session)))
-       (concat "  " (mevedel-menu--value target) "\n"))
-     (when-let* ((durability
-                  (mevedel-menu--durability-description session)))
-       (concat "  " (mevedel-menu--value durability) "\n")))))
+     (mevedel-menu--alert-line session))))
+
+(defun mevedel-menu--session-info-text ()
+  "Return the complete session state as info-panel text."
+  (let* ((context (mevedel-menu--context))
+         (data-buffer (mevedel-cockpit-context-data-buffer context))
+         (session (mevedel-cockpit-context-session context))
+         (workspace (mevedel-cockpit-context-workspace context))
+         (target (and session
+                      (mevedel-session-execution-target session)))
+         (mode (mevedel-menu--mode-symbol
+                session data-buffer
+                (mevedel-cockpit-context-view-buffer context))))
+    (require 'mevedel-models)
+    (string-join
+     (delq
+      nil
+      (list
+       (format "mevedel session — %s"
+               (or (and session (mevedel-session-name session)) "unknown"))
+       ""
+       (mevedel-menu--info-row
+        "Workspace" (mevedel-menu--root-label workspace target))
+       (mevedel-menu--target-description session)
+       (mevedel-menu--durability-description session)
+       (mevedel-menu--info-row
+        "Request"
+        (format "%s · mode %s · preset %s"
+                (mevedel-request-state-label data-buffer)
+                (mevedel-menu--mode-label mode)
+                (or (and session (mevedel-session-preset-name session))
+                    "none")))
+       (mevedel-menu--info-row
+        "Model"
+        (format "%s · effort %s"
+                (mevedel-model-current-provider-label data-buffer)
+                (or (with-current-buffer data-buffer
+                      (and (boundp 'gptel-reasoning-effort)
+                           gptel-reasoning-effort))
+                    "default")))
+       ""))
+     "\n")))
+
+(defun mevedel-menu--call-in-view (function)
+  "Call view FUNCTION in the cockpit's paired view buffer."
+  (mevedel-cockpit-call-in-view (mevedel-menu--context) function))
+
+(defun mevedel-menu--navigate-description ()
+  "Return the navigation surface header with the projected segment."
+  (let* ((context (mevedel-menu--context))
+         (session (mevedel-cockpit-context-session context))
+         (view-buffer (mevedel-cockpit-context-view-buffer context))
+         (total (or (and session (mevedel-session-current-segment session)) 1))
+         (shown (and view-buffer
+                     (buffer-local-value
+                      'mevedel-view--historical-segment-number view-buffer))))
+    (concat
+     (mevedel-menu--face "Navigate" 'transient-heading)
+     "  "
+     (mevedel-menu--value
+      (or (and session (mevedel-session-name session)) "unknown"))
+     " · segment "
+     (mevedel-menu--value
+      (if shown
+          (format "%d/%d" shown total)
+        (format "live (%d)" total))))))
 
 (defun mevedel-menu--mode-description ()
   "Return the top-level mode row description."
@@ -386,7 +510,7 @@
 (defun mevedel-menu--model-description ()
   "Return the top-level model row description."
   (let ((model (mevedel-menu--model-label)))
-    (format "%-9s %s"
+    (format "%-10s %s"
             "Model"
             (if (string= model "none")
                 (mevedel-menu--inactive-value model)
@@ -395,11 +519,26 @@
 (defun mevedel-menu--model-selection-description ()
   "Return the caller-owned model-selection description."
   (let ((scope (transient-scope)))
-    (format "%s: %s · effort %s%s"
-            (plist-get scope :title)
-            (plist-get scope :model-provider)
-            (or (plist-get scope :reasoning-effort) "default")
-            (if (plist-get scope :inherited) " · session" ""))))
+    (concat
+     (mevedel-menu--face (plist-get scope :title) 'transient-heading)
+     "  "
+     (mevedel-menu--value (plist-get scope :model-provider))
+     " · effort "
+     (mevedel-menu--value
+      (or (plist-get scope :reasoning-effort) "default"))
+     (if (plist-get scope :inherited) " · session" ""))))
+
+(defun mevedel-menu--model-selection-effort-description ()
+  "Return the effort-cycling row description with its next value."
+  (let* ((scope (transient-scope))
+         (efforts (mevedel-menu--model-selection-efforts scope))
+         (current (plist-get scope :reasoning-effort))
+         (position (seq-position efforts current))
+         (next (nth (mod (1+ (or position -1)) (length efforts)) efforts)))
+    (format "%-13s %s → %s"
+            "Cycle effort"
+            (mevedel-menu--value (or current "default"))
+            (mevedel-menu--inactive-value (or next "default")))))
 
 (defun mevedel-menu--tools-description ()
   "Return the top-level tools row description."
@@ -415,7 +554,7 @@
                    (mevedel-menu--context)))
          (count (mevedel-execution-count-user session)))
     (mevedel-menu--state-description
-     "Processes"
+     "Executions"
      (format "%d live" count)
      (if (> count 0) 'warning 'transient-inactive-value))))
 
@@ -439,7 +578,7 @@
 (defun mevedel-menu--worktree-description ()
   "Return the top-level worktree row description."
   (let ((worktree (mevedel-menu--worktree-label)))
-    (format "%-9s %s"
+    (format "%-10s %s"
             "Worktree"
             (if (string= worktree "not-git")
                 (mevedel-menu--inactive-value worktree)
@@ -474,66 +613,142 @@
   (and (mevedel-menu--current-goal)
        (not (mevedel-menu--request-active-p))))
 
+(defun mevedel-menu--goal-budget-label (goal)
+  "Return GOAL's token accounting as a compact label."
+  (let ((budget (mevedel-goal-token-budget goal)))
+    (if budget
+        (format "%d/%d tokens" (mevedel-goal-tokens-used goal) budget)
+      (format "%d tokens · unbounded" (mevedel-goal-tokens-used goal)))))
+
 (defun mevedel-menu--goal-description ()
-  "Return the complete Goal cockpit description."
+  "Return the one-line Goal cockpit status.
+The full record lives in the Goal info panel."
   (if-let* ((goal (mevedel-menu--current-goal)))
-      (let ((budget (mevedel-goal-token-budget goal)))
-        (string-join
-         (list
-          (format "Goal: %s" (mevedel-goal-objective goal))
-          (format "Status: %s%s"
-                  (mevedel-goal-status goal)
-                  (if-let* ((reason (mevedel-goal-reason goal)))
-                      (format " — %s" reason) ""))
-          (format "Budget: %d%s" (mevedel-goal-tokens-used goal)
-                  (if budget (format "/%d tokens" budget)
-                    " tokens / unbounded"))
-          (format "Turns: %d · Elapsed: %ds"
-                  (mevedel-goal-turns-run goal)
-                  (mevedel-goal-time-used-seconds goal))
-          (format "Accepted plan: %s"
-                  (or (mevedel-goal-plan-reference goal) "none")))
-         "\n"))
-    "No active Goal. Start one here or with /goal OBJECTIVE."))
+      (concat
+       (mevedel-menu--face "Goal" 'transient-heading)
+       "  "
+       (mevedel-menu--value (mevedel-goal-objective goal))
+       " · "
+       (mevedel-menu--value (format "%s" (mevedel-goal-status goal))
+                            (if (eq (mevedel-goal-status goal) 'blocked)
+                                'warning
+                              'transient-value))
+       (format " · %d turns · " (mevedel-goal-turns-run goal))
+       (mevedel-menu--value (mevedel-menu--goal-budget-label goal)))
+    (concat
+     (mevedel-menu--face "Goal" 'transient-heading)
+     "  "
+     (mevedel-menu--inactive-value
+      "none — s starts one, or /goal OBJECTIVE"))))
+
+(defun mevedel-menu--goal-record-text ()
+  "Return the complete Goal record as info-panel text."
+  (if-let* ((goal (mevedel-menu--current-goal)))
+      (string-join
+       (list
+        "mevedel Goal"
+        ""
+        (mevedel-menu--info-row "Objective" (mevedel-goal-objective goal))
+        (mevedel-menu--info-row
+         "Status"
+         (format "%s%s"
+                 (mevedel-goal-status goal)
+                 (if-let* ((reason (mevedel-goal-reason goal)))
+                     (format " — %s" reason) "")))
+        (mevedel-menu--info-row
+         "Budget" (mevedel-menu--goal-budget-label goal))
+        (mevedel-menu--info-row
+         "Turns"
+         (format "%d · elapsed %ds"
+                 (mevedel-goal-turns-run goal)
+                 (mevedel-goal-time-used-seconds goal)))
+        (mevedel-menu--info-row
+         "Plan" (or (mevedel-goal-plan-reference goal) "none"))
+        "")
+       "\n")
+    "mevedel Goal\n\nNo active Goal. Start one here or with /goal OBJECTIVE.\n"))
+
+(defun mevedel-menu--preset-policies ()
+  "Return the session's resolved preset policies.
+Each element is (KIND NAME LABEL ERROR), where ERROR is the resolution
+failure message or nil.  KIND is `tier' or `workload'."
+  (let ((context (mevedel-menu--context)))
+    (with-current-buffer (mevedel-cockpit-context-data-buffer context)
+      (let ((resolve
+             (lambda (kind name resolver)
+               (condition-case err
+                   (let ((policy (funcall resolver name)))
+                     (list kind name
+                           (format "%s:%s · effort %s"
+                                   (gptel-backend-name
+                                    (plist-get policy :backend))
+                                   (gptel--model-name
+                                    (plist-get policy :model))
+                                   (or (plist-get policy :effort) "default"))
+                           nil))
+                 (error
+                  (list kind name nil (error-message-string err)))))))
+        (append
+         (mapcar (lambda (tier)
+                   (funcall resolve 'tier tier #'mevedel-model-resolve-tier))
+                 (delete-dups (mapcar #'car mevedel-model-tiers)))
+         (mapcar (lambda (workload)
+                   (funcall resolve 'workload workload
+                            #'mevedel-model-resolve-workload))
+                 (delete-dups (mapcar #'car mevedel-model-workloads))))))))
 
 (defun mevedel-menu--preset-description ()
-  "Return selected preset, tiers, workloads, and actual request policies."
+  "Return the one-line preset summary, plus an alert for broken policies.
+The resolved policy table lives in the preset info panel."
   (let* ((context (mevedel-menu--context))
-         (session (mevedel-cockpit-context-session context)))
-    (with-current-buffer (mevedel-cockpit-context-data-buffer context)
-      (let* ((tiers (delete-dups (mapcar #'car mevedel-model-tiers)))
-             (workloads (delete-dups
-                         (mapcar #'car mevedel-model-workloads)))
-             (format-policy
-              (lambda (name resolver)
+         (session (mevedel-cockpit-context-session context))
+         (policies (mevedel-menu--preset-policies))
+         (broken (seq-filter (lambda (policy) (nth 3 policy)) policies))
+         (tiers (seq-count (lambda (policy) (eq (car policy) 'tier)) policies)))
+    (concat
+     (mevedel-menu--face "Preset" 'transient-heading)
+     "  "
+     (mevedel-menu--value
+      (or (and session (mevedel-session-preset-name session)) "none"))
+     (format " · %d tiers · %d workloads · " tiers (- (length policies) tiers))
+     (if broken
+         (mevedel-menu--value (format "%d broken" (length broken)) 'error)
+       (mevedel-menu--value "all resolved"))
+     (when broken
+       (concat
+        "\n"
+        (mevedel-menu--value
+         (format "! %s %s does not resolve — fix before dispatch"
+                 (nth 0 (car broken)) (nth 1 (car broken)))
+         'error))))))
+
+(defun mevedel-menu--preset-report-text ()
+  "Return the resolved preset policy table as info-panel text."
+  (let* ((context (mevedel-menu--context))
+         (session (mevedel-cockpit-context-session context))
+         (policies (mevedel-menu--preset-policies))
+         (row (lambda (policy)
                 (format "  %-18s %s"
-                        name
-                        (condition-case err
-                            (let ((policy (funcall resolver name)))
-                              (format "%s:%s · effort %s"
-                                      (gptel-backend-name
-                                       (plist-get policy :backend))
-                                      (gptel--model-name
-                                       (plist-get policy :model))
-                                      (or (plist-get policy :effort) "default")))
-                          (error
-                           (format
-                            "ERROR: %s — fix this preset before dispatch"
-                            (error-message-string err))))))))
-        (string-join
-         (append
-          (list (format "Preset: %s"
-                        (or (mevedel-session-preset-name session) "none"))
-                "Tiers:")
-          (mapcar (lambda (tier)
-                    (funcall format-policy tier #'mevedel-model-resolve-tier))
-                  tiers)
-          (list "Workloads:")
-          (mapcar
-           (lambda (workload)
-             (funcall format-policy workload #'mevedel-model-resolve-workload))
-           workloads))
-         "\n")))))
+                        (nth 1 policy)
+                        (or (nth 2 policy)
+                            (format "ERROR: %s" (nth 3 policy))))))
+         (of-kind (lambda (kind)
+                    (mapcar row
+                            (seq-filter
+                             (lambda (policy) (eq (car policy) kind))
+                             policies)))))
+    (string-join
+     (append
+      (list (format "mevedel preset — %s"
+                    (or (and session (mevedel-session-preset-name session))
+                        "none"))
+            ""
+            "Tiers")
+      (funcall of-kind 'tier)
+      (list "" "Workloads")
+      (funcall of-kind 'workload)
+      (list ""))
+     "\n")))
 
 (defun mevedel-menu--mode-choice-description (mode detail)
   "Return the MODE surface row with DETAIL and current-state marker."
@@ -546,10 +761,17 @@
                             (mevedel-cockpit-context-data-buffer context)
                             (mevedel-cockpit-context-view-buffer context)))))
          (label (mevedel-menu--mode-label mode)))
-    (format "%-7s %-7s %s"
-            (if current (mevedel-menu--value label) label)
-            (if current (mevedel-menu--value "current" 'warning) "")
-            detail)))
+    (mevedel-menu--mode-row label detail current)))
+
+(defun mevedel-menu--mode-row (label detail current)
+  "Return a mode-surface row for LABEL and DETAIL.
+CURRENT marks the row as the active choice.  The marker trails the
+descriptions so they stay aligned and read as a comparison."
+  (string-trim-right
+   (format "%-10s %-40s %s"
+           (if current (mevedel-menu--value label) label)
+           detail
+           (if current (mevedel-menu--value "current" 'warning) ""))))
 
 (defun mevedel-menu--mode-ask-description ()
   "Return the ask mode row description."
@@ -566,14 +788,37 @@
   (mevedel-menu--mode-choice-description 'full-auto "auto-allow tools"))
 
 (defun mevedel-menu--mode-plan-description ()
-  "Return the Plan mode row description."
+  "Return the Plan mode row description.
+Plan is orthogonal to the permission mode, so it reads as its own on/off
+state rather than as a fourth permission choice."
   (let* ((session (mevedel-cockpit-context-session
                    (mevedel-menu--context)))
          (current (mevedel-session-plan-mode session)))
-    (format "%-7s %-7s %s"
-            (if current (mevedel-menu--value "Plan") "Plan")
-            (if current (mevedel-menu--value "current" 'warning) "")
-            "inspect and discuss without direct edits")))
+    (format "%-10s %s · %s"
+            "Plan mode"
+            (if current
+                (mevedel-menu--value "on" 'warning)
+              (mevedel-menu--inactive-value "off"))
+            "inspect and discuss, no edits")))
+
+(defun mevedel-menu--mode-surface-description ()
+  "Return the one-line mode surface header."
+  (let* ((context (mevedel-menu--context))
+         (session (mevedel-cockpit-context-session context))
+         (permission
+          (mevedel-menu--mode-label
+           (mevedel-menu--mode-symbol
+            session
+            (mevedel-cockpit-context-data-buffer context)
+            (mevedel-cockpit-context-view-buffer context)))))
+    (concat
+     (mevedel-menu--face "Mode" 'transient-heading)
+     "  permission "
+     (mevedel-menu--value permission)
+     " · Plan "
+     (if (mevedel-session-plan-mode session)
+         (mevedel-menu--value "on" 'warning)
+       (mevedel-menu--inactive-value "off")))))
 
 
 ;;
@@ -591,99 +836,6 @@
 (defun mevedel-menu--abort-inapt-p ()
   "Return non-nil when aborting should be inapt."
   (not (mevedel-menu--request-active-p)))
-
-
-;;
-;;; Permissions surface
-
-(defun mevedel-menu--permission-rule-label (scope rule)
-  "Return a cockpit label for SCOPE permission RULE."
-  (let ((plist (cdr rule)))
-    (format "%s %s: %s %S"
-            scope
-            (if (plist-get plist :network) "network" "operation")
-            (car rule)
-            (or (plist-get plist :pattern)
-                (plist-get plist :path)
-                (plist-get plist :domain)
-                (plist-get plist :name)
-                "*"))))
-
-(defun mevedel-menu--permission-resource-label (scope grant)
-  "Return a cockpit label for SCOPE exact resource GRANT."
-  (let ((path (plist-get grant :path)))
-    (format "%s resource: %s %s"
-            scope
-            (plist-get grant :access)
-            (if (stringp path)
-                (abbreviate-file-name path)
-              (format "%S" path)))))
-
-(defun mevedel-menu--permission-candidates ()
-  "Return remembered permission authority in the current cockpit."
-  (require 'mevedel-permissions)
-  (let* ((context (mevedel-menu--context))
-         (session (mevedel-cockpit-context-session context))
-         (workspace (mevedel-cockpit-context-workspace context))
-         (persistent
-          (and workspace
-               (mevedel-permission-persistent-authority workspace)))
-         candidates)
-    (dolist (rule (mevedel-session-permission-rules session))
-      (push
-       (cons (mevedel-menu--permission-rule-label "Session" rule)
-             (list :scope 'session :kind 'rule :value rule))
-       candidates))
-    (dolist (grant (mevedel-session-resource-grants session))
-      (push
-       (cons (mevedel-menu--permission-resource-label "Session" grant)
-             (list :scope 'session :kind 'resource :value grant))
-       candidates))
-    (dolist (rule (plist-get persistent :rules))
-      (push
-       (cons (mevedel-menu--permission-rule-label "Workspace" rule)
-             (list :scope 'workspace :kind 'rule :value rule))
-       candidates))
-    (dolist (grant (plist-get persistent :resource-grants))
-      (push
-       (cons (mevedel-menu--permission-resource-label "Workspace" grant)
-             (list :scope 'workspace :kind 'resource :value grant))
-       candidates))
-    (nreverse candidates)))
-
-(defun mevedel-menu--permissions-description ()
-  "Return remembered authority for the permissions cockpit."
-  (let ((labels (mapcar #'car (mevedel-menu--permission-candidates))))
-    (if labels
-        (string-join (cons "Remembered authority:" labels) "\n")
-      "No remembered permission authority.")))
-
-(defun mevedel-menu--permissions-revoke ()
-  "Select and revoke one remembered permission authority."
-  (interactive)
-  (let ((candidates (mevedel-menu--permission-candidates)))
-    (unless candidates
-      (user-error "No remembered permission authority"))
-    (let* ((label (completing-read "Revoke authority: "
-                                   candidates nil t))
-           (target (cdr (assoc label candidates)))
-           (context (mevedel-menu--context))
-           (session (mevedel-cockpit-context-session context))
-           (workspace (mevedel-cockpit-context-workspace context))
-           (value (plist-get target :value)))
-      (pcase (cons (plist-get target :scope)
-                   (plist-get target :kind))
-        (`(session . rule)
-         (mevedel-permission-remove-session-rule session value))
-        (`(session . resource)
-         (mevedel-permission-remove-session-resource-grant
-          session (plist-get value :path) (plist-get value :access)))
-        (`(workspace . rule)
-         (mevedel-permission-remove-persistent-rule workspace value))
-        (`(workspace . resource)
-         (mevedel-permission-remove-persistent-resource-grant
-          workspace (plist-get value :path) (plist-get value :access))))
-      (message "mevedel: revoked %s" label))))
 
 
 ;;
@@ -748,23 +900,29 @@
       (plist-put scope :inherited nil)
       (funcall (plist-get scope :update) label effort))))
 
-(defun mevedel-menu--model-selection-select-effort ()
-  "Select reasoning effort for the caller-owned model-selection scope."
+(defun mevedel-menu--model-selection-efforts (&optional scope)
+  "Return the selectable efforts for SCOPE's model.
+The list is the model's supported efforts followed by nil for the
+provider default, which is the full cycle the surface offers."
+  (require 'mevedel-models)
+  (let* ((scope (or scope (transient-scope)))
+         (provider (mevedel-model-resolve-provider
+                    (plist-get scope :model-provider) t)))
+    (append (and provider
+                 (mevedel-model-supported-efforts
+                  (plist-get provider :model)))
+            (list nil))))
+
+(defun mevedel-menu--model-selection-cycle-effort ()
+  "Advance the caller-owned model selection to the next reasoning effort.
+Effort is a closed enum the chosen model determines, so it cycles in
+place instead of prompting."
   (interactive)
   (let* ((scope (transient-scope))
-         (provider
-          (progn
-            (require 'mevedel-models)
-            (mevedel-model-resolve-provider
-             (plist-get scope :model-provider))))
-         (candidates
-          (cons "default"
-                (mapcar
-                 #'symbol-name
-                 (mevedel-model-supported-efforts
-                  (plist-get provider :model)))))
-         (choice (completing-read "Effort: " candidates nil t))
-         (effort (unless (string= choice "default") (intern choice))))
+         (efforts (mevedel-menu--model-selection-efforts scope))
+         (current (plist-get scope :reasoning-effort))
+         (position (seq-position efforts current))
+         (effort (nth (mod (1+ (or position -1)) (length efforts)) efforts)))
     (plist-put scope :reasoning-effort effort)
     (plist-put scope :inherited nil)
     (funcall (plist-get scope :update)
@@ -809,10 +967,16 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     (pcase area
       ('top
        (transient-setup 'mevedel-menu--top))
+      ('navigate
+       (transient-setup 'mevedel-menu--navigate))
+      ('session-info
+       (mevedel-menu--open-session-info))
       ('mode
        (transient-setup 'mevedel-menu--mode))
       ('permissions
-       (transient-setup 'mevedel-menu--permissions))
+       (require 'mevedel-permissions-list)
+       (mevedel-cockpit-call-in-data
+        context #'mevedel-permissions-list-open context))
       ('model
        (mevedel-menu--open-model))
       ('goal
@@ -1021,6 +1185,35 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive)
   (mevedel-menu-open 'help))
 
+(defun mevedel-menu--open-navigate ()
+  "Open the navigation cockpit surface."
+  (interactive)
+  (mevedel-menu-open 'navigate))
+
+(defun mevedel-menu--open-session-info ()
+  "Open the session info panel."
+  (interactive)
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-show-help
+   mevedel-menu-session-info-buffer-name
+   (mevedel-menu--session-info-text)))
+
+(defun mevedel-menu--open-preset-report ()
+  "Open the resolved preset policy info panel."
+  (interactive)
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-show-help
+   mevedel-menu-preset-report-buffer-name
+   (mevedel-menu--preset-report-text)))
+
+(defun mevedel-menu--open-goal-record ()
+  "Open the Goal record info panel."
+  (interactive)
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-show-help
+   mevedel-menu-goal-record-buffer-name
+   (mevedel-menu--goal-record-text)))
+
 (defun mevedel-menu-help--text ()
   "Return command-discovery text for the session cockpit."
   (string-join
@@ -1035,6 +1228,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      "/mode                       Mode"
      "/model                      Model"
      "Cockpit G / P               Goal / Preset model team"
+     "Cockpit u                   Remembered permission authority"
+     "Cockpit i                   Session info panel"
      "/tools, /tools list         Tools"
      "/ps                         Live executions"
      "/stop [EXECUTION_ID]        Stop one execution, or all when omitted"
@@ -1059,7 +1254,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      "The view buffer owns the composer, compact transcript, and status strip."
      "The data buffer owns raw gptel state, tools, model, and transcript data."
      "The cockpit resolves the view/data pair once and routes actions to the owning buffer."
-     "Cockpit [ / ] / g inspect previous, next, or selected session segments."
+     "Cockpit N opens Navigate: [ / ] / g inspect session segments,"
+     "n / p move through displays, C-n / C-p through queries, TAB folds a section."
      "The raw data buffer keeps gptel header behavior for the gptel menu.")
    "\n"))
 
@@ -1084,7 +1280,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
 (transient-define-prefix mevedel-menu--top ()
   "Top-level mevedel session cockpit."
   [:description mevedel-menu--header
-   ["Session"
+   ["Conversation"
     :pad-keys t
     ("RET" "Send" mevedel-menu--send
      :inapt-if mevedel-menu--send-inapt-p)
@@ -1093,65 +1289,35 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("c" "Compact" mevedel-menu--compact)
     ("r" "Review" mevedel-menu--review)
     ("v" "Verify" mevedel-menu--verify)]
-   ["Navigate"
+   ["History"
     :pad-keys t
+    ("N" "Navigate…" mevedel-menu--open-navigate)
     ("f" "Fork conversation" mevedel-menu--fork-conversation-here)
     ("F" "Fork worktree" mevedel-menu--fork-worktree-here)
     ("R" "Rewind here" mevedel-menu--rewind-here)
-    ("B" "Switch conversation variant" mevedel-menu--switch-variant-here)
-    ("[" "Previous segment"
-     (lambda () (interactive)
-       (mevedel-cockpit-call-in-view
-        (mevedel-menu--context) #'mevedel-view-previous-segment))
-     :transient t)
-    ("]" "Next segment"
-     (lambda () (interactive)
-       (mevedel-cockpit-call-in-view
-        (mevedel-menu--context) #'mevedel-view-next-segment))
-     :transient t)
-    ("g" "Go to segment"
-     (lambda () (interactive)
-       (mevedel-cockpit-call-in-view
-        (mevedel-menu--context) #'mevedel-view-go-to-segment))
-     :transient t)
-    ("n" "Next display"
-     (lambda () (interactive)
-       (mevedel-cockpit-call-in-view
-        (mevedel-menu--context) #'mevedel-view-next-display))
-     :transient t)
-    ("N" "Previous display"
-     (lambda () (interactive)
-       (mevedel-cockpit-call-in-view
-        (mevedel-menu--context) #'mevedel-view-previous-display))
-     :transient t)
-    ("C-n" "Next query"
-     (lambda () (interactive)
-       (mevedel-cockpit-call-in-view
-        (mevedel-menu--context) #'mevedel-view-next-user-query))
-     :transient t)
-    ("C-p" "Previous query"
-     (lambda () (interactive)
-       (mevedel-cockpit-call-in-view
-        (mevedel-menu--context) #'mevedel-view-previous-user-query))
-     :transient t)
-    ("e" "Toggle section"
-     (lambda () (interactive)
-       (mevedel-cockpit-call-in-view
-        (mevedel-menu--context) #'mevedel-view-toggle-section))
-     :transient t)]
+    ("B" "Switch variant" mevedel-menu--switch-variant-here)]
    ["Configure"
     :pad-keys t
     ("m" mevedel-menu--open-mode
      :description mevedel-menu--mode-description)
-    ("u" "Permissions" mevedel-menu--open-permissions)
     ("M" mevedel-menu--open-model
      :description mevedel-menu--model-description)
     ("P" mevedel-menu--open-preset
-     :description (lambda () (format "%-9s %s" "Preset"
+     :description (lambda () (format "%-10s %s" "Preset"
                                      (or (mevedel-session-preset-name
                                           (mevedel-cockpit-context-session
                                            (mevedel-menu--context)))
                                          "none"))))
+    ("u" "Permissions" mevedel-menu--open-permissions)
+    ("G" mevedel-menu--open-goal
+     :description (lambda () (format "%-10s %s" "Goal"
+                                     (if-let* ((goal (mevedel-menu--current-goal)))
+                                         (format "%s, %d turns"
+                                                 (mevedel-goal-status goal)
+                                                 (mevedel-goal-turns-run goal))
+                                       "none"))))]
+   ["Cockpits"
+    :pad-keys t
     ("t" mevedel-menu--open-tools
      :description mevedel-menu--tools-description)
     ("x" mevedel-menu--open-executions
@@ -1159,76 +1325,106 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("s" mevedel-menu--open-skills
      :description mevedel-menu--skills-description)
     ("p" mevedel-menu--open-plugins
-     :description mevedel-menu--plugins-description)]
-   ["Inspect"
-    :pad-keys t
-    ("d" "Toggle data view" mevedel-menu--toggle-data-view)
-    ("g" "gptel menu" mevedel-menu--open-gptel)
+     :description mevedel-menu--plugins-description)
     ("w" mevedel-menu--open-worktree
      :description mevedel-menu--worktree-description)
-    ("G" mevedel-menu--open-goal
-     :description (lambda () (format "%-9s %s" "Goal"
-                                     (if-let* ((goal (mevedel-menu--current-goal)))
-                                         (format "%s, %d turns"
-                                                 (mevedel-goal-status goal)
-                                                 (mevedel-goal-turns-run goal))
-                                       "none"))))
+    ("d" "Data view" mevedel-menu--toggle-data-view)
+    ("i" "Session info" mevedel-menu--open-session-info)
+    ("g" "gptel menu" mevedel-menu--open-gptel)
     ("?" "Help" mevedel-menu--open-help)]]
   (interactive)
   (mevedel-menu--context)
   (transient-setup 'mevedel-menu--top))
 
+(transient-define-prefix mevedel-menu--navigate ()
+  "Transcript navigation cockpit surface.
+Every entry stays open so repeated motion needs one menu, and the keys
+match the ones the view buffer itself binds."
+  [:description mevedel-menu--navigate-description
+   ["Segment"
+    :pad-keys t
+    ("[" "Previous"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-previous-segment))
+     :transient t)
+    ("]" "Next"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-next-segment))
+     :transient t)
+    ("g" "Go to…"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-go-to-segment))
+     :transient t)]
+   ["Display"
+    :pad-keys t
+    ("n" "Next"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-next-display))
+     :transient t)
+    ("p" "Previous"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-previous-display))
+     :transient t)]
+   ["Query"
+    :pad-keys t
+    ("C-n" "Next"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-next-user-query))
+     :transient t)
+    ("C-p" "Previous"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-previous-user-query))
+     :transient t)]
+   ["Section"
+    :pad-keys t
+    ("TAB" "Toggle"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-toggle-section))
+     :transient t)
+    ("q" "Back" mevedel-menu)]]
+  (interactive)
+  (mevedel-menu--context)
+  (transient-setup 'mevedel-menu--navigate))
+
 (transient-define-prefix mevedel-menu--mode ()
   "Permission mode cockpit surface."
-  [:description mevedel-menu--header
-   ["Mode"
+  [:description mevedel-menu--mode-surface-description
+   ["Permission mode"
     :pad-keys t
     ("k" (lambda () (interactive) (mevedel-menu--set-mode 'ask))
      :description mevedel-menu--mode-ask-description)
     ("e" (lambda () (interactive) (mevedel-menu--set-mode 'edits))
      :description mevedel-menu--mode-edits-description)
     ("f" (lambda () (interactive) (mevedel-menu--set-mode 'full-auto))
-     :description mevedel-menu--mode-full-auto-description)
-    ("p" mevedel-menu--enter-plan
-     :description mevedel-menu--mode-plan-description)]
-   ["Navigation"
+     :description mevedel-menu--mode-full-auto-description)]
+   ["Conversation"
     :pad-keys t
-    ("b" "Back" mevedel-menu)]]
+    ("p" mevedel-menu--enter-plan
+     :description mevedel-menu--mode-plan-description)
+    ("q" "Back" mevedel-menu)]]
   (interactive)
   (mevedel-menu--context)
   (transient-setup 'mevedel-menu--mode))
-
-(transient-define-prefix mevedel-menu--permissions ()
-  "Remembered permission authority cockpit surface."
-  [:description mevedel-menu--permissions-description
-   ["Authority"
-    :pad-keys t
-    ("r" "Revoke" mevedel-menu--permissions-revoke
-     :transient t)]
-   ["Navigation"
-    :pad-keys t
-    ("b" "Back" mevedel-menu)]]
-  (interactive)
-  (mevedel-menu--context)
-  (transient-setup 'mevedel-menu--permissions))
 
 (transient-define-prefix mevedel-menu--model-selection ()
   "Shared caller-owned model-selection surface."
   [:description mevedel-menu--model-selection-description
    ["Model"
     :pad-keys t
-    ("RET" "Select model" mevedel-menu--model-selection-select-model
+    ("RET" "Choose model…" mevedel-menu--model-selection-select-model
      :transient t)
-    ("<return>" "Select model" mevedel-menu--model-selection-select-model
+    ;; Bind the GUI Return event too, without advertising it twice.
+    ("<return>" "Choose model…" mevedel-menu--model-selection-select-model
      :transient t :if (lambda (&rest _) nil))
-    ("e" "Select effort" mevedel-menu--model-selection-select-effort
-     :transient t)
     ("s" "Use session model" mevedel-menu--model-selection-reset
      :if (lambda () (plist-get (transient-scope) :reset))
      :transient t)]
-   ["Navigation"
+   ["Effort"
     :pad-keys t
-    ("b" "Back" transient-quit-one)]])
+    ("e" mevedel-menu--model-selection-cycle-effort
+     :description mevedel-menu--model-selection-effort-description
+     :transient t)
+    ("q" "Back" transient-quit-one)]])
 
 (transient-define-prefix mevedel-menu--goal ()
   "Goal cockpit surface."
@@ -1240,17 +1436,22 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("p" "Pause" (lambda () (interactive)
                      (mevedel-menu--goal-call #'mevedel-goal-pause))
      :inapt-if-not mevedel-menu--goal-active-p)
-    ("e" "Edit objective" mevedel-menu--goal-edit
-     :inapt-if-not mevedel-menu--current-goal)
-    ("b" "Set budget" mevedel-menu--goal-budget
-     :inapt-if-not mevedel-menu--current-goal)
     ("r" "Resume" (lambda () (interactive)
                       (mevedel-menu--goal-call #'mevedel-goal-resume))
      :inapt-if-not mevedel-menu--goal-resumable-p)
     ("c" "Clear" (lambda () (interactive)
                      (mevedel-menu--goal-call #'mevedel-goal-clear))
      :inapt-if-not mevedel-menu--goal-clearable-p)]
-   ["Navigation" ("q" "Back" mevedel-menu)]]
+   ["Adjust"
+    :pad-keys t
+    ("e" "Edit objective" mevedel-menu--goal-edit
+     :inapt-if-not mevedel-menu--current-goal)
+    ("b" "Set budget" mevedel-menu--goal-budget
+     :inapt-if-not mevedel-menu--current-goal)]
+   ["Inspect"
+    :pad-keys t
+    ("i" "Goal record" mevedel-menu--open-goal-record)
+    ("q" "Back" mevedel-menu)]]
   (interactive)
   (mevedel-menu--context)
   (transient-setup 'mevedel-menu--goal))
@@ -1260,9 +1461,12 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   [:description mevedel-menu--preset-description
    ["Preset"
     :pad-keys t
-    ("RET" "Select session preset" mevedel-menu--select-preset)
+    ("RET" "Choose preset…" mevedel-menu--select-preset)
     ("g" "gptel menu" mevedel-menu--open-gptel)]
-   ["Navigation" ("q" "Back" mevedel-menu)]]
+   ["Inspect"
+    :pad-keys t
+    ("i" "Model policy report" mevedel-menu--open-preset-report)
+    ("q" "Back" mevedel-menu)]]
   (interactive)
   (mevedel-menu--context)
   (transient-setup 'mevedel-menu--preset))
