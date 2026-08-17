@@ -41,6 +41,22 @@
 (declare-function mevedel-cockpit-show-help
                   "mevedel-cockpit" (buffer text))
 
+;; `mevedel-session-control-transfer'
+(declare-function mevedel-session-control-transfer-drain-blocker
+                  "mevedel-session-control-transfer" (session))
+
+;; `mevedel-view-interaction'
+(declare-function mevedel-refresh-session "mevedel-view-interaction" ())
+(declare-function mevedel-release-control "mevedel-view-interaction" ())
+(declare-function mevedel-take-control "mevedel-view-interaction" ())
+(declare-function mevedel-toggle-follow "mevedel-view-interaction" ())
+(declare-function mevedel-view-control-transfer-grant
+                  "mevedel-view-interaction" ())
+(declare-function mevedel-view-control-transfer-keep
+                  "mevedel-view-interaction" ())
+(defvar mevedel-session-follow-published)
+(defvar mevedel-session--read-only-mode)
+
 ;; `mevedel-compact'
 (declare-function mevedel-compact "mevedel-compact"
                   (&optional aggressive instructions))
@@ -154,6 +170,8 @@
                   (&optional buffer))
 (declare-function mevedel-request-state-label "mevedel-structs"
                   (&optional buffer))
+(declare-function mevedel-session-control-transfer
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-current-segment
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
@@ -425,6 +443,74 @@ The complete target and durability state lives in the session info panel."
         'transient-inactive-value))
      "\n"
      (mevedel-menu--alert-line session))))
+
+(defun mevedel-menu--read-only-p ()
+  "Return non-nil when this cockpit's session is read-only here."
+  (when-let ((data (mevedel-cockpit-context-data-buffer
+                    (mevedel-menu--context))))
+    (buffer-local-value 'mevedel-session--read-only-mode data)))
+
+(defun mevedel-menu--transfer-pending-p ()
+  "Return non-nil when another client is waiting for this session's lease."
+  (when-let ((session (mevedel-cockpit-context-session
+                       (mevedel-menu--context))))
+    (and (not (mevedel-menu--read-only-p))
+         (memq (plist-get (mevedel-session-control-transfer session) :state)
+               '(requested quiescing)))))
+
+(defun mevedel-menu--follow-description ()
+  "Return the follow toggle description for the control surface."
+  (let ((data (mevedel-cockpit-context-data-buffer (mevedel-menu--context))))
+    (format "%-10s %s" "Follow"
+            (cond
+             ((not (mevedel-menu--read-only-p)) "owner")
+             ((and data (buffer-local-value 'mevedel-session-follow-published
+                                            data))
+              "on")
+             (t "off")))))
+
+(defun mevedel-menu--control-summary ()
+  "Return the top-level cockpit entry description for session control."
+  (format "%-10s %s" "Control"
+          (if (mevedel-menu--read-only-p) "read-only" "writable")))
+
+(defun mevedel-menu--control-description ()
+  "Return the control surface header.
+
+Authority first, because every action on the surface either changes it or is
+unavailable until it changes."
+  (require 'mevedel-session-control-transfer)
+  (let* ((context (mevedel-menu--context))
+         (session (mevedel-cockpit-context-session context))
+         (read-only-p (mevedel-menu--read-only-p))
+         (transfer (and session (mevedel-session-control-transfer session)))
+         (label (plist-get (plist-get transfer :request) :requester-label)))
+    (concat
+     (mevedel-menu--face "control" 'transient-heading)
+     " "
+     (mevedel-menu--value
+      (if read-only-p "read-only" "writable")
+      (if read-only-p 'transient-inactive-value 'transient-value))
+     " · "
+     (mevedel-menu--face
+      (pcase (plist-get transfer :state)
+        ('requested
+         (if read-only-p
+             "control requested, waiting for the owner"
+           (format "%s is asking for control" (or label "another client"))))
+        ('quiescing
+         (if read-only-p
+             "granted, waiting for the owner to finish"
+           (format "granting to %s, finishing %s"
+                   (or label "another client")
+                   (or (mevedel-session-control-transfer-drain-blocker
+                        session)
+                       "up"))))
+        ('rejected "control request was declined")
+        (_ (if read-only-p
+               "another client is writing this session"
+             "you hold this session's lease")))
+      'transient-inactive-value))))
 
 (defun mevedel-menu--session-info-text ()
   "Return the complete session state as info-panel text."
@@ -981,6 +1067,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
        (mevedel-menu--open-model))
       ('goal
        (transient-setup 'mevedel-menu--goal))
+      ('control
+       (transient-setup 'mevedel-menu--control))
       ('preset
        (transient-setup 'mevedel-menu--preset))
       ('skills
@@ -1019,6 +1107,40 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   "Abort the active request from the view buffer."
   (interactive)
   (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-view-abort))
+
+(defun mevedel-menu--take-control ()
+  "Take control of this session from the view buffer."
+  (interactive)
+  (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-take-control))
+
+(defun mevedel-menu--release-control ()
+  "Release this session's lease from the view buffer."
+  (interactive)
+  (mevedel-cockpit-call-in-view
+   (mevedel-menu--context) #'mevedel-release-control))
+
+(defun mevedel-menu--grant-control ()
+  "Grant the pending control-transfer request from the view buffer."
+  (interactive)
+  (mevedel-cockpit-call-in-view
+   (mevedel-menu--context) #'mevedel-view-control-transfer-grant))
+
+(defun mevedel-menu--keep-control ()
+  "Decline the pending control-transfer request from the view buffer."
+  (interactive)
+  (mevedel-cockpit-call-in-view
+   (mevedel-menu--context) #'mevedel-view-control-transfer-keep))
+
+(defun mevedel-menu--toggle-follow ()
+  "Toggle published-state following from the view buffer."
+  (interactive)
+  (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-toggle-follow))
+
+(defun mevedel-menu--refresh-session ()
+  "Re-read the owner's newest published state from the view buffer."
+  (interactive)
+  (mevedel-cockpit-call-in-view
+   (mevedel-menu--context) #'mevedel-refresh-session))
 
 (defun mevedel-menu--rewind-here ()
   "Rewind to the settled assistant turn at point in the view buffer."
@@ -1190,6 +1312,11 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive)
   (mevedel-menu-open 'navigate))
 
+(defun mevedel-menu--open-control ()
+  "Open the session control cockpit surface."
+  (interactive)
+  (mevedel-menu-open 'control))
+
 (defun mevedel-menu--open-session-info ()
   "Open the session info panel."
   (interactive)
@@ -1328,6 +1455,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      :description mevedel-menu--plugins-description)
     ("w" mevedel-menu--open-worktree
      :description mevedel-menu--worktree-description)
+    ("C" mevedel-menu--open-control
+     :description mevedel-menu--control-summary)
     ("d" "Data view" mevedel-menu--toggle-data-view)
     ("i" "Session info" mevedel-menu--open-session-info)
     ("g" "gptel menu" mevedel-menu--open-gptel)
@@ -1335,6 +1464,37 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive)
   (mevedel-menu--context)
   (transient-setup 'mevedel-menu--top))
+
+(transient-define-prefix mevedel-menu--control ()
+  "Session control cockpit surface.
+
+Who may write this session, and what a non-owner sees of the owner's work.
+The same surface serves both sides: a client that wants control and a host
+that is being asked for it are the same protocol seen from two ends."
+  [:description mevedel-menu--control-description
+   ["Control"
+    :pad-keys t
+    ("t" "Take control" mevedel-menu--take-control
+     :inapt-if-not mevedel-menu--read-only-p)
+    ("q" "Release control" mevedel-menu--release-control
+     :inapt-if mevedel-menu--read-only-p)
+    ("g" "Grant" mevedel-menu--grant-control
+     :inapt-if-not mevedel-menu--transfer-pending-p)
+    ("k" "Keep" mevedel-menu--keep-control
+     :inapt-if-not mevedel-menu--transfer-pending-p)]
+   ["Follow"
+    :pad-keys t
+    ("f" mevedel-menu--toggle-follow
+     :description mevedel-menu--follow-description
+     :inapt-if-not mevedel-menu--read-only-p)
+    ("r" "Refresh now" mevedel-menu--refresh-session
+     :inapt-if-not mevedel-menu--read-only-p)]
+   ["Inspect"
+    :pad-keys t
+    ("i" "Session info" mevedel-menu--open-session-info)]]
+  (interactive)
+  (mevedel-menu--context)
+  (transient-setup 'mevedel-menu--control))
 
 (transient-define-prefix mevedel-menu--navigate ()
   "Transcript navigation cockpit surface.

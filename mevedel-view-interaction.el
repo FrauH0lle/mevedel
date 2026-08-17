@@ -89,8 +89,15 @@
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-session-control-transfer'
+(declare-function mevedel-session-control-transfer--follow-published
+                  "mevedel-session-control-transfer"
+                  (session buffer &optional force))
+(declare-function mevedel-session-control-transfer-acquire
+                  "mevedel-session-control-transfer" (session buffer))
 (declare-function mevedel-session-control-transfer-decide
                   "mevedel-session-control-transfer" (session decision))
+(declare-function mevedel-session-control-transfer-drain-blocker
+                  "mevedel-session-control-transfer" (session))
 (declare-function mevedel-session-control-transfer-descriptor
                   "mevedel-session-control-transfer" (session read-only-p))
 (declare-function mevedel-session-control-transfer-poll
@@ -115,9 +122,25 @@
 (declare-function mevedel-session-control-transfer-unregister-presentation
                   "mevedel-session-control-transfer" (session buffer))
 
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-lease-release
+                  "mevedel-session-durability"
+                  (session-dir &optional session))
+(declare-function mevedel-session-durability-lease-state
+                  "mevedel-session-durability" (session-dir))
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--apply-read-only-mode
+                  "mevedel-session-persistence" (buffer &optional reason))
+(declare-function mevedel-session-persistence-save
+                  "mevedel-session-persistence"
+                  (session buffer &optional settled))
+
 ;; `mevedel-view-render'
 (declare-function mevedel-view--debug-log "mevedel-view-render"
                   (event &rest data))
+(declare-function mevedel-view--rebase-data-sources "mevedel-view-render"
+                  (mapping))
 (declare-function mevedel-view--debug-state "mevedel-view-render"
                   (&optional data-buf start end))
 
@@ -171,15 +194,32 @@ seconds; nothing else observes the cadence."
   :type 'number
   :group 'mevedel)
 
+(defcustom mevedel-view-control-transfer-active-poll-seconds 2
+  "Seconds between control-transfer polls while a transfer is in flight.
+
+The idle intervals buy back connection time from a session nobody is trying
+to hand over.  A transfer in flight is the opposite case: three separate
+waits compose -- the owner noticing the request, the grant deadline, and the
+requester noticing the release fence -- so an idle cadence turns a 30 second
+handoff into minutes of polling latency.  This interval applies only while a
+request is outstanding, and both sides return to their idle cadence as soon
+as it settles."
+  :type 'number
+  :group 'mevedel)
+
 (defun mevedel-view--control-transfer-poll-seconds (session)
   "Return the control-transfer poll interval to use for SESSION."
-  (if (and session
-           (file-remote-p (or (mevedel-session-save-path session)
-                              (mevedel-session-working-directory session)
-                              "")))
-      mevedel-view-control-transfer-remote-poll-seconds
-    mevedel-view-control-transfer-poll-seconds))
-
+  (cond
+   ((and session
+         (memq (plist-get (mevedel-session-control-transfer session) :state)
+               '(requested quiescing)))
+    mevedel-view-control-transfer-active-poll-seconds)
+   ((and session
+         (file-remote-p (or (mevedel-session-save-path session)
+                            (mevedel-session-working-directory session)
+                            "")))
+    mevedel-view-control-transfer-remote-poll-seconds)
+   (t mevedel-view-control-transfer-poll-seconds)))
 
 ;;
 ;;; State
@@ -207,6 +247,26 @@ seconds; nothing else observes the cadence."
 
 (defvar-local mevedel-view--session-observer nil
   "Unregister token for this view's semantic session observer.")
+
+(defun mevedel-view--control-transfer-schedule (view)
+  "Arm VIEW's next control-transfer poll at the currently apt interval.
+
+The interval is chosen per tick rather than once at setup, because a
+transfer in flight wants a cadence the idle session does not."
+  (when (buffer-live-p view)
+    (with-current-buffer view
+      (when (timerp mevedel-view--control-transfer-timer)
+        (cancel-timer mevedel-view--control-transfer-timer))
+      (let ((interval
+             (mevedel-view--control-transfer-poll-seconds
+              (and (boundp 'mevedel--data-buffer)
+                   (buffer-live-p mevedel--data-buffer)
+                   (buffer-local-value 'mevedel--session
+                                       mevedel--data-buffer)))))
+        (setq-local mevedel-view--control-transfer-timer
+                    (run-at-time interval nil
+                                 #'mevedel-view--control-transfer-refresh
+                                 view))))))
 
 (defun mevedel-view-interaction--session-event (view event &rest args)
   "Apply semantic session EVENT to VIEW, when it remains live."
@@ -268,14 +328,16 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
                        (ignore-errors
                          (mevedel-session-control-transfer-poll
                           session data t)))
-              ;; The coordinator enables writes only after the target
-              ;; incarnation check and committed transcript restore.
+              ;; Acquiring control and advancing to a newer publication both
+              ;; replace the transcript.  The coordinator enables writes only
+              ;; after the target incarnation check and committed restore.
               (mevedel-view--full-rerender))
             (when (not read-only-p)
               (ignore-errors
                 (mevedel-session-control-transfer-poll
                  session data nil))))
-          (mevedel-view--interaction-rebuild))))))
+          (mevedel-view--interaction-rebuild)))
+      (mevedel-view--control-transfer-schedule (current-buffer)))))
 
 (defun mevedel-view-control-transfer-grant ()
   "Grant the currently displayed cooperative control-transfer request."
@@ -307,6 +369,97 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
       (mevedel-session-control-transfer-request mevedel--session))
     (message "mevedel: control-transfer request recorded; wait for release")
     (mevedel-view--interaction-rebuild)))
+
+(defun mevedel-view--control-transfer-session ()
+  "Return the current view's (DATA-BUFFER . SESSION), or signal."
+  (let ((data (mevedel-view--control-transfer-data-buffer)))
+    (unless data (user-error "No active mevedel session"))
+    (let ((session (buffer-local-value 'mevedel--session data)))
+      (unless session (user-error "No active mevedel session"))
+      (cons data session))))
+
+;;;###autoload
+(defun mevedel-take-control ()
+  "Take control of the session shown in the current view.
+
+An unheld or expired lease is acquired directly -- there is no owner to ask,
+and the lease layer already confirms an expired takeover.  A lease a live
+client holds is requested instead; that client grants it automatically once
+`mevedel-session-transfer-prompt-timeout' passes, then finishes its work and
+releases, so control arrives without anyone sitting at the other machine."
+  (interactive)
+  (require 'mevedel-session-control-transfer)
+  (require 'mevedel-session-durability)
+  (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
+    (unless (buffer-local-value 'mevedel-session--read-only-mode data)
+      (user-error "This session is already writable here"))
+    (if (eq 'foreign
+            (mevedel-session-durability-lease-state
+             (mevedel-session-save-path session)))
+        (mevedel-view-control-transfer-request)
+      (mevedel-session-control-transfer-acquire session data)
+      (mevedel-view--full-rerender)
+      (mevedel-view--interaction-rebuild))))
+
+;;;###autoload
+(defun mevedel-release-control ()
+  "Hand this session's lease back and keep watching it read-only.
+
+The session is saved and published before the lease goes, so whoever takes
+it next starts from the work done here.  Live work blocks the release for
+the same reason a granted transfer waits for it."
+  (interactive)
+  (require 'mevedel-session-control-transfer)
+  (require 'mevedel-session-durability)
+  (require 'mevedel-session-persistence)
+  (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
+    (when (buffer-local-value 'mevedel-session--read-only-mode data)
+      (user-error "This session is already read-only here"))
+    (when-let ((blocker
+                (mevedel-session-control-transfer-drain-blocker session)))
+      (user-error "Cannot release control while %s is outstanding" blocker))
+    (mevedel-session-persistence-save session data t)
+    (mevedel-session-durability-lease-release
+     (mevedel-session-save-path session) session)
+    (mevedel-session-persistence--apply-read-only-mode
+     data "Control released; this session is now read-only here")
+    (mevedel-view--interaction-rebuild)
+    (message "mevedel: control released; following the new owner")))
+
+;;;###autoload
+(defun mevedel-toggle-follow ()
+  "Toggle whether this non-owner view follows the owner's published turns."
+  (interactive)
+  (require 'mevedel-session-control-transfer)
+  (pcase-let ((`(,data . ,_session) (mevedel-view--control-transfer-session)))
+    (let ((enabled
+           (with-current-buffer data
+             (setq-local mevedel-session-follow-published
+                         (not mevedel-session-follow-published)))))
+      (mevedel-view--interaction-rebuild)
+      (message "mevedel: following published turns %s"
+               (if enabled "on" "off")))))
+
+;;;###autoload
+(defun mevedel-refresh-session ()
+  "Re-read the owner's newest published state into this read-only view.
+
+This is what following does on a timer, run now and regardless of whether
+this view follows."
+  (interactive)
+  (require 'mevedel-session-control-transfer)
+  (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
+    (unless (buffer-local-value 'mevedel-session--read-only-mode data)
+      (user-error "This session is writable here; there is nothing to follow"))
+    (if (mevedel-session-control-transfer--follow-published session data t)
+        (progn
+          (mevedel-view--full-rerender)
+          (mevedel-view--interaction-rebuild)
+          (message "mevedel: advanced to the owner's newest published state"))
+      (message "mevedel: already at the owner's newest published state"))))
+
+(defvar-keymap mevedel-view--control-transfer-status-map
+  :doc "Inert keymap for a control-transfer status line.")
 
 (defvar-keymap mevedel-view--control-transfer-map
   :doc "Keymap for cooperative lease-transfer controls."
@@ -397,14 +550,7 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
                      session
                      (lambda ()
                        (mevedel-view-interaction-transfer-drain-p view))))))
-    (setq-local mevedel-view--control-transfer-timer
-                (let ((interval
-                       (mevedel-view--control-transfer-poll-seconds
-                        (buffer-local-value 'mevedel--session
-                                            mevedel--data-buffer))))
-                  (run-at-time interval interval
-                               #'mevedel-view--control-transfer-refresh
-                               (current-buffer))))))
+    (mevedel-view--control-transfer-schedule (current-buffer))))
 
 (defun mevedel-view--interaction-telemetry-close (id)
   "Record and forget telemetry lifetime ID."
@@ -876,9 +1022,13 @@ This deletes only interaction UI overlays and never settles callbacks."
                (append descriptor
                        (list :id 'control-transfer
                              :keymap
-                             (if (eq (plist-get descriptor :action) 'grant)
-                                 mevedel-view--control-transfer-map
-                               mevedel-view--control-transfer-request-map)
+                             (pcase (plist-get descriptor :action)
+                               ('grant mevedel-view--control-transfer-map)
+                               ('request
+                                mevedel-view--control-transfer-request-map)
+                               ;; A pending request is a status line; there
+                               ;; is nothing for the user to press on it.
+                               (_ mevedel-view--control-transfer-status-map))
                              :origin "/root"))))
             (when (mevedel-session-pending-plan-approval session)
               (require 'mevedel-plan-mode)

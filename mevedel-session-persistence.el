@@ -247,6 +247,8 @@
                   "mevedel-session-durability" (session-dir &optional session))
 (declare-function mevedel-session-durability-lease-state
                   "mevedel-session-durability" (session-dir))
+(declare-function mevedel-session-durability-lease-status
+                  "mevedel-session-durability" (session-dir))
 (declare-function mevedel-session-transfer-poll
                   "mevedel-session-transfer" (session))
 (declare-function mevedel-session-transfer-decide
@@ -545,10 +547,11 @@ Defaults to 1 MB."
 (defcustom mevedel-session-max-age-days 30
   "Auto-cleanup threshold for old sessions, in days.
 
-Sessions older than this are eligible for deletion when `mevedel-resume'
-runs or Emacs exits (throttled per workspace per Emacs invocation).  Age
-comes from `:updated-at', or the sidecar or session directory modification
-time when metadata cannot provide it.  Sessions with active locks are always
+Sessions older than this are eligible for deletion when the `mevedel'
+session chooser runs or Emacs exits (throttled per workspace per Emacs
+invocation).  Age comes from `:updated-at', or the sidecar or session
+directory modification time when metadata cannot provide it.  Sessions with
+active locks are always
 skipped: any cross-host lock, or a same-host lock whose PID is live and not
 known to have been reused.  A nil value disables auto-cleanup entirely."
   :type '(choice (integer :tag "Days")
@@ -4178,7 +4181,7 @@ is not active: either its PID is dead, or the PID is live but the live
 process start time proves PID reuse.  Cross-host locks are left alone.
 Best-effort; any I/O failure is swallowed.
 
-Called opportunistically from `mevedel-resume'."
+Called opportunistically from the `mevedel' session chooser."
   (let ((sessions-dir (mevedel-session-persistence--sessions-dir workspace)))
     ;; Portable leases expire and are taken over explicitly.  A project
     ;; sweep has no authority over them.
@@ -4404,16 +4407,21 @@ broken.  While set: autosave is inhibited (the terminal DONE handler
 early-outs), the view buffer refuses to insert into the data buffer,
 and the data buffer itself is marked `buffer-read-only'.")
 
-(defun mevedel-session-persistence--apply-read-only-mode (buf)
+(defun mevedel-session-persistence--apply-read-only-mode (buf &optional reason)
   "Put BUF into read-only session mode.
+
+REASON replaces the default explanation.  Handing control away deliberately
+is not the same event as finding someone else already holding the lock, and
+saying the wrong one is how a user learns to ignore the warning.
 See `mevedel-session--read-only-mode' for semantics."
   (with-current-buffer buf
     (setq buffer-read-only t)
     (setq-local mevedel-session--read-only-mode t)
     (display-warning
      'mevedel
-     "Session opened read-only: another host holds the lock. \
-Sends are disabled and nothing will be persisted."
+     (concat (or reason
+                 "Session opened read-only: another host holds the lock")
+             ". Sends are disabled and nothing will be persisted here.")
      :warning)))
 
 (defun mevedel-session-persistence--synthesize-session (session-dir workspace)
@@ -7899,10 +7907,12 @@ SESSIONS may supply an already-loaded session summary list."
                       (string-lessp left-created right-created)))
                 left-source))))))
 
-(defun mevedel-session-persistence--format-session-candidate (entry)
+(defun mevedel-session-persistence--format-session-candidate (entry &optional detail)
   "Return a `completing-read' display string for session ENTRY.
 Shows a relative-time annotation first so the newest session is
-easiest to recognise at a glance."
+easiest to recognise at a glance.  DETAIL, when given, names the machine
+holding the session and is placed ahead of the message preview, which is the
+one field with no bound on its length."
   (let* ((s        (plist-get entry :summary))
          (updated  (plist-get s :updated-at))
          (relative (mevedel-session-persistence--format-relative-time updated))
@@ -7937,43 +7947,96 @@ easiest to recognise at a glance."
                      (t "active"))))
               (format "  Worktree Fork: %s (%s)"
                       (or current origin "?") status)))))
-    (format "%-12s  %s  [%d seg, %d turns]%s  %s"
-            relative name segments turns (or worktree "") preview)))
+    (format "%-12s  %s  [%d seg, %d turns]%s%s  %s"
+            relative name segments turns (or worktree "")
+            (if detail (format "  (%s)" detail) "")
+            preview)))
+
+(defun mevedel-session-persistence--entry-live-buffer (entry)
+  "Return the live root buffer already open for session ENTRY, or nil."
+  (when-let ((session-id (plist-get (plist-get entry :summary) :session-id)))
+    (require 'mevedel-session-control-transfer)
+    (mevedel-session-control-transfer-root-buffer-for-id session-id)))
+
+(defun mevedel-session-persistence--entry-authority (workspace entry)
+  "Return `(:action LABEL :detail TEXT)' for WORKSPACE session ENTRY.
+
+The verb names the outcome of choosing this row, which the lease decides:
+whether anyone is writing the session right now, not whether its files
+happen to be local or reached over TRAMP.  DETAIL names the machine
+involved, which is the part a verb cannot carry.
+
+A whole lease observation per candidate is one target round trip per row, so
+the state and the holder are read together."
+  (cond
+   ((when-let ((buffer (mevedel-session-persistence--entry-live-buffer entry)))
+      (list :action "Switch"
+            :detail (if (buffer-local-value 'mevedel-session--read-only-mode
+                                            buffer)
+                        "already open here, read-only"
+                      "already open here"))))
+   ((eq (mevedel-session-persistence--workspace-authority-mode workspace)
+        'portable)
+    (require 'mevedel-session-durability)
+    (let* ((status (mevedel-session-durability-lease-status
+                    (plist-get entry :save-path)))
+           (host (plist-get status :host))
+           (elsewhere (and host (not (equal host (system-name))) host)))
+      (pcase (plist-get status :state)
+        ('foreign
+         (list :action "Join"
+               :detail (format "held by %s" (or host "another client"))))
+        ('expired
+         (list :action "Take over"
+               :detail (if host
+                           (format "lease expired, was %s" host)
+                         "lease expired")))
+        (_
+         (list :action "Resume"
+               :detail (and elsewhere
+                            (format "last held by %s" elsewhere)))))))
+   ((mevedel-session-persistence--active-lock-p (plist-get entry :save-path))
+    (list :action "Join" :detail "locked by another process"))
+   (t (list :action "Resume"))))
 
 (defun mevedel-session-persistence--entry-action (workspace entry)
   "Return the entry action label for WORKSPACE session ENTRY."
-  (if (eq (mevedel-session-persistence--workspace-authority-mode workspace)
-          'portable)
-      (progn
-        (require 'mevedel-session-durability)
-        (pcase (mevedel-session-durability-lease-state
-                (plist-get entry :save-path))
-          ('foreign "Join read-only")
-          ('expired "Take over")
-          (_ "Resume")))
-    (if (mevedel-session-persistence--active-lock-p
-         (plist-get entry :save-path))
-        "Join read-only"
-      "Resume")))
+  (plist-get (mevedel-session-persistence--entry-authority workspace entry)
+             :action))
 
 (defun mevedel-session-persistence-choose-entry (workspace)
   "Choose a persisted WORKSPACE session or return `new'.
 
-Return nil when no persisted sessions exist.  Restoring a foreign session
-opens its committed state read-only; its view then offers Request control."
+Return nil when no persisted sessions exist.  The action offered per row
+follows the session's authority: an unheld session resumes, one already open
+in this Emacs is switched to, one another client holds is joined read-only
+and follows the owner from there, and an expired lease is taken over."
+  ;; Expired sessions and locks left behind by dead Emacsen are swept before
+  ;; listing, so the chooser never offers a row that exists only because
+  ;; nothing has cleaned up after a previous invocation.
+  (mevedel-session-persistence-cleanup-expired workspace)
+  (mevedel-session-persistence--sweep-stale-locks workspace)
   (when-let ((sessions
               (mevedel-session-persistence-list-sessions workspace)))
     (let* ((new-label "Start new session")
+           (held-p nil)
            (candidates
             (mapcar
              (lambda (entry)
-               (cons
-                (format "%s — %s"
-                        (mevedel-session-persistence--entry-action
-                         workspace entry)
-                        (mevedel-session-persistence--format-session-candidate
-                         entry))
-                entry))
+               (let* ((authority
+                       (mevedel-session-persistence--entry-authority
+                        workspace entry))
+                      (action (plist-get authority :action)))
+                 ;; Whether some other writer is live is already answered by
+                 ;; the row's own authority read; asking the target again per
+                 ;; candidate is a second round trip for the same fact.
+                 (unless (equal action "Resume")
+                   (setq held-p t))
+                 (cons
+                  (format "%-10s %s" action
+                          (mevedel-session-persistence--format-session-candidate
+                           entry (plist-get authority :detail)))
+                  entry)))
              sessions))
            (choices (cons new-label (mapcar #'car candidates)))
            (choice
@@ -7984,20 +8047,7 @@ opens its committed state read-only; its view then offers Request control."
              nil t nil nil (car choices))))
       (if (equal choice new-label)
           (progn
-            (when (cl-some
-                   (lambda (candidate)
-                     (let ((entry (cdr candidate)))
-                       (if (eq
-                            (mevedel-session-persistence--workspace-authority-mode
-                             workspace)
-                            'portable)
-                           (memq
-                            (mevedel-session-durability-lease-state
-                             (plist-get entry :save-path))
-                            '(owned foreign))
-                         (mevedel-session-persistence--active-lock-p
-                          (plist-get entry :save-path)))))
-                   candidates)
+            (when held-p
               (unless
                   (yes-or-no-p
                    (concat
@@ -8007,7 +8057,8 @@ opens its committed state read-only; its view then offers Request control."
                 (user-error "New session was not started")))
             'new)
         (mevedel-session-persistence-restore
-         (plist-get (cdr (assoc choice candidates)) :save-path))))))
+         (plist-get (cdr (assoc choice candidates)) :save-path)
+         nil nil workspace)))))
 
 (defun mevedel-session-persistence--ordered-display-collection
     (displays category)
@@ -8119,55 +8170,6 @@ CATEGORY is exposed as completion metadata for completion UI integrations."
            "Switch variant: " collection nil t nil nil
            (or (car current) (car displays)))))
     (cdr (assoc chosen candidates))))
-
-;;;###autoload
-(defun mevedel-resume ()
-  "Resume a saved mevedel session in the current workspace.
-
-Pick a session via `completing-read'.  If the picked session's chat
-buffer is already alive in Emacs, switch to it instead of re-loading
-from disk."
-  (interactive)
-  ;; Entry point: pull in the rest of mevedel so calling this as the first
-  ;; command in a fresh Emacs does not hit void-function errors on
-  ;; `mevedel-workspace' and friends.
-  (require 'mevedel)
-  (let* ((workspace (mevedel-workspace))
-         ;; Clean up before sweeping stale locks so removing a lock cannot make
-         ;; a sidecar-less session appear newly modified.
-         (_         (mevedel-session-persistence-cleanup-expired workspace))
-         ;; Silently drop `.lock' files left behind by previous Emacs
-         ;; invocations on this host before listing.
-         (_         (mevedel-session-persistence--sweep-stale-locks workspace))
-         (sessions  (mevedel-session-persistence-list-sessions workspace)))
-    (unless sessions
-      (user-error "No saved sessions in this workspace"))
-    (require 'mevedel-session-control-transfer)
-    (let* ((target
-            (let* ((candidates
-                    (mapcar
-                     (lambda (e)
-                       (cons (mevedel-session-persistence--format-session-candidate e)
-                             e))
-                     sessions))
-                   (displays (mapcar #'car candidates))
-                   (collection
-                    (mevedel-session-persistence--ordered-display-collection
-                     displays 'mevedel-session))
-                   (chosen (completing-read
-                            "Resume session: "
-                            collection nil t
-                            nil nil
-                            (car displays))))
-              (cdr (assoc chosen candidates))))
-           (save-path (plist-get target :save-path))
-           (buf       (mevedel-session-persistence-restore save-path))
-           (session   (buffer-local-value 'mevedel--session buf))
-           (display   (or (mevedel-session-control-transfer-presentation-buffer
-                          session)
-                          buf)))
-      (display-buffer display gptel-display-buffer-action)
-      buf)))
 
 ;;;###autoload
 (defun mevedel-save-session (&optional arg)
@@ -8474,8 +8476,8 @@ bad buffer can't block exit."
         (error nil)))))
 
 ;; Install at file-load time so exit persistence runs even when the user
-;; never called `mevedel-install' this Emacs (e.g. running `mevedel-resume'
-;; is the only command invoked).  Duplicate adds are no-ops by `add-hook'.
+;; never called `mevedel-install' this Emacs (e.g. running `mevedel' to
+;; resume is the only command invoked).  Duplicate adds are no-ops by `add-hook'.
 (add-hook 'kill-emacs-query-functions
           #'mevedel-session-persistence--allow-emacs-exit-p)
 (add-hook 'kill-emacs-hook #'mevedel-session-persistence--kill-emacs-hook)

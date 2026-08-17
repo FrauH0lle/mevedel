@@ -305,8 +305,9 @@ warnings.
   `mevedel-request-directive-changes` / `mevedel-retry-directive` /
   `mevedel-tutor-directive`
 - `mevedel` / `mevedel-tutoring`
-- `mevedel-resume` / `mevedel-rewind` / `mevedel-save-session` /
-  `mevedel-rename-session`
+- `mevedel-rewind` / `mevedel-save-session` / `mevedel-rename-session`
+- `mevedel-take-control` / `mevedel-release-control` /
+  `mevedel-toggle-follow` / `mevedel-refresh-session`
 - `mevedel-process-directives`, `mevedel-next/previous-instruction`
 - `mevedel-diff-apply-buffer` / `mevedel-ediff-patch`
 - `mevedel-compact`

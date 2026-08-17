@@ -60,7 +60,24 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
 (defvar mevedel-session--read-only-mode)
+
+(defcustom mevedel-session-follow-published t
+  "Whether a non-owner session buffer follows the owner's committed state.
+
+A joined client and a host that has handed control away are the same thing:
+a buffer whose session is being written somewhere else.  Following re-reads
+each new committed publication so the buffer shows the owner's work instead
+of the snapshot it opened with.  Updates arrive one publication at a time,
+which is turn-granular, not streaming.
+
+Each poll costs one lease observation, and each advance costs the committed
+sidecar and segment.  Set to nil to hold a non-owner buffer at the state it
+opened with; the value is read per buffer, so a single session can opt out
+with `mevedel-toggle-follow'."
+  :type 'boolean
+  :group 'mevedel)
 
 (defvar mevedel-session-control-transfer--observers
   (make-hash-table :test #'eq :weakness 'key)
@@ -86,7 +103,7 @@
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--apply-read-only-mode
-                  "mevedel-session-persistence" (buffer))
+                  "mevedel-session-persistence" (buffer &optional reason))
 (declare-function mevedel-session-persistence--check-target-incarnation
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-persistence--copy-session-state
@@ -113,6 +130,12 @@
 (declare-function mevedel-session-durability-lease-release
                   "mevedel-session-durability"
                   (session-dir &optional session))
+(declare-function mevedel-session-durability-publication-head
+                  "mevedel-session-durability" (session-dir))
+
+;; `mevedel-transcript-restore'
+(declare-function mevedel-transcript-restore-gptel-state
+                  "mevedel-transcript-restore" ())
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-read
@@ -299,6 +322,28 @@ predicate is conservatively treated as still draining."
                              (error t))))
                     (mevedel-session-control-transfer-drains session))))
 
+(defun mevedel-session-control-transfer-drain-blocker (session)
+  "Return a short phrase naming what blocks SESSION's handoff, or nil.
+
+Only the owner can answer this: a requester sees `quiescing' and nothing
+about why.  The first blocker is enough -- the user wants to know whether the
+wait is theirs to end, not an inventory."
+  (cond
+   ((mevedel-request-active-p
+     (mevedel-session-control-transfer-root-buffer session))
+    "a running request")
+   ((mevedel-execution-session-live-p session) "a live execution")
+   ((mevedel-session-permission-queue session) "a permission prompt")
+   ((mevedel-session-pending-plan-approval session) "a plan approval")
+   ((mevedel-session-pending-input-p session) "queued input")
+   ((mevedel-agent-control-active-turn-p session) "an agent turn")
+   ((mevedel-execution-unsettled-mutation-p session) "an unsettled mutation")
+   ((or (mevedel-session-pending-publication session)
+        (mevedel-session-publication-active-p session))
+    "a publication")
+   ((not (mevedel-session-control-transfer-drained-p session))
+    "the view")))
+
 (defun mevedel-session-control-transfer-observe (session)
   "Refresh SESSION's durable transfer state without settling it.
 
@@ -321,15 +366,154 @@ releases the owner's session."
         (when (buffer-live-p buffer)
           (mevedel-session-persistence-save session buffer t)
           (mevedel-session-transfer-release session)
-          (mevedel-session-persistence--apply-read-only-mode buffer))))
+          (mevedel-session-persistence--apply-read-only-mode
+           buffer
+           (format "Control transferred to %s"
+                   (or (plist-get (plist-get state :request)
+                                  :requester-label)
+                       "another client"))))))
     (mevedel-session-control-transfer session)))
 
-(defun mevedel-session-control-transfer--poll-requester
+(defun mevedel-session-control-transfer--insert-committed-segment
     (session buffer)
-  "Acquire SESSION into BUFFER after its committed release fence is visible.
+  "Replace BUFFER with SESSION's current committed segment bytes.
+
+The buffer is left unmodified and read-only-neutral: the caller decides
+whether the result is a writable owner buffer or a read-only follower.  The
+segment number comes from the committed session state, so a rotation on the
+owner's side repoints the visited file here too."
+  (let* ((save-path (mevedel-session-save-path session))
+         (logical
+          (file-name-nondirectory
+           (mevedel-session-persistence--segment-path
+            save-path (mevedel-session-current-segment session))))
+         (segment-path (expand-file-name logical save-path))
+         (content
+          (mevedel-session-persistence-read-artifact session logical t)))
+    (with-current-buffer buffer
+      (setq buffer-file-name segment-path
+            buffer-file-truename nil
+            default-directory (mevedel-session-working-directory session))
+      (set-visited-file-modtime)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert
+         (decode-coding-string
+          content (or buffer-file-coding-system 'utf-8-unix))))
+      (require 'mevedel-transcript-restore)
+      (mevedel-transcript-restore-gptel-state)
+      (set-buffer-modified-p nil)
+      (set-visited-file-modtime))))
+
+(defun mevedel-session-control-transfer--follow-published
+    (session buffer &optional force)
+  "Advance read-only BUFFER to SESSION's newest committed publication.
+
+FORCE re-reads even when this buffer has following turned off, which is what
+an explicit refresh command asks for.
+
+Return non-nil when the buffer moved to a newer publication.  A non-owner
+sees only what the owner has committed, so the buffer advances one whole
+publication at a time and never mid-turn.  The publication head names the
+generation cheaply, so an unchanged owner costs one lease observation and no
+artifact reads at all.
+
+A locally modified buffer is left alone.  Those edits are exactly what the
+transfer path refuses to discard, and a follow tick must not resolve that
+conflict on the user's behalf."
+  (when (and (buffer-live-p buffer)
+             (or force
+                 (buffer-local-value 'mevedel-session-follow-published buffer))
+             (not (buffer-modified-p buffer))
+             (mevedel-session-save-path session))
+    (require 'mevedel-session-durability)
+    (require 'mevedel-session-publication)
+    (let* ((save-path (mevedel-session-save-path session))
+           (head (mevedel-session-durability-publication-head save-path)))
+      (when (and head
+                 (not (equal head
+                             (plist-get (mevedel-session-publication session)
+                                        :head))))
+        (let* ((workspace (mevedel-session-workspace session))
+               (target (mevedel-session-execution-target session))
+               (lease (mevedel-session-lease session))
+               (timer (mevedel-session-lease-renewal-timer session))
+               (transfer (mevedel-session-control-transfer session))
+               (publication (mevedel-session-publication-read save-path))
+               (sidecar
+                (and publication
+                     (mevedel-session-persistence-load-sidecar
+                      (plist-get publication :sidecar))))
+               (refreshed
+                (and sidecar
+                     (plist-get
+                      (mevedel-session-persistence-deserialize
+                       sidecar workspace)
+                      :session))))
+          (when refreshed
+            (mevedel-session-persistence--copy-session-state refreshed session)
+            (mevedel-session-set-execution-target session target)
+            ;; The follower holds no lease and runs no renewal timer; adopting
+            ;; committed state must not invent either.
+            (mevedel-session-adopt-committed-state
+             session workspace save-path lease timer publication transfer
+             buffer)
+            (mevedel-session-control-transfer--insert-committed-segment
+             session buffer)
+            t))))))
+
+(defun mevedel-session-control-transfer--adopt-control (session buffer)
+  "Adopt SESSION's committed state into BUFFER under a freshly held lease.
+
+The caller has already acquired the lease.  Losing it again on any failure is
+the point of the unwind: a client that cannot finish adopting committed state
+must not keep other clients out.
 
 The target incarnation check runs after committed session state is copied and
 before transcript bytes are inserted or the buffer becomes writable."
+  (condition-case err
+      (let* ((save-path (mevedel-session-save-path session))
+             (workspace (mevedel-session-workspace session))
+             (target (mevedel-session-execution-target session))
+             (lease (mevedel-session-lease session))
+             (timer (mevedel-session-lease-renewal-timer session))
+             (transfer (mevedel-session-control-transfer session))
+             (publication
+              (or (mevedel-session-publication-read save-path)
+                  (error "Transferred session has no committed publication")))
+             (sidecar
+              (mevedel-session-persistence-load-sidecar
+               (plist-get publication :sidecar)))
+             (refreshed
+              (plist-get
+               (mevedel-session-persistence-deserialize sidecar workspace)
+               :session)))
+        (unless refreshed
+          (error "Transferred session has no valid committed sidecar"))
+        (mevedel-session-persistence--copy-session-state refreshed session)
+        (mevedel-session-set-execution-target session target)
+        (mevedel-session-adopt-committed-state
+         session workspace save-path lease timer publication transfer buffer)
+        (mevedel-session-control-transfer-register-root-buffer session buffer)
+        (mevedel-session-persistence--check-target-incarnation session buffer)
+        (mevedel-session-control-transfer--insert-committed-segment
+         session buffer)
+        (with-current-buffer buffer
+          (setq buffer-read-only nil
+                mevedel-session--read-only-mode nil))
+        (mevedel-session-persistence--load-instructions session buffer)
+        (mevedel-session-set-control-transfer
+         session
+         (list :state 'acquired :request (plist-get transfer :request)))
+        (message "mevedel: control acquired; session is writable")
+        t)
+    (error
+     (mevedel-session-durability-lease-release
+      (mevedel-session-save-path session) session)
+     (signal (car err) (cdr err)))))
+
+(defun mevedel-session-control-transfer--poll-requester (session buffer)
+  "Acquire SESSION into BUFFER after its committed release fence is visible."
   (when (and (buffer-live-p buffer)
              (mevedel-session-save-path session)
              (eq (plist-get (mevedel-session-control-transfer session) :state)
@@ -343,76 +527,36 @@ before transcript bytes are inserted or the buffer becomes writable."
            (mevedel-session-save-path session)
            (buffer-name buffer)
            session)
-      (condition-case err
-          (let* ((save-path (mevedel-session-save-path session))
-                 (workspace (mevedel-session-workspace session))
-                 (target (mevedel-session-execution-target session))
-                 (lease (mevedel-session-lease session))
-                 (timer (mevedel-session-lease-renewal-timer session))
-                 (transfer (mevedel-session-control-transfer session))
-                 (publication
-                  (or (mevedel-session-publication-read save-path)
-                      (error "Transferred session has no committed publication")))
-                 (sidecar
-                  (mevedel-session-persistence-load-sidecar
-                   (plist-get publication :sidecar)))
-                 (refreshed
-                  (plist-get
-                   (mevedel-session-persistence-deserialize sidecar workspace)
-                   :session)))
-            (unless refreshed
-              (error "Transferred session has no valid committed sidecar"))
-            (mevedel-session-persistence--copy-session-state
-             refreshed session)
-            (mevedel-session-set-execution-target session target)
-            (mevedel-session-adopt-committed-state
-             session workspace save-path lease timer publication transfer buffer)
-            (mevedel-session-control-transfer-register-root-buffer session buffer)
-            (mevedel-session-persistence--check-target-incarnation
-             session buffer)
-            (let* ((logical
-                    (file-name-nondirectory
-                     (mevedel-session-persistence--segment-path
-                      save-path (mevedel-session-current-segment session))))
-                   (segment-path (expand-file-name logical save-path))
-                   (content
-                    (mevedel-session-persistence-read-artifact
-                     session logical t)))
-              (with-current-buffer buffer
-                (setq buffer-file-name segment-path
-                      buffer-file-truename nil
-                      default-directory
-                      (mevedel-session-working-directory session))
-                (set-visited-file-modtime)
-                (let ((inhibit-read-only t))
-                  (erase-buffer)
-                  (insert
-                   (decode-coding-string
-                    content (or buffer-file-coding-system 'utf-8-unix))))
-                (require 'mevedel-transcript-restore)
-                (mevedel-transcript-restore-gptel-state)
-                (set-buffer-modified-p nil)
-                (set-visited-file-modtime)
-                (setq buffer-read-only nil
-                      mevedel-session--read-only-mode nil)))
-            (mevedel-session-persistence--load-instructions session buffer)
-            (mevedel-session-set-control-transfer
-             session
-             (list :state 'acquired
-                   :request (plist-get transfer :request)))
-            (message
-             "mevedel: cooperative control acquired; session is writable")
-            t)
-        (error
-         (mevedel-session-durability-lease-release
-          (mevedel-session-save-path session) session)
-         (signal (car err) (cdr err)))))))
+      (mevedel-session-control-transfer--adopt-control session buffer))))
+
+(defun mevedel-session-control-transfer-acquire (session buffer)
+  "Take SESSION's unheld lease directly into BUFFER.
+
+For a lease nobody holds there is no owner to request control from, and for
+an expired one the lease layer's own takeover confirmation is the whole
+negotiation.  Both reduce to acquiring and adopting committed state, which is
+also what a granted transfer ends with."
+  (unless (buffer-live-p buffer)
+    (error "Session buffer is not live"))
+  (unless (mevedel-session-save-path session)
+    (user-error "Session has not been materialized yet"))
+  (when (buffer-modified-p buffer)
+    (user-error "Read-only session changed locally; refresh before taking control"))
+  (require 'mevedel-session-durability)
+  (require 'mevedel-session-publication)
+  (mevedel-session-control-transfer-register-root-buffer session buffer)
+  (if (mevedel-session-durability-lease-acquire
+       (mevedel-session-save-path session) (buffer-name buffer) session)
+      (mevedel-session-control-transfer--adopt-control session buffer)
+    (user-error "Another client took this session's lease first")))
 
 (defun mevedel-session-control-transfer-poll (session buffer read-only-p)
   "Poll SESSION's durable transfer state for BUFFER.
 
 READ-ONLY-P selects requester admission; an owning session drains and settles
-its committed transfer. Return non-nil when a requester acquired control.
+its committed transfer.  Return non-nil when a non-owner buffer changed --
+either by acquiring control or by advancing to a newer publication -- so the
+caller knows to redraw.
 
 Polling runs from a timer, and a timer fires wherever the main loop happens to
 be waiting, including inside a TRAMP operation.  Target I/O from there is a
@@ -425,7 +569,9 @@ transport is free."
   (unless (or (mevedel-session-publication-active-p session)
               (mevedel-transport-busy-p (mevedel-session-save-path session)))
     (if read-only-p
-        (mevedel-session-control-transfer--poll-requester session buffer)
+        (or (mevedel-session-control-transfer--poll-requester session buffer)
+            (mevedel-session-control-transfer--follow-published
+             session buffer))
       (mevedel-session-control-transfer--poll-owner session))))
 
 (defun mevedel-session-control-transfer-request (session)
@@ -452,15 +598,37 @@ using its own interaction presentation."
          (request (plist-get transfer :request))
          (label (plist-get request :requester-label)))
     (cond
-     ((memq state '(requested quiescing))
+     ;; The owner decides.  A requester in the same durable state is waiting
+     ;; on its own request and has nothing to grant.
+     ((and (not read-only-p) (memq state '(requested quiescing)))
       (list :kind 'control-transfer
             :action 'grant
             :body
-            (format "Control transfer requested by %s  [g]rant  [k]eep"
-                    (or label "another client"))
+            (if (eq state 'quiescing)
+                (format "Control granted to %s  finishing %s"
+                        (or label "another client")
+                        (or (mevedel-session-control-transfer-drain-blocker
+                             session)
+                            "up"))
+              (format "Control transfer requested by %s  [g]rant  [k]eep"
+                      (or label "another client")))
             :help-echo "Grant or keep the current lease"))
-     ((and read-only-p
-           (not (memq state '(requested quiescing))))
+     ((and read-only-p (eq state 'requested))
+      (list :kind 'control-transfer
+            :action 'requested
+            :body "Control requested  waiting for the owner"
+            :help-echo "The owner grants automatically once the request times out"))
+     ((and read-only-p (eq state 'quiescing))
+      (list :kind 'control-transfer
+            :action 'requested
+            :body "Control granted  waiting for the owner to finish"
+            :help-echo "Control arrives once the owner has drained its work"))
+     ((and read-only-p (eq state 'rejected))
+      (list :kind 'control-transfer
+            :action 'request
+            :body "Control request was declined  [r]equest again"
+            :help-echo "Request cooperative control"))
+     (read-only-p
       (list :kind 'control-transfer
             :action 'request
             :body "Session is read-only  [r]equest control"

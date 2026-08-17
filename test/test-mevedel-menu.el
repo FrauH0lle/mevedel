@@ -1242,6 +1242,46 @@
           (mevedel-menu--send))
         (should (eq called-buffer view-buf))))))
 
+(mevedel-deftest mevedel-menu--take-control ()
+  ,test
+  (test)
+  :doc "control suffixes run in the paired view buffer"
+  ;; A transient fires wherever the cockpit was opened from, which is often
+  ;; the data buffer; the control commands resolve their pair from the
+  ;; current buffer and would find the wrong half.
+  (mevedel-menu-test--with-buffers
+    (let (called)
+      (cl-letf (((symbol-function 'mevedel-take-control)
+                 (lambda () (interactive) (push (cons 'take (current-buffer))
+                                                called)))
+                ((symbol-function 'mevedel-release-control)
+                 (lambda () (interactive) (push (cons 'release (current-buffer))
+                                                called)))
+                ((symbol-function 'mevedel-toggle-follow)
+                 (lambda () (interactive) (push (cons 'follow (current-buffer))
+                                                called)))
+                ((symbol-function 'mevedel-refresh-session)
+                 (lambda () (interactive) (push (cons 'refresh (current-buffer))
+                                                called)))
+                ((symbol-function 'mevedel-view-control-transfer-grant)
+                 (lambda () (interactive) (push (cons 'grant (current-buffer))
+                                                called)))
+                ((symbol-function 'mevedel-view-control-transfer-keep)
+                 (lambda () (interactive) (push (cons 'keep (current-buffer))
+                                                called))))
+        (with-current-buffer data-buf
+          (mevedel-menu--take-control)
+          (mevedel-menu--release-control)
+          (mevedel-menu--grant-control)
+          (mevedel-menu--keep-control)
+          (mevedel-menu--toggle-follow)
+          (mevedel-menu--refresh-session))
+        (should (= 6 (length called)))
+        (should (equal '(take release grant keep follow refresh)
+                       (mapcar #'car (reverse called))))
+        (should (cl-every (lambda (entry) (eq view-buf (cdr entry)))
+                          called))))))
+
 (mevedel-deftest mevedel-menu--abort ()
   ,test
   (test)
