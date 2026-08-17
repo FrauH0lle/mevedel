@@ -891,7 +891,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
               (should (= (point) (+ (mevedel-view--input-start) 4)))))
         (delete-directory root t)))))
 
-(mevedel-deftest mevedel-tool-fs--read-file ()
+(mevedel-deftest mevedel-tool-fs--read-file (:quiet t)
   ,test
   (test)
   :doc "reads full file with line numbers"

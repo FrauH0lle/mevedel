@@ -580,7 +580,11 @@
   ,test
   (test)
   :doc "replaces frozen preset tools with the latest registered schema"
-  (let ((gptel-tools nil))
+  ;; The refresh writes `gptel-tools' buffer-locally.  Let-binding the global
+  ;; instead makes Emacs itself complain from C, where neither a capture nor
+  ;; the mute list can reach it, so the case owns a buffer to be refreshed in.
+  (with-temp-buffer
+    (setq-local gptel-tools nil)
     (mevedel-define-tool
       :name "TestWait"
       :description "Old wait schema"
@@ -589,9 +593,9 @@
              (chars string :optional "Input")))
     (mevedel-define-preset test-preset
       :tools ((:tool "TestWait")))
-    (setq gptel-tools
-          (list (mevedel-tool-gptel-tool
-                 (mevedel-tool-get "TestWait"))))
+    (setq-local gptel-tools
+                (list (mevedel-tool-gptel-tool
+                       (mevedel-tool-get "TestWait"))))
     (mevedel-define-tool
       :name "TestWait"
       :description "Current wait schema"

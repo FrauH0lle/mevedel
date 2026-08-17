@@ -3662,7 +3662,7 @@ default Bash keeps bare dot inspection automatic"
     '(:type terminal :delivery model) nil)))
 
 (mevedel-deftest mevedel-tool-exec--bash
-  ()
+  (:quiet t)
   ,test
   (test)
   :doc "errors on missing command"

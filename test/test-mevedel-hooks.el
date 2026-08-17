@@ -433,7 +433,7 @@
 		     (delete-file file))))
 
 (mevedel-deftest mevedel-hooks--read-lisp-file
-		 (:doc "reads Lisp hook files with read evaluation disabled")
+		 (:quiet t :doc "reads Lisp hook files with read evaluation disabled")
 		 (let ((file (make-temp-file "mevedel-hooks" nil ".el"))
 		       (mevedel-hooks-test--read-eval-ran nil))
 		   (unwind-protect
@@ -682,7 +682,7 @@
       (delete-directory home t))))
 
 (mevedel-deftest mevedel-hooks-effective-rules/malformed-trust-db
-  (:doc "ignores malformed trusted hook entries")
+  (:quiet t :doc "ignores malformed trusted hook entries")
   (let* ((root (make-temp-file "mevedel-hooks-trust" t))
          (user-dir (make-temp-file "mevedel-hooks-user" t))
          (workspace (mevedel-hooks-test--workspace root))
@@ -1226,7 +1226,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-context-audit-records
-  (:doc "attributes merged context to handlers in execution order")
+  (:quiet t :doc "attributes merged context to handlers in execution order")
   (let* ((root (make-temp-file "mevedel-hooks-context-audit" t))
          (session (mevedel-hooks-test--session root))
          (mevedel-hook-rules nil))
@@ -1390,7 +1390,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/unified-elisp-terminal
-  (:doc "a terminal native decision skips later declarative handlers")
+  (:quiet t :doc "a terminal native decision skips later declarative handlers")
   (let* ((root (make-temp-file "mevedel-hooks-unified-terminal" t))
          (session (mevedel-hooks-test--session root))
          (mevedel-pre-tool-use-functions
@@ -1463,7 +1463,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/session-reminders
-  (:doc "queues model-visible reminders for blocking outcomes only")
+  (:quiet t :doc "queues model-visible reminders for blocking outcomes only")
   (let* ((root (make-temp-file "mevedel-hooks-reminders" t))
          (session (mevedel-hooks-test--session root)))
     (unwind-protect
@@ -1538,7 +1538,7 @@
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/command-output-cap
-                         (:doc "caps command hook output before returning block reasons")
+                         (:quiet t :doc "caps command hook output before returning block reasons")
                          (let* ((root (make-temp-file "mevedel-hooks-command" t))
                                 (session (mevedel-hooks-test--session root))
                                 (mevedel-hooks-command-output-max-chars 16)
@@ -1589,7 +1589,7 @@
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/permission-request-terminal
-		 (:doc "stops later PermissionRequest hooks after fail-closed stop decisions")
+		 (:quiet t :doc "stops later PermissionRequest hooks after fail-closed stop decisions")
 		 (let* ((root (make-temp-file "mevedel-hooks-pr-terminal" t))
 			(session (mevedel-hooks-test--session root))
 			(mevedel-hook-rules
@@ -1612,7 +1612,7 @@
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/command-block
-		 (:doc "maps exit-code 2 to event-specific blocking decisions")
+		 (:quiet t :doc "maps exit-code 2 to event-specific blocking decisions")
 		 (let* ((root (make-temp-file "mevedel-hooks-block" t))
 			(session (mevedel-hooks-test--session root))
 			(mevedel-hook-rules
@@ -1636,7 +1636,7 @@
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/unannotated-command-origin
-  (:doc "fails closed instead of inferring where an unannotated command runs")
+  (:quiet t :doc "fails closed instead of inferring where an unannotated command runs")
   (let* ((root (make-temp-file "mevedel-hooks-unannotated" t))
          (marker (file-name-concat root "ran"))
          (session (mevedel-hooks-test--session root))
@@ -1870,7 +1870,7 @@
       (delete-directory user-dir t))))
 
 (mevedel-deftest mevedel-hooks-run-event/foreign-command-target
-  (:doc "refuses a plugin command rooted on another remote target")
+  (:quiet t :doc "refuses a plugin command rooted on another remote target")
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-hooks-foreign" t)))
          (remote-root (format "/mevedelmock:%s:%s"
@@ -1910,7 +1910,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/plugin-command-env
-  (:doc "runs plugin command hooks with compatibility env and creates data dir")
+  (:quiet t :doc "runs plugin command hooks with compatibility env and creates data dir")
   (let* ((root (make-temp-file "mevedel-hooks-plugin-env-ws" t))
          (user-dir (file-name-as-directory
                     (make-temp-file "mevedel-hooks-plugin-env-user" t)))
@@ -1982,7 +1982,7 @@
       (delete-directory user-dir t))))
 
 (mevedel-deftest mevedel-hooks-run-event/command-continuation-buffer
-		 (:doc "resumes later Elisp handlers in the original dispatch buffer")
+		 (:quiet t :doc "resumes later Elisp handlers in the original dispatch buffer")
 		 (let* ((root (make-temp-file "mevedel-hooks-continuation" t))
 			(session (mevedel-hooks-test--session root))
 			(mevedel-hooks-test--seen-buffer nil)
@@ -2011,7 +2011,7 @@
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/fail-closed
-		 (:doc "command failures fail open by default and fail closed when requested")
+		 (:quiet t :doc "command failures fail open by default and fail closed when requested")
 		 (let* ((root (make-temp-file "mevedel-hooks-fail" t))
 			(session (mevedel-hooks-test--session root)))
 		   (unwind-protect
@@ -2138,7 +2138,7 @@
 					 messages)))
 		     (delete-directory root t))))
 
-(mevedel-deftest mevedel-hooks-run-event/slow-progress ()
+(mevedel-deftest mevedel-hooks-run-event/slow-progress (:quiet t)
   ,test
   (test)
   :doc "slow progress restores request status without disturbing composer or agent"

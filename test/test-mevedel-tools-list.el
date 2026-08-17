@@ -450,7 +450,7 @@
         (kill-buffer data-buffer)))))
 
 (mevedel-deftest mevedel-tools-list-defer-active
-  (:after-each (progn
+  (:quiet t :after-each (progn
                  (mevedel-tool-clear-registry)
                  (mevedel-workspace-clear-registry)
                  (mevedel-tools-list-test--cleanup-list)))
@@ -534,7 +534,7 @@
       (mevedel-tools-list-test--cleanup-list data-buffer))))
 
 (mevedel-deftest mevedel-tools-list-activate-deferred
-  (:after-each (progn
+  (:quiet t :after-each (progn
                  (mevedel-tool-clear-registry)
                  (setf (alist-get "mevedel" gptel--known-tools nil t #'equal)
                        nil)
@@ -647,7 +647,7 @@
       (mevedel-tools-list-test--cleanup-list data-buffer))))
 
 (mevedel-deftest mevedel-tools-list-search-load
-  (:after-each (progn
+  (:quiet t :after-each (progn
                  (mevedel-tool-clear-registry)
                  (setf (alist-get "mevedel" gptel--known-tools nil t #'equal)
                        nil)

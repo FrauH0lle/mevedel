@@ -852,7 +852,7 @@
                  (buffer-substring-no-properties
                   (point-min) mevedel-view--input-marker)))))))
 
-(mevedel-deftest mevedel-review--dispatch ()
+(mevedel-deftest mevedel-review--dispatch (:quiet t)
   ,test
   (test)
   :doc "routes standalone review output to a safe data buffer"

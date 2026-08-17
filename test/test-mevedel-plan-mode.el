@@ -188,7 +188,7 @@
       (should (eq 'invalidated outcome)))))
 
 (mevedel-deftest mevedel-plan-approval-settle
-  (:doc "clears pending state before delivering the outcome")
+  (:quiet t :doc "clears pending state before delivering the outcome")
   ,test
   (test)
   (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))

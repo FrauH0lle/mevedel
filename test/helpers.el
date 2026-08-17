@@ -36,7 +36,23 @@
 
 (defconst mevedel-test--muted-message-regexps
   '("\\`gptel chat restored\\.\\'"
-    "\\`Type q to \\(?:restore previous buffer\\|delete help window\\)")
+    "\\`Type q to \\(?:restore previous buffer\\|delete help window\\)"
+    ;; gptel reports an unconfigured backend on every send path a test
+    ;; exercises without one.  The suite's default backend covers the cases
+    ;; that need one; the rest are testing something else entirely.
+    "\\`Could not activate gptel backend "
+    ;; TRAMP narrates its own connection attempts, including the ones a
+    ;; mock-method test means to fail.
+    "\\`Tramp: "
+    "Host name .* does not match "
+    "\\`File error: Tramp failed to connect"
+    "tramp-cleanup-this-connection"
+    ;; Emacs commands a test drives directly.
+    "\\`History search: "
+    "\\`Mark set\\'"
+    "\\`Copied\\'"
+    "buffer-local while locally let-bound!"
+    "\\`Cannot remove lock file ")
   "Third-party progress messages the run log must not carry.
 
 Each entry names a message mevedel does not emit and cannot suppress at
@@ -600,7 +616,8 @@ inputs/outputs and optional docstrings."
 
 (cl-defmacro mevedel-deftest (object
                             (&key before-each after-each expected-result
-                                  doc tags vars vars* &allow-other-keys)
+                                  doc tags vars vars* quiet
+                                  &allow-other-keys)
                             &rest template)
   "Define one or more ERT test cases for OBJECT with TEMPLATE.
 
@@ -610,6 +627,7 @@ or other symbol.
 KEYWORD ARGUMENTS:
   :before-each - Form(s) to run before each test case
   :after-each  - Form(s) to run after each test case
+  :quiet       - Capture the messages and warnings every case provokes
   :expected-result - Expected result type (:passed, :failed, etc)
   :doc         - Documentation string for the test
   :tags        - List of tags to apply to the test
@@ -619,6 +637,15 @@ KEYWORD ARGUMENTS:
 The `let'/`let*' binding introduced via :vars and :vars* will
 encompass the whole test body, including the code from
 :before-each and :after-each.
+
+:quiet declares that the function under test reports to the echo area or
+raises a warning on the paths these cases take, and that the cases assert
+the durable state those diagnostics echo rather than the text.  It wraps
+each case in `mevedel-test--with-captured-diagnostics', which is the same
+capture a single call site would use, at the granularity of one tested
+function.  Reach for it when a case cannot avoid provoking correct
+product output; prefer asserting the text with an explicit capture when
+the diagnostic itself is the behaviour under test.
 
 TEMPLATE:
 TEMPLATE is a list of forms that will be expanded into test cases
@@ -772,6 +799,10 @@ See also:
                          (if (cl-every #'listp after-each)
                              after-each
                            (list after-each))))))
+              (when quiet
+                (setq test-body
+                      `((mevedel-test--with-captured-diagnostics nil
+                          ,@test-body))))
               (setq test-body
                     `((let ((worktree-controls-before
                              (mevedel-test--worktree-control-snapshot)))

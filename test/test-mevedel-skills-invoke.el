@@ -1577,7 +1577,7 @@ allowed-tools:
     (should (eq 'ok (plist-get outcome :status)))
     (should (equal "value=3" (plist-get outcome :body)))))
 
-(mevedel-deftest mevedel-skills-invoke ()
+(mevedel-deftest mevedel-skills-invoke (:quiet t)
   ,test
   (test)
   :doc "inline skill yields :status ok :kind inline with prepared body"
@@ -2842,7 +2842,7 @@ spanning lines")))
                        session source))))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-skills--dispatch-inline-attachments ()
+(mevedel-deftest mevedel-skills--dispatch-inline-attachments (:quiet t)
   ,test
   (test)
   :doc "prepares distinct inline skills, appends metadata, and continues"
@@ -3073,7 +3073,7 @@ spanning lines")))
                                         (buffer-string)))))
       (kill-buffer chat))))
 
-(mevedel-deftest mevedel-skills--dispatch-skill-command ()
+(mevedel-deftest mevedel-skills--dispatch-skill-command (:quiet t)
   ,test
   (test)
   :doc "skill expansion inserts prepared body and returns 'skill"

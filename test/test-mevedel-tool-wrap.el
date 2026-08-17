@@ -201,7 +201,7 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
 ;;; mevedel-define-tool :wrap integration
 
 (mevedel-deftest mevedel-define-tool--wrap
-  (:before-each (mevedel-tool-clear-registry)
+  (:quiet t :before-each (mevedel-tool-clear-registry)
    :after-each (mevedel-tool-clear-registry))
   ,test
   (test)

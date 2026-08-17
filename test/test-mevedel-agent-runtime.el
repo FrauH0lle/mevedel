@@ -242,7 +242,7 @@
     (should (string-suffix-p "</task-background>\n" block))))
 
 (mevedel-deftest mevedel-agent-runtime-dispatch
-  ()
+  (:quiet t)
   ,test
   (test)
   :doc "rejects dispatch outside an active session"

@@ -2980,7 +2980,7 @@
         (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-session-publication-append-diagnostic
-  ()
+  (:quiet t)
   ,test
   (test)
   :doc "retries a failed remote diagnostic atomically without blocking mutation"

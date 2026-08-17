@@ -227,7 +227,7 @@
     (should-not (string-match-p "# Exact plan" source))))
 
 (mevedel-deftest mevedel-plan-handoff--implementation-failed
-  (:doc "records a retryable failure and clears preparation progress")
+  (:quiet t :doc "records a retryable failure and clears preparation progress")
   ,test
   (test)
   (let* ((session
@@ -285,7 +285,7 @@
       (kill-buffer chat-buffer))))
 
 (mevedel-deftest mevedel-plan-handoff-settle-request
-  (:doc "terminal success clears the attached direct implementation retry")
+  (:quiet t :doc "terminal success clears the attached direct implementation retry")
   ,test
   (test)
   (let* ((retry '(:step submit))

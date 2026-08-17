@@ -29,7 +29,7 @@
 (require 'mevedel-compact)
 
 (mevedel-deftest mevedel-plan-handoff--dispatch-accepted
-  (:doc "Here/Fresh rotates once, runs setup hooks, and retries only submission")
+  (:quiet t :doc "Here/Fresh rotates once, runs setup hooks, and retries only submission")
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-fresh-" t))

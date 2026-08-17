@@ -1679,7 +1679,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                    '((:id "call-current-1") (:id "call-current-2")))
              body-start)))))))
 
-(mevedel-deftest mevedel--compact-agent-apply ()
+(mevedel-deftest mevedel--compact-agent-apply (:quiet t)
   ,test
   (test)
   :doc "archives the full canonical transcript before rewriting it"
@@ -2896,7 +2896,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (should-not (string-match-p "directive prompt" history))
         (should-not (string-match-p "directive answer" history))))))
 
-(mevedel-deftest mevedel--compact-run ()
+(mevedel-deftest mevedel--compact-run (:quiet t)
   ,test
   (test)
   :doc "rejects an unpersisted buffer before hooks or model requests"

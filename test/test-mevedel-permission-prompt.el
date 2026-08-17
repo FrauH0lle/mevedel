@@ -94,7 +94,7 @@
       (kill-buffer side-buffer))))
 
 (mevedel-deftest mevedel-permission--prompt-approve-session
-  (:doc "does not settle prompts that suppress session allow")
+  (:quiet t :doc "does not settle prompts that suppress session allow")
   (with-temp-buffer
     (let (received)
       (insert "prompt")

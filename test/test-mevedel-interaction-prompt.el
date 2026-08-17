@@ -31,7 +31,7 @@
              (mevedel--prompt-attribution-line
               "/root/worker/verifier"))))))
 
-(mevedel-deftest mevedel--prompt--settle ()
+(mevedel-deftest mevedel--prompt--settle (:quiet t)
   ,test
   (test)
   :doc "fires callback exactly once and removes overlay from pending list"

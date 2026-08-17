@@ -98,7 +98,7 @@
     (setq item '(:tty nil))
     (should-error (mevedel-executions-list-send-input) :type 'user-error)))
 
-(mevedel-deftest mevedel-executions-list-interrupt ()
+(mevedel-deftest mevedel-executions-list-interrupt (:quiet t)
   ,test
   (test)
   :doc "routes interrupt through session-wide user authority"
@@ -108,7 +108,7 @@
       (mevedel-executions-list-interrupt))
     (should (equal (list #'mevedel-execution-interrupt-user) call))))
 
-(mevedel-deftest mevedel-executions-list-stop ()
+(mevedel-deftest mevedel-executions-list-stop (:quiet t)
   ,test
   (test)
   :doc "routes stop through session-wide user authority"
