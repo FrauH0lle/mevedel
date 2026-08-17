@@ -220,6 +220,10 @@ async function main() {
     {id: 'tool', kind: 'tool', revision: 0, name: 'Bash', status: 'completed',
      summary: 'Bash', detail: 'head -5 notes.txt', result: 'large',
      truncated: true},
+    {id: 'patch', kind: 'tool', revision: 0, name: 'ApplyPatch',
+     status: 'completed', summary: 'ApplyPatch', detail: 'parser.el',
+     result: 'Applied patch: 1 changes',
+     diff: '@@ -1 +1 @@\n-old\n+new'},
   ]});
   await deliver({t: 'record', record: {id: 'assistant', kind: 'assistant',
                                        revision: 1, text: 'stream replacement'}});
@@ -227,7 +231,16 @@ async function main() {
     {id: 'guest-user', kind: 'user', revision: 0, text: 'from the phone',
      guest: 'roland'},
   ]});
-  assert.equal(nodes.transcript.children.length, 3);
+  assert.equal(nodes.transcript.children.length, 4);
+
+  // ApplyPatch tool row: the authored patch renders as a diff pane and the
+  // result summary stays a plain line.
+  const patchTurn = findByRecordId(nodes.transcript, 'patch');
+  const patchFlat = JSON.stringify(patchTurn,
+                                   (k, v) => (k === 'parent' ? undefined : v));
+  assert.match(patchFlat, /line add/);
+  assert.match(patchFlat, /line del/);
+  assert.match(textOf(patchTurn), /Applied patch: 1 changes/);
 
   // Assistant record: live update replaced the markdown body.
   const assistantTurn = findByRecordId(nodes.transcript, 'assistant');
@@ -258,7 +271,7 @@ async function main() {
   assert.match(flat, /"className":"tok-str"/);
 
   // Live removal.
-  await deliver({t: 'remove', ids: ['tool']});
+  await deliver({t: 'remove', ids: ['tool', 'patch']});
   assert.equal(nodes.transcript.children.length, 2);
 
   // Composer sends a sealed prompt; interrupt sends a sealed abort.

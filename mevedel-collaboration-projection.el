@@ -143,7 +143,7 @@ key."
   "Return JSON-safe alist representation of RECORD."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
-                       :truncated :guest :directive :detail))
+                       :truncated :guest :directive :detail :diff))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -189,7 +189,11 @@ query -- so a collapsed tool row says what the call did."
                      (format "tool-%s" tool-use-id)
                    (mevedel-collaboration--stable-record-id
                     "tool" raw occurrence)))
-             (result (string-trim (if (stringp result) result "")))
+             ;; Trim only newlines on the left: leading spaces are
+             ;; significant, e.g. the right-aligned line numbers Read
+             ;; prepends to its first line.
+             (result (string-trim (if (stringp result) result "")
+                                  "[\n\r]+"))
              (status (if (string-match-p
                           "\\(?:Error:\\|blocked by\\|<tool_call_error>\\)"
                           result)
@@ -197,7 +201,8 @@ query -- so a collapsed tool row says what the call did."
                        "completed"))
              (result (mevedel-collaboration--truncate-bytes
                       result mevedel-collaboration--max-tool-result-bytes))
-             (truncated (string-suffix-p "\n[truncated]" result)))
+             (truncated (string-suffix-p "\n[truncated]" result))
+             (args (plist-get parsed :args)))
         (apply #'mevedel-collaboration--record
                id "tool"
                :revision 0
@@ -207,9 +212,18 @@ query -- so a collapsed tool row says what the call did."
                :result result
                :truncated (and truncated t)
                :identity-fixed (and tool-use-id t)
-               (when-let ((detail (mevedel-collaboration--tool-detail
-                                   (plist-get parsed :args))))
-                 (list :detail detail)))))))
+               (append
+                (when-let ((detail (mevedel-collaboration--tool-detail
+                                    args)))
+                  (list :detail detail))
+                ;; The applied patch renders as a diff pane in the viewer;
+                ;; the result text is only the application summary.
+                (when-let (((equal (format "%s" name) "ApplyPatch"))
+                           (patch (plist-get args :patch))
+                           ((stringp patch)))
+                  (list :diff (mevedel-collaboration--truncate-bytes
+                               patch
+                               mevedel-collaboration--max-tool-result-bytes)))))))))
 
 (defun mevedel-collaboration--directive-at (ranges position)
   "Return the directive id owning POSITION per directive RANGES, or nil."
@@ -225,13 +239,16 @@ failing the whole projection."
   (require 'mevedel-transcript-audit)
   (ignore-errors (mevedel-transcript-buffer-directive-ranges t)))
 
-(defun mevedel-collaboration--attribute-guest-prompts (user-ends)
+(defun mevedel-collaboration--attribute-guest-prompts (user-starts)
   "Attach guest names to user records per attribution positions.
-USER-ENDS is an ordered list of (SEGMENT-END . RECORD).  Each guest
-attribution record names the nearest user turn ending at or before it."
+USER-STARTS is an ordered list of (SEGMENT-START . RECORD).  Each guest
+attribution record names the last user turn starting at or before it.
+Starts are the stable anchor: segment repair can grow a user turn's end
+over the audit blocks that follow it, or reclassify trailing text, but
+the turn always begins before its own attribution block."
   (dolist (attribution (mevedel-transcript-audit-guest-prompts))
     (let (owner)
-      (dolist (entry user-ends)
+      (dolist (entry user-starts)
         (when (<= (car entry) (car attribution))
           (setq owner (cdr entry))))
       (when owner
@@ -247,7 +264,7 @@ attributed to a collaboration guest carry that guest's name."
       (require 'mevedel-transcript)
       (require 'mevedel-transcript-audit)
       (let ((ranges (mevedel-collaboration--directive-ranges))
-            records user-ends (occurrences (make-hash-table :test #'equal)))
+            records user-starts (occurrences (make-hash-table :test #'equal)))
         (dolist (segment (mevedel-transcript-segments
                           (point-min) (point-max)))
           (let ((directive (mevedel-collaboration--directive-at
@@ -270,8 +287,8 @@ attributed to a collaboration guest carry that guest's name."
                                   mevedel-collaboration--max-record-text-bytes)
                            (when directive (list :directive directive)))
                           records)
-                    (push (cons (caddr segment) (car records))
-                          user-ends)))))
+                    (push (cons (cadr segment) (car records))
+                          user-starts)))))
              ((eq (car segment) 'response)
               (let ((text (mevedel-collaboration--clean-response
                            (buffer-substring-no-properties
@@ -302,7 +319,7 @@ attributed to a collaboration guest carry that guest's name."
                   (when directive
                     (setq record (plist-put record :directive directive)))
                   (push record records)))))))
-        (mevedel-collaboration--attribute-guest-prompts (nreverse user-ends))
+        (mevedel-collaboration--attribute-guest-prompts (nreverse user-starts))
         (nreverse records)))))
 
 (defun mevedel-collaboration--tool-records (records)
@@ -337,7 +354,9 @@ attributed to a collaboration guest carry that guest's name."
 (defun mevedel-collaboration--tool-result-fields (result)
   "Return status, bounded RESULT, and truncation for tool RESULT."
   (let* ((result (if (stringp result) result (format "%s" (or result ""))))
-         (result (string-trim result))
+         ;; Left-trim newlines only: leading spaces can be significant
+         ;; alignment, e.g. Read's right-aligned line numbers.
+         (result (string-trim result "[\n\r]+"))
          (status (if (string-match-p
                       "\\(?:Error:\\|blocked by\\|<tool_call_error>\\)"
                       result)
