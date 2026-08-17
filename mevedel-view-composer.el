@@ -396,7 +396,7 @@
 (declare-function mevedel-view--insert-user-message
                   "mevedel-view-render"
                   (text &optional kind hook-context prompt-summary-body
-                        prompt-summary-source hook-audits))
+                        prompt-summary-source hook-audits guest-name))
 (declare-function mevedel-view--source-range
                   "mevedel-view-render" (data-buffer start end))
 (declare-function mevedel-view-fork-point-at-point
@@ -2867,7 +2867,8 @@ replaces INPUT only in the temporary request prompt."
               input session))))
      (let (data-turn-start
            hook-audits-with-source
-           prompt-summary-source)
+           prompt-summary-source
+           guest-name)
        ;; Forward to the data buffer first so immediate inline-skill
        ;; Prompt handles can expand through the same source-backed fold
        ;; path as a full rerender.
@@ -2913,11 +2914,11 @@ replaces INPUT only in the temporary request prompt."
          ;; later insertion at the turn boundary is claimed by the
          ;; response span and would reach model context.
          (when mevedel-view--pending-guest-attribution
+           (setq guest-name mevedel-view--pending-guest-attribution
+                 mevedel-view--pending-guest-attribution nil)
            (require 'mevedel-transcript-audit)
            (insert (mevedel--format-hook-audit-record
-                    (list :type 'guest-prompt
-                          :name mevedel-view--pending-guest-attribution)))
-           (setq mevedel-view--pending-guest-attribution nil))
+                    (list :type 'guest-prompt :name guest-name))))
          ;; Anchor the data-side marker after the forwarded prompt so
          ;; incremental renders extract only the in-flight assistant
          ;; segments from here forward.  Pushed onto the view buffer's
@@ -2935,7 +2936,7 @@ replaces INPUT only in the temporary request prompt."
               (mevedel-view--insert-user-message
                (or display-text input) nil hook-context
                prompt-summary-body prompt-summary-source
-               hook-audits-with-source)))
+               hook-audits-with-source guest-name)))
          (mevedel-view-stream-begin-turn turn-start data-turn-start)
          ;; Clear composer text.
          (mevedel-view--clear-input))

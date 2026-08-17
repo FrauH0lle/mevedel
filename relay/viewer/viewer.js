@@ -370,7 +370,7 @@
   function whoLine(record) {
     const who = el('div', 'who');
     if (record.kind === 'user') {
-      who.append(el('span', 'name', record.guest || 'You'));
+      who.append(el('span', 'name', record.guest || 'Host'));
       if (record.guest) who.append(el('span', 'badge', 'guest'));
     } else if (record.kind === 'assistant') {
       who.append(el('span', 'name', 'Assistant'));
@@ -431,7 +431,7 @@
     turn.dataset.recordId = record.id;
     turn.dataset.role = roleOf(record);
     const rail = el('div', 'rail');
-    const glyphText = roleOf(record) === 'you' ? 'Y'
+    const glyphText = roleOf(record) === 'you' ? 'H'
       : roleOf(record) === 'guest' ? 'G' : '◆';
     rail.append(el('div', 'glyph', glyphText));
     turn.append(rail);
