@@ -72,14 +72,31 @@
 (mevedel-deftest mevedel-view-control-transfer-keymaps ()
   ,test
   (test)
-  :doc "binds owner and read-only transfer controls to their displayed action"
-  (should (eq (lookup-key mevedel-view--control-transfer-map (kbd "RET"))
+  :doc "binds exactly the transfer keys each side displays, and nothing else"
+  (should (eq (lookup-key mevedel-view--control-transfer-map (kbd "g"))
               #'mevedel-view-control-transfer-grant))
-  (should (eq (lookup-key mevedel-view--control-transfer-request-map (kbd "RET"))
+  (should (eq (lookup-key mevedel-view--control-transfer-map (kbd "k"))
+              #'mevedel-view-control-transfer-keep))
+  (should (eq (lookup-key mevedel-view--control-transfer-request-map (kbd "r"))
               #'mevedel-view-control-transfer-request))
   (should-not
-   (eq (lookup-key mevedel-view--control-transfer-request-map (kbd "RET"))
-       #'mevedel-view-control-transfer-grant)))
+   (eq (lookup-key mevedel-view--control-transfer-request-map (kbd "r"))
+       #'mevedel-view-control-transfer-grant))
+  ;; Giving a session to another machine is not undone by pressing something
+  ;; else, so these maps claim no click, no `RET', and no key the line does
+  ;; not display.  Those events reach the shared display fallback instead,
+  ;; and `mevedel-view-activate-at-point' declines to act on interaction
+  ;; text.  The owner's map in particular must not offer `r': requesting
+  ;; control from yourself makes your own poll grant it and release your
+  ;; lease.
+  (dolist (map (list mevedel-view--control-transfer-map
+                     mevedel-view--control-transfer-request-map
+                     mevedel-view--control-transfer-status-map))
+    (dolist (key '("<mouse-1>" "<mouse-2>" "<mouse-3>" "RET" "<return>"))
+      (should-not (lookup-key map (kbd key)))))
+  (should-not (lookup-key mevedel-view--control-transfer-map (kbd "r")))
+  (should-not (lookup-key mevedel-view--control-transfer-status-map (kbd "g")))
+  (should-not (lookup-key mevedel-view--control-transfer-status-map (kbd "r"))))
 
 (mevedel-deftest mevedel-view--show-pending-plan
   (:doc "uses the clicked view and focuses hidden or visible approvals")

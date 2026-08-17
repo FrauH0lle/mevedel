@@ -498,21 +498,19 @@ the user to stop seeing both."
 (defvar-keymap mevedel-view--control-transfer-status-map
   :doc "Inert keymap for a control-transfer status line.")
 
+;; Handing a session to another machine is not undoable by pressing
+;; something else, so these keymaps bind exactly the keys the line displays.
+;; A click, `RET', or an unadvertised key falls through to
+;; `mevedel-view-activate-at-point', which declines to act on interaction
+;; text -- so a stray click in the transcript cannot give the session away.
 (defvar-keymap mevedel-view--control-transfer-map
   :doc "Keymap for cooperative lease-transfer controls."
   "g" #'mevedel-view-control-transfer-grant
-  "k" #'mevedel-view-control-transfer-keep
-  "r" #'mevedel-view-control-transfer-request
-  "RET" #'mevedel-view-control-transfer-grant
-  "<return>" #'mevedel-view-control-transfer-grant
-  "<mouse-1>" #'mevedel-view-control-transfer-grant)
+  "k" #'mevedel-view-control-transfer-keep)
 
 (defvar-keymap mevedel-view--control-transfer-request-map
   :doc "Keymap for requesting cooperative control from read-only mode."
-  "r" #'mevedel-view-control-transfer-request
-  "RET" #'mevedel-view-control-transfer-request
-  "<return>" #'mevedel-view-control-transfer-request
-  "<mouse-1>" #'mevedel-view-control-transfer-request)
+  "r" #'mevedel-view-control-transfer-request)
 
 (defun mevedel-view-interaction-teardown ()
   "Cancel timers owned by the current view before it is destroyed."
