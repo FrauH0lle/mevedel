@@ -426,10 +426,10 @@ the same reason a granted transfer waits for it."
     (mevedel-session-persistence-save session data t)
     (mevedel-session-durability-lease-release
      (mevedel-session-save-path session) session)
+    ;; One notice per event: applying read-only mode announces it.
     (mevedel-session-persistence--apply-read-only-mode
-     data "Control released; this session is now read-only here")
-    (mevedel-view--interaction-rebuild)
-    (message "mevedel: control released; following the new owner")))
+     data "control released; following the new owner from here")
+    (mevedel-view--interaction-rebuild)))
 
 ;;;###autoload
 (defun mevedel-toggle-follow ()

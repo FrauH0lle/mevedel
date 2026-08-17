@@ -378,7 +378,14 @@ on lease state: an unheld or expired lease is acquired directly, because
 there is no owner to ask and the lease layer's own confirmation is the whole
 negotiation; a held one is requested. `mevedel-release-control` is the
 reverse, saving and publishing before the lease goes and leaving the buffer
-read-only and following. Neither side is privileged: the machine that just
+read-only and following.
+
+Entering read-only mode reports itself as a message rather than a warning.
+The buffer states its own authority in the interaction zone and the cockpit
+header for as long as it holds, so a warning window would repeat durably
+visible state and take the frame at the moment the user is watching the
+handoff. A lease that fails to renew or is lost still warns: that is a
+problem, not a transition. Neither side is privileged: the machine that just
 handed control away is a non-owner like any other and can ask for it back.
 
 ### Following a session owned elsewhere
