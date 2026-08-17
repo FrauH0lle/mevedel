@@ -1486,9 +1486,11 @@ that is being asked for it are the same protocol seen from two ends."
     :pad-keys t
     ("f" mevedel-menu--toggle-follow
      :description mevedel-menu--follow-description
-     :inapt-if-not mevedel-menu--read-only-p)
+     :inapt-if-not mevedel-menu--read-only-p
+     :transient t)
     ("r" "Refresh now" mevedel-menu--refresh-session
-     :inapt-if-not mevedel-menu--read-only-p)]
+     :inapt-if-not mevedel-menu--read-only-p
+     :transient t)]
    ["Inspect"
     :pad-keys t
     ("i" "Session info" mevedel-menu--open-session-info)]]

@@ -591,47 +591,63 @@ transport is free."
 (defun mevedel-session-control-transfer-descriptor (session read-only-p)
   "Return the semantic interaction descriptor for SESSION.
 
-The descriptor contains no view overlays or keymaps.  A view may render it
-using its own interaction presentation."
+The descriptor carries no faces, overlays, or keymaps: `:title', `:detail',
+and `:keys' say what is true and what the user may do, and the view decides
+how prominent that is.  `:attention' marks the states that are waiting on a
+person rather than on the protocol.
+
+READ-ONLY-P selects the side.  Owner and requester share one durable state
+and need opposite presentations of it: only the owner can decide, and only
+the owner can see what a handoff is still waiting for."
   (let* ((transfer (mevedel-session-control-transfer session))
          (state (plist-get transfer :state))
          (request (plist-get transfer :request))
-         (label (plist-get request :requester-label)))
+         (label (or (plist-get request :requester-label) "another client")))
     (cond
-     ;; The owner decides.  A requester in the same durable state is waiting
-     ;; on its own request and has nothing to grant.
-     ((and (not read-only-p) (memq state '(requested quiescing)))
+     ((and (not read-only-p) (eq state 'requested))
       (list :kind 'control-transfer
             :action 'grant
-            :body
-            (if (eq state 'quiescing)
-                (format "Control granted to %s  finishing %s"
-                        (or label "another client")
-                        (or (mevedel-session-control-transfer-drain-blocker
-                             session)
-                            "up"))
-              (format "Control transfer requested by %s  [g]rant  [k]eep"
-                      (or label "another client")))
+            :attention t
+            :title (format "%s is asking for control of this session" label)
+            :detail "Granted automatically if you do not answer."
+            :keys '(("g" . "grant now") ("k" . "keep control"))
             :help-echo "Grant or keep the current lease"))
-     ((and read-only-p (eq state 'requested))
+     ((and (not read-only-p) (eq state 'quiescing))
       (list :kind 'control-transfer
-            :action 'requested
-            :body "Control requested  waiting for the owner"
-            :help-echo "The owner grants automatically once the request times out"))
-     ((and read-only-p (eq state 'quiescing))
+            :action 'status
+            :title (format "Handing control to %s" label)
+            :detail (if-let ((blocker
+                              (mevedel-session-control-transfer-drain-blocker
+                               session)))
+                        (format "Finishing %s first." blocker)
+                      "Publishing the final state.")
+            :help-echo "Control moves once this session has drained"))
+     ((not read-only-p) nil)
+     ((eq state 'requested)
       (list :kind 'control-transfer
-            :action 'requested
-            :body "Control granted  waiting for the owner to finish"
+            :action 'status
+            :title "Control requested"
+            :detail "The owner grants automatically if it does not answer."
+            :help-echo "Waiting for the owner to answer or time out"))
+     ((eq state 'quiescing)
+      (list :kind 'control-transfer
+            :action 'status
+            :title "Control granted"
+            :detail "Waiting for the owner to finish its current work."
             :help-echo "Control arrives once the owner has drained its work"))
-     ((and read-only-p (eq state 'rejected))
+     ((eq state 'rejected)
       (list :kind 'control-transfer
             :action 'request
-            :body "Control request was declined  [r]equest again"
+            :attention t
+            :title "Control request was declined"
+            :keys '(("r" . "request again"))
             :help-echo "Request cooperative control"))
-     (read-only-p
+     (t
       (list :kind 'control-transfer
             :action 'request
-            :body "Session is read-only  [r]equest control"
+            :title "This session is read-only here"
+            :detail "Another client holds its lease."
+            :keys '(("r" . "request control"))
             :help-echo "Request cooperative control")))))
 
 (provide 'mevedel-session-control-transfer)

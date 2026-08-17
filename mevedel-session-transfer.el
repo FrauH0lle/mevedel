@@ -325,10 +325,23 @@ cross a release."
              request)))))
 
 (defun mevedel-session-transfer--set-state
-    (session state request &optional decision)
-  "Set transient SESSION control-transfer STATE for REQUEST and DECISION."
+    (session state request &optional decision observed-at)
+  "Set transient SESSION control-transfer STATE for REQUEST and DECISION.
+
+OBSERVED-AT is the target time at which this owner first saw REQUEST.  It is
+transient client state, not part of the durable protocol: a restarted owner
+simply starts its notice window again."
   (mevedel-session-set-control-transfer
-   session (list :state state :request request :decision decision)))
+   session (list :state state :request request :decision decision
+                 :observed-at observed-at)))
+
+(defun mevedel-session-transfer--observed-at (session request now)
+  "Return when this owner first saw REQUEST for SESSION, defaulting to NOW."
+  (let ((previous (mevedel-session-control-transfer session)))
+    (or (and (equal (plist-get (plist-get previous :request) :request-id)
+                    (plist-get request :request-id))
+             (plist-get previous :observed-at))
+        now)))
 
 (defun mevedel-session-transfer-request
     (session &optional label)
@@ -421,8 +434,9 @@ explicitly decides and releases its lease."
   "Poll SESSION's immutable control-transfer request and decision records.
 
 The owner may call this from a UI timer or command loop.  An unanswered
-request is granted once its deadline passes, but grant does not release the
-lease or transfer authority."
+request is granted once `mevedel-session-transfer-prompt-timeout' has passed
+since this owner could first see it, but grant does not release the lease or
+transfer authority."
   (unless (mevedel-session-durability--portable-session-p session)
     (error "Control transfer requires a portable project session"))
   (mevedel-session-durability-with-transaction
@@ -467,6 +481,10 @@ lease or transfer authority."
       (let* ((request
               (mevedel-session-transfer--current-request
                directory current session-id now))
+             (observed-at
+              (and request
+                   (mevedel-session-transfer--observed-at
+                    session request now)))
              (decision-path
               (and request
                    (mevedel-session-transfer--decision-path
@@ -485,6 +503,12 @@ lease or transfer authority."
                   (error "Invalid portable control-transfer decision: %s"
                          decision-path))
                 value)))
+        ;; The timeout exists to give the owner a chance to refuse, so it
+        ;; runs from when this owner could first see the request, not from
+        ;; when the requester wrote it.  A poll interval can be longer than
+        ;; the timeout, and measuring from `:created-at' then granted
+        ;; requests the owner had never displayed -- silently, from the
+        ;; user's point of view.
         (when (and request (not decision)
                    (progn
                      (unless
@@ -492,7 +516,7 @@ lease or transfer authority."
                           mevedel-session-transfer-prompt-timeout)
                        (error "Invalid control-transfer timeout: %S"
                               mevedel-session-transfer-prompt-timeout))
-                     (<= (+ (plist-get request :created-at)
+                     (<= (+ (max (plist-get request :created-at) observed-at)
                             mevedel-session-transfer-prompt-timeout)
                          now)))
           (let ((candidate
@@ -522,13 +546,13 @@ lease or transfer authority."
           (mevedel-session-control-transfer session))
          ((not decision)
           (mevedel-session-transfer--set-state
-           session 'requested request))
+           session 'requested request nil observed-at))
          ((eq 'grant (plist-get decision :decision))
           (mevedel-session-transfer--set-state
-           session 'quiescing request decision))
+           session 'quiescing request decision observed-at))
          (t
           (mevedel-session-transfer--set-state
-           session 'rejected request decision))))))))
+           session 'rejected request decision observed-at))))))))
 
 (defun mevedel-session-transfer-decide
     (session decision)

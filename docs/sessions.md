@@ -360,7 +360,12 @@ re-armed per tick rather than fixed when the view is set up.
 
 An unanswered request is granted by the owner's own poll once
 `mevedel-session-transfer-prompt-timeout` passes, so control can be taken
-from a machine nobody is sitting at. That requires the owner's Emacs to be
+from a machine nobody is sitting at. That window runs from the moment the
+owner could first *see* the request, not from when the requester wrote it: a
+poll interval can be longer than the timeout, and measuring from the
+requester's clock granted requests the owner had never displayed. Worst-case
+latency is therefore one poll interval plus the timeout, and the person at
+the owner always gets the full timeout to press Keep. That requires the owner's Emacs to be
 alive and polling; an owner that has died instead lets its lease expire, and
 the successor takes over through the expired-lease path. Grant is not
 release: the owner still drains, publishes, and releases, so a request
