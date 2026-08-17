@@ -310,18 +310,34 @@ the live view/data pair once and routes each action to the owner buffer. The
 explicit `g gptel menu` cockpit row is the advanced bridge into gptel's menu
 from the paired data buffer.
 
-Its Navigate group keeps inspection and mutation distinct:
+Its header is one identity line — session, permission mode, request state,
+workspace root, and execution target — followed by a warning-face alert line
+only when session state is off-nominal: an unready target, an unavailable
+sandbox, a lease that is neither owned nor local, or a pending publication.
+The complete target and durability state is the `i Session info` panel, so
+nominal state costs the cockpit no lines. Cockpit surfaces are grouped as
+Conversation, History, Configure, and Cockpits.
+
+Its History group owns mutation of the transcript:
+
+- `f` / `F` arm a Conversation Fork or Worktree Fork at the settled assistant
+  response under point.
+- `R` confirms a true in-place Rewind to that response.
+- `B` switches conversation variants at that response.
+
+`N` opens the Navigate submenu, whose entries all stay open so repeated motion
+needs one menu. It only inspects, and never changes session state:
 
 - `[` / `]` project the previous or next persisted session segment in the same
   view.
 - `g` opens the segment picker, including missing or unreadable archived
   segments.
-- `n` / `N` move through rendered displays without changing session state.
-- `C-n` / `C-p` move through user queries without changing session state.
-- `f` / `F` arm a Conversation Fork or Worktree Fork at the settled assistant
-  response under point.
-- `R` confirms a true in-place Rewind to that response.
-- `B` switches conversation variants at that response.
+- `n` / `p` move through rendered displays.
+- `C-n` / `C-p` move through user queries.
+- `TAB` toggles the section at point.
+
+Those are the keys the view buffer's own keymap binds, so the cockpit teaches
+one vocabulary rather than two.
 
 An archived segment is a read-only projection, not a second live session.
 Its banner shows the segment number and a clickable `[Latest]` action. The
@@ -390,7 +406,7 @@ directive, historical, agent, and side scopes cannot create one.
 
 While managed Bash work is live, the status zone shows its session-wide count
 as an `Executions` fragment. Activating it opens the execution cockpit. The
-main cockpit exposes the same surface as `Processes`, and `/ps` opens it
+main cockpit exposes the same surface as `Executions`, and `/ps` opens it
 directly. Execution start and settlement reconcile this fragment through the
 normal managed-zone path, preserving composer text, point, and windows.
 
@@ -898,14 +914,18 @@ it shows original and updated model-visible result text.
 ## Goal and Preset Cockpits
 
 The session cockpit exposes two session-owned workflow surfaces. The Goal
-surface shows the objective, status and reason, token/time/turn accounting,
-budget, and accepted-plan reference. Its start, pause, resume, and clear actions
-are enabled only at compatible lifecycle states.
+surface shows the objective, status, turn count, and token accounting on one
+line, and groups its keys as Lifecycle, Adjust, and Inspect. Its start, pause,
+resume, and clear actions are enabled only at compatible lifecycle states. The
+blocked reason, elapsed time, and accepted-plan reference are the `i Goal
+record` info panel.
 
-The Preset surface selects a preset buffer-locally in the owning data buffer
-and displays its effective tier map plus resolved provider and effort for each
-workload.
-Resolution failures tell the user to fix the preset before dispatch. Presets
-remain configuration-as-code; the cockpit does not author or rewrite them. The
-view status strip links to both surfaces. Cockpit inspection and selection never
-rebuild the composer, so an active multiline draft is retained.
+The Preset surface selects a preset buffer-locally in the owning data buffer.
+Its header summarizes the preset name and how many tier and workload policies
+resolve; `i Model policy report` opens the full table of resolved provider and
+effort per tier and workload. A policy that fails to resolve is named on an
+error-face alert line telling the user to fix the preset before dispatch, rather
+than hiding inside the table. Presets remain configuration-as-code; the cockpit
+does not author or rewrite them. The view status strip links to both surfaces.
+Cockpit inspection and selection never rebuild the composer, so an active
+multiline draft is retained.

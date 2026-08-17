@@ -619,7 +619,7 @@ completion cards while retaining their full model-facing disclosure in the
 authoritative data buffer.
 
 Users have a separate session-wide control surface. `/ps`, the view's live
-execution status row, and the session cockpit's `Processes` row open a
+execution status row, and the session cockpit's `Executions` row open a
 tabulated list containing foreground and yielded work from every model owner.
 It shows the opaque execution ID, canonical owner (`/root` or a retained agent
 path), command, PTY mode, elapsed

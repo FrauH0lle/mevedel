@@ -29,6 +29,8 @@
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context
                   "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-format-header
+                  "mevedel-cockpit" (name scope state))
 (declare-function mevedel-cockpit-open-surface
                   "mevedel-cockpit" (surface &optional context))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
@@ -1198,35 +1200,24 @@ Workspace runtime data is retained."
   "Return the selected plugin name, or signal a user error."
   (mevedel-plugin-name (mevedel-plugins-list--plugin-at-point)))
 
-(defun mevedel-plugins-list--activation-label (workspace)
-  "Return the adaptive activation action label for WORKSPACE and point."
-  (if-let* ((plugin (condition-case nil
-                        (mevedel-plugins-list--selected-item)
-                      (user-error nil)))
-            ((mevedel-plugin-p plugin)))
-      (if (mevedel-plugins--enabled-p plugin workspace)
-          "Disable plugin"
-        "Enable plugin")
-    "Toggle plugin"))
-
 (defun mevedel-plugins-list--header-line (items context)
   "Return the plugin cockpit header line for ITEMS and CONTEXT."
+  (require 'mevedel-cockpit)
   (let ((total 0)
         (enabled 0)
+        (hooks 0)
         (workspace (mevedel-plugins-list--workspace context)))
     (dolist (item items)
       (when (mevedel-plugin-p item)
         (setq total (1+ total))
-        (when (mevedel-plugins--enabled-p
-               item workspace)
-          (setq enabled (1+ enabled)))))
-    (format "%s  %s  %d/%d enabled    RET details  e %s  h hooks  + install  u update  r reload  g refresh  x remove  o source  ? help  q back"
-            (propertize "mevedel: plugins"
-                        'face 'font-lock-function-name-face)
-            (mevedel-plugins-list--root-label context)
-            enabled
-            total
-            (mevedel-plugins-list--activation-label workspace))))
+        (when (mevedel-plugins--enabled-p item workspace)
+          (setq enabled (1+ enabled)))
+        (when (mevedel-plugins--hooks-enabled-p item workspace)
+          (setq hooks (1+ hooks)))))
+    (mevedel-cockpit-format-header
+     "plugins"
+     (mevedel-plugins-list--root-label context)
+     (format "%d/%d enabled · %d with hooks" enabled total hooks))))
 
 (defun mevedel-plugins-list--collect (context)
   "Return plugin cockpit items for CONTEXT."

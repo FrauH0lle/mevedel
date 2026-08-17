@@ -44,6 +44,8 @@
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-format-header
+                  "mevedel-cockpit" (name scope state))
 (declare-function mevedel-cockpit-open-surface
                   "mevedel-cockpit" (surface &optional context))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
@@ -504,15 +506,14 @@ Routes through the lifecycle-aware permission transition path."
 
 (defun mevedel-skills-list--header-line (&optional items context)
   "Return the skills cockpit header line for ITEMS and CONTEXT."
+  (require 'mevedel-cockpit)
   (let* ((total (length items))
          (enabled (cl-count-if #'mevedel-skills--skill-enabled-p
                                items)))
-    (format "%s  %s  %d/%d enabled    RET details  e toggle  o source  g refresh  ? help  q back"
-            (propertize "mevedel: skills"
-                        'face 'font-lock-function-name-face)
-            (mevedel-skills-list--session-label context)
-            enabled
-            total)))
+    (mevedel-cockpit-format-header
+     "skills"
+     (mevedel-skills-list--session-label context)
+     (format "%d/%d enabled" enabled total))))
 
 (defun mevedel-skills-list--collect (context)
   "Return skill cockpit items for CONTEXT."

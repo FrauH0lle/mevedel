@@ -66,8 +66,10 @@
               (should (eq major-mode 'mevedel-executions-list-mode))
               (should (= 1 (length tabulated-list-entries)))
               (should (equal "exec-000007" (tabulated-list-get-id)))
-              (should (string-match-p "1 live execution"
-                                      (mevedel-cockpit-surface-header-line)))
+              (should (string-match-p
+                       "mevedel: executions.*main.*1 live.*? keys"
+                       (substring-no-properties
+                        (mevedel-cockpit-surface-header-line))))
               (should (string-match-p
                        ">>> ready"
                        (mevedel-executions-list--details item nil)))

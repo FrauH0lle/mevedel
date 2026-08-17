@@ -41,7 +41,10 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **live session epoch** — One continuous activation of a root session between `SessionStart` and `SessionEnd`. A persisted session may have multiple live epochs across resume; rewind, clear, and compaction begin context epochs within the same live epoch.
 - **session setting** — Configuration owned by one session, initially derived from global defaults, preserved across resume, and copied when the session is forked without affecting other sessions.
 - **session cockpit** — The central user-facing control surface for one session, presenting live session state and routing common workflow, configuration, and inspection actions.
-- **tabulated cockpit surface** — A session-owned cockpit buffer for inspecting and acting on selectable resources in a table.
+- **tabulated cockpit surface** — A session-owned cockpit buffer for inspecting and acting on selectable resources in a table. Its header line carries identity, scope, and state; the keys themselves live in its help.
+- **cockpit info panel** — A read-only buffer of aligned label/value rows holding a cockpit surface's complete state, opened with `i` from the surface that owns it. It keeps reports that can grow out of menu headers.
+- **cockpit alert line** — The second cockpit header line, shown only when session state is off-nominal and naming just the conditions the user may want to act on.
+- **permissions cockpit** — The tabulated cockpit surface listing remembered session and workspace authority, where one row can be revoked without affecting the others.
 - **worktree cockpit surface** — The session cockpit surface for Git worktree status and actions, split between a transient status menu and an optional tabulated worktree list.
 - **worktree session** — A session whose working directory is a Git linked worktree while still belonging to the same mevedel workspace.
 - **instruction** — A user-authored, source-linked record that gives mevedel context or work to perform. An attached instruction is presented by an overlay, but the overlay is not necessarily the record's identity.

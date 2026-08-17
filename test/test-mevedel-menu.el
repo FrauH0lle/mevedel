@@ -26,6 +26,7 @@
 (require 'mevedel-models)
 (require 'mevedel-mentions)
 (require 'mevedel-permissions)
+(require 'mevedel-permissions-list)
 (require 'mevedel-plugins)
 (require 'mevedel-presets)
 (require 'mevedel-session-persistence)
@@ -130,7 +131,7 @@
           (mevedel-menu-open 'top)))
       (should (eq called-prefix 'mevedel-menu--top))))
 
-  :doc "opens requested mode, permissions, model, Goal, and Preset surfaces"
+  :doc "opens requested mode, navigate, model, Goal, and Preset surfaces"
   (mevedel-menu-test--with-buffers
     (let (called-prefix)
       (cl-letf (((symbol-function 'transient-setup)
@@ -138,13 +139,36 @@
                    (setq called-prefix prefix))))
         (with-current-buffer view-buf
           (dolist (area '((mode . mevedel-menu--mode)
-                          (permissions . mevedel-menu--permissions)
+                          (navigate . mevedel-menu--navigate)
                           (model . mevedel-menu--model-selection)
                           (goal . mevedel-menu--goal)
                           (preset . mevedel-menu--preset)))
             (setq called-prefix nil)
             (mevedel-menu-open (car area))
             (should (eq called-prefix (cdr area))))))))
+
+  :doc "opens the permissions cockpit from the owning data buffer"
+  (mevedel-menu-test--with-buffers
+    (let (opened-context opened-buffer)
+      (cl-letf (((symbol-function 'mevedel-permissions-list-open)
+                 (lambda (context)
+                   (setq opened-context context
+                         opened-buffer (current-buffer)))))
+        (with-current-buffer view-buf
+          (mevedel-menu-open 'permissions)))
+      (should (eq (mevedel-cockpit-context-session opened-context) session))
+      (should (eq opened-buffer data-buf))))
+
+  :doc "opens the session info panel"
+  (mevedel-menu-test--with-buffers
+    (let (shown-buffer shown-text)
+      (cl-letf (((symbol-function 'mevedel-cockpit-show-help)
+                 (lambda (buffer text)
+                   (setq shown-buffer buffer shown-text text))))
+        (with-current-buffer view-buf
+          (mevedel-menu-open 'session-info)))
+      (should (equal shown-buffer mevedel-menu-session-info-buffer-name))
+      (should (string-match-p "mevedel session — main" shown-text))))
 
   :doc "opens requested tools, executions, skills, and plugins surfaces"
   (mevedel-menu-test--with-buffers
@@ -252,7 +276,7 @@
 (mevedel-deftest mevedel-menu--goal-description ()
   ,test
   (test)
-  :doc "shows Goal lifecycle, accounting, and accepted-plan reference"
+  :doc "shows objective, status, turns, and accounting on one line"
   (mevedel-menu-test--with-buffers
     (let ((goal
            (mevedel-goal--create
@@ -263,11 +287,44 @@
             :plan-reference "local/plans/accepted.md")))
       (setf (mevedel-session-goal session) goal)
       (with-current-buffer view-buf
-        (let ((text (mevedel-menu--goal-description)))
-          (dolist (needle '("Ship the feature" "Status: paused"
-                            "Provider credits exhausted" "400/1000"
-                            "Turns: 3" "Elapsed: 12s" "local/plans/accepted.md"))
-            (should (string-match-p (regexp-quote needle) text)))))))
+        (let ((text (substring-no-properties
+                     (mevedel-menu--goal-description))))
+          (dolist (needle '("Ship the feature" "paused" "3 turns"
+                            "400/1000 tokens"))
+            (should (string-match-p (regexp-quote needle) text)))
+          ;; The reason, elapsed time, and plan reference belong to the
+          ;; record panel, not to the header.
+          (dolist (needle '("Provider credits exhausted" "12s"
+                            "local/plans/accepted.md" "\n"))
+            (should-not (string-match-p (regexp-quote needle) text)))))))
+
+  :doc "shows the empty state with the way to start a Goal"
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer view-buf
+      (should (string-match-p
+               "none — s starts one, or /goal OBJECTIVE"
+               (substring-no-properties
+                (mevedel-menu--goal-description)))))))
+
+(mevedel-deftest mevedel-menu--goal-record-text ()
+  ,test
+  (test)
+  :doc "shows Goal lifecycle, accounting, and accepted-plan reference"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-goal session)
+          (mevedel-goal--create
+           :id "g1" :objective "Ship the feature" :status 'paused
+           :token-budget 1000 :tokens-used 400
+           :time-used-seconds 12 :turns-run 3
+           :reason "Provider credits exhausted"
+           :plan-reference "local/plans/accepted.md"))
+    (with-current-buffer view-buf
+      (let ((text (mevedel-menu--goal-record-text)))
+        (dolist (needle '("Ship the feature" "paused"
+                          "Provider credits exhausted" "400/1000 tokens"
+                          "3 · elapsed 12s" "local/plans/accepted.md"))
+          (should (string-match-p (regexp-quote needle) text))))))
+
   :doc "shows an unbounded Goal budget consistently"
   (mevedel-menu-test--with-buffers
     (setf (mevedel-session-goal session)
@@ -276,10 +333,61 @@
            :time-used-seconds 0))
     (with-current-buffer view-buf
       (should (string-match-p
-               "Budget: 3 tokens / unbounded"
-               (mevedel-menu--goal-description))))))
+               "3 tokens · unbounded"
+               (mevedel-menu--goal-record-text)))))
+
+  :doc "explains the empty state"
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer view-buf
+      (should (string-match-p
+               "No active Goal"
+               (mevedel-menu--goal-record-text))))))
 
 (mevedel-deftest mevedel-menu--preset-description ()
+  ,test
+  (test)
+  :doc "summarizes the resolved policy counts on one line"
+  (mevedel-menu-test--with-model-backends
+    (mevedel-menu-test--with-buffers
+      (with-current-buffer data-buf
+        (setq-local gptel-backend (gptel-get-backend "Fast")
+                    gptel-model 'fast-model
+                    gptel-reasoning-effort nil
+                    mevedel-model-tiers
+                    '((fast)
+                      (strong :provider "Balanced:balanced-model" :effort high)
+                      (strong :provider "Fast:fast-model"))
+                    mevedel-model-workloads
+                    '((planning :provider "Balanced:balanced-model")))
+        (setf (mevedel-session-preset-name session) 'my-team))
+      (with-current-buffer view-buf
+        (should
+         (equal
+          (substring-no-properties (mevedel-menu--preset-description))
+          "Preset  my-team · 2 tiers · 1 workloads · all resolved")))))
+
+  :doc "names the first broken policy on an alert line"
+  (mevedel-menu-test--with-model-backends
+    (mevedel-menu-test--with-buffers
+      (with-current-buffer data-buf
+        (setq-local gptel-backend (gptel-get-backend "Fast")
+                    gptel-model 'fast-model
+                    gptel-reasoning-effort nil
+                    mevedel-model-tiers
+                    '((broken :provider "Missing:no-model")
+                      (fast))
+                    mevedel-model-workloads nil)
+        (setf (mevedel-session-preset-name session) 'broken))
+      (with-current-buffer view-buf
+        (should
+         (equal
+          (substring-no-properties (mevedel-menu--preset-description))
+          (string-join
+           '("Preset  broken · 2 tiers · 0 workloads · 1 broken"
+             "! tier broken does not resolve — fix before dispatch")
+           "\n")))))))
+
+(mevedel-deftest mevedel-menu--preset-report-text ()
   ,test
   (test)
   :doc "shows resolved tier and workload policies in configured order"
@@ -299,14 +407,17 @@
       (with-current-buffer view-buf
         (should
          (equal
-          (mevedel-menu--preset-description)
+          (mevedel-menu--preset-report-text)
           (string-join
-           '("Preset: my-team"
-             "Tiers:"
+           '("mevedel preset — my-team"
+             ""
+             "Tiers"
              "  fast               Fast:fast-model · effort default"
              "  strong             Balanced:balanced-model · effort high"
-             "Workloads:"
-             "  planning           Balanced:balanced-model · effort default")
+             ""
+             "Workloads"
+             "  planning           Balanced:balanced-model · effort default"
+             "")
            "\n"))))))
 
   :doc "keeps rendering after an invalid tier policy"
@@ -324,13 +435,16 @@
       (with-current-buffer view-buf
         (should
          (equal
-          (mevedel-menu--preset-description)
+          (mevedel-menu--preset-report-text)
           (string-join
-           '("Preset: broken"
-             "Tiers:"
-             "  broken             ERROR: Backend Missing is not known to be defined — fix this preset before dispatch"
+           '("mevedel preset — broken"
+             ""
+             "Tiers"
+             "  broken             ERROR: Backend Missing is not known to be defined"
              "  fast               Fast:fast-model · effort default"
-             "Workloads:")
+             ""
+             "Workloads"
+             "")
            "\n")))))))
 
 (mevedel-deftest mevedel-menu--goal-resumable-p ()
@@ -420,6 +534,39 @@
       (mevedel-menu--open-preset))
     (should (eq 'preset area))))
 
+(mevedel-deftest mevedel-menu--open-preset-report ()
+  ,test
+  (test)
+  :doc "shows the resolved policy report in the preset info panel"
+  (mevedel-menu-test--with-buffers
+    (let (shown-buffer shown-text)
+      (cl-letf (((symbol-function 'mevedel-cockpit-show-help)
+                 (lambda (buffer text)
+                   (setq shown-buffer buffer shown-text text))))
+        (with-current-buffer view-buf
+          (mevedel-menu--open-preset-report)))
+      (should (equal shown-buffer mevedel-menu-preset-report-buffer-name))
+      (should (string-match-p "mevedel preset" shown-text))
+      (should (string-match-p "Tiers" shown-text)))))
+
+(mevedel-deftest mevedel-menu--open-goal-record ()
+  ,test
+  (test)
+  :doc "shows the Goal record in the Goal info panel"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-goal session)
+          (mevedel-goal--create
+           :objective "Ship it" :status 'active
+           :tokens-used 0 :time-used-seconds 0 :turns-run 0))
+    (let (shown-buffer shown-text)
+      (cl-letf (((symbol-function 'mevedel-cockpit-show-help)
+                 (lambda (buffer text)
+                   (setq shown-buffer buffer shown-text text))))
+        (with-current-buffer view-buf
+          (mevedel-menu--open-goal-record)))
+      (should (equal shown-buffer mevedel-menu-goal-record-buffer-name))
+      (should (string-match-p "Objective     Ship it" shown-text)))))
+
 (mevedel-deftest mevedel-menu--open-executions ()
   ,test (test)
   :doc "routes to the executions area"
@@ -499,13 +646,15 @@
 (mevedel-deftest mevedel-menu--header ()
   ,test
   (test)
-  :doc "shows session orientation and idle state"
+  :doc "shows session orientation and idle state on one line"
   (mevedel-menu-test--with-buffers
     (with-current-buffer view-buf
-      (let ((header (mevedel-menu--header)))
-        (should (string-match-p "mevedel: main" header))
+      (let ((header (substring-no-properties (mevedel-menu--header))))
+        (should (string-match-p "mevedel main" header))
         (should (string-match-p "ask" header))
-        (should (string-match-p "idle" header)))))
+        (should (string-match-p "idle" header))
+        ;; A nominal session earns exactly one header line.
+        (should (equal "" (nth 1 (split-string header "\n")))))))
 
   :doc "shows running request state"
   (mevedel-menu-test--with-buffers
@@ -515,7 +664,7 @@
     (with-current-buffer view-buf
       (should (string-match-p "running" (mevedel-menu--header)))))
 
-  :doc "shows target identity, support, readiness, and sandbox state"
+  :doc "keeps nominal target and durability state out of the header"
   (mevedel-menu-test--with-buffers
     (let* ((target (mevedel-execution-target-create
                     "/ssh:user@host:/srv/project/"))
@@ -527,22 +676,106 @@
       (setf (mevedel-execution-target-readiness target)
             '(:status ready :sandbox-mode best-effort
               :sandbox-status bubblewrap)
+            (mevedel-session-lease remote-session) '(:state owned))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session remote-session))
+      (unwind-protect
+          (with-current-buffer view-buf
+            (let ((header (substring-no-properties (mevedel-menu--header))))
+              (should (string-match-p "ssh:user@host" header))
+              (should-not (string-match-p "supported" header))
+              (should-not (string-match-p "Persistence" header))
+              (should-not (string-match-p "!" header))))
+        ;; Leave the workspace session in place so teardown does not try to
+        ;; save the substituted remote session and warn.
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session)))))
+
+  :doc "raises off-nominal target and publication state as an alert line"
+  (mevedel-menu-test--with-buffers
+    (let* ((target (mevedel-execution-target-create
+                    "/ssh:user@host:/srv/project/"))
+           (remote-session
+            (mevedel-session--create
+             :name "remote" :workspace workspace
+             :working-directory "/ssh:user@host:/srv/project/"
+             :execution-target target :permission-mode 'ask)))
+      (setf (mevedel-execution-target-readiness target)
+            '(:status not-probed :sandbox-mode best-effort
+              :sandbox-status unavailable)
             (mevedel-session-lease remote-session) '(:state owned)
             (mevedel-session-pending-publication remote-session)
             '(:reason "remote write failed"))
       (with-current-buffer data-buf
         (setq-local mevedel--session remote-session))
-      (with-current-buffer view-buf
-        (let ((header (mevedel-menu--header)))
-          (should (string-match-p "Target.*ssh:user@host" header))
-          (should (string-match-p "supported" header))
-          (should (string-match-p "ready" header))
-          (should (string-match-p "sandbox bubblewrap" header))
-          (should (string-match-p "Persistence.*lease owned" header))
-          (should (string-match-p "publication pending" header))))
-      ;; The header is what this case is about; leaving the publication
-      ;; pending would make buffer teardown refuse to save and warn.
-      (setf (mevedel-session-pending-publication remote-session) nil))))
+      (unwind-protect
+          (with-current-buffer view-buf
+            (let ((alert (nth 1 (split-string
+                                 (substring-no-properties
+                                  (mevedel-menu--header))
+                                 "\n"))))
+              (should (string-match-p "target not-probed" alert))
+              (should (string-match-p "sandbox unavailable" alert))
+              (should (string-match-p "publication pending" alert))))
+        ;; The header is what this case is about; leaving the substituted
+        ;; session in the buffer would make teardown warn about saving it.
+        (setf (mevedel-session-pending-publication remote-session) nil)
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session))))))
+
+(mevedel-deftest mevedel-menu--navigate-description ()
+  ,test
+  (test)
+  :doc "names the live segment when no archived segment is projected"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-current-segment session) 4)
+    (with-current-buffer view-buf
+      (should (string= "Navigate  main · segment live (4)"
+                       (substring-no-properties
+                        (mevedel-menu--navigate-description))))))
+
+  :doc "names the projected segment and the live total"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-current-segment session) 9)
+    (with-current-buffer view-buf
+      (setq-local mevedel-view--historical-segment-number 4)
+      (should (string= "Navigate  main · segment 4/9"
+                       (substring-no-properties
+                        (mevedel-menu--navigate-description)))))))
+
+(mevedel-deftest mevedel-menu--session-info-text ()
+  ,test
+  (test)
+  :doc "renders complete target and durability state as aligned rows"
+  (mevedel-menu-test--with-buffers
+    (let* ((target (mevedel-execution-target-create
+                    "/ssh:user@host:/srv/project/"))
+           (remote-session
+            (mevedel-session--create
+             :name "remote" :workspace workspace
+             :working-directory "/ssh:user@host:/srv/project/"
+             :execution-target target :permission-mode 'ask)))
+      (setf (mevedel-execution-target-readiness target)
+            '(:status ready :sandbox-mode best-effort
+              :sandbox-status bubblewrap)
+            (mevedel-session-lease remote-session) '(:state owned))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session remote-session))
+      (unwind-protect
+          (with-current-buffer view-buf
+            (let ((text (substring-no-properties
+                         (mevedel-menu--session-info-text))))
+              (should (string-match-p "mevedel session — remote" text))
+              (should (string-match-p "Target.*ssh:user@host" text))
+              (should (string-match-p "tier supported · readiness ready" text))
+              (should (string-match-p "sandbox bubblewrap" text))
+              (should (string-match-p "Persistence" text))
+              (should (string-match-p "lease owned · publication published"
+                                      text))
+              (should (string-match-p "Request.*idle · mode ask" text))
+              (should (string-match-p "Model" text))))
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session))))))
 
 (mevedel-deftest mevedel-menu--worktree-label ()
   ,test
@@ -581,7 +814,7 @@
                (lambda (&optional _context)
                  '(:state normal-checkout :label "main"))))
       (with-current-buffer view-buf
-        (should (string= "Worktree  main"
+        (should (string= "Worktree   main"
                          (substring-no-properties
                           (mevedel-menu--worktree-description))))))))
 
@@ -595,7 +828,7 @@
                  (should (eq session seen-session))
                  3)))
       (with-current-buffer view-buf
-        (should (string= "Processes 3 live"
+        (should (string= "Executions 3 live"
                          (substring-no-properties
                           (mevedel-menu--executions-description))))))))
 
@@ -608,13 +841,13 @@
                (lambda (&optional _context)
                  '(:state normal-checkout :label "main"))))
       (with-current-buffer view-buf
-        (should (string= "Mode      ask"
+        (should (string= "Mode       ask"
                          (substring-no-properties
                           (mevedel-menu--mode-description))))
-        (should (string= "Model     gpt-5.5"
+        (should (string= "Model      gpt-5.5"
                          (substring-no-properties
                           (mevedel-menu--model-description))))
-        (should (string= "Tools     2 active"
+        (should (string= "Tools      2 active"
                          (substring-no-properties
                           (mevedel-menu--tools-description))))
         (should (string-match-p
@@ -627,7 +860,7 @@
                      string-end)
                  (substring-no-properties
                   (mevedel-menu--plugins-description))))
-        (should (string= "Worktree  main"
+        (should (string= "Worktree   main"
                          (substring-no-properties
                           (mevedel-menu--worktree-description))))))))
 
@@ -637,10 +870,12 @@
   :doc "marks the active mode without exposing internal mode names"
   (mevedel-menu-test--with-buffers
     (with-current-buffer view-buf
-      (should (string= "ask     current prompt for edits and uncertain execution"
-                       (substring-no-properties
-                        (mevedel-menu--mode-ask-description))))
-      (should (string= "edits           auto-apply edit previews"
+      (should (string=
+               (concat "ask        "
+                       "prompt for edits and uncertain execution current")
+               (substring-no-properties
+                (mevedel-menu--mode-ask-description))))
+      (should (string= "edits      auto-apply edit previews"
                        (substring-no-properties
                         (mevedel-menu--mode-edits-description))))))
 
@@ -648,10 +883,13 @@
   (mevedel-menu-test--with-buffers
     (with-current-buffer view-buf
       (mevedel-menu--set-mode 'full-auto)
-      (should (string= "full-auto current auto-allow tools"
-                       (substring-no-properties
-                        (mevedel-menu--mode-full-auto-description))))
-      (should (string= "ask             prompt for edits and uncertain execution"
+      (should (string=
+               (concat "full-auto  "
+                       "auto-allow tools                         current")
+               (substring-no-properties
+                (mevedel-menu--mode-full-auto-description))))
+      (should (string= (concat "ask        "
+                               "prompt for edits and uncertain execution")
                        (substring-no-properties
                         (mevedel-menu--mode-ask-description))))))
 
@@ -660,15 +898,35 @@
     (setf (mevedel-session-plan-mode session) t
           (mevedel-session-permission-mode session) 'full-auto)
     (with-current-buffer view-buf
-      (should (string= "Mode      Plan/full-auto"
+      (should (string= "Mode       Plan/full-auto"
                        (substring-no-properties
                         (mevedel-menu--mode-description))))
-      (should (string= "Plan    current inspect and discuss without direct edits"
-                       (substring-no-properties
-                        (mevedel-menu--mode-plan-description))))
-      (should (string= "full-auto         auto-allow tools"
+      (should (string=
+               "Plan mode  on · inspect and discuss, no edits"
+               (substring-no-properties
+                (mevedel-menu--mode-plan-description))))
+      (should (string= "full-auto  auto-allow tools"
                        (substring-no-properties
                         (mevedel-menu--mode-full-auto-description)))))))
+
+(mevedel-deftest mevedel-menu--mode-surface-description ()
+  ,test
+  (test)
+  :doc "shows both mode axes on one line"
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer view-buf
+      (should (string= "Mode  permission ask · Plan off"
+                       (substring-no-properties
+                        (mevedel-menu--mode-surface-description))))))
+
+  :doc "shows Plan as its own axis, not as a permission mode"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-plan-mode session) t
+          (mevedel-session-permission-mode session) 'full-auto)
+    (with-current-buffer view-buf
+      (should (string= "Mode  permission full-auto · Plan on"
+                       (substring-no-properties
+                        (mevedel-menu--mode-surface-description)))))))
 
 (mevedel-deftest mevedel-menu-help--text ()
   ,test
@@ -700,8 +958,8 @@
       (let ((text (substring-no-properties
                    (mevedel-menu--mode-plan-description))))
         (should (string-match-p "Plan" text))
-        (should (string-match-p "current" text))
-        (should (string-match-p "without direct edits" text))))))
+        (should (string-match-p "on ·" text))
+        (should (string-match-p "no edits" text))))))
 
 (mevedel-deftest mevedel-menu--enter-plan ()
   ,test
@@ -722,7 +980,7 @@
       (should (eq (mevedel-menu--mode-symbol
                    session data-buf view-buf)
                   'full-auto))
-      (should (string= "Mode      full-auto"
+      (should (string= "Mode       full-auto"
                        (substring-no-properties
                         (mevedel-menu--mode-description)))))))
 
@@ -756,7 +1014,7 @@
     (cl-letf (((symbol-function 'transient-scope)
                (lambda (&rest _) scope)))
       (should
-       (equal "Directive model: Fast:fast-model · effort high · session"
+       (equal "Directive model  Fast:fast-model · effort high · session"
               (substring-no-properties
                (mevedel-menu--model-selection-description)))))))
 
@@ -816,7 +1074,7 @@
         (let ((display
                (with-current-buffer transient--buffer-name
                  (substring-no-properties (buffer-string)))))
-          (should (string-match-p "RET +Select model" display))
+          (should (string-match-p "RET +Choose model" display))
           (should-not (string-match-p "<return>" display))))
     (transient--emergency-exit :test)
     (should-not
@@ -882,10 +1140,10 @@
           (should (eq 'high gptel-reasoning-effort)))
         (should-not (mevedel-session-model-provider session))))))
 
-(mevedel-deftest mevedel-menu--model-selection-select-effort ()
+(mevedel-deftest mevedel-menu--model-selection-cycle-effort ()
   ,test
   (test)
-  :doc "effort selection updates caller state without changing the session"
+  :doc "cycles through the model's supported efforts and back to default"
   (mevedel-menu-test--with-model-backends
     (let ((old-effort (get 'balanced-model :reasoning-effort))
           (scope '(:model-provider "Balanced:balanced-model"
@@ -899,13 +1157,54 @@
                   (lambda (provider effort)
                     (setq update (list provider effort))))
             (cl-letf (((symbol-function 'transient-scope)
-                       (lambda (&rest _) scope))
-                      ((symbol-function 'completing-read)
-                       (lambda (&rest _) "high")))
-              (mevedel-menu--model-selection-select-effort))
-            (should (equal '("Balanced:balanced-model" high) update))
-            (should (eq 'high (plist-get scope :reasoning-effort)))
-            (should-not (plist-get scope :inherited)))
+                       (lambda (&rest _) scope)))
+              (mevedel-menu--model-selection-cycle-effort)
+              (should (equal '("Balanced:balanced-model" low) update))
+              (should (eq 'low (plist-get scope :reasoning-effort)))
+              (should-not (plist-get scope :inherited))
+              (mevedel-menu--model-selection-cycle-effort)
+              (should (eq 'high (plist-get scope :reasoning-effort)))
+              ;; The cycle ends on the provider default, not on a wrap
+              ;; back to the first supported effort.
+              (mevedel-menu--model-selection-cycle-effort)
+              (should-not (plist-get scope :reasoning-effort))
+              (mevedel-menu--model-selection-cycle-effort)
+              (should (eq 'low (plist-get scope :reasoning-effort)))))
+        (put 'balanced-model :reasoning-effort old-effort))))
+
+  :doc "starts the cycle over when the current effort is unsupported"
+  (mevedel-menu-test--with-model-backends
+    (let ((old-effort (get 'balanced-model :reasoning-effort))
+          (scope (list :model-provider "Balanced:balanced-model"
+                       :reasoning-effort 'max
+                       :inherited nil
+                       :update #'ignore)))
+      (unwind-protect
+          (progn
+            (put 'balanced-model :reasoning-effort '(member low high))
+            (cl-letf (((symbol-function 'transient-scope)
+                       (lambda (&rest _) scope)))
+              (mevedel-menu--model-selection-cycle-effort)
+              (should (eq 'low (plist-get scope :reasoning-effort)))))
+        (put 'balanced-model :reasoning-effort old-effort)))))
+
+(mevedel-deftest mevedel-menu--model-selection-effort-description ()
+  ,test
+  (test)
+  :doc "names the current effort and the one the next press selects"
+  (mevedel-menu-test--with-model-backends
+    (let ((old-effort (get 'balanced-model :reasoning-effort))
+          (scope '(:model-provider "Balanced:balanced-model"
+                   :reasoning-effort high)))
+      (unwind-protect
+          (progn
+            (put 'balanced-model :reasoning-effort '(member low high))
+            (cl-letf (((symbol-function 'transient-scope)
+                       (lambda (&rest _) scope)))
+              (should
+               (equal "Cycle effort  high → default"
+                      (substring-no-properties
+                       (mevedel-menu--model-selection-effort-description))))))
         (put 'balanced-model :reasoning-effort old-effort)))))
 
 (mevedel-deftest mevedel-menu--model-selection-reset ()
@@ -1141,72 +1440,6 @@
                   (mevedel-request--create :session mevedel--session)))
     (with-current-buffer view-buf
       (should-not (mevedel-menu--abort-inapt-p)))))
-
-(mevedel-deftest mevedel-menu--permissions ()
-  ,test
-  (test)
-  :doc "lists distinct session operation, network, and resource authority"
-  (mevedel-menu-test--with-buffers
-    (setf (mevedel-session-permission-rules session)
-          '(("Bash" :pattern "npx test*" :action allow)
-            ("Bash" :pattern "npx test*" :network t :action allow)))
-    (setf (mevedel-session-resource-grants session)
-          '((:path "/tmp/external" :access read)))
-    (with-current-buffer view-buf
-      (let ((description (mevedel-menu--permissions-description)))
-        (should (string-match-p "Session operation" description))
-        (should (string-match-p "Session network" description))
-        (should (string-match-p "Session resource" description)))))
-  :doc "revokes a session network rule without changing operation or resource authority"
-  (mevedel-menu-test--with-buffers
-    (let ((operation '("Bash" :pattern "npx test*" :action allow))
-          (network
-           '("Bash" :pattern "npx test*" :network t :action allow))
-          (resource '(:path "/tmp/external" :access read)))
-      (setf (mevedel-session-permission-rules session)
-            (list operation network))
-      (setf (mevedel-session-resource-grants session)
-            (list resource))
-      (with-current-buffer view-buf
-        (let* ((candidate
-                (seq-find
-                 (lambda (item)
-                   (string-match-p "Session network" (car item)))
-                 (mevedel-menu--permission-candidates)))
-               (label (car candidate)))
-          (cl-letf (((symbol-function 'completing-read)
-                     (lambda (&rest _) label)))
-            (mevedel-menu--permissions-revoke))))
-      (should
-       (equal (list operation)
-              (mevedel-session-permission-rules session)))
-      (should
-       (equal (list resource)
-              (mevedel-session-resource-grants session)))))
-  :doc "revokes one workspace resource without changing workspace network authority"
-  (mevedel-menu-test--with-buffers
-    (let ((path "/tmp/workspace-external")
-          (network
-           '("Bash" :pattern "npx test*" :network t :action allow)))
-      (mevedel-permission--save-persistent-rule
-       workspace "Bash" 'allow nil
-       :spec-key :pattern :spec-value "npx test*" :network t)
-      (mevedel-permission--save-persistent-resource-grant
-       workspace path 'read)
-      (with-current-buffer view-buf
-        (let* ((candidate
-                (seq-find
-                 (lambda (item)
-                   (string-match-p "Workspace resource" (car item)))
-                 (mevedel-menu--permission-candidates)))
-               (label (car candidate)))
-          (cl-letf (((symbol-function 'completing-read)
-                     (lambda (&rest _) label)))
-            (mevedel-menu--permissions-revoke))))
-      (let ((authority
-             (mevedel-permission-persistent-authority workspace)))
-        (should (equal (list network) (plist-get authority :rules)))
-        (should-not (plist-get authority :resource-grants))))))
 
 (provide 'test-mevedel-menu)
 

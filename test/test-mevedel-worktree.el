@@ -846,7 +846,7 @@
   ,test
   (test)
 
-  :doc "renders compact dynamic worktree status rows"
+  :doc "renders the compact one-line worktree status"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-worktree-desc-" t)))
          (workspace (mevedel-worktree-test--workspace root))
@@ -867,20 +867,79 @@
                            (setq called-buffer (current-buffer)
                                  called-context context)
                            status)))
-                (let ((description (mevedel-worktree-status--description)))
-                  (should (string-match-p "mevedel worktree" description))
-                  (should (string-match-p "Repo:" description))
-                  (should (string-match-p "Session:    main" description))
-                  (should (string-match-p "Directory:" description))
-                  (should (string-match-p "Isolation:  normal checkout"
-                                          description))
-                  (should (string-match-p "Branch:     main" description))
-                  (should (string-match-p ".worktrees: ignored" description))
-                  (should (string-match-p "Dirty:      no" description))
-                  (should (string-match-p "Worktrees:  1" description)))))
+                (let ((description (substring-no-properties
+                                    (mevedel-worktree-status--description))))
+                  (should (string-match-p "Worktree  main" description))
+                  (should (string-match-p "normal checkout" description))
+                  (should (string-match-p "1 worktree" description))
+                  ;; An ignored `.worktrees' and a clean tree are nominal,
+                  ;; so neither earns an alert line.
+                  (should-not (string-match-p "dirty" description))
+                  (should-not (string-match-p "\n" description)))))
             (should (eq called-buffer data-buffer))
             (should (eq (plist-get called-context :session) session))
             (should (eq (plist-get called-context :workspace) workspace)))
+        (mevedel-worktree-test--cleanup-surfaces data-buffer)
+        (delete-directory root t))))
+
+  :doc "raises a dirty tree and an untracked .worktrees directory"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-desc-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (status (thread-first
+                   (mevedel-worktree-test--status root)
+                   (plist-put :session session)
+                   (plist-put :workspace workspace)
+                   (plist-put :dirty-p t)
+                   (plist-put :ignore-state 'not-ignored))))
+    (let ((data-buffer (generate-new-buffer " *mwt-desc-data*")))
+      (unwind-protect
+          (progn
+            (mevedel-worktree-test--install-context status data-buffer)
+            (with-current-buffer data-buffer
+              (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+                         (lambda (&optional _context) status)))
+                (let* ((description (substring-no-properties
+                                     (mevedel-worktree-status--description)))
+                       (alert (nth 1 (split-string description "\n"))))
+                  (should (string-match-p "dirty" description))
+                  (should (string-match-p "! .worktrees not ignored"
+                                          alert))))))
+        (mevedel-worktree-test--cleanup-surfaces data-buffer)
+        (delete-directory root t)))))
+
+(mevedel-deftest mevedel-worktree-status--details-text ()
+  ,test
+  (test)
+
+  :doc "renders the complete repository status as aligned rows"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-details-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (status (plist-put
+                  (plist-put (mevedel-worktree-test--status root)
+                             :session session)
+                  :workspace workspace)))
+    (let ((data-buffer (generate-new-buffer " *mwt-details-data*")))
+      (unwind-protect
+          (progn
+            (mevedel-worktree-test--install-context status data-buffer)
+            (with-current-buffer data-buffer
+              (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+                         (lambda (&optional _context) status)))
+                (let ((text (mevedel-worktree-status--details-text)))
+                  (should (string-match-p "mevedel worktree" text))
+                  (should (string-match-p "Repo " text))
+                  (should (string-match-p "Session       main" text))
+                  (should (string-match-p "Directory " text))
+                  (should (string-match-p "Isolation     normal checkout"
+                                          text))
+                  (should (string-match-p "Branch        main" text))
+                  (should (string-match-p ".worktrees    ignored" text))
+                  (should (string-match-p "Dirty         no" text))
+                  (should (string-match-p "Worktrees     1" text))))))
         (mevedel-worktree-test--cleanup-surfaces data-buffer)
         (delete-directory root t)))))
 
@@ -967,6 +1026,34 @@
       (delete-directory root t))
     (should (eq called-buffer data-buffer))))
 
+(mevedel-deftest mevedel-worktree-status-details ()
+  ,test
+  (test)
+
+  :doc "opens the worktree info panel"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-panel-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (status (plist-put
+                  (plist-put (mevedel-worktree-test--status root)
+                             :session session)
+                  :workspace workspace))
+         (data-buffer (generate-new-buffer " *mwt-panel-data*")))
+    (unwind-protect
+        (progn
+          (mevedel-worktree-test--install-context status data-buffer)
+          (with-current-buffer data-buffer
+            (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+                       (lambda (&optional _context) status)))
+              (mevedel-worktree-status-details)))
+          (with-current-buffer mevedel-worktree-details-buffer-name
+            (should (string-match-p "Session       main" (buffer-string)))))
+      (when (get-buffer mevedel-worktree-details-buffer-name)
+        (kill-buffer mevedel-worktree-details-buffer-name))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-worktree-status-help ()
   ,test
   (test)
@@ -977,6 +1064,10 @@
         (mevedel-worktree-status-help)
         (with-current-buffer mevedel-worktree-help-buffer-name
           (should (string-match-p "c  Create a linked worktree session"
+                                  (buffer-string)))
+          (should (string-match-p "i  Show full repository status"
+                                  (buffer-string)))
+          (should (string-match-p "q  Back to the main session cockpit"
                                   (buffer-string)))
           (should (string-match-p "RET  Show selected worktree details"
                                   (buffer-string)))

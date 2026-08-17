@@ -432,8 +432,11 @@
                 (should (string-match-p "ssh:user@host" line))
                 (should (string-match-p "lease lost" line))
                 (should (string-match-p "publication pending" line))
-                (should (string-match-p "ready" header))
-                (should (string-match-p "sandbox bubblewrap" header))
+                ;; Nominal readiness stays out of the cockpit header; the
+                ;; lost lease and pending publication earn its alert line.
+                (should (string-match-p "lease lost" header))
+                (should (string-match-p "publication pending" header))
+                (should-not (string-match-p "sandbox bubblewrap" header))
                 (should (string= draft (mevedel-view--input-text)))
                 (should (= (point)
                            (+ (mevedel-view--input-start) point-offset))))))

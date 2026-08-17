@@ -266,6 +266,14 @@ item is selected."
     (with-help-window buffer
       (princ text))))
 
+(defun mevedel-cockpit--generated-help-text (surface)
+  "Return generated key help for SURFACE.
+Used when SURFACE provides neither `:help-function' nor `:help-text', so
+every surface answers \\`?' with at least its own key table."
+  (format "mevedel %s\n\nKeys\n%s\n"
+          (mevedel-cockpit--surface-label surface)
+          (mevedel-cockpit-surface-key-help-text surface)))
+
 (defun mevedel-cockpit-surface-help ()
   "Open help for the current cockpit surface."
   (interactive)
@@ -275,12 +283,10 @@ item is selected."
                     (user-error nil)))
          (function (plist-get surface :help-function))
          (text (or (and function (funcall function context))
-                   (plist-get surface :help-text)))
+                   (plist-get surface :help-text)
+                   (mevedel-cockpit--generated-help-text surface)))
          (buffer (or (plist-get surface :help-buffer)
                      "*mevedel cockpit help*")))
-    (unless text
-      (user-error "No help for this %s"
-                  (mevedel-cockpit--surface-label surface)))
     (mevedel-cockpit-show-help buffer text)))
 
 (defun mevedel-cockpit-surface-details ()
@@ -296,6 +302,16 @@ item is selected."
       (user-error "No details for this %s"
                   (mevedel-cockpit--surface-label surface)))
     (mevedel-cockpit-show-help buffer (funcall function item context))))
+
+(defun mevedel-cockpit-format-header (name scope state)
+  "Return the shared cockpit header line for NAME, SCOPE, and STATE.
+NAME identifies the surface, SCOPE the session or root it belongs to, and
+STATE its counts and condition.  The trailing pointer replaces per-surface
+key listings; the keys themselves belong in \\`?' help."
+  (concat (propertize (format "mevedel: %s" name)
+                      'face 'font-lock-function-name-face)
+          (format "  %s  %s    " (or scope "") (or state ""))
+          (propertize "? keys" 'face 'shadow)))
 
 (defun mevedel-cockpit-surface-header-line ()
   "Return the header line for the current cockpit surface."
