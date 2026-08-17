@@ -489,9 +489,11 @@ A lease written before hosts were recorded reads as unknown, not as an error.
 
 Joining an active writer opens only its last committed publication and exposes
 `Request control` in the view. Expired takeover still requires the ordinary
-explicit confirmation. Starting an independent session while another session
-is held warns that both share project files and points to a Worktree Fork for
-isolation.
+explicit confirmation. Starting an independent session while another one is
+*held* — joined or open here, not merely resumable or expired — warns that both
+share project files and points to a Worktree Fork for isolation. An expired
+lease does not warn: its writer is gone, which is the reason that row offers a
+takeover in the first place.
 
 A failure before the manifest-head compare-and-set retains the current and
 previously retained staged sources as one transient local recovery, surfaces

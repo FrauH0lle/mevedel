@@ -11379,24 +11379,27 @@ The result is a plist whose :tempdir owns every created file."
               (lambda (&rest _) nil)))
           (setq status '(:state foreign :host "desktop"))
           (should
-           (equal '(:action "Join" :detail "held by desktop")
+           (equal '(:action "Join" :detail "held by desktop" :held t)
                   (mevedel-session-persistence--entry-authority
                    workspace entry)))
+          ;; An expired lease offers a takeover precisely because nobody is
+          ;; writing the session any more, so it is not a live writer.
           (setq status '(:state expired :host "laptop"))
           (should
-           (equal '(:action "Take over" :detail "lease expired, was laptop")
+           (equal '(:action "Take over" :detail "lease expired, was laptop"
+                    :held nil)
                   (mevedel-session-persistence--entry-authority
                    workspace entry)))
           ;; An unheld lease resumes wherever its files live; the machine
           ;; that last held it is context, not a different action.
           (setq status (list :state 'available :host "laptop"))
           (should
-           (equal '(:action "Resume" :detail "last held by laptop")
+           (equal '(:action "Resume" :detail "last held by laptop" :held nil)
                   (mevedel-session-persistence--entry-authority
                    workspace entry)))
           (setq status (list :state 'available :host (system-name)))
           (should
-           (equal '(:action "Resume" :detail nil)
+           (equal '(:action "Resume" :detail nil :held nil)
                   (mevedel-session-persistence--entry-authority
                    workspace entry)))
           ;; A lease predating recorded hosts still resumes.
@@ -11424,13 +11427,14 @@ The result is a plist whose :tempdir owns every created file."
               (lambda (&rest _)
                 (ert-fail "An open session must not cost a lease read"))))
           (should
-           (equal '(:action "Switch" :detail "already open here")
+           (equal '(:action "Switch" :detail "already open here" :held t)
                   (mevedel-session-persistence--entry-authority
                    workspace entry)))
           (with-current-buffer live
             (setq-local mevedel-session--read-only-mode t))
           (should
-           (equal '(:action "Switch" :detail "already open here, read-only")
+           (equal '(:action "Switch" :detail "already open here, read-only"
+                    :held t)
                   (mevedel-session-persistence--entry-authority
                    workspace entry))))
       (when (buffer-live-p live)
@@ -11449,7 +11453,7 @@ The result is a plist whose :tempdir owns every created file."
          (entry '(:save-path "/session/" :summary (:session-name "main")))
          (choice "Start new session")
          (warned nil)
-         (authority '(:action "Join" :detail "held by desktop"))
+         (authority '(:action "Join" :detail "held by desktop" :held t))
          (restored (generate-new-buffer " *mevedel-entry-restored*")))
     (unwind-protect
         (cl-letf
@@ -11486,14 +11490,18 @@ The result is a plist whose :tempdir owns every created file."
            (eq restored
                (mevedel-session-persistence-choose-entry workspace)))
           ;; Nothing holds an unheld session, so starting an independent one
-          ;; alongside it needs no warning.
-          (setq authority '(:action "Resume" :detail nil)
-                choice "Start new session"
-                warned nil)
-          (should
-           (eq 'new
-               (mevedel-session-persistence-choose-entry workspace)))
-          (should-not warned))
+          ;; alongside it needs no warning.  Neither does an expired lease:
+          ;; its writer is gone, which is why the row offers a takeover.
+          (dolist (unheld '((:action "Resume" :detail nil :held nil)
+                            (:action "Take over" :detail "lease expired"
+                             :held nil)))
+            (setq authority unheld
+                  choice "Start new session"
+                  warned nil)
+            (should
+             (eq 'new
+                 (mevedel-session-persistence-choose-entry workspace)))
+            (should-not warned)))
       (when (buffer-live-p restored)
         (kill-buffer restored))
       (when (file-directory-p root)
