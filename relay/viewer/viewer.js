@@ -1,4 +1,4 @@
-/* viewer.js -- dependency-free sealed collaboration guest */
+/* viewer.js -- MevView: dependency-free sealed collaboration guest */
 'use strict';
 
 (() => {
@@ -9,10 +9,10 @@
   const composer = document.getElementById('composer');
   const composerInput = document.getElementById('composer-input');
   const composerName = document.getElementById('composer-name');
-  const sendButton = document.getElementById('send-button');
   const stopButton = document.getElementById('stop-button');
-  const filterSelect = document.getElementById('filter');
+  const filterNav = document.getElementById('filter');
   const requests = document.getElementById('requests');
+  const sessionLabel = document.getElementById('session-label');
 
   const PROTO = 2;
   const GIVE_UP_MS = 3 * 60 * 1000;
@@ -36,6 +36,8 @@
     // serialized through this promise chain.
     inbound: Promise.resolve(),
   };
+
+  /* ── Link grammar and sealing ─────────────────────────────────────── */
 
   function base64urlDecode(text) {
     if (typeof text !== 'string' || !/^[A-Za-z0-9_-]+$/.test(text)) return null;
@@ -110,9 +112,18 @@
     state.socket.send(await sealFrame(frame));
   }
 
+  /* ── Small DOM helpers ────────────────────────────────────────────── */
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (typeof text === 'string') node.textContent = text;
+    return node;
+  }
+
   function atLiveEdge() {
     return document.documentElement.scrollHeight - window.scrollY
-      - window.innerHeight < 24;
+      - window.innerHeight < 40;
   }
 
   function scrollToLive() {
@@ -121,11 +132,12 @@
 
   function setConnection(text, className) {
     connection.textContent = text;
-    connection.className = `connection ${className || ''}`;
+    connection.className = `conn ${className || ''}`;
   }
 
   function showNotice(text) {
     notice.textContent = text || '';
+    notice.hidden = !text;
   }
 
   function setLiveButton(visible) {
@@ -136,74 +148,325 @@
     setLiveButton(!atLiveEdge());
   }
 
-  function appendTextBody(parent, text, className) {
-    const body = document.createElement('pre');
-    body.className = className || 'card-body';
-    body.textContent = typeof text === 'string' ? text : '';
-    parent.append(body);
-    return body;
-  }
+  /* ── Markdown (DOM-built, textContent only, XSS-safe) ─────────────── */
 
-  function headerLabel(record) {
-    if (record.kind === 'assistant') return 'Assistant';
-    if (record.kind === 'tool') return 'Tool';
-    return record.guest ? `Guest ${record.guest}` : 'You';
-  }
-
-  function createHeader(record, card) {
-    const header = document.createElement('div');
-    header.className = 'card-header';
-    const label = document.createElement('span');
-    label.textContent = headerLabel(record);
-    if (record.guest) label.className = 'guest-badge';
-    header.append(label);
-    const status = document.createElement('span');
-    status.className = `status ${record.status || ''}`;
-    status.textContent = record.status || '';
-    header.append(status);
-    card.append(header);
-    return {header, label, status};
-  }
-
-  function createRecordElement(record) {
-    if (!['user', 'assistant', 'tool'].includes(record.kind)) return null;
-    const card = document.createElement('article');
-    card.className = `card ${record.kind}`;
-    card.dataset.recordId = record.id;
-    const parts = createHeader(record, card);
-    if (record.kind === 'tool') {
-      const details = document.createElement('details');
-      const summary = document.createElement('summary');
-      summary.textContent = `${record.summary || record.name || 'Tool'}${record.truncated ? ' (truncated)' : ''}`;
-      details.append(summary);
-      const result = document.createElement('pre');
-      result.className = 'tool-result';
-      result.textContent = record.result || '';
-      details.append(result);
-      card.append(details);
-      return {card, label: parts.label, status: parts.status, body: result, summary};
+  function renderInline(target, text) {
+    // `code`, **bold**, *italic* -- one pass, longest marker first.
+    const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)/g;
+    let last = 0;
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      if (match.index > last) {
+        target.append(text.slice(last, match.index));
+      }
+      const token = match[0];
+      if (token.startsWith('`')) {
+        target.append(el('code', '', token.slice(1, -1)));
+      } else if (token.startsWith('**')) {
+        const strong = el('strong');
+        renderInline(strong, token.slice(2, -2));
+        target.append(strong);
+      } else {
+        const em = el('em');
+        renderInline(em, token.slice(1, -1));
+        target.append(em);
+      }
+      last = match.index + token.length;
     }
-    return {card, label: parts.label, status: parts.status,
-            body: appendTextBody(card, record.text)};
+    if (last < text.length) target.append(text.slice(last));
+  }
+
+  function renderMarkdown(text) {
+    const root = el('div', 'prose');
+    const lines = String(text || '').split('\n');
+    let index = 0;
+    let paragraph = [];
+    const flush = () => {
+      if (paragraph.length) {
+        const p = el('p');
+        renderInline(p, paragraph.join('\n'));
+        root.append(p);
+        paragraph = [];
+      }
+    };
+    while (index < lines.length) {
+      const line = lines[index];
+      const fence = line.match(/^```(\S*)\s*$/);
+      if (fence) {
+        flush();
+        const code = [];
+        index++;
+        while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+          code.push(lines[index]);
+          index++;
+        }
+        index++; // closing fence
+        root.append(renderCodeBlock(code.join('\n'), fence[1]));
+        continue;
+      }
+      const heading = line.match(/^(#{1,4})\s+(.*)$/);
+      if (heading) {
+        flush();
+        const h = el(`h${heading[1].length}`);
+        renderInline(h, heading[2]);
+        root.append(h);
+        index++;
+        continue;
+      }
+      const quote = line.match(/^>\s?(.*)$/);
+      if (quote) {
+        flush();
+        const bq = el('blockquote');
+        const inner = [quote[1]];
+        index++;
+        while (index < lines.length && /^>\s?/.test(lines[index])) {
+          inner.push(lines[index].replace(/^>\s?/, ''));
+          index++;
+        }
+        const p = el('p');
+        renderInline(p, inner.join('\n'));
+        bq.append(p);
+        root.append(bq);
+        continue;
+      }
+      const bullet = line.match(/^\s*([-*]|\d+\.)\s+/);
+      if (bullet) {
+        flush();
+        const ordered = /^\s*\d+\./.test(line);
+        const list = el(ordered ? 'ol' : 'ul');
+        while (index < lines.length) {
+          const item = lines[index].match(/^\s*(?:[-*]|\d+\.)\s+(.*)$/);
+          if (!item) break;
+          const li = el('li');
+          renderInline(li, item[1]);
+          list.append(li);
+          index++;
+          // Continuation lines indented under the item.
+          while (index < lines.length && /^\s{2,}\S/.test(lines[index])
+                 && !/^\s*(?:[-*]|\d+\.)\s+/.test(lines[index])) {
+            li.append(' ' + lines[index].trim());
+            index++;
+          }
+        }
+        root.append(list);
+        continue;
+      }
+      if (/^\s*$/.test(line)) {
+        flush();
+        index++;
+        continue;
+      }
+      paragraph.push(line);
+      index++;
+    }
+    flush();
+    return root;
+  }
+
+  /* ── Fontification ────────────────────────────────────────────────── */
+
+  const LANG_RULES = {
+    lisp: [
+      [/;.*$/m, 'tok-com'],
+      [/"(?:[^"\\]|\\.)*"/, 'tok-str'],
+      [/(?<=\()(?:defun|defmacro|defvar|defcustom|defconst|let\*?|lambda|if|when|unless|while|cond|pcase|setq|require|provide|interactive|dolist|dotimes|progn|or|and|not)\b/, 'tok-kw'],
+      [/(?<=\(defun\s)[-a-zA-Z0-9_?!*/<>=]+/, 'tok-fn'],
+    ],
+    shell: [
+      [/#.*$/m, 'tok-com'],
+      [/"(?:[^"\\]|\\.)*"|'[^']*'/, 'tok-str'],
+      [/\b(?:if|then|else|fi|for|do|done|while|case|esac|function|return|exit|export|local)\b/, 'tok-kw'],
+    ],
+    python: [
+      [/#.*$/m, 'tok-com'],
+      [/"""[\s\S]*?"""|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/, 'tok-str'],
+      [/\b(?:def|class|return|if|elif|else|for|while|import|from|as|with|try|except|raise|lambda|None|True|False|and|or|not|in|is)\b/, 'tok-kw'],
+    ],
+    js: [
+      [/\/\/.*$/m, 'tok-com'],
+      [/`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/, 'tok-str'],
+      [/\b(?:const|let|var|function|return|if|else|for|while|class|new|await|async|import|export|null|true|false|typeof)\b/, 'tok-kw'],
+    ],
+    go: [
+      [/\/\/.*$/m, 'tok-com'],
+      [/`[^`]*`|"(?:[^"\\]|\\.)*"/, 'tok-str'],
+      [/\b(?:func|return|if|else|for|range|type|struct|interface|package|import|var|const|go|defer|select|case|switch|nil|true|false)\b/, 'tok-kw'],
+    ],
+  };
+  const LANG_ALIASES = {
+    'emacs-lisp': 'lisp', elisp: 'lisp', lisp: 'lisp', scheme: 'lisp',
+    sh: 'shell', bash: 'shell', shell: 'shell', zsh: 'shell',
+    python: 'python', py: 'python',
+    js: 'js', javascript: 'js', typescript: 'js', ts: 'js', json: 'js',
+    go: 'go', golang: 'go',
+  };
+
+  function highlightInto(target, text, lang) {
+    const rules = LANG_RULES[LANG_ALIASES[(lang || '').toLowerCase()] || ''];
+    if (!rules) {
+      target.textContent = text;
+      return;
+    }
+    const combined = new RegExp(
+      rules.map(rule => `(${rule[0].source})`).join('|'), 'gm');
+    let last = 0;
+    let match;
+    while ((match = combined.exec(text)) !== null) {
+      if (match.index > last) target.append(text.slice(last, match.index));
+      let cls = '';
+      for (let group = 1; group <= rules.length; group++) {
+        if (match[group] !== undefined) {
+          cls = rules[group - 1][1];
+          break;
+        }
+      }
+      target.append(el('span', cls, match[0]));
+      last = match.index + match[0].length;
+      if (match[0].length === 0) combined.lastIndex++;
+    }
+    if (last < text.length) target.append(text.slice(last));
+  }
+
+  function renderCodeBlock(code, lang) {
+    if ((lang || '').toLowerCase() === 'diff') {
+      const block = el('div', 'codeblock');
+      block.append(el('span', 'lang', 'diff'));
+      block.append(renderDiff(code));
+      return block;
+    }
+    const block = el('div', 'codeblock');
+    if (lang) block.append(el('span', 'lang', lang));
+    const pre = el('pre');
+    highlightInto(pre, code, lang);
+    block.append(pre);
+    return block;
+  }
+
+  function renderDiff(text) {
+    const container = el('div', 'diff');
+    for (const line of String(text || '').split('\n')) {
+      let cls = 'line';
+      if (/^@@/.test(line)) cls += ' hunk';
+      else if (/^(\*\*\*|\+\+\+|---|diff |Index:|=== )/.test(line)) cls += ' file';
+      else if (/^\+/.test(line)) cls += ' add';
+      else if (/^-/.test(line)) cls += ' del';
+      container.append(el('span', cls, line));
+    }
+    return container;
+  }
+
+  function looksLikeDiff(text) {
+    return /^(@@ |\+\+\+ |--- |\*\*\* (Begin|Update|Add|Delete))/m
+      .test(String(text || ''));
+  }
+
+  /* ── Ledger rendering ─────────────────────────────────────────────── */
+
+  function roleOf(record) {
+    if (record.kind === 'user') return record.guest ? 'guest' : 'you';
+    return 'ai';
+  }
+
+  function whoLine(record) {
+    const who = el('div', 'who');
+    if (record.kind === 'user') {
+      who.append(el('span', 'name', record.guest || 'You'));
+      if (record.guest) who.append(el('span', 'badge', 'guest'));
+    } else if (record.kind === 'assistant') {
+      who.append(el('span', 'name', 'Assistant'));
+    } else {
+      who.append(el('span', 'name', 'Tool'));
+    }
+    if (record.directive) {
+      who.append(el('span', 'dirchip', `◆ ${directiveLabel(record.directive)}`));
+    }
+    return who;
+  }
+
+  function renderContent(record) {
+    if (record.kind === 'user') {
+      const prose = renderMarkdown(record.text || '');
+      prose.className = 'prose prompt';
+      return prose;
+    }
+    if (record.kind === 'assistant') {
+      return renderMarkdown(record.text || '');
+    }
+    // Tool row.
+    const details = el('details', `tool ${record.status || ''}`);
+    const summary = el('summary');
+    summary.append(el('span', 'tname', record.name || 'Tool'));
+    summary.append(el('span', 'targ',
+                      record.detail
+                      || (record.summary !== record.name ? record.summary : '')
+                      || ''));
+    summary.append(el('span', `chip ${record.status || ''}`,
+                      record.status || ''));
+    details.append(summary);
+    const result = record.result || '';
+    if (result) {
+      if (record.name === 'ApplyPatch' || looksLikeDiff(result)) {
+        const body = renderDiff(result);
+        body.className = 'result diff';
+        details.append(body);
+      } else {
+        details.append(el('pre', 'result', result));
+      }
+      if (record.truncated) {
+        details.append(el('pre', 'result', '[result truncated]'));
+      }
+    }
+    return details;
+  }
+
+  function buildTurn(record) {
+    const turn = el('article', `turn ${roleOf(record)}`);
+    turn.dataset.recordId = record.id;
+    turn.dataset.role = roleOf(record);
+    const rail = el('div', 'rail');
+    const glyphText = roleOf(record) === 'you' ? 'Y'
+      : roleOf(record) === 'guest' ? 'G' : '◆';
+    rail.append(el('div', 'glyph', glyphText));
+    turn.append(rail);
+    const content = el('div', 'content');
+    content.append(whoLine(record));
+    const rendered = renderContent(record);
+    content.append(rendered);
+    turn.append(content);
+    // Tool rows keep their disclosure state across updates; stashing the
+    // details element avoids a querySelector the protocol test's fake DOM
+    // does not implement.
+    if (record.kind === 'tool') turn.toolDetails = rendered;
+    return turn;
+  }
+
+  function markContinuations() {
+    let previousRole = null;
+    for (const turn of [...transcript.children]) {
+      if (turn.hidden) continue;
+      const role = turn.dataset.role || 'ai';
+      const cont = role === 'ai' && previousRole === 'ai';
+      turn.className = `turn ${role}${cont ? ' cont' : ''}`;
+      previousRole = role;
+    }
   }
 
   function updateRecordElement(record) {
-    let element = state.elements.get(record.id);
-    if (!element) {
-      element = createRecordElement(record);
-      if (!element) return;
-      state.elements.set(record.id, element);
-      transcript.append(element.card);
-    } else if (record.kind === 'tool') {
-      element.summary.textContent = `${record.summary || record.name || 'Tool'}${record.truncated ? ' (truncated)' : ''}`;
-      element.body.textContent = record.result || '';
+    let turn = state.elements.get(record.id);
+    if (!turn) {
+      turn = buildTurn(record);
+      state.elements.set(record.id, turn);
+      transcript.append(turn);
     } else {
-      element.body.textContent = record.text || '';
+      const wasOpen = !!(turn.toolDetails && turn.toolDetails.open);
+      const fresh = buildTurn(record);
+      if (wasOpen && fresh.toolDetails) fresh.toolDetails.open = true;
+      fresh.hidden = turn.hidden;
+      turn.replaceWith(fresh);
+      state.elements.set(record.id, fresh);
+      turn = fresh;
     }
-    element.label.textContent = headerLabel(record);
-    element.label.className = record.guest ? 'guest-badge' : '';
-    element.status.textContent = record.status || '';
-    element.status.className = `status ${record.status || ''}`;
+    return turn;
   }
 
   function replaceSnapshot(records) {
@@ -214,8 +477,9 @@
     records.forEach(record => {
       if (record && typeof record.id === 'string') state.records.set(record.id, record);
     });
-    state.records.forEach(updateRecordElement);
+    state.records.forEach(record => updateRecordElement(record));
     refreshFilter();
+    markContinuations();
     if (follow) scrollToLive();
     updateLiveAffordance();
   }
@@ -226,6 +490,7 @@
     state.records.set(record.id, record);
     updateRecordElement(record);
     refreshFilter();
+    markContinuations();
     if (follow) scrollToLive();
     updateLiveAffordance();
   }
@@ -233,14 +498,15 @@
   function removeRecords(ids) {
     (Array.isArray(ids) ? ids : []).forEach(id => {
       state.records.delete(id);
-      const element = state.elements.get(id);
-      if (element) element.card.remove();
+      const turn = state.elements.get(id);
+      if (turn) turn.remove();
       state.elements.delete(id);
     });
     refreshFilter();
+    markContinuations();
   }
 
-  // ── Directive filter ──────────────────────────────────────────────────
+  /* ── Directive filter ─────────────────────────────────────────────── */
   // Records inside a directive turn carry its id; the menu is derived
   // client-side, so filtering is per-guest and costs no round-trips.
 
@@ -254,72 +520,75 @@
     for (const record of state.records.values()) {
       if (record.directive === id && record.kind === 'user' && record.text) {
         const line = record.text.split('\n', 1)[0];
-        return line.length > 40 ? `${line.slice(0, 37)}…` : line;
+        return line.length > 32 ? `${line.slice(0, 29)}…` : line;
       }
     }
     return id.slice(0, 8);
   }
 
   function refreshFilter() {
-    if (filterSelect) {
+    if (filterNav) {
       const ids = [];
       state.records.forEach(record => {
         if (record.directive && !ids.includes(record.directive)) {
           ids.push(record.directive);
         }
       });
-      filterSelect.hidden = ids.length === 0;
+      filterNav.hidden = ids.length === 0;
       if (state.filter !== 'all' && state.filter !== 'main'
           && !ids.includes(state.filter)) {
         state.filter = 'all';
       }
-      const add = (value, label) => {
-        const option = document.createElement('option');
-        option.value = value;
-        option.textContent = label;
-        filterSelect.append(option);
+      filterNav.replaceChildren();
+      const add = (value, label, dir) => {
+        const button = el('button', dir ? 'dir' : '', label);
+        button.type = 'button';
+        button.setAttribute('aria-pressed',
+                            state.filter === value ? 'true' : 'false');
+        button.addEventListener('click', () => {
+          state.filter = value;
+          refreshFilter();
+        });
+        filterNav.append(button);
       };
-      filterSelect.replaceChildren();
       add('all', 'All');
       if (ids.length) add('main', 'Main chat');
-      ids.forEach(id => add(id, `◆ ${directiveLabel(id)}`));
-      filterSelect.value = state.filter;
+      ids.forEach(id => add(id, `◆ ${directiveLabel(id)}`, true));
     }
     state.records.forEach(record => {
-      const element = state.elements.get(record.id);
-      if (element) element.card.hidden = !recordVisible(record);
+      const turn = state.elements.get(record.id);
+      if (turn) turn.hidden = !recordVisible(record);
     });
   }
 
-  // ── Pending interactions ──────────────────────────────────────────────
-  // The host presents permission/plan prompts to full-link guests; the
-  // first answer (here or in Emacs) settles them everywhere.
+  /* ── Pending interactions ─────────────────────────────────────────── */
+  // The host presents permission/patch/plan prompts to full-link guests;
+  // the first answer (here or in Emacs) settles them everywhere.
 
   function removeRequest(reqId) {
     if (!requests) return;
-    const card = requests.children.find
-      ? requests.children.find(c => c.dataset.reqId === String(reqId))
-      : [...requests.children].find(c => c.dataset.reqId === String(reqId));
+    const cards = [...requests.children];
+    const card = cards.find(c => c.dataset.reqId === String(reqId));
     if (card) card.remove();
   }
 
   function renderRequest(frame) {
     if (!requests) return;
     removeRequest(frame.reqId);
-    const card = document.createElement('section');
-    card.className = 'request-card';
+    const card = el('section', 'request-card');
     card.dataset.reqId = String(frame.reqId);
-    const body = document.createElement('pre');
-    body.className = 'request-body';
-    body.textContent = typeof frame.body === 'string' ? frame.body : '';
-    card.append(body);
-    const controls = document.createElement('div');
-    controls.className = 'request-controls';
+    card.append(el('span', 'rhead', 'Pending interaction'));
+    if (frame.bodyKind === 'diff') {
+      const body = renderDiff(frame.body || '');
+      card.append(body);
+    } else {
+      card.append(el('pre', 'request-body',
+                     typeof frame.body === 'string' ? frame.body : ''));
+    }
+    const controls = el('div', 'request-controls');
     (Array.isArray(frame.options) ? frame.options : []).forEach(option => {
-      const button = document.createElement('button');
+      const button = el('button', 'btn', option.label);
       button.type = 'button';
-      button.className = 'composer-button';
-      button.textContent = option.label;
       button.addEventListener('click', () => {
         send({t: 'ui-response', reqId: frame.reqId, option: option.id});
       });
@@ -327,16 +596,13 @@
     });
     card.append(controls);
     if (frame.allowFeedback === true) {
-      const feedbackRow = document.createElement('div');
-      feedbackRow.className = 'request-controls';
-      const feedback = document.createElement('input');
+      const feedbackRow = el('div', 'request-controls');
+      const feedback = el('input', 'request-feedback');
       feedback.type = 'text';
-      feedback.className = 'composer-name request-feedback';
       feedback.placeholder = 'Feedback…';
-      const sendFeedback = document.createElement('button');
+      feedback.setAttribute('aria-label', 'Feedback');
+      const sendFeedback = el('button', 'btn quiet', 'Send feedback');
       sendFeedback.type = 'button';
-      sendFeedback.className = 'composer-button';
-      sendFeedback.textContent = 'Send feedback';
       sendFeedback.addEventListener('click', () => {
         if (feedback.value.trim()) {
           send({t: 'ui-response', reqId: frame.reqId,
@@ -353,6 +619,8 @@
     if (requests) requests.replaceChildren();
   }
 
+  /* ── Composer ─────────────────────────────────────────────────────── */
+
   function guestName() {
     return (composerName && composerName.value.trim())
       || localStorage.getItem('mevedel-guest-name')
@@ -363,6 +631,8 @@
     if (composer) composer.hidden = !visible;
   }
 
+  /* ── Frame handling ───────────────────────────────────────────────── */
+
   function handleFrame(frame) {
     if (!frame || typeof frame.t !== 'string') return;
     if (frame.t === 'welcome') {
@@ -371,7 +641,7 @@
       setComposerVisible(!state.readOnly);
       // Active ui-requests are re-sent after the snapshot on every hello.
       clearRequests();
-      setConnection('Loading snapshot…', 'connected');
+      setConnection('Loading…', 'connected');
     } else if (frame.t === 'snapshot-chunk') {
       if (!state.staging) return;
       if (Array.isArray(frame.records)) state.staging.records.push(...frame.records);
@@ -412,6 +682,8 @@
     }
     // Unknown frame types from a newer host are tolerated silently.
   }
+
+  /* ── Connection lifecycle ─────────────────────────────────────────── */
 
   function websocketUrl() {
     const url = new URL(`/r/${state.roomId}`, window.location.href);
@@ -496,13 +768,6 @@
     }
   }
 
-  if (filterSelect) {
-    filterSelect.addEventListener('change', () => {
-      state.filter = filterSelect.value;
-      refreshFilter();
-    });
-  }
-
   liveButton.addEventListener('click', () => {
     scrollToLive();
     setLiveButton(false);
@@ -519,6 +784,7 @@
   } else {
     state.roomId = credentials.roomId;
     state.writeToken = credentials.writeToken;
+    if (sessionLabel) sessionLabel.textContent = state.roomId.slice(0, 8);
     // The key remains only in this page's memory; remove it from the URL
     // and history before opening the socket.
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);

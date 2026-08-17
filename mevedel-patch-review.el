@@ -21,6 +21,8 @@
                   (&optional source-buffer overlay))
 (declare-function mevedel--prompt--settle
                   "mevedel-interaction-prompt" (overlay outcome))
+(declare-function mevedel--prompt-announce
+                  "mevedel-interaction-prompt" (overlay))
 (defvar mevedel--prompt-overlays)
 
 ;; `mevedel-side-conversation'
@@ -626,9 +628,36 @@ DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
                        (funcall callback
                                 '(:result "Error: Patch review aborted"
                                   :status error)))))
+      ;; The remote surface gets the two whole-call decisions: apply the
+      ;; staged selection, or request a revision with whole-patch
+      ;; feedback.  Hunk editing and per-hunk feedback stay in Emacs.
+      (overlay-put overlay 'mevedel--remote-body
+                   (let ((patch (or (plist-get proposal :patch) "")))
+                     (if (> (length patch) 60000)
+                         (concat (substring patch 0 60000) "\n[truncated]")
+                       patch)))
+      (overlay-put overlay 'mevedel--remote-body-kind "diff")
+      (overlay-put overlay 'mevedel--remote-options
+                   (list (cons (lambda ()
+                                 (mevedel-patch-review--submit proposal))
+                               "Apply patch")))
+      (overlay-put overlay 'mevedel--remote-feedback
+                   (lambda (text)
+                     (plist-put proposal :feedback text)
+                     (mevedel-patch-review--deselect-all proposal)
+                     (mevedel-patch-review--submit proposal)))
       (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
-      (mevedel--prompt--register-canceller data-buffer overlay)))
+      (mevedel--prompt--register-canceller data-buffer overlay)
+      (mevedel--prompt-announce overlay)))
   nil)
+
+(defun mevedel-patch-review--deselect-all (proposal)
+  "Deselect every operation and hunk in PROPOSAL.
+Remote whole-patch feedback requests a revision instead of applying."
+  (dolist (operation (plist-get proposal :operations))
+    (plist-put operation :selected nil)
+    (dolist (hunk (plist-get operation :hunks))
+      (plist-put hunk :selected nil))))
 
 (defun mevedel-patch-review-toggle-fold ()
   "Fold or unfold the patch file or hunk at point."
@@ -897,6 +926,37 @@ on Update files and patch-level feedback leave selection untouched."
   (interactive)
   (kill-buffer (current-buffer)))
 
+(defun mevedel-patch-review--submit (proposal)
+  "Apply PROPOSAL's selected changes and settle its review."
+  (if (mevedel-side-conversation-mutation-warning-pending-p proposal)
+      (mevedel-patch-review--render proposal)
+    (condition-case err
+        (progn
+          (mevedel-tool-patch--assert-baseline proposal)
+          (let* ((changes (mevedel-tool-patch--planned-changes proposal))
+                 (feedback-p (> (plist-get
+                                 (mevedel-tool-patch--proposal-stats
+                                  proposal)
+                                 :comments)
+                                0))
+                 (callback (plist-get proposal :callback))
+                 (result
+                  (if (or changes feedback-p)
+                      (mevedel-tool-patch--result proposal changes)
+                    (list :result "Error: Patch rejected" :status 'error)))
+                 (overlay (plist-get proposal :overlay)))
+            (if changes
+                (mevedel-tool-patch--apply
+                 (plist-get proposal :data-buffer) changes
+                 (lambda ()
+                   (mevedel--prompt--settle overlay 'approve)
+                   (funcall callback result)))
+              (mevedel--prompt--settle overlay 'approve)
+              (funcall callback result))))
+      (error
+       (plist-put proposal :conflict (error-message-string err))
+       (mevedel-patch-review--render proposal)))))
+
 (defun mevedel-patch-review-submit ()
   "Apply the selected patch changes in the review at point."
   (interactive)
@@ -904,34 +964,7 @@ on Update files and patch-level feedback leave selection untouched."
                    'mevedel-patch-proposal)))
     (unless proposal
       (user-error "No patch review at point"))
-    (if (mevedel-side-conversation-mutation-warning-pending-p proposal)
-        (mevedel-patch-review--render proposal)
-      (condition-case err
-          (progn
-            (mevedel-tool-patch--assert-baseline proposal)
-            (let* ((changes (mevedel-tool-patch--planned-changes proposal))
-                   (feedback-p (> (plist-get
-                                   (mevedel-tool-patch--proposal-stats
-                                    proposal)
-                                   :comments)
-                                  0))
-                   (callback (plist-get proposal :callback))
-                   (result
-                    (if (or changes feedback-p)
-                        (mevedel-tool-patch--result proposal changes)
-                      (list :result "Error: Patch rejected" :status 'error)))
-                   (overlay (plist-get proposal :overlay)))
-              (if changes
-                  (mevedel-tool-patch--apply
-                   (plist-get proposal :data-buffer) changes
-                   (lambda ()
-                     (mevedel--prompt--settle overlay 'approve)
-                     (funcall callback result)))
-                (mevedel--prompt--settle overlay 'approve)
-                (funcall callback result))))
-        (error
-         (plist-put proposal :conflict (error-message-string err))
-         (mevedel-patch-review--render proposal))))))
+    (mevedel-patch-review--submit proposal)))
 
 
 (provide 'mevedel-patch-review)

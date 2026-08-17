@@ -22,16 +22,27 @@ class Element {
     this.dataset = {};
     this.hidden = false;
     this.value = '';
+    this.open = false;
+    this.attributes = {};
     this.scrollHeight = 100;
   }
   append(...children) {
-    for (const child of children) child.parent = this;
+    for (const child of children) {
+      if (typeof child !== 'string') child.parent = this;
+    }
     this.children.push(...children);
   }
   replaceChildren(...children) { this.children = children; }
   remove() {
     if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this);
   }
+  replaceWith(other) {
+    if (!this.parent) return;
+    const index = this.parent.children.indexOf(this);
+    other.parent = this.parent;
+    if (index >= 0) this.parent.children[index] = other;
+  }
+  setAttribute(name, value) { this.attributes[name] = value; }
   addEventListener(type, callback) {
     (this.listeners[type] ||= []).push(callback);
   }
@@ -41,6 +52,18 @@ class Element {
     if (!event.type) event.type = type;
     for (const callback of this.listeners[type] || []) callback(event);
   }
+}
+
+// textContent in the real DOM concatenates descendants; the fake keeps
+// strings and elements as children, so flatten recursively.
+function textOf(node) {
+  if (typeof node === 'string') return node;
+  return (node.textContent || '') + node.children.map(textOf).join('');
+}
+
+function findByRecordId(root, id) {
+  return root.children.find(c => typeof c !== 'string'
+                            && c.dataset && c.dataset.recordId === id);
 }
 
 class Socket {
@@ -108,7 +131,8 @@ async function main() {
 
   const ids = ['transcript', 'connection', 'notice', 'live-button',
                'composer', 'composer-input', 'composer-name',
-               'send-button', 'stop-button', 'filter', 'requests'];
+               'send-button', 'stop-button', 'filter', 'requests',
+               'session-label'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.composer.hidden = true;
   const sockets = [];
@@ -178,7 +202,6 @@ async function main() {
   assert.equal(typeof hello.name, 'string');
 
   let delivered = 0;
-  let applied = 0;
   const deliver = async frame => {
     first.dispatch('message', {data: await seal(key, 1, frame)});
     delivered++;
@@ -192,9 +215,11 @@ async function main() {
   await deliver({t: 'welcome', proto: 2, readOnly: false, recordCount: 3});
   assert.equal(nodes.composer.hidden, false);
   await deliver({t: 'snapshot-chunk', final: false, records: [
-    {id: 'assistant', kind: 'assistant', revision: 0, text: '<b>inert</b>'},
+    {id: 'assistant', kind: 'assistant', revision: 0,
+     text: 'Some **bold** and `inline` text.\n\n```elisp\n(defun demo ()\n  "doc")\n```'},
     {id: 'tool', kind: 'tool', revision: 0, name: 'Bash', status: 'completed',
-     summary: 'Bash', result: 'large', truncated: true},
+     summary: 'Bash', detail: 'head -5 notes.txt', result: 'large',
+     truncated: true},
   ]});
   await deliver({t: 'record', record: {id: 'assistant', kind: 'assistant',
                                        revision: 1, text: 'stream replacement'}});
@@ -203,21 +228,36 @@ async function main() {
      guest: 'roland'},
   ]});
   assert.equal(nodes.transcript.children.length, 3);
-  assert.equal(nodes.transcript.children[0].children[1].textContent,
-               'stream replacement');
-  assert.equal(nodes.transcript.children[0].children[1].tagName, 'pre');
-  assert.match(nodes.transcript.children[1].children[1].children[0].textContent,
-               /truncated/);
-  // Guest badge renders on the attributed prompt only.
-  assert.equal(nodes.transcript.children[2].children[0].children[0].textContent,
-               'Guest roland');
-  assert.equal(nodes.transcript.children[2].children[0].children[0].className,
-               'guest-badge');
 
-  // Live record update and removal.
-  await deliver({t: 'record', record: {id: 'assistant', kind: 'assistant',
-                                       revision: 2, text: 'newest'}});
-  assert.equal(nodes.transcript.children[0].children[1].textContent, 'newest');
+  // Assistant record: live update replaced the markdown body.
+  const assistantTurn = findByRecordId(nodes.transcript, 'assistant');
+  assert.match(textOf(assistantTurn), /stream replacement/);
+
+  // Tool row: detail line, truncation note, status chip.
+  const toolTurn = findByRecordId(nodes.transcript, 'tool');
+  assert.match(textOf(toolTurn), /head -5 notes\.txt/);
+  assert.match(textOf(toolTurn), /truncated/);
+  assert.match(textOf(toolTurn), /completed/);
+
+  // Guest badge renders on the attributed prompt only.
+  const guestTurn = findByRecordId(nodes.transcript, 'guest-user');
+  assert.equal(guestTurn.dataset.role, 'guest');
+  assert.match(textOf(guestTurn), /roland/);
+  assert.match(textOf(guestTurn), /guest/);
+
+  // Markdown + fontification: bold, inline code, and elisp keyword spans.
+  await deliver({t: 'record', record: {
+    id: 'assistant', kind: 'assistant', revision: 2,
+    text: 'Some **bold** and `inline` text.\n\n```elisp\n(defun demo ()\n  "doc")\n```',
+  }});
+  const md = findByRecordId(nodes.transcript, 'assistant');
+  const flat = JSON.stringify(md, (k, v) => (k === 'parent' ? undefined : v));
+  assert.match(flat, /"tagName":"strong"/);
+  assert.match(flat, /"tagName":"code"/);
+  assert.match(flat, /"className":"tok-kw"/);
+  assert.match(flat, /"className":"tok-str"/);
+
+  // Live removal.
   await deliver({t: 'remove', ids: ['tool']});
   assert.equal(nodes.transcript.children.length, 2);
 
@@ -232,12 +272,12 @@ async function main() {
   assert.equal(nodes['composer-input'].value, '');
   // The host's queued acknowledgement surfaces as a notice.
   await deliver({t: 'queued'});
-  assert.match(nodes.notice.textContent, /queued/i);
+  assert.match(textOf(nodes.notice), /queued/i);
   nodes['stop-button'].dispatch('click');
   await waitFor(() => first.sent.length === 3, 'sealed abort');
   assert.deepEqual(await unseal(key, first.sent[2]), {t: 'abort'});
 
-  // Directive-tagged records grow a client-side filter menu; selecting a
+  // Directive-tagged records grow a client-side filter; selecting a
   // directive hides everything outside it, per guest, no round-trips.
   assert.equal(nodes.filter.hidden, true);
   await deliver({t: 'record', record: {
@@ -245,45 +285,51 @@ async function main() {
     text: 'Refactor the parser\nwith details', directive: 'dir-1',
   }});
   assert.equal(nodes.filter.hidden, false);
-  assert.deepEqual(nodes.filter.children.map(o => o.value),
-                   ['all', 'main', 'dir-1']);
-  assert.equal(nodes.filter.children[2].textContent, '◆ Refactor the parser');
-  nodes.filter.value = 'dir-1';
-  nodes.filter.dispatch('change');
-  assert.equal(nodes.transcript.children.find(
-    c => c.dataset.recordId === 'assistant').hidden, true);
-  assert.equal(nodes.transcript.children.find(
-    c => c.dataset.recordId === 'directive-user').hidden, false);
-  nodes.filter.value = 'main';
-  nodes.filter.dispatch('change');
-  assert.equal(nodes.transcript.children.find(
-    c => c.dataset.recordId === 'assistant').hidden, false);
-  assert.equal(nodes.transcript.children.find(
-    c => c.dataset.recordId === 'directive-user').hidden, true);
-  nodes.filter.value = 'all';
-  nodes.filter.dispatch('change');
+  const labels = nodes.filter.children.map(textOf);
+  assert.deepEqual(labels, ['All', 'Main chat', '◆ Refactor the parser']);
+  nodes.filter.children[2].dispatch('click');
+  assert.equal(findByRecordId(nodes.transcript, 'assistant').hidden, true);
+  assert.equal(findByRecordId(nodes.transcript, 'directive-user').hidden, false);
+  nodes.filter.children[1].dispatch('click'); // Main chat
+  assert.equal(findByRecordId(nodes.transcript, 'assistant').hidden, false);
+  assert.equal(findByRecordId(nodes.transcript, 'directive-user').hidden, true);
+  nodes.filter.children[0].dispatch('click'); // All
 
   // A ui-request renders a card whose buttons and feedback field answer
-  // through sealed ui-response frames; ui-request-end dismisses it.
+  // through sealed ui-response frames; a diff body gets diff rendering;
+  // ui-request-end dismisses the card.
   await deliver({t: 'ui-request', reqId: 41, body: 'Run rm -rf /tmp/x?',
+                 bodyKind: 'text',
                  options: [{id: 0, label: 'Allow once'}, {id: 1, label: 'Deny'}],
                  allowFeedback: true});
   assert.equal(nodes.requests.children.length, 1);
   const card = nodes.requests.children[0];
-  assert.equal(card.children[0].textContent, 'Run rm -rf /tmp/x?');
+  assert.match(textOf(card), /Run rm -rf \/tmp\/x\?/);
+  const controls = card.children.find(c => c.className === 'request-controls');
   const sentBefore = first.sent.length;
-  card.children[1].children[1].dispatch('click'); // Deny
+  controls.children[1].dispatch('click'); // Deny
   await waitFor(() => first.sent.length === sentBefore + 1, 'ui-response');
   assert.deepEqual(await unseal(key, first.sent[sentBefore]),
                    {t: 'ui-response', reqId: 41, option: 1});
-  const feedbackRow = card.children[2];
+  const feedbackRow = card.children[card.children.length - 1];
   feedbackRow.children[0].value = 'do a dry run first';
   feedbackRow.children[1].dispatch('click');
   await waitFor(() => first.sent.length === sentBefore + 2, 'feedback');
   assert.deepEqual(await unseal(key, first.sent[sentBefore + 1]),
                    {t: 'ui-response', reqId: 41,
                     feedback: 'do a dry run first'});
+  await deliver({t: 'ui-request', reqId: 42,
+                 body: '@@ -1,2 +1,2 @@\n-old line\n+new line',
+                 bodyKind: 'diff', options: [{id: 0, label: 'Apply patch'}],
+                 allowFeedback: true});
+  const diffCard = nodes.requests.children.find(
+    c => c.dataset.reqId === '42');
+  const diffFlat = JSON.stringify(diffCard,
+                                  (k, v) => (k === 'parent' ? undefined : v));
+  assert.match(diffFlat, /line add/);
+  assert.match(diffFlat, /line del/);
   await deliver({t: 'ui-request-end', reqId: 41});
+  await deliver({t: 'ui-request-end', reqId: 42});
   assert.equal(nodes.requests.children.length, 0);
 
   // Unknown future frames are tolerated.
@@ -302,8 +348,7 @@ async function main() {
   // Bye ends the session: no reconnect, composer gone.
   timer = null;
   sockets[1].dispatch('message', {data: await seal(key, 1, {t: 'bye', reason: 'user-stop'})});
-  await waitFor(() => nodes.connection.textContent === 'Session ended', 'bye');
-  assert.equal(nodes.connection.textContent, 'Session ended');
+  await waitFor(() => textOf(nodes.connection).includes('Session ended'), 'bye');
   assert.equal(nodes.composer.hidden, true);
   sockets[1].dispatch('close', {code: 4001});
   assert.equal(timer, null);

@@ -47,6 +47,8 @@
                   (kind text &optional occurrence))
 (declare-function mevedel-collaboration--tool-call-key
                   "mevedel-collaboration-projection" (info))
+(declare-function mevedel-collaboration--tool-detail
+                  "mevedel-collaboration-projection" (args))
 (declare-function mevedel-collaboration--tool-records
                   "mevedel-collaboration-projection" (records))
 (declare-function mevedel-collaboration--tool-result-fields
@@ -379,6 +381,8 @@ request or prompt transaction."
   (list :t "ui-request"
         :reqId request-id
         :body (or (overlay-get overlay 'mevedel--remote-body) "")
+        :bodyKind (or (overlay-get overlay 'mevedel--remote-body-kind)
+                      "text")
         :options
         (vconcat
          (cl-loop for (_outcome . label)
@@ -463,12 +467,19 @@ answer can execute the same path the host key binding would."
         (let* ((options (overlay-get overlay 'mevedel--remote-options))
                (feedback (plist-get frame :feedback))
                (option (plist-get frame :option))
+               (feedback-handler
+                (overlay-get overlay 'mevedel--remote-feedback))
                (outcome
                 (cond
                  ((and (stringp feedback)
                        (not (string-empty-p (string-trim feedback)))
-                       (overlay-get overlay 'mevedel--remote-feedback))
-                  (cons 'feedback (string-trim feedback)))
+                       feedback-handler)
+                  ;; A function handler owns the whole feedback flow, for
+                  ;; prompts whose feedback is not a plain settle outcome.
+                  (if (functionp feedback-handler)
+                      (let ((text (string-trim feedback)))
+                        (lambda () (funcall feedback-handler text)))
+                    (cons 'feedback (string-trim feedback))))
                  ((and (integerp option) (nth option options))
                   (car (nth option options))))))
           (when (and outcome (buffer-live-p (overlay-buffer overlay)))
@@ -845,7 +856,8 @@ The early return below needs the block a `cl-defun' establishes; a plain
                          (format "tool-%s" explicit-id)
                        (mevedel-collaboration--stable-record-id
                         "tool" call-key occurrence)))
-                 (entry (mevedel-collaboration--record
+                 (entry (apply
+                         #'mevedel-collaboration--record
                          id "tool"
                          :revision 0
                          :name name
@@ -858,7 +870,11 @@ The early return below needs the block a `cl-defun' establishes; a plain
                          :call-key call-key
                          :baseline-tool-count
                          (length (mevedel-collaboration--tool-records canonical))
-                         :baseline-record-count (length canonical))))
+                         :baseline-record-count (length canonical)
+                         (when-let ((detail
+                                     (mevedel-collaboration--tool-detail
+                                      (plist-get info :args))))
+                           (list :detail detail)))))
             (puthash call-key (1+ occurrence) occurrences)
             (setq room (plist-put room :pending-tools
                                   (append pending (list entry))))

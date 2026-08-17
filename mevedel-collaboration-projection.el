@@ -143,7 +143,7 @@ key."
   "Return JSON-safe alist representation of RECORD."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
-                       :truncated :guest :directive))
+                       :truncated :guest :directive :detail))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -158,6 +158,19 @@ key."
 
 ;;
 ;;; Canonical projection
+
+(defun mevedel-collaboration--tool-detail (args)
+  "Return a bounded one-line viewer summary of tool ARGS, or nil.
+The detail is the tool's primary operand -- a command, path, pattern, or
+query -- so a collapsed tool row says what the call did."
+  (let ((value (and (listp args)
+                    (cl-loop for key in '(:command :file_path :pattern
+                                          :query :url :path :name)
+                             for found = (plist-get args key)
+                             when (stringp found) return found))))
+    (when value
+      (mevedel-collaboration--truncate-bytes
+       (car (split-string value "\n")) 200))))
 
 (defun mevedel-collaboration--tool-record (data-buffer segment &optional occurrence)
   "Return an allowlisted tool record for SEGMENT in DATA-BUFFER."
@@ -185,15 +198,18 @@ key."
              (result (mevedel-collaboration--truncate-bytes
                       result mevedel-collaboration--max-tool-result-bytes))
              (truncated (string-suffix-p "\n[truncated]" result)))
-        (mevedel-collaboration--record
-         id "tool"
-         :revision 0
-         :name (format "%s" name)
-         :status status
-         :summary (format "%s" name)
-         :result result
-         :truncated (and truncated t)
-         :identity-fixed (and tool-use-id t))))))
+        (apply #'mevedel-collaboration--record
+               id "tool"
+               :revision 0
+               :name (format "%s" name)
+               :status status
+               :summary (format "%s" name)
+               :result result
+               :truncated (and truncated t)
+               :identity-fixed (and tool-use-id t)
+               (when-let ((detail (mevedel-collaboration--tool-detail
+                                   (plist-get parsed :args))))
+                 (list :detail detail)))))))
 
 (defun mevedel-collaboration--directive-at (ranges position)
   "Return the directive id owning POSITION per directive RANGES, or nil."
