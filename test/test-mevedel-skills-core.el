@@ -73,7 +73,7 @@
 ;;
 ;;; Discovery + parsing
 
-(mevedel-deftest mevedel-skills-scan ()
+(mevedel-deftest mevedel-skills-scan (:quiet t)
   ,test
   (test)
   :doc "scans a single directory and builds a skill struct"
@@ -1815,7 +1815,7 @@ paths:
 )
 
 (mevedel-deftest mevedel-skills-rescan
-  (:before-each (mevedel-skills-test--reset-watchers)
+  (:quiet t :before-each (mevedel-skills-test--reset-watchers)
    :after-each (mevedel-skills-test--reset-watchers))
   ,test
   (test)

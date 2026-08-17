@@ -802,7 +802,7 @@
 						     :tool-name)))))
 		     (kill-buffer parent))))
 
-(mevedel-deftest mevedel-agent-conversation-save ()
+(mevedel-deftest mevedel-agent-conversation-save (:quiet t)
 		 ,test
 		 (test)
 

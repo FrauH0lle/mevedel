@@ -403,6 +403,16 @@ warnings.
   - `mevedel-test--muted-message-regexps` in `test/helpers.el` drops the few
     third-party progress messages mevedel cannot suppress at their source.
     Nothing mevedel itself emits belongs there.
+  - `mevedel-deftest`'s `:quiet t` captures the messages and warnings every
+    case of one deftest provokes. Use it when the function under test
+    correctly reports to the echo area on the paths its cases take and those
+    cases assert the durable state the diagnostic echoes. Prefer an explicit
+    capture with a place when the diagnostic text is itself the behaviour
+    under test.
+  - A notice Emacs raises from C, such as `Making VAR buffer-local while
+    locally let-bound!`, reaches the log through neither mechanism. Remove
+    its cause: let-binding a variable that product code then sets
+    buffer-locally is the test's mistake, not the code's.
 - **Isolation**: a test leaves no global state behind — no live session in the
   execution registry, no workspace registry entry, no live timer, no target
   connection, and no file outside its own temporary directory. Leaked state

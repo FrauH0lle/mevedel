@@ -902,7 +902,7 @@
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
-(mevedel-deftest mevedel-view--allow-session-close-p ()
+(mevedel-deftest mevedel-view--allow-session-close-p (:quiet t)
   ,test
   (test)
   :doc "pending publication blocks closing the data buffer"

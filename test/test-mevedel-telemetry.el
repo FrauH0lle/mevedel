@@ -46,7 +46,7 @@
       (nreverse entries))))
 
 (mevedel-deftest mevedel-telemetry-record
-  ()
+  (:quiet t)
   ,test
   (test)
   :doc "buffers safe enriched events until session materialization"
@@ -490,7 +490,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry-profiler-start
-		 (:doc "starts one session-owned profiler run and installs its guard")
+		 (:quiet t :doc "starts one session-owned profiler run and installs its guard")
 		 (let* ((root (make-temp-file "mevedel-telemetry-profiler-start-" t))
 			(session (test-mevedel-telemetry--session root))
 			(mevedel-telemetry--profiler-session nil)
@@ -558,7 +558,7 @@
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry-profiler-stop
-		 (:doc "records complete or failed artifact saves and clears run ownership")
+		 (:quiet t :doc "records complete or failed artifact saves and clears run ownership")
 		 (let* ((root (make-temp-file "mevedel-telemetry-profiler-stop-" t))
 			(session (test-mevedel-telemetry--session root))
 			(mevedel-telemetry--profiler-session session)
@@ -626,7 +626,7 @@
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-debug
-  (:doc "toggles profiling and persists captured gptel and view debug logs")
+  (:quiet t :doc "toggles profiling and persists captured gptel and view debug logs")
   (let* ((root (make-temp-file "mevedel-session-debug-" t))
          (session (test-mevedel-telemetry--session root))
          (log-buffer (get-buffer-create gptel--log-buffer-name))

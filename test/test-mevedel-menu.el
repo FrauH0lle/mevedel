@@ -616,7 +616,7 @@
       (mevedel-menu--goal-budget))
     (should (equal (cdr call) '("12000")))))
 
-(mevedel-deftest mevedel-menu--select-preset ()
+(mevedel-deftest mevedel-menu--select-preset (:quiet t)
   ,test
   (test)
   :doc "selects in the owning data buffer only and preserves a multiline draft"
@@ -1080,7 +1080,7 @@
     (should-not
      (memq transient--transient-map overriding-terminal-local-map))))
 
-(mevedel-deftest mevedel-menu--open-model ()
+(mevedel-deftest mevedel-menu--open-model (:quiet t)
   ,test
   (test)
   :doc "opens shared selection and applies updates to the session"

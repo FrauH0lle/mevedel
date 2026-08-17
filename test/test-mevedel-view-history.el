@@ -505,7 +505,7 @@ Binds `data-buf' and `view-buf'."
             (when (buffer-live-p buf-two) (kill-buffer buf-two))))))))
 
 (mevedel-deftest mevedel-view-history--persistence-corrupt
-  (:doc "rejects malformed binding persistence through the corrupt-history path")
+  (:quiet t :doc "rejects malformed binding persistence through the corrupt-history path")
   (mevedel-view-history-test--with-temp-dir dir
     (let* ((path (mevedel-view-history-test--path dir))
            (session (mevedel-view-history-test--session dir))

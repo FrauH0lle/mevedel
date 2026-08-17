@@ -45,7 +45,7 @@ signal after recording."
    :entry-origin (lambda (entry) (plist-get entry :origin))))
 
 (mevedel-deftest mevedel-queue--enqueue
-  (:doc "shared queue enqueue contract")
+  (:quiet t :doc "shared queue enqueue contract")
   ,test
   (test)
 
@@ -60,7 +60,7 @@ signal after recording."
     (should (equal '((a . aborted)) (car outcomes)))))
 
 (mevedel-deftest mevedel-queue--pop
-  (:doc "shared queue pop contract")
+  (:quiet t :doc "shared queue pop contract")
   ,test
   (test)
 
@@ -93,7 +93,7 @@ signal after recording."
       (should-not (car (mevedel-queue--ensure-settled-cell entry))))))
 
 (mevedel-deftest mevedel-queue--abort-all
-  (:doc "shared queue abort contract")
+  (:quiet t :doc "shared queue abort contract")
   ,test
   (test)
 

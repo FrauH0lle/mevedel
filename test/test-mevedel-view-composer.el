@@ -405,7 +405,7 @@
       "◆ Discuss ·"
       (mevedel-view--input-prompt-string 'ask)))))
 
-(mevedel-deftest mevedel-view--switch-composer-scope ()
+(mevedel-deftest mevedel-view--switch-composer-scope (:quiet t)
   ,test
   (test)
   :doc "preserves independent chat and directive drafts with exact point"
@@ -435,7 +435,7 @@
         (should (= 7 (- (point) (mevedel-view--input-start))))))))
 
 (mevedel-deftest mevedel-view--queue-follow-up
-  ()
+  (:quiet t)
   ,test
   (test)
   :doc "stores directive scope on queued follow-ups"
@@ -504,7 +504,7 @@
     (should-not (mevedel-view--plan-mode-p))))
 
 (mevedel-deftest mevedel-view-cycle-permission-mode
-  (:doc "cycles the current session mode and refreshes the prompt")
+  (:quiet t :doc "cycles the current session mode and refreshes the prompt")
   ,test
   (test)
 
@@ -560,7 +560,7 @@
       (set-default-toplevel-value 'mevedel-permission-mode saved))))
 
 (mevedel-deftest mevedel-view-toggle-plan-mode
-  (:doc "toggles Plan independently while retaining permission mode and draft")
+  (:quiet t :doc "toggles Plan independently while retaining permission mode and draft")
   ,test
   (test)
   (mevedel-view-test--with-buffers
@@ -1633,7 +1633,7 @@
 ;;
 ;;; mevedel-view-send slash-fork integration
 
-(mevedel-deftest mevedel-view-send/local-slash-command ()
+(mevedel-deftest mevedel-view-send/local-slash-command (:quiet t)
   ,test
   (test)
   :doc "local slash command string results are shown"
@@ -2057,7 +2057,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
    (mevedel-view--steering-request-context-supported-p
     '(:future-policy nil))))
 
-(mevedel-deftest mevedel-view-send/skill-inline ()
+(mevedel-deftest mevedel-view-send/skill-inline (:quiet t)
   ,test
   (test)
   :doc "inline attachment reaches the model-visible gptel request"
@@ -2622,7 +2622,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   :doc "non-invocable exact source warns, annotates, and sends the multiline turn"
   (mevedel-view-test--bound-source-failure-case 'not-user-invocable))
 
-(mevedel-deftest mevedel-view-send/planned-skills ()
+(mevedel-deftest mevedel-view-send/planned-skills (:quiet t)
   ,test
   (test)
 
@@ -3378,7 +3378,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (:input "revise" :scope (:directive-id "d1" :action plan))))
     (should-not (mevedel-view--follow-up-auto-drain-blocked-p session))))
 
-(mevedel-deftest mevedel-view-send/pending-input ()
+(mevedel-deftest mevedel-view-send/pending-input (:quiet t)
   ,test
   (test)
 
@@ -4630,7 +4630,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
            "/goal auto ship it" "auto ship it")))
       (should (equal "auto ship it" started)))))
 
-(mevedel-deftest mevedel-view-send/user-prompt-hooks ()
+(mevedel-deftest mevedel-view-send/user-prompt-hooks (:quiet t)
   ,test
   (test)
 

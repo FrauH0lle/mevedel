@@ -2379,7 +2379,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
-(mevedel-deftest mevedel-session-persistence-save ()
+(mevedel-deftest mevedel-session-persistence-save (:quiet t)
   ,test
   (test)
   :doc "assigns stable fork-point identity only to settled responses"
@@ -2663,7 +2663,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
-(mevedel-deftest mevedel-session-persistence--allow-emacs-exit-p ()
+(mevedel-deftest mevedel-session-persistence--allow-emacs-exit-p (:quiet t)
   ,test
   (test)
   :doc "pending publication vetoes exit until retry or explicit abandonment"
@@ -2758,7 +2758,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
           (setq buffer-read-only nil))
         (kill-buffer buffer)))))
 
-(mevedel-deftest mevedel-session-persistence--kill-emacs-hook ()
+(mevedel-deftest mevedel-session-persistence--kill-emacs-hook (:quiet t)
   ,test
   (test)
   :doc "force-tears down executions before exit persistence"
@@ -2990,7 +2990,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
       (delete-directory bad-root t)
       (delete-directory good-root t))))
 
-(mevedel-deftest mevedel-session-persistence--instruction-snapshots ()
+(mevedel-deftest mevedel-session-persistence--instruction-snapshots (:quiet t)
   ,test
   (test)
   :doc "saves current and per-turn instruction snapshots"
@@ -3335,7 +3335,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry))))
 
-(mevedel-deftest mevedel-session-persistence--instruction-anchor-restore ()
+(mevedel-deftest mevedel-session-persistence--instruction-anchor-restore (:quiet t)
   ,test
   (test)
   :doc "reanchors an instruction after text is inserted before it"
@@ -3988,7 +3988,7 @@ workspace tree."
     (should (= 0 (mevedel-file-history--latest-version session "/tmp/baz")))
     (mevedel-workspace-clear-registry)))
 
-(mevedel-deftest mevedel-file-history-snapshot-modified ()
+(mevedel-deftest mevedel-file-history-snapshot-modified (:quiet t)
   ,test
   (test)
   :doc "writes a pre-turn checkpoint for a modified file"
@@ -4614,7 +4614,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
     (should (equal "/ssh:user@host:/home/user/project/"
                    (mevedel-workspace-root workspace)))))
 
-(mevedel-deftest mevedel-session-persistence-restore ()
+(mevedel-deftest mevedel-session-persistence-restore (:quiet t)
   ,test
   (test)
   :doc "restores stale rows as lost but supersedes rows with newer facts"
@@ -5611,7 +5611,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
   :doc "cold-restores the durable tree, mailboxes, recovery, and follow-up"
   (test-mevedel-session-persistence--cold-agent-tree-round-trip))
 
-(mevedel-deftest mevedel-session-persistence-restore/unsettled-mutation ()
+(mevedel-deftest mevedel-session-persistence-restore/unsettled-mutation (:quiet t)
   ,test
   (test)
   :doc "restore inherits an unsettled mutation and acknowledgement clears it"
@@ -6794,7 +6794,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
         (delete-directory root t))
       (mevedel-workspace-clear-registry))))
 
-(mevedel-deftest mevedel-session-persistence-publish-sidecar-state ()
+(mevedel-deftest mevedel-session-persistence-publish-sidecar-state (:quiet t)
   ,test
   (test)
   :doc "commits only the remote sidecar and propagates publication failure"
@@ -7358,7 +7358,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (should (= 4 (plist-get (cadr rewound) :cum-turn))))
       (kill-buffer buffer))))
 
-(mevedel-deftest mevedel-rewind ()
+(mevedel-deftest mevedel-rewind (:quiet t)
   ,test
   (test)
   :doc "errors when no current session"
@@ -8711,7 +8711,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
 ;;
 ;;; Phase 9: fork-on-send + rename-session
 
-(mevedel-deftest mevedel-save-session ()
+(mevedel-deftest mevedel-save-session (:quiet t)
   ,test
   (test)
   :doc "refuses save-as without changing a tree that has an active turn"
@@ -11091,7 +11091,7 @@ The result is a plist whose :tempdir owns every created file."
     (should-not (string-match-p "/ssh:alias:" text))
     (should (string-match-p "/srv/repo/.worktrees/fork/" text))))
 
-(mevedel-deftest mevedel-session-persistence--commit-remote-rename ()
+(mevedel-deftest mevedel-session-persistence--commit-remote-rename (:quiet t)
   ,test
   (test)
   :doc "moves the owned lease and commits renamed metadata through one head"
@@ -11263,7 +11263,7 @@ The result is a plist whose :tempdir owns every created file."
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry))))
 
-(mevedel-deftest mevedel-rename-session ()
+(mevedel-deftest mevedel-rename-session (:quiet t)
   ,test
   (test)
   :doc "renames the session-name field and the buffer"
@@ -11523,7 +11523,7 @@ The result is a plist whose :tempdir owns every created file."
         (delete-directory root t))
       (mevedel-workspace-clear-registry))))
 
-(mevedel-deftest mevedel-session-persistence-list-sessions ()
+(mevedel-deftest mevedel-session-persistence-list-sessions (:quiet t)
   ,test
   (test)
   :doc "lists materialized sessions, sorted newest-first"
@@ -12085,7 +12085,7 @@ The result is a plist whose :tempdir owns every created file."
 ;;
 ;;; Phase 11: relocation, self-heal, save-failure flag
 
-(mevedel-deftest mevedel-session-persistence--reconcile-relocation ()
+(mevedel-deftest mevedel-session-persistence--reconcile-relocation (:quiet t)
   ,test
   (test)
   :doc "rewrites permission rules whose :path is under the saved root"
@@ -12271,7 +12271,7 @@ The result is a plist whose :tempdir owns every created file."
   (should (null (mevedel-session-persistence--parse-iso-time "not a date")))
   (should (null (mevedel-session-persistence--parse-iso-time nil))))
 
-(mevedel-deftest mevedel-session-persistence-cleanup-expired ()
+(mevedel-deftest mevedel-session-persistence-cleanup-expired (:quiet t)
   ,test
   (test)
   :doc "deletes sessions older than the cap"

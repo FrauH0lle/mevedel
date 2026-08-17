@@ -32,7 +32,7 @@
     (while (not (funcall predicate))
       (accept-process-output nil 0.01))))
 
-(mevedel-deftest mevedel-execution-scheduler-submit ()
+(mevedel-deftest mevedel-execution-scheduler-submit (:quiet t)
   ,test
   (test)
   :doc "admits recognized readers concurrently"

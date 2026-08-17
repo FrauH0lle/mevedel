@@ -99,7 +99,7 @@
       (put 'test-model :reasoning-effort old-effort))))
 
 (mevedel-deftest mevedel-model-set-session-provider
-  ()
+  (:quiet t)
   ,test
   (test)
 

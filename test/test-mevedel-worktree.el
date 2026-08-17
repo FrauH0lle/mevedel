@@ -1459,7 +1459,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-worktree-list-create
-  (:after-each (mevedel-worktree-test--cleanup-surfaces))
+  (:quiet t :after-each (mevedel-worktree-test--cleanup-surfaces))
   ,test
   (test)
 

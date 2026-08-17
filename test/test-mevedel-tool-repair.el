@@ -1137,7 +1137,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-tool-repair-flush-log
-  (:doc "retains a failed append and persists it on a later flush")
+  (:quiet t :doc "retains a failed append and persists it on a later flush")
   (let* ((root (make-temp-file "mevedel-repair-log-retry-" t))
          (blocked (file-name-concat root "blocked"))
          (restored (file-name-concat root "restored"))

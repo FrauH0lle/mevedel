@@ -181,7 +181,7 @@
     (should-not
      (mevedel-agent-control-retained-buffer-p session buffer))))
 
-(mevedel-deftest mevedel-agent-control-teardown-session ()
+(mevedel-deftest mevedel-agent-control-teardown-session (:quiet t)
   ,test
   (test)
   :doc "kills all registered conversation buffers without requiring open views"
@@ -1214,7 +1214,7 @@
        :type 'user-error))))
 
 (mevedel-deftest mevedel-agent-control-spawn
-  (:after-each (mevedel-workspace-clear-registry))
+  (:quiet t :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
   :doc "commits a real retained conversation while stubbing only provider start"

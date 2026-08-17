@@ -32,7 +32,7 @@
 
 (defvar gptel--known-backends)
 
-(mevedel-deftest mevedel-view-send/btw ()
+(mevedel-deftest mevedel-view-send/btw (:quiet t)
   ,test
   (test)
   :doc "rejects /btw before the parent has accepted a prompt"

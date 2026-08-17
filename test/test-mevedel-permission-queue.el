@@ -69,7 +69,7 @@
 ;;; Enqueue order + head render
 
 (mevedel-deftest mevedel-permission--enqueue
-  (:doc "FIFO permission queue contract")
+  (:quiet t :doc "FIFO permission queue contract")
   ,test
   (test)
 
@@ -406,7 +406,7 @@
         (delete-directory dir t)))))
 
 (mevedel-deftest mevedel-permission-log-flush
-  (:doc "retains failed queued diagnostics and clears them after retry")
+  (:quiet t :doc "retains failed queued diagnostics and clears them after retry")
   (let* ((root (make-temp-file "mevedel-permission-flush-" t))
          (blocked (file-name-concat root "blocked"))
          (restored (file-name-concat root "restored"))
@@ -722,7 +722,7 @@
                    (mevedel-permission-queue--attribution-origin entry)))))
 
 (mevedel-deftest mevedel-permission-queue--render-generic
-  (:doc "renders generic permission queue entries")
+  (:quiet t :doc "renders generic permission queue entries")
   ,test
   (test)
 
@@ -1026,7 +1026,7 @@
       (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-permission-queue--render-bash
-  (:doc "renders queued Bash permission prompts")
+  (:quiet t :doc "renders queued Bash permission prompts")
   ,test
   (test)
 
@@ -1076,7 +1076,7 @@
     (should (null (mevedel-session-permission-queue session)))))
 
 (mevedel-deftest mevedel-permission-queue--render-eval
-  (:doc "renders queued Eval permission prompts")
+  (:quiet t :doc "renders queued Eval permission prompts")
   ,test
   (test)
 
