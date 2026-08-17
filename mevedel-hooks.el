@@ -2050,6 +2050,7 @@ decision plist."
                  :handler-count (length handlers))))
              (settled nil)
              (slow-surfaced nil)
+             (slow-echoed nil)
              (progress-lease (and handlers
                                   (mevedel-hooks--progress-snapshot)))
              (progress-owner (gensym "hook-progress-"))
@@ -2075,6 +2076,14 @@ decision plist."
 	                      (length context))))
 	                 (when (timerp slow-timer)
 	                   (cancel-timer slow-timer))
+                         ;; The slow notice is a bare echo message that
+                         ;; would otherwise linger indefinitely and read
+                         ;; as a hang after the hook completes.
+                         (when slow-echoed
+                           (mevedel-hooks--surface
+                            (format "%s hook finished"
+                                    (mevedel-hooks--event-display-name
+                                     event))))
                          (when slow-surfaced
                            (let ((restored
                                   (mevedel-hooks--restore-progress
@@ -2101,6 +2110,7 @@ decision plist."
                    mevedel-hooks-slow-threshold nil
                    (lambda ()
                      (unless settled
+                       (setq slow-echoed t)
                        (mevedel-hooks--surface
                         (format "%s hook still running..."
                                 (mevedel-hooks--event-display-name event)))
