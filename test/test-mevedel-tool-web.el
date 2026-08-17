@@ -13,6 +13,7 @@
 (require 'gptel-agent-tools)
 (require 'mevedel-view)
 (require 'mevedel-tool-web)
+(require 'mevedel-view-render)
 (require 'helpers
          (file-name-concat
           (file-name-directory

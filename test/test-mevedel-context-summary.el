@@ -9,6 +9,7 @@
 (require 'mevedel-context-summary)
 (require 'mevedel-models)
 (require 'mevedel-structs)
+(require 'mevedel-agent-conversation)
 (require 'helpers
          (file-name-concat
           (file-name-directory

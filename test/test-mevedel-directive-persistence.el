@@ -9,6 +9,7 @@
 (require 'mevedel-directive-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-utilities)
+(require 'mevedel-directive)
 (require 'helpers
          (file-name-concat
           (file-name-directory

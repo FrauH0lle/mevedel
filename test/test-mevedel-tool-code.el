@@ -9,6 +9,7 @@
 (require 'xref)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-code)
+(require 'mevedel-execution-target)
 (require 'helpers
          (file-name-concat
           (file-name-directory

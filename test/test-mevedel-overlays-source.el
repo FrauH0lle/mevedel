@@ -12,6 +12,7 @@
 (require 'mevedel-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
+(require 'mevedel-directive)
 (require 'helpers
          (file-name-concat
           (file-name-directory
