@@ -66,6 +66,11 @@
 (declare-function mevedel-directive-set-request "mevedel-directive"
                   (directive request))
 
+;; `mevedel-directive-frame'
+(declare-function mevedel-directive-frame-display
+                  "mevedel-directive-frame"
+                  (directive view-buffer &optional focus))
+
 ;; `mevedel-directive-plan'
 (declare-function mevedel-directive-plan--planning-prompt
                   "mevedel-directive-plan"
@@ -2475,8 +2480,10 @@ active in the buffer."
       (goto-char found)
       (when (get-text-property found 'mevedel-view-collapsed)
         (mevedel-view-toggle-section)))
-    (pop-to-buffer view-buffer)
-    (recenter)))
+    ;; Navigation only: point stays on the answer, so this does not enter
+    ;; directive composer scope the way the follow-up actions do.
+    (require 'mevedel-directive-frame)
+    (mevedel-directive-frame-display owner view-buffer t)))
 
 (defun mevedel--ov-actions-view-changes (&optional instructions)
   "Toggle the latest patch buffer for INSTRUCTIONS."

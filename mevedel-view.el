@@ -670,6 +670,9 @@ existing `mevedel--view-buffer' binding untouched.  A
                 #'mevedel-view--allow-session-close-p nil t))
     (unless mevedel-view--side-conversation-p
       (add-hook 'kill-buffer-hook #'mevedel-view-history-save nil t))
+    ;; A transcript has no line numbers worth counting, and they cost four
+    ;; columns of a directive frame that is already narrow.
+    (setq-local display-line-numbers nil)
     (unless mevedel-view--agent-transcript-p
       (setq header-line-format '(:eval (mevedel-view--status-strip)))))
   (unless (plist-get options :preserve-data-view-buffer)

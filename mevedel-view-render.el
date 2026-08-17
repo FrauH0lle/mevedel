@@ -51,6 +51,10 @@
                   "mevedel-directive-activity"
                   (&optional directive workspace))
 
+;; `mevedel-directive-frame'
+(declare-function mevedel-directive-frame-refresh-filter
+                  "mevedel-directive-frame" ())
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-sandbox-summary-class
                   "mevedel-execution" (summary))
@@ -3230,7 +3234,9 @@ the render so user toggles survive streaming ticks."
           (mevedel-view--ensure-request-progress data-buf)
           (unless mevedel-view--agent-transcript-p
             (mevedel-view--render-agent-status)
-            (mevedel-view--interaction-rebuild)))))))))
+            (mevedel-view--interaction-rebuild)
+            (when (fboundp 'mevedel-directive-frame-refresh-filter)
+              (mevedel-directive-frame-refresh-filter))))))))))
 
 (defun mevedel-view--conversation-variant-button
     (data-buf source-start source-end &optional session)
@@ -6500,7 +6506,9 @@ HISTORICAL-P suppresses live-only rows.  START-TIME is for diagnostics."
         (mevedel-view--refresh-pending-tool-lines))
       (mevedel-view--render-status live-data-buf)
       (mevedel-view--interaction-rebuild)
-      (mevedel-view--ensure-request-progress live-data-buf))
+      (mevedel-view--ensure-request-progress live-data-buf)
+      (when (fboundp 'mevedel-directive-frame-refresh-filter)
+        (mevedel-directive-frame-refresh-filter)))
     (mevedel-view--debug-log
      'full-rerender-after-render
      :last-assistant-turn-start

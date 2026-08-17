@@ -259,7 +259,8 @@ composer.
 
 The source actions and `mevedel-list-directives` resolve the topmost workspace
 directive record, bind or resume its execution session, and display that
-session's ordinary MevView. Starting an action appends a directive turn at the
+session's ordinary MevView, by default in a directive frame anchored at the
+directive. Starting an action appends a directive turn at the
 chronological tip; it never opens another live rendering surface. Full request,
 response, tool, and interaction content remains visible there while provider
 prompt projection keeps it outside ordinary-chat context.
@@ -289,6 +290,114 @@ compact `PLAN: ON` hint. Planning and approval derive Planning, Plan Ready, and
 Plan Accepted presentation states without replacing the directive's underlying
 lifecycle. A cancelled proposal remains a draft and exposes Continue Plan,
 which restores the isolated directive composer scope.
+
+## Directive Frame
+
+The directive frame is a floating child frame anchored at a directive's source
+position that displays that directive's bound execution-session view. It shows
+the real view buffer, so permissions, Ask, patch review, streaming, and the
+composer work in it unmodified and no second renderer exists. See
+[ADR 0106](adr/0106-directive-frame-is-a-child-frame.md) for why an overlay
+cannot host these interactions.
+
+`mevedel-show-chat-buffer` selects `frame`, `window`, or nil for directive
+dispatch. Child frames need a graphical display before Emacs 31, so the frame
+falls back to an ordinary window wherever they are unavailable; every behavior
+except the floating geometry is identical in that fallback.
+
+An explicit action opens the frame with focus. A request dispatch opens it
+without focus, because a request the user just started must not move point.
+Scope-entering actions enter the directive composer scope before displaying, so
+composer input in the frame becomes a follow-up for that directive; frame
+teardown leaves that scope again. Show answer positions point on the rendered
+answer instead, and deliberately does not enter composer scope.
+
+At most one directive frame exists at a time, and it is dismissed explicitly
+rather than on directive settlement. The frame is anchored to its directive: it
+tracks the directive's screen position as the source buffer scrolls, hides once
+the directive leaves the window, and returns when it scrolls back, so the
+directive and its frame scroll as one thing. Tracking runs from
+`window-scroll-functions` and `window-configuration-change-hook` in the source
+buffer, and repositions only on an actual change, because setting a frame
+position from a redisplay hook triggers redisplay again.
+
+Displaying a directive whose frame is already open reuses it without rebuilding
+it, so an action that both enters composer scope and dispatches a request does
+not recreate the frame between the two steps. Teardown runs from `delete-frame-functions`, so
+dismissing the frame, deleting it with ordinary frame commands, or exiting Emacs
+all restore point and leave the composer scope.
+
+The frame may filter the displayed transcript to its own directive's turns.
+Filtering marks the turns of every other directive and of ordinary chat with an
+`invisible` text property; content before the first turn, such as the header,
+is never hidden. The invisibility spec that implements this is buffer-local
+rather than window-local, so filtering is skipped whenever the view buffer is
+also displayed outside the frame, and the frame shows the full transcript
+instead. Rendering re-applies the filter, so streamed turns stay hidden.
+
+The frame binds only a filter toggle and a dismiss command, both on `C-c`
+prefixes. Single-letter bindings are impossible because the view buffer holds an
+editable composer, and `C-g` keeps its view meaning of aborting the request. The
+directive scope hint line advertises both keys while the frame is showing.
+
+### Frame chrome
+
+The frame carries its own chrome through **window parameters**, not buffer-local
+settings, because the view buffer is shared with the main view: the main view
+keeps its mode line and its full-width status strip. In the frame the mode line
+is suppressed, fringes are zero, and the header line is a condensed variant
+leading with directive identity, then composer scope, a filter marker, request
+state, model, and tool count. Session facts the parent already shows — session
+name, workspace root, execution target, preset — are deliberately absent,
+because this header has a fraction of the width.
+
+The border is painted by setting a background on `internal-border` and
+`child-frame-border` for that frame. A border width alone draws nothing: without
+an explicit background the border takes the default background and is invisible.
+`mevedel-directive-frame-border` and `mevedel-directive-frame-border-inactive`
+distinguish whether the frame holds focus, which is how a dispatch-opened frame
+that deliberately did not take focus reads as unfocused.
+
+Frame height fits its content between `mevedel-directive-frame-min-height` and
+`mevedel-directive-frame-height`, refitted on the view's throttled render
+cadence rather than per streamed token. Only height is fitted; width stays as
+computed from the parent frame at open, because fitting both dimensions sizes
+the frame to the longest unwrapped line in the transcript and readily exceeds
+the parent's width.
+
+When the directive's source buffer is displayed in more than one window, the
+frame anchors to the window the user is in, preferring the selected window, then
+any window on the selected frame. It stays with that window afterwards, so
+scrolling a second window showing the same buffer neither moves the frame nor
+hides it.
+
+### Buffer display from the frame
+
+While the frame is showing, the view buffer redirects `display-buffer` to the
+parent frame. The frame's root window is dedicated and unsplittable and the
+frame is a few lines tall, so a transient menu, a cockpit surface, a followed
+file link, or the patch buffer is unusable inside it. Redirecting at the display
+layer rather than per-command covers every such surface, including ones that do
+not exist yet.
+
+The redirect hands input focus to the parent along with the buffer. Callers such
+as `pop-to-buffer` select the window the redirect returns; without moving focus
+too, the selected window and the focused frame would disagree and typing would
+still reach the directive frame. The redirect also re-wraps the incoming alist
+as a display action, since `display-buffer` takes `(FUNCTIONS . ALIST)` and
+reads a bare alist's first entry as an action function.
+
+Frame teardown runs in two phases. `delete-frame-functions` hands input focus
+back to the parent before the frame is deleted, because deleting a focused child
+frame without moving focus first leaves no frame focused and Emacs stops
+responding to the keyboard. `after-delete-frame-functions` then restores point
+and focus again once the frame is actually gone: the window system reports focus
+back asynchronously, so until Emacs processes that event the parent draws no
+cursor, and it would otherwise reappear only when the next key arrives. The
+second phase forces one redisplay to settle it.
+
+The view buffer disables `display-line-numbers`. A transcript has no line
+numbers worth counting, and they cost four columns of an already narrow frame.
 
 ## Status Strip And Cockpit Routing
 

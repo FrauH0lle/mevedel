@@ -151,6 +151,7 @@ Chat / view
   mevedel-chat.el             session lifecycle
   mevedel-side-conversation.el  ephemeral /btw conversation lifecycle
   mevedel-directive-activity.el  read-only workspace directive inspector
+  mevedel-directive-frame.el  directive-anchored child frame and transcript filter
   mevedel-directive-plan.el   directive-owned planning and approval workflow
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing

@@ -84,6 +84,11 @@
 (declare-function mevedel-directive-remove-subdirective
                   "mevedel-directive" (directive subdirective))
 
+;; `mevedel-directive-frame'
+(declare-function mevedel-directive-frame-display
+                  "mevedel-directive-frame"
+                  (directive view-buffer &optional focus))
+
 ;; `mevedel-directive-plan'
 (declare-function mevedel-directive-plan-start
                   "mevedel-directive-plan"
@@ -408,11 +413,18 @@ query completes."
 (defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*"
   "Name of the `diff' preview buffer.")
 
-(defcustom mevedel-show-chat-buffer t
-  "Control if the mevedel chat buffer should be shown automatically.
+(defcustom mevedel-show-chat-buffer 'frame
+  "How a directive request displays its execution-session view.
 
-If non-nil, the chat buffer will automatically be displayed."
-  :type 'boolean
+`frame' opens a directive frame anchored at the directive, without
+taking focus.  `window' displays the view in an ordinary window using
+`gptel-display-buffer-action'.  nil displays nothing.
+
+A directive frame falls back to a window wherever child frames are
+unavailable, so `frame' is safe on a terminal."
+  :type '(choice (const :tag "Directive frame" frame)
+                 (const :tag "Ordinary window" window)
+                 (const :tag "Do not display" nil))
   :group 'mevedel)
 
 ;;
@@ -1815,10 +1827,16 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 	     (overlay-start directive) (overlay-end directive)))
 
 	  ;; Display view buffer if configured (fall back to data buffer)
-	  (when mevedel-show-chat-buffer
-	    (display-buffer (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
-				chat-buffer)
-			    gptel-display-buffer-action))
+	  (let ((view (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
+			  chat-buffer)))
+	    (pcase mevedel-show-chat-buffer
+	      ;; No focus argument: a request the user just started must not
+	      ;; move point into the frame.
+	      ('frame
+	       (require 'mevedel-directive-frame)
+	       (mevedel-directive-frame-display directive view))
+	      ('window
+	       (display-buffer view gptel-display-buffer-action))))
 
 	(with-current-buffer chat-buffer
 	  (require 'mevedel-session-persistence)
