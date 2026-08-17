@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>mevedel live session</title>
+    <link rel="stylesheet" href="/viewer.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">mevedel</p>
+        <h1>Live session</h1>
+      </div>
+      <div class="topbar-side">
+        <select id="filter" class="filter" aria-label="Transcript filter" hidden></select>
+        <p id="connection" class="connection" role="status">Connecting…</p>
+      </div>
+    </header>
+    <main id="transcript" class="transcript" aria-live="polite" aria-label="Shared session transcript"></main>
+    <div class="live-controls">
+      <button id="live-button" class="live-button" type="button" hidden>Return to live</button>
+      <p id="notice" class="notice" role="status"></p>
+    </div>
+    <div id="requests" class="requests" aria-label="Pending interactions"></div>
+    <form id="composer" class="composer" hidden>
+      <textarea id="composer-input" class="composer-input" rows="3"
+                placeholder="Queue a follow-up for the session…"
+                aria-label="Prompt"></textarea>
+      <div class="composer-controls">
+        <input id="composer-name" class="composer-name" type="text"
+               maxlength="32" placeholder="Your name" aria-label="Display name">
+        <button id="stop-button" class="composer-button stop" type="button">Interrupt</button>
+        <button id="send-button" class="composer-button" type="submit">Send</button>
+      </div>
+    </form>
+    <aside class="disclosure" aria-label="Sharing and security notice">
+      This link is a bearer credential: anyone who has it can read the
+      visible prompts, responses, paths, and tool results, which may contain
+      secrets, and a full-control link can also prompt and interrupt the
+      session. Frames are sealed end to end with a key that lives only in
+      the link; the relay sees ciphertext.
+    </aside>
+    <script src="/viewer.js" defer></script>
+  </body>
+</html>

@@ -25,6 +25,8 @@
                   "mevedel-interaction-prompt" (buffer overlay))
 (declare-function mevedel--prompt--settle
                   "mevedel-interaction-prompt" (overlay result))
+(declare-function mevedel--prompt-announce
+                  "mevedel-interaction-prompt" (overlay))
 (declare-function mevedel--prompt-attribution-line
                   "mevedel-interaction-prompt" (origin))
 (declare-function mevedel--prompt-framed-body
@@ -311,9 +313,17 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
         (overlay-put ov 'mevedel-permission-include-always include-always)
         (overlay-put ov 'mevedel--callback cont)
         (overlay-put ov 'mevedel-user-request t)
+        ;; The remote surface gets the one-shot outcomes only: durable
+        ;; session or workspace authority is never mintable from a guest.
+        (overlay-put ov 'mevedel--remote-body
+                     (substring-no-properties content))
+        (overlay-put ov 'mevedel--remote-options
+                     '((allow-once . "Allow once") (deny-once . "Deny")))
+        (overlay-put ov 'mevedel--remote-feedback t)
         (unless entry
           (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
-          (mevedel--prompt--register-canceller source-buffer ov))))
+          (mevedel--prompt--register-canceller source-buffer ov))
+        (mevedel--prompt-announce ov)))
     ov))
 
 

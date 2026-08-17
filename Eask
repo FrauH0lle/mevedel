@@ -28,7 +28,7 @@
 (depends-on "emacs" "30.2")
 (depends-on "gptel")
 (depends-on "gptel-agent")
-(depends-on "web-server" "0.1.2")
+(depends-on "websocket")
 
 (development
  (depends-on "mcp"))

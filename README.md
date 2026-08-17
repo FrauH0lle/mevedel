@@ -65,8 +65,8 @@ Key features:
 - [gptel](https://github.com/karthink/gptel) 0.9.9.5 or higher
 - [gptel-agent](https://github.com/karthink/gptel-agent) 0.0.1 or higher for
   multi-agent workflows
-- [web-server](https://elpa.gnu.org/packages/web-server.html) 0.1.2 for
-  browser collaboration
+- [websocket](https://elpa.gnu.org/packages/websocket.html) 1.15 for
+  browser collaboration (the self-hosted relay lives in `relay/`)
 - [ripgrep](https://github.com/BurntSushi/ripgrep) for search tools and `@file`
   directory listings
 - [Bubblewrap](https://github.com/containers/bubblewrap) on Linux for Bash and

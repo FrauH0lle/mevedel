@@ -1,4 +1,4 @@
-;;; test-mevedel-collaboration.el --- Collaboration transport and projection tests -*- lexical-binding: t; -*-
+;;; test-mevedel-collaboration.el --- Collaboration facade and projection tests -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
@@ -17,298 +17,70 @@
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration)
 (require 'mevedel-transcript)
+(require 'mevedel-transcript-audit)
 (require 'mevedel-chat)
+(require 'mevedel-view)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-render)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-ui)
 
 
 ;;
-;;; Credentials, origins, and framing
+;;; Credentials and links
 
-(mevedel-deftest mevedel-collaboration--random-token
-  (:doc "creates a URL-safe 256-bit token and fails without OS randomness")
-  (let ((token (mevedel-collaboration--random-token)))
-    (should (= 43 (length token)))
-    (should (string-match-p "\\`[A-Za-z0-9_-]+\\'" token)))
-  (cl-letf (((symbol-function 'mevedel-collaboration--random-bytes)
-             (lambda (_) (error "Random source unavailable"))))
-    (should-error (mevedel-collaboration--random-token))))
+(mevedel-deftest mevedel-collaboration--base64url
+  (:doc "encodes URL-safe unpadded base64, decodes it back, and returns nil for malformed input")
+  (progn
+    (dolist (count '(16 32 48))
+      (let* ((bytes (mevedel-collaboration--random-bytes count))
+             (encoded (mevedel-collaboration--base64url bytes)))
+        (should (string-match-p "\\`[A-Za-z0-9_-]+\\'" encoded))
+        (should (equal bytes
+                       (mevedel-collaboration--base64url-decode encoded)))))
+    (should (equal (mevedel-collaboration--base64url
+                    (unibyte-string #xfb #xff #xfe))
+                   "-__-"))
+    (should-not (mevedel-collaboration--base64url-decode nil))
+    (should-not (mevedel-collaboration--base64url-decode "not base64 !!"))))
 
-(mevedel-deftest mevedel-collaboration--normalize-public-origin
-  (:doc "accepts only credential-free HTTPS origins")
-  (dolist (case '(("https://collab.example" . t)
-                  ("http://collab.example" . nil)
-                  ("https://collab.example/path" . nil)
-                  ("https://user:pass@collab.example" . nil)
-                  ("https://collab.example/?token=secret" . nil)))
-    (let ((mevedel-collaboration-public-base-url (car case)))
-      (if (cdr case)
-          (should (equal (car case)
-                         (mevedel-collaboration--normalize-public-origin)))
-        (should-error (mevedel-collaboration--normalize-public-origin)
+(mevedel-deftest mevedel-collaboration--random-bytes
+  (:doc "returns the requested count and fails without OS randomness")
+  (progn
+    (should (= 32 (string-bytes (mevedel-collaboration--random-bytes 32))))
+    (cl-letf (((symbol-function 'insert-file-contents-literally)
+               (lambda (&rest _) (error "No such file"))))
+      (should-error (mevedel-collaboration--random-bytes 32)
+                    :type 'user-error))))
+
+(mevedel-deftest mevedel-collaboration--relay-origins
+  (:doc "derives the web origin from a ws origin and rejects other shapes")
+  (progn
+    (let ((mevedel-collaboration-relay-url "wss://collab.example"))
+      (should (equal '("wss://collab.example" . "https://collab.example")
+                     (mevedel-collaboration--relay-origins))))
+    (let ((mevedel-collaboration-relay-url "ws://127.0.0.1:7466/"))
+      (should (equal '("ws://127.0.0.1:7466" . "http://127.0.0.1:7466")
+                     (mevedel-collaboration--relay-origins))))
+    (dolist (bad '("https://collab.example" "collab.example"
+                   "wss://collab.example/path" nil ""))
+      (let ((mevedel-collaboration-relay-url bad))
+        (should-error (mevedel-collaboration--relay-origins)
                       :type 'user-error)))))
 
-(mevedel-deftest mevedel-collaboration--auth-boundaries
-  (:doc "rejects missing, malformed, stale, and unsupported authentication")
-  (let ((guest (list :authenticated nil))
-        (room (list :pending-auth nil :room-id "room" :token "token"))
-        closed)
-    (setf (plist-get room :pending-auth) (list guest))
-    (cl-letf (((symbol-function 'process-get) (lambda (&rest _) guest))
-              ((symbol-function 'mevedel-collaboration--guest-close)
-               (lambda (_guest reason) (setq closed reason))))
-      (let ((mevedel-collaboration--room room))
-        (dolist (payload '("{}"
-                           "not-json"
-                           "{\"type\":\"auth\",\"version\":2,\"room\":\"room\",\"token\":\"token\"}"
-                           "{\"type\":\"auth\",\"version\":1,\"room\":\"room\",\"token\":\"stale\"}"
-                           "{\"type\":\"auth\",\"version\":1,\"room\":\"room\"}"))
-          (setq closed nil)
-          (mevedel-collaboration--auth-message 'process payload)
-          (should (eq 'auth-rejected closed)))
-        (setq closed nil)
-        (mevedel-collaboration--auth-message
-         'process (string-as-unibyte "\377"))
-        (should (eq 'auth-rejected closed))))))
-
-(mevedel-deftest mevedel-collaboration--auth-timeout
-  (:doc "closes an unauthenticated guest after the authentication deadline")
-  (let ((closed nil)
-        (guest (list :authenticated nil)))
-    (cl-letf (((symbol-function 'process-get) (lambda (&rest _) guest))
-              ((symbol-function 'mevedel-collaboration--guest-close)
-               (lambda (_guest reason) (setq closed reason))))
-      (mevedel-collaboration--auth-timeout 'process)
-      (should (eq 'auth-timeout closed)))))
-
-(mevedel-deftest mevedel-collaboration--valid-websocket-key-p
-  (:doc "requires a canonical base64 WebSocket key containing 16 bytes")
-  (let ((key (base64-encode-string (make-string 16 7) t)))
-    (should (mevedel-collaboration--valid-websocket-key-p key))
-    (should-not (mevedel-collaboration--valid-websocket-key-p
-                 (base64-encode-string (make-string 15 7) t)))
-    (should-not (mevedel-collaboration--valid-websocket-key-p
-                 (concat key "=")))
-    (should-not (mevedel-collaboration--valid-websocket-key-p "not-base64"))))
-
-(mevedel-deftest mevedel-collaboration--frame-info
-  (:doc "buffers partial frames and rejects unsafe frame shapes and bounds")
+(mevedel-deftest mevedel-collaboration--sanitize-guest-name
+  (:doc "bounds guest names, strips control characters, and never yields empty")
   (progn
-    (let ((partial (unibyte-string #x81 #x82 1 2)))
-      (should (eq 'incomplete
-                  (plist-get (mevedel-collaboration--frame-info partial)
-                             :state))))
-    (should (eq 'invalid
-                (plist-get
-                 (mevedel-collaboration--frame-info
-                  (unibyte-string #x01 0))
-                 :state)))
-    (let ((header (unibyte-string #x81 #xff
-                                  1 0 0 0 0 0 0 0 0 0 0 0))
-          (info nil))
-      (setq info (mevedel-collaboration--frame-info header))
-      (should (eq 'too-large (plist-get info :state))))))
-
-(mevedel-deftest mevedel-collaboration--close-code
-  (:doc "keeps slow-reader disposal reconnectable while auth rejection is terminal")
-  (progn
-    (should (= 1013 (mevedel-collaboration--close-code 'guest-too-slow)))
-    (should (= 1008 (mevedel-collaboration--close-code 'auth-rejected)))
-    (should (= 1008 (mevedel-collaboration--close-code 'inbound-after-auth)))))
-
-(mevedel-deftest mevedel-collaboration--guest-close
-  (:doc "owns deferred close teardown and cancels a prior close on repetition")
-  (let ((guest (list :process 'process :close-timer nil))
-        (room nil) (timers nil) (cancelled nil) (deleted nil)
-        (close-callback nil) (close-args nil) (send-count 0))
-    (setq room (list :guest guest))
-    (let ((mevedel-collaboration--room room))
-      (cl-letf (((symbol-function 'process-live-p) (lambda (_) t))
-                ((symbol-function 'process-send-string)
-                 (lambda (&rest _) (cl-incf send-count)))
-                ((symbol-function 'set-process-sentinel) (lambda (&rest _) nil))
-                ((symbol-function 'cancel-timer)
-                 (lambda (timer) (push timer cancelled)))
-                ((symbol-function 'delete-process)
-                 (lambda (process) (push process deleted)))
-                ((symbol-function 'accept-process-output)
-                 (lambda (&rest _) (error "Close teardown must not wait")))
-                ((symbol-function 'run-at-time)
-                 (lambda (_delay _repeat callback &rest args)
-                   (setq close-callback callback
-                         close-args args)
-                   (let ((timer (intern (format "timer-%d" (1+ (length timers))))))
-                     (push timer timers)
-                     timer))))
-        (mevedel-collaboration--guest-close guest 'guest-too-slow)
-        (let ((first-timer (plist-get guest :close-timer)))
-          (should (eq first-timer (car timers)))
-          (mevedel-collaboration--guest-close guest 'guest-too-slow)
-          (should (memq first-timer cancelled))
-          (should (= 2 send-count))
-          (should (equal (list 'process guest) close-args))
-          (apply close-callback close-args)
-          (should-not (plist-get guest :close-timer))
-          (should (equal '(process) deleted)))))))
-
-(mevedel-deftest mevedel-collaboration--bounded-http-errors
-  (:doc "bounds HTTP error bodies and emits an exact content length")
-  (let (headers body)
-    (cl-letf (((symbol-function 'ws-response-header)
-               (lambda (_process code &rest values)
-                 (setq headers (cons code values))))
-              ((symbol-function 'process-send-string)
-               (lambda (_process value) (setq body value))))
-      (mevedel-collaboration--send-http
-       'process 400 "text/plain; charset=utf-8"
-       (make-string (* 2 1024 1024) ?x)))
-    (let ((length-header (cdr (assoc "Content-Length" (cdr headers)))))
-      (should (= 400 (car headers)))
-      (should (stringp body))
-      (should (<= (string-bytes body) mevedel-collaboration--max-message-bytes))
-      (should (= (string-bytes body) length-header)))))
-
-(mevedel-deftest mevedel-collaboration--preupgrade-filter
-  (:doc "counts bounded headers and releases them only on a real upgrade")
-  (let ((process (start-process "mevedel-preupgrade-test" nil "cat"))
-        (delegated nil)
-        (removed nil))
-    (unwind-protect
-        (cl-letf (((symbol-function 'ws-filter)
-                   (lambda (_process string) (push string delegated)))
-                  ((symbol-function 'mevedel-collaboration--preupgrade-remove)
-                   (lambda (value &optional _preserve)
-                     (setq removed value))))
-          (process-put process :mevedel-collaboration-preupgrade-bytes 0)
-          (mevedel-collaboration--preupgrade-filter
-           process "GET / HTTP/1.1\r\nHost: x\r\n\r")
-          (should-not removed)
-          ;; End of headers keeps the bounds: only web-server replacing the
-          ;; process plist with its message object means an upgrade.
-          (mevedel-collaboration--preupgrade-filter process "\n")
-          (should-not removed)
-          (set-process-plist process (list :message 'websocket-message))
-          (mevedel-collaboration--preupgrade-filter process "frame")
-          (should (eq process removed))
-          (should (equal (list "frame" "\n" "GET / HTTP/1.1\r\nHost: x\r\n\r")
-                         delegated)))
-      (dolist (slot '(:mevedel-collaboration-preupgrade-idle
-                      :mevedel-collaboration-preupgrade-total))
-        (when-let ((timer (process-get process slot)))
-          (cancel-timer timer)))
-      (remhash process mevedel-collaboration--preupgrade-state)
-      (delete-process process))))
-
-(mevedel-deftest mevedel-collaboration--preupgrade-stop
-  (:doc "keeps every unupgraded connection tracked, bounded, and closable")
-  (progn
-    (skip-unless (not (eq system-type 'windows-nt)))
-    (require 'web-server)
-    (let* ((server (mevedel-collaboration--ws-start
-                  #'mevedel-collaboration--request-handler t))
-         (listener (mevedel-collaboration--web-server-slot server 'process))
-         (port (process-contact listener :service))
-         (clients nil)
-         (mevedel-collaboration--room (list :server server)))
-    (cl-flet ((connect ()
-                (let ((client
-                       (make-network-process
-                        :name "mevedel-preupgrade-client"
-                        :host "127.0.0.1" :service port
-                        :coding 'binary :noquery t)))
-                  (push client clients)
-                  client)))
-      (unwind-protect
-          (progn
-            ;; End of headers is not an upgrade: a multipart request keeps
-            ;; web-server parsing, so the connection must stay bounded.
-            (let ((client (connect)))
-              (process-send-string
-               client
-               (concat "POST / HTTP/1.1\r\nHost: x\r\n"
-                       "Content-Type: multipart/form-data; boundary=zz\r\n"
-                       "\r\n"))
-              (accept-process-output client 0.2)
-              (let ((children (process-get
-                               listener
-                               :mevedel-collaboration-preupgrade-children)))
-                (should (= 1 (length children)))
-                (should (gethash (car children)
-                                 mevedel-collaboration--preupgrade-state))))
-            ;; The bounds stay armed after a completed header block that is
-            ;; not an upgrade.
-            (let* ((children (process-get
-                              listener
-                              :mevedel-collaboration-preupgrade-children))
-                   (state (gethash (car children)
-                                   mevedel-collaboration--preupgrade-state)))
-              (should (timerp (plist-get state :idle)))
-              (should (timerp (plist-get state :total)))
-              (should (> (plist-get state :bytes) 0)))
-            ;; A connection past the byte bound is closed at once, and one
-            ;; that stops mid-headers is closed when its idle deadline
-            ;; passes.
-            (let ((mevedel-collaboration--max-preupgrade-bytes 4096)
-                  (mevedel-collaboration--preupgrade-idle-timeout 0.2)
-                  (client (connect)))
-              (process-send-string
-               client (concat "GET / HTTP/1.1\r\nX-Big: "
-                              (make-string 8192 ?x) "\r\n"))
-              (accept-process-output client 0.3)
-              (should-not (process-live-p client)))
-            (let ((mevedel-collaboration--preupgrade-idle-timeout 0.2)
-                  (client (connect)))
-              (process-send-string client "GET / HTTP/1.1\r\n")
-              (with-timeout (3 (ert-fail "Idle connection was not closed"))
-                (while (process-live-p client)
-                  (accept-process-output client 0.05)))
-              (should-not (process-live-p client)))
-            ;; A valid route still answers.
-            (let ((client (connect)))
-              (process-send-string
-               client "GET /index.html HTTP/1.1\r\nHost: x\r\n\r\n")
-              (with-timeout (3 (ert-fail "Viewer route did not answer"))
-                (while (and (process-live-p client)
-                            (with-current-buffer
-                                (or (process-buffer client)
-                                    (set-process-buffer
-                                     client (generate-new-buffer " *route*")))
-                              (= (point-max) (point-min))))
-                  (accept-process-output client 0.05)))
-              (when-let ((buffer (process-buffer client)))
-                (with-current-buffer buffer
-                  (should (string-match-p "200 OK" (buffer-string))))
-                (kill-buffer buffer)))
-            ;; Held connections are capped rather than accumulated.
-            (dotimes (_ (+ mevedel-collaboration--max-preupgrade-children 4))
-              (let ((client (connect)))
-                (process-send-string client "GET / HTTP/1.1\r\n")
-                (accept-process-output client 0.05)))
-            (should (<= (length (process-get
-                                 listener
-                                 :mevedel-collaboration-preupgrade-children))
-                        mevedel-collaboration--max-preupgrade-children))
-            ;; Stopping the room leaves no tracked child, no timer, and no
-            ;; surviving connection.
-            (mevedel-collaboration--preupgrade-stop server)
-            (ws-stop server)
-            (dolist (client clients)
-              (accept-process-output client 0.2))
-            (should-not (process-get
-                         listener
-                         :mevedel-collaboration-preupgrade-children))
-            (should (zerop (hash-table-count
-                            mevedel-collaboration--preupgrade-state)))
-            (should-not (cl-find-if #'process-live-p clients)))
-        (dolist (client clients)
-          (when (process-live-p client)
-            (delete-process client)))
-        (condition-case nil (ws-stop server) (error nil)))))))
-
+    (should (equal "guest" (mevedel-collaboration--sanitize-guest-name nil)))
+    (should (equal "guest" (mevedel-collaboration--sanitize-guest-name "  ")))
+    (should (equal "a b" (mevedel-collaboration--sanitize-guest-name
+                          "a\n\t\rb")))
+    (should (= mevedel-collaboration--max-guest-name-chars
+               (length (mevedel-collaboration--sanitize-guest-name
+                        (make-string 200 ?x)))))))
 
 ;;
-;;; Canonical projection and bounded output
+;;; Canonical projection
 
 (mevedel-deftest mevedel-collaboration--canonical-records
   (:doc "uses allowlisted canonical text, stable identities, and revision zero")
@@ -328,6 +100,42 @@
                                         records)))
           (should-not (string-match-p "\\`user-[0-9]+\\'"
                                       (plist-get (car records) :id))))))))
+
+(mevedel-deftest mevedel-collaboration--directive-at
+  (:doc "maps a position to its owning directive range")
+  (let ((ranges (list (list :start 10 :end 20 :directive-id "dir-1")
+                      (list :start 30 :end 40 :directive-id "dir-2"))))
+    (should (equal "dir-1" (mevedel-collaboration--directive-at ranges 10)))
+    (should (equal "dir-1" (mevedel-collaboration--directive-at ranges 19)))
+    (should-not (mevedel-collaboration--directive-at ranges 20))
+    (should (equal "dir-2" (mevedel-collaboration--directive-at ranges 35)))
+    (should-not (mevedel-collaboration--directive-at ranges 5))
+    (should-not (mevedel-collaboration--directive-at nil 5))))
+
+(mevedel-deftest mevedel-collaboration--directive-ranges
+  (:doc "tags records inside directive turns and serializes the id")
+  (with-temp-buffer
+    (insert "prompt\nanswer\n")
+    (let ((data-buffer (current-buffer)))
+      (cl-letf (((symbol-function 'mevedel-transcript-segments)
+                 (lambda (_start _end)
+                   (list (list 'user 1 7) (list 'response 8 14))))
+                ((symbol-function 'mevedel-collaboration--directive-ranges)
+                 (lambda ()
+                   (list (list :start 8 :end 14 :directive-id "dir-1"))))
+                ((symbol-function 'mevedel-view--user-turn-text)
+                 (lambda (_segments _buffer) "visible prompt"))
+                ((symbol-function 'mevedel-view--visible-response-text)
+                 (lambda (_text) "visible answer")))
+        (let* ((records (mevedel-collaboration--canonical-records data-buffer))
+               (user (car records))
+               (response (cadr records)))
+          (should-not (plist-member user :directive))
+          (should (equal "dir-1" (plist-get response :directive)))
+          (should (equal "dir-1"
+                         (cdr (assoc "directive"
+                                     (mevedel-collaboration--json-record
+                                      response))))))))))
 
 (mevedel-deftest mevedel-collaboration--allowlist
   (:doc "serializes only visible canonical fields from adversarial records")
@@ -395,16 +203,6 @@
                             "Unknown kind payload"))
             (should-not (string-match-p (regexp-quote hidden) json))))))))
 
-(mevedel-deftest mevedel-collaboration--snapshot-refusal
-  (:doc "refuses an initial snapshot larger than eight MiB")
-  (with-temp-buffer
-    (cl-letf (((symbol-function 'mevedel-collaboration--canonical-records)
-               (lambda (_) (list (list :id "huge" :kind "assistant"
-                                        :revision 0
-                                        :text (make-string (* 8 1024 1024) ?x))))))
-      (should-error (mevedel-collaboration--start nil (current-buffer))
-                    :type 'user-error))))
-
 (mevedel-deftest mevedel-collaboration--local-remote-parity
   (:doc "keeps local and remote-backed projections semantically identical")
   (with-temp-buffer
@@ -448,7 +246,7 @@
     (let* ((room (list :data-buffer (current-buffer)
                        :records nil :pending-tools nil
                        :tool-call-occurrences (make-hash-table :test #'equal)
-                       :guest nil))
+                       :guests (make-hash-table :test #'eql)))
            (info '(:name "Bash" :args (:command "true")))
            (mevedel-collaboration--room room)
            canonical)
@@ -475,6 +273,38 @@
           (should (equal "" (plist-get entry :result)))
           (should-not (plist-get room :pending-tools)))))))
 
+(mevedel-deftest mevedel-collaboration--project-records
+  (:doc "merges a pending tool with its landed canonical record even when the settlement info missed it")
+  (let* ((canonical
+          (list (list :id "canonical-1" :kind "tool" :revision 0
+                      :name "Bash" :status "completed"
+                      :summary "Bash" :result "transcript-formatted output"
+                      :truncated nil)))
+         ;; Still "running": the post-tool settlement never matched it.
+         (stuck (list :id "pending-1" :kind "tool" :revision 0
+                      :name "Bash" :status "running" :summary "Bash"
+                      :result "" :truncated nil :pending t
+                      :identity-fixed t :call-key "k1"
+                      :baseline-tool-count 0 :baseline-record-count 0))
+         (room (list :data-buffer 'data :pending-tools (list stuck))))
+    (cl-letf (((symbol-function 'mevedel-collaboration--canonical-records)
+               (lambda (_) (mapcar #'copy-sequence canonical))))
+      (let ((records (mevedel-collaboration--project-records room)))
+        ;; One card, keeping the pending identity with canonical content.
+        (should (= 1 (length records)))
+        (should (equal "pending-1" (plist-get (car records) :id)))
+        (should (equal "completed" (plist-get (car records) :status)))
+        (should (equal "transcript-formatted output"
+                       (plist-get (car records) :result)))))
+    ;; A pending whose canonical record has not landed stays visible.
+    (let ((room (list :data-buffer 'data
+                      :pending-tools (list (copy-sequence stuck)))))
+      (cl-letf (((symbol-function 'mevedel-collaboration--canonical-records)
+                 (lambda (_) nil)))
+        (let ((records (mevedel-collaboration--project-records room)))
+          (should (= 1 (length records)))
+          (should (equal "running" (plist-get (car records) :status))))))))
+
 (mevedel-deftest mevedel-collaboration--clean-response
   (:doc "fails closed when canonical response projection is unavailable")
   (cl-letf (((symbol-function 'mevedel-view--visible-response-text)
@@ -489,183 +319,70 @@
       (should-error
        (mevedel-collaboration--clean-user '(user 1 2) (current-buffer))))))
 
-(mevedel-deftest mevedel-collaboration--snapshot-chunks
-  (:doc "keeps each UTF-8 snapshot message below the frame bound")
-  (progn
-    (let* ((record (list :id "assistant-x" :kind "assistant" :revision 0
-                         :text (make-string 100000 937)))
-           (chunks (cdr (mevedel-collaboration--snapshot-chunks (list record)))))
-      (should (= 1 (length chunks)))
-      (let ((guest (list :next-sequence 0)))
-        (dolist (chunk chunks)
-          (should
-           (<= (string-bytes
-                (plist-get
-                 (mevedel-collaboration--guest-json-with-sequence guest chunk)
-                 :json))
-               mevedel-collaboration--max-message-bytes)))))
-    (let ((record (list :id "assistant-x" :kind "assistant" :revision 0
-                        :text (make-string mevedel-collaboration--max-message-bytes
-                                           ?x))))
-      (should-error (mevedel-collaboration--snapshot-chunks (list record))
-                    :type 'user-error))))
-
-(mevedel-deftest mevedel-collaboration--guest-enqueue
-  (:doc "accounts framed UTF-8 bytes before admission and rejects a full queue")
-  (progn
-    (let ((guest (list :process 'process :pending-bytes 0 :queue nil
-                       :in-flight nil :pump-timer nil)))
-      (cl-letf (((symbol-function 'process-live-p) (lambda (_) t))
-                ((symbol-function 'process-put) (lambda (&rest _) nil))
-                ((symbol-function 'run-at-time) (lambda (&rest _) 'timer))
-                ((symbol-function 'ws-web-socket-frame) (lambda (wire) wire)))
-        (should (mevedel-collaboration--guest-enqueue guest "Grüße"))
-        (should (= (string-bytes (encode-coding-string "Grüße" 'utf-8 t))
-                   (plist-get (car (plist-get guest :queue)) :bytes)))))
-    (let ((closed nil)
-          (guest (list :process 'process
-                       :pending-bytes mevedel-collaboration--max-pending-bytes
-                       :queue nil)))
-      (cl-letf (((symbol-function 'mevedel-collaboration--guest-close)
-                 (lambda (_guest reason) (setq closed reason)))
-                ((symbol-function 'process-live-p) (lambda (_) t))
-                ((symbol-function 'ws-web-socket-frame) (lambda (wire) wire)))
-        (should-not (mevedel-collaboration--guest-enqueue guest "x"))
-        (should (eq 'guest-too-slow closed))))))
-
-(mevedel-deftest mevedel-collaboration--guest-send
-  (:doc "coalesces only unsent record revisions and preserves queue order")
-  (let ((guest (list :process 'process :pending-bytes 0 :queue nil
-                     :in-flight nil :pump-timer nil))
-        (first `(("type" . "record")
-                 ("version" . 1)
-                 ("record" . (("id" . "assistant-1") ("revision" . 1)))))
-        (replacement `(("type" . "record")
-                       ("version" . 1)
-                       ("record" . (("id" . "assistant-1") ("revision" . 2)))))
-        (second `(("type" . "record")
-                  ("version" . 1)
-                  ("record" . (("id" . "assistant-2") ("revision" . 1))))))
-    (cl-letf (((symbol-function 'process-live-p) (lambda (_) t))
-              ((symbol-function 'process-put) (lambda (&rest _) nil))
-              ((symbol-function 'run-at-time) (lambda (&rest _) 'timer))
-              ((symbol-function 'ws-web-socket-frame) (lambda (wire) wire)))
-      (mevedel-collaboration--guest-send guest first)
-      (mevedel-collaboration--guest-send guest replacement)
-      (mevedel-collaboration--guest-send guest second)
-      (let ((queue (plist-get guest :queue)))
-        (should (= 2 (length queue)))
-        (should (string-match-p "assistant-1" (plist-get (car queue) :frame)))
-        (should (string-match-p "\\\"revision\\\":2"
-                                (plist-get (car queue) :frame)))
-        (should (string-match-p "assistant-2"
-                                (plist-get (cadr queue) :frame)))
-        (should (string-match-p "\\\"ack-token\\\":\\\"[A-Za-z0-9_-]+"
-                                (plist-get (car queue) :frame)))
-        (should (stringp (plist-get (car queue) :ack-token)))
-        (should (= (+ (plist-get (car queue) :bytes)
-                      (plist-get (cadr queue) :bytes))
-                   (plist-get guest :pending-bytes))))))
-  (let ((guest (list :process 'process :pending-bytes 0 :queue nil
-                     :in-flight nil :pump-timer nil
-                     :snapshot-active t :after-snapshot nil
-                     :after-snapshot-bytes 0))
-        (first `(("type" . "record")
-                 ("version" . 1)
-                 ("record" . (("id" . "assistant-1") ("revision" . 1)))))
-        (replacement `(("type" . "record")
-                       ("version" . 1)
-                       ("record" . (("id" . "assistant-1") ("revision" . 2))))))
-    (cl-letf (((symbol-function 'process-live-p) (lambda (_) t))
-              ((symbol-function 'process-put) (lambda (&rest _) nil))
-              ((symbol-function 'run-at-time) (lambda (&rest _) 'timer))
-              ((symbol-function 'ws-web-socket-frame) (lambda (wire) wire)))
-      (mevedel-collaboration--guest-send guest first)
-      (mevedel-collaboration--guest-send guest replacement)
-      (should (= 1 (length (plist-get guest :after-snapshot))))
-        (should (string-match-p "\\\"revision\\\":2"
-                              (plist-get (car (plist-get guest :after-snapshot))
-                                         :json))))))
-
-(mevedel-deftest mevedel-collaboration--ack-message
-  (:doc "requires the exact per-frame token and sequence before advancing output")
-  (let ((guest (list :process 'process
-                     :in-flight (list :sequence 7 :ack-token "expected")
-                     :acknowledged-sequence nil
-                     :acknowledged-token nil
-                     :pump-timer 'timer))
-        (scheduled nil)
-        (closed nil))
-    (cl-letf (((symbol-function 'process-get)
-               (lambda (&rest _) guest))
-              ((symbol-function 'process-put) (lambda (&rest _) nil))
-              ((symbol-function 'cancel-timer) (lambda (_) nil))
-              ((symbol-function 'run-at-time)
-               (lambda (&rest _) (setq scheduled t)))
-              ((symbol-function 'mevedel-collaboration--guest-close)
-               (lambda (_guest reason) (setq closed reason))))
-      (mevedel-collaboration--ack-message
-       'process "{\"type\":\"ack\",\"seq\":7,\"ack-token\":\"expected\"}")
-      (should (= 7 (plist-get guest :acknowledged-sequence)))
-      (should (equal "expected" (plist-get guest :acknowledged-token)))
-      (should scheduled)
-      (should-not closed)
-      (setq scheduled nil)
-      (mevedel-collaboration--ack-message
-       'process "{\"type\":\"ack\",\"seq\":7,\"ack-token\":\"forged\"}")
-      (should (eq 'inbound-after-auth closed))
-      (should-not scheduled)
-      (setq closed nil)
-      (mevedel-collaboration--ack-message
-       'process "{\"type\":\"ack\",\"seq\":7}")
-      (should (eq 'inbound-after-auth closed)))))
-
-(mevedel-deftest mevedel-collaboration--after-snapshot-bound
-  (:doc "counts deferred live frames against the shared pending output bound")
-  (let ((closed nil)
-        (guest (list :process 'process :pending-bytes 0
-                     :after-snapshot-bytes 0 :after-snapshot nil
-                     :snapshot-active t)))
-    (cl-letf (((symbol-function 'ws-web-socket-frame)
-               (lambda (wire) wire))
-              ((symbol-function 'mevedel-collaboration--guest-close)
-               (lambda (_guest reason) (setq closed reason))))
-      (dotimes (_ 2)
-        (should
-         (mevedel-collaboration--guest-send
-          guest `(("type" . "update")
-                  ("payload" . ,(make-string 800000 ?x))))))
-      (should (> (plist-get guest :after-snapshot-bytes) 0))
-      (should-not
-       (mevedel-collaboration--guest-send
-        guest `(("type" . "update")
-                ("payload" . ,(make-string 800000 ?x)))))
-      (should (eq 'guest-too-slow closed)))))
+;;
+;;; Publication
 
 (mevedel-deftest mevedel-collaboration--publish
-  (:doc "publishes simultaneous changes in canonical order with incremented revisions")
+  (:doc "broadcasts simultaneous changes in canonical order with incremented revisions")
   (let* ((old (list (list :id "a" :kind "assistant" :revision 0 :text "one")
                     (list :id "b" :kind "assistant" :revision 0 :text "two")))
          (new (list (list :id "a" :kind "assistant" :revision 0 :text "ONE")
                     (list :id "b" :kind "assistant" :revision 0 :text "TWO")))
          (sent nil)
-         (guest (list :authenticated t))
-         (room (list :records old :guest guest)))
+         (guests (make-hash-table :test #'eql))
+         (room (list :records old :transport 'transport :guests guests)))
+    (puthash 1 (list :name "g" :writable nil :ready t) guests)
     (let ((mevedel-collaboration--room room))
       (cl-letf (((symbol-function 'mevedel-collaboration--project-records)
                  (lambda (_) new))
-                ((symbol-function 'mevedel-collaboration--guest-send)
-                 (lambda (_guest object) (push object sent))))
+                ((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (_transport peer frame)
+                   (push (cons peer frame) sent)
+                   t)))
         (mevedel-collaboration--publish room)))
     (setq sent (nreverse sent))
+    (should (equal '(0 0) (mapcar #'car sent)))
+    (should (equal '("record" "record")
+                   (mapcar (lambda (entry) (plist-get (cdr entry) :t)) sent)))
     (should (equal '("a" "b")
-                   (mapcar (lambda (object)
-                             (cdr (assoc "id" (cdr (assoc "record" object)))))
+                   (mapcar (lambda (entry)
+                             (cdr (assoc "id" (plist-get (cdr entry) :record))))
                            sent)))
     (should (equal '(1 1)
-                   (mapcar (lambda (object)
-                             (cdr (assoc "revision" (cdr (assoc "record" object)))))
+                   (mapcar (lambda (entry)
+                             (cdr (assoc "revision"
+                                         (plist-get (cdr entry) :record))))
                            sent)))))
+
+(mevedel-deftest mevedel-collaboration--attribute-guest-prompts
+  (:doc "attributes each guest record to the nearest preceding user turn")
+  (with-temp-buffer
+    (insert "first prompt\nanswer\nsecond prompt\n")
+    (require 'mevedel-transcript-audit)
+    (insert (mevedel--format-hook-audit-record
+             (list :type 'guest-prompt :name "phone")))
+    (cl-letf (((symbol-function 'mevedel-transcript-segments)
+               (lambda (_start _end)
+                 (list (list 'user 1 13) (list 'response 14 20)
+                       (list 'user 21 34))))
+              ((symbol-function 'mevedel-view--user-turn-text)
+               (lambda (segments _buffer)
+                 (if (= 1 (cadr (car segments))) "first prompt"
+                   "second prompt")))
+              ((symbol-function 'mevedel-view--visible-response-text)
+               (lambda (_text) "answer")))
+      (let* ((records (mevedel-collaboration--canonical-records
+                       (current-buffer)))
+             (first-user (nth 0 records))
+             (second-user (nth 2 records)))
+        ;; The attribution block sits after both prompts, so it names the
+        ;; nearest preceding user turn: the second one.
+        (should-not (plist-member first-user :guest))
+        (should (equal "phone" (plist-get second-user :guest)))
+        (should (equal "phone"
+                       (cdr (assoc "guest"
+                                   (mevedel-collaboration--json-record
+                                    second-user)))))))))
 
 (mevedel-deftest mevedel-collaboration--safe-accepted-prompt
   (:doc "publishes accepted prompt insertion and isolates observer failure")
@@ -742,6 +459,457 @@
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer))))))
 
+;;
+;;; Snapshot delivery
+
+(mevedel-deftest mevedel-collaboration--snapshot-chunks
+  (:doc "splits records into chunks each under the wire bound")
+  (progn
+    (should-not (mevedel-collaboration--snapshot-chunks nil))
+    (let* ((record (list :id "assistant-x" :kind "assistant" :revision 0
+                         :text (make-string 100000 937)))
+           (chunks (mevedel-collaboration--snapshot-chunks
+                    (make-list 12 record))))
+      (should (> (length chunks) 1))
+      (should (= 12 (apply #'+ (mapcar #'length chunks))))
+      (dolist (chunk chunks)
+        (should (<= (string-bytes
+                     (mevedel-collaboration--json-string (vconcat chunk)))
+                    mevedel-collaboration--max-message-bytes))))))
+
+(mevedel-deftest mevedel-collaboration--send-snapshot
+  (:doc "sends a targeted welcome then final-flagged snapshot chunks")
+  (let* ((guests (make-hash-table :test #'eql))
+         (records (list (list :id "u" :kind "user" :revision 0 :text "hi")))
+         (room (list :transport 'transport :guests guests :records records))
+         sent)
+    (puthash 7 (list :name "g" :writable t :ready t) guests)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport peer frame)
+                 (push (cons peer frame) sent)
+                 t)))
+      (mevedel-collaboration--send-snapshot room 7))
+    (setq sent (nreverse sent))
+    (should (equal '(7 7) (mapcar #'car sent)))
+    (let ((welcome (cdr (nth 0 sent)))
+          (chunk (cdr (nth 1 sent))))
+      (should (equal "welcome" (plist-get welcome :t)))
+      (should (eq :json-false (plist-get welcome :readOnly)))
+      (should (= 1 (plist-get welcome :recordCount)))
+      (should (equal "snapshot-chunk" (plist-get chunk :t)))
+      (should (eq t (plist-get chunk :final)))
+      (should (= 1 (length (plist-get chunk :records)))))))
+
+;;
+;;; Inbound guest frames
+
+(mevedel-deftest mevedel-collaboration--handle-hello
+  (:doc "rejects a protocol mismatch and classifies write-token possession")
+  (let* ((guests (make-hash-table :test #'eql))
+         (token (mevedel-collaboration--random-bytes 16))
+         (room (list :transport 'transport :guests guests
+                     :write-token token :records nil
+                     :ui-requests (make-hash-table :test #'eql)))
+         sent)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport peer frame)
+                 (push (cons peer frame) sent)
+                 t)))
+      (mevedel-collaboration--handle-hello room 3 (list :proto 999 :name "x"))
+      (should (equal "error" (plist-get (cdr (car sent)) :t)))
+      (should (= 0 (hash-table-count guests)))
+      (setq sent nil)
+      (mevedel-collaboration--handle-hello
+       room 1 (list :proto mevedel-collaboration--protocol-version
+                    :name "Phone"
+                    :writeToken (mevedel-collaboration--base64url token)))
+      (mevedel-collaboration--handle-hello
+       room 2 (list :proto mevedel-collaboration--protocol-version
+                    :name "Laptop\n<evil>"
+                    :writeToken (mevedel-collaboration--base64url
+                                 (mevedel-collaboration--random-bytes 16))))
+      (let ((writer (gethash 1 guests))
+            (viewer (gethash 2 guests)))
+        (should (plist-get writer :writable))
+        (should (equal "Phone" (plist-get writer :name)))
+        (should-not (plist-get viewer :writable))
+        (should (equal "Laptop <evil>" (plist-get viewer :name))))
+      (let ((welcomes (cl-remove-if-not
+                       (lambda (entry)
+                         (equal "welcome" (plist-get (cdr entry) :t)))
+                       sent)))
+        (should (= 2 (length welcomes)))))))
+
+(mevedel-deftest mevedel-collaboration--handle-prompt
+  (:doc "queues a writable guest prompt and ignores unauthorized or invalid ones")
+  (let* ((guests (make-hash-table :test #'eql))
+         (data-buffer (generate-new-buffer " *collab-prompt-data*"))
+         (view-buffer (generate-new-buffer " *collab-prompt-view*"))
+         (room (list :data-buffer data-buffer :guests guests
+                     :transport 'transport))
+         enqueued rebuilt drained sent)
+    (unwind-protect
+        (progn
+          (puthash 1 (list :name "Phone" :writable t :ready t) guests)
+          (with-current-buffer data-buffer
+            (setq-local mevedel--view-buffer view-buffer)
+            ;; A real struct: the turn-count accessor is a defsubst that
+            ;; load order may have inlined beyond a stub's reach.
+            (setq-local mevedel--session
+                        (mevedel-session--create :name "share")))
+          (cl-letf (((symbol-function 'mevedel-session-enqueue-pending-input)
+                     (lambda (_session category entry)
+                       (setq enqueued (cons category entry))))
+                    ((symbol-function 'mevedel--normalize-message-text)
+                     (lambda (text) (string-trim text)))
+                    ((symbol-function 'mevedel-view--interaction-rebuild)
+                     (lambda () (setq rebuilt t)))
+                    ((symbol-function 'mevedel-view--schedule-late-follow-up-drain)
+                     (lambda () (setq drained t)))
+                    ((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (_transport peer frame)
+                       (push (cons peer frame) sent)
+                       t)))
+            (mevedel-collaboration--handle-prompt
+             room 1 (list :t "prompt" :text " check the tests \n"
+                          :name "DonHugo\n!")))
+          (should (equal 'follow-up (car enqueued)))
+          (should (equal "check the tests" (plist-get (cdr enqueued) :input)))
+          ;; The prompt frame's name refreshes the hello-time default.
+          (should (equal "DonHugo !" (plist-get (cdr enqueued) :guest-name)))
+          (should (equal "DonHugo !" (plist-get (gethash 1 guests) :name)))
+          (should (numberp (plist-get (cdr enqueued) :queued-at-turn)))
+          ;; The guest gets a targeted queued acknowledgement.
+          (should (equal '(1 . (:t "queued")) (car sent)))
+          (should rebuilt)
+          (should drained)
+          ;; A byte-identical repeat within the duplicate window is a
+          ;; double-fired client submit and is dropped.
+          (setq enqueued nil sent nil)
+          (cl-letf (((symbol-function 'mevedel-session-enqueue-pending-input)
+                     (lambda (_session category entry)
+                       (setq enqueued (cons category entry))))
+                    ((symbol-function 'mevedel--normalize-message-text)
+                     (lambda (text) (string-trim text)))
+                    ((symbol-function 'mevedel-view--interaction-rebuild)
+                     (lambda () nil))
+                    ((symbol-function 'mevedel-view--schedule-late-follow-up-drain)
+                     (lambda () nil))
+                    ((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (&rest _) t)))
+            (mevedel-collaboration--handle-prompt
+             room 1 (list :t "prompt" :text " check the tests \n"))
+            (should-not enqueued)
+            ;; Different text inside the window still goes through.
+            (mevedel-collaboration--handle-prompt
+             room 1 (list :t "prompt" :text "another question"))
+            (should (equal "another question"
+                           (plist-get (cdr enqueued) :input))))
+          ;; Unauthorized and invalid prompts never reach the queue.
+          (let ((rejects nil))
+            (puthash 8 (list :name "Viewer" :writable nil :ready t) guests)
+            (cl-letf (((symbol-function 'mevedel-session-enqueue-pending-input)
+                       (lambda (&rest args) (setq rejects args))))
+              ;; Read-only guest.
+              (mevedel-collaboration--handle-prompt
+               room 8 (list :t "prompt" :text "denied"))
+              ;; Unregistered peer.
+              (mevedel-collaboration--handle-prompt
+               room 9 (list :t "prompt" :text "denied"))
+              ;; Oversized, blank, and non-string prompts from a writable
+              ;; guest.
+              (mevedel-collaboration--handle-prompt
+               room 1 (list :t "prompt"
+                            :text (make-string
+                                   (1+ mevedel-collaboration--max-prompt-bytes)
+                                   ?x)))
+              (mevedel-collaboration--handle-prompt
+               room 1 (list :t "prompt" :text "   "))
+              (mevedel-collaboration--handle-prompt
+               room 1 (list :t "prompt" :text 42)))
+            (should-not rejects)))
+      (kill-buffer view-buffer)
+      (kill-buffer data-buffer))))
+
+(mevedel-deftest mevedel-collaboration--handle-abort
+  (:doc "aborts for a writable guest and ignores read-only guests")
+  (with-temp-buffer
+    (let* ((guests (make-hash-table :test #'eql))
+           (room (list :data-buffer (current-buffer) :guests guests))
+           aborted)
+      (puthash 1 (list :name "Viewer" :writable nil :ready t) guests)
+      (puthash 2 (list :name "Writer" :writable t :ready t) guests)
+      (cl-letf (((symbol-function 'mevedel-view--abort-data-buffer)
+                 (lambda (buffer) (setq aborted buffer))))
+        (mevedel-collaboration--handle-abort room 1)
+        (should-not aborted)
+        (mevedel-collaboration--handle-abort room 2)
+        (should (eq (current-buffer) aborted))))))
+
+(mevedel-deftest mevedel-collaboration--on-prompt-created
+  (:doc "presents remote-capable prompts to writable guests only, gated by the defcustom")
+  (with-temp-buffer
+    (insert "prompt text")
+    (let* ((guests (make-hash-table :test #'eql))
+           (requests (make-hash-table :test #'eql))
+           (room (list :transport 'transport :guests guests
+                       :ui-requests requests))
+           (overlay (make-overlay 1 5))
+           sent)
+      (overlay-put overlay 'mevedel--remote-body "Run rm -rf /tmp/x?")
+      (overlay-put overlay 'mevedel--remote-options
+                   '((allow-once . "Allow once") (deny-once . "Deny")))
+      (overlay-put overlay 'mevedel--remote-feedback t)
+      (puthash 1 (list :name "phone" :writable t :ready t) guests)
+      (puthash 2 (list :name "laptop" :writable nil :ready t) guests)
+      (let ((mevedel-collaboration--room room)
+            (mevedel-collaboration-remote-interactions t))
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame)
+                     (push (cons peer frame) sent)
+                     t)))
+          ;; An overlay without remote options is never broadcast.
+          (mevedel-collaboration--on-prompt-created (make-overlay 1 2))
+          (should-not sent)
+          (mevedel-collaboration--on-prompt-created overlay)
+          (should (= 1 (length sent)))
+          ;; Writable guest only; the read-only guest sees nothing.
+          (should (= 1 (car (car sent))))
+          (let ((frame (cdr (car sent))))
+            (should (equal "ui-request" (plist-get frame :t)))
+            (should (equal "Run rm -rf /tmp/x?" (plist-get frame :body)))
+            (should (equal '("Allow once" "Deny")
+                           (mapcar (lambda (option)
+                                     (cdr (assoc "label" option)))
+                                   (append (plist-get frame :options) nil))))
+            (should (eq t (plist-get frame :allowFeedback)))
+            (should (= 1 (hash-table-count requests)))
+            ;; A late-joining writable guest receives the active request.
+            (setq sent nil)
+            (mevedel-collaboration--send-ui-requests room 7)
+            (should (equal (plist-get frame :reqId)
+                           (plist-get (cdr (car sent)) :reqId))))
+          ;; The defcustom gates the whole surface.
+          (let ((mevedel-collaboration-remote-interactions nil))
+            (setq sent nil)
+            (mevedel-collaboration--on-prompt-created overlay)
+            (should-not sent)))))))
+
+(mevedel-deftest mevedel-collaboration--handle-ui-response
+  (:doc "settles once with the mapped outcome and ignores unauthorized answers")
+  (with-temp-buffer
+    (insert "prompt text")
+    (let* ((guests (make-hash-table :test #'eql))
+           (requests (make-hash-table :test #'eql))
+           (room (list :transport 'transport :guests guests
+                       :ui-requests requests))
+           (overlay (make-overlay 1 5))
+           (accepted nil)
+           settled sent)
+      (overlay-put overlay 'mevedel--remote-options
+                   (list '(allow-once . "Allow once")
+                         (cons (lambda () (setq accepted t)) "Accept")))
+      (overlay-put overlay 'mevedel--remote-feedback t)
+      (puthash 1 (list :name "phone" :writable t :ready t) guests)
+      (puthash 2 (list :name "laptop" :writable nil :ready t) guests)
+      (puthash 41 overlay requests)
+      (let ((mevedel-collaboration--room room)
+            (mevedel-collaboration-remote-interactions t))
+        (cl-letf (((symbol-function 'mevedel--prompt--settle)
+                   (lambda (_overlay outcome) (setq settled outcome)))
+                  ((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame)
+                     (push (cons peer frame) sent)
+                     t))
+                  ((symbol-function 'message) (lambda (&rest _) nil)))
+          ;; A read-only guest and an unknown request id are ignored.
+          (mevedel-collaboration--handle-ui-response
+           room 2 (list :reqId 41 :option 0))
+          (mevedel-collaboration--handle-ui-response
+           room 1 (list :reqId 999 :option 0))
+          (should-not settled)
+          ;; A symbol option settles through the shared settle.
+          (mevedel-collaboration--handle-ui-response
+           room 1 (list :reqId 41 :option 0))
+          (should (eq 'allow-once settled))
+          ;; A function option runs instead of settling.
+          (setq settled nil)
+          (mevedel-collaboration--handle-ui-response
+           room 1 (list :reqId 41 :option 1))
+          (should accepted)
+          (should-not settled)
+          ;; Feedback maps to the standard feedback outcome.
+          (mevedel-collaboration--handle-ui-response
+           room 1 (list :reqId 41 :feedback "  needs a dry run  "))
+          (should (equal '(feedback . "needs a dry run") settled))
+          ;; Settlement dismisses the request everywhere writable.
+          (mevedel-collaboration--on-prompt-settled overlay)
+          (should (= 0 (hash-table-count requests)))
+          (should (equal '(1 . (:t "ui-request-end" :reqId 41))
+                         (car sent)))
+          ;; A late answer after dismissal is ignored silently.
+          (setq settled nil)
+          (mevedel-collaboration--handle-ui-response
+           room 1 (list :reqId 41 :option 0))
+          (should-not settled))))))
+
+(mevedel-deftest mevedel-collaboration--on-frame
+  (:doc "dispatches known frames and stops the room on handler failure")
+  (let ((room (list :guests (make-hash-table :test #'eql)))
+        handled stopped)
+    (let ((mevedel-collaboration--room room))
+      (cl-letf (((symbol-function 'mevedel-collaboration--handle-hello)
+                 (lambda (_room peer _frame) (setq handled peer))))
+        (mevedel-collaboration--on-frame 5 (list :t "hello" :proto 2)))
+      (should (= 5 handled))
+      ;; Unknown frame types are tolerated.
+      (mevedel-collaboration--on-frame 5 (list :t "future-frame"))
+      (cl-letf (((symbol-function 'mevedel-collaboration--handle-prompt)
+                 (lambda (&rest _) (error "Handler fault")))
+                ((symbol-function 'mevedel-collaboration--stop-internal)
+                 (lambda (reason) (setq stopped reason)))
+                ((symbol-function 'display-warning) (lambda (&rest _) nil)))
+        (mevedel-collaboration--on-frame 5 (list :t "prompt" :text "x"))
+        (should (eq 'observer-failure stopped))))))
+
+(mevedel-deftest mevedel-collaboration--on-control
+  (:doc "drops a guest on peer-left and waits for hello on peer-joined")
+  (let* ((guests (make-hash-table :test #'eql))
+         (room (list :guests guests))
+         (mevedel-collaboration--room room))
+    (mevedel-collaboration--on-control 'peer-joined 1)
+    (should (= 0 (hash-table-count guests)))
+    (puthash 1 (list :name "g") guests)
+    (mevedel-collaboration--on-control 'peer-left 1)
+    (should (= 0 (hash-table-count guests)))))
+
+(mevedel-deftest mevedel-collaboration--on-state
+  (:doc "clears the guest registry when the relay connection drops")
+  (let* ((guests (make-hash-table :test #'eql))
+         (room (list :guests guests))
+         (mevedel-collaboration--room room))
+    (puthash 1 (list :name "g") guests)
+    (mevedel-collaboration--on-state 'down)
+    (should (= 0 (hash-table-count guests)))
+    (mevedel-collaboration--on-state 'open)
+    (mevedel-collaboration--on-state 'stopped)))
+
+;;
+;;; Room lifecycle
+
+(mevedel-deftest mevedel-collaboration--start
+  (:doc "builds the room, both bearer links, and the TTL timer")
+  (with-temp-buffer
+    (let ((mevedel-collaboration-relay-url "ws://127.0.0.1:1")
+          (mevedel-collaboration-share-ttl 60)
+          (mevedel-collaboration--room nil)
+          (session (mevedel-session--create :name "share"))
+          dialed room)
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'mevedel-collaboration--transport-open)
+                       (lambda (url _key &rest _) (setq dialed url) 'transport))
+                      ((symbol-function 'mevedel-collaboration--canonical-records)
+                       (lambda (_) nil)))
+              (setq room (mevedel-collaboration--start session
+                                                        (current-buffer))))
+            (should (string-match
+                     "\\`ws://127\\.0\\.0\\.1:1/r/\\([A-Za-z0-9_-]+\\)\\?role=host\\'"
+                     dialed))
+            (let ((room-id (match-string 1 dialed)))
+              (should (equal room-id (plist-get room :room-id)))
+              (should (string-prefix-p
+                       (format "http://127.0.0.1:1/#%s." room-id)
+                       (plist-get room :link-view)))
+              (should (string-prefix-p
+                       (format "http://127.0.0.1:1/#%s." room-id)
+                       (plist-get room :link-full))))
+            ;; The full secret embeds the write token after the room key.
+            (let* ((view-secret (car (last (split-string
+                                            (plist-get room :link-view)
+                                            "\\."))))
+                   (full-secret (car (last (split-string
+                                            (plist-get room :link-full)
+                                            "\\.")))))
+              (should (equal (mevedel-collaboration--base64url-decode
+                              view-secret)
+                             (plist-get room :key)))
+              (should (equal (mevedel-collaboration--base64url-decode
+                              full-secret)
+                             (concat (plist-get room :key)
+                                     (plist-get room :write-token)))))
+            (should (timerp (plist-get room :ttl-timer)))
+            ;; Restarting for the same session reuses the room.
+            (should (eq room (mevedel-collaboration--start
+                              session (current-buffer)))))
+        (when-let ((timer (plist-get mevedel-collaboration--room :ttl-timer)))
+          (cancel-timer timer))
+        (setq mevedel-collaboration--room nil)
+        (remove-hook 'kill-emacs-hook
+                     #'mevedel-collaboration--stop-for-emacs)))))
+
+(mevedel-deftest mevedel-collaboration--second-session
+  (:doc "rejects a second session while one room is active")
+  (let ((mevedel-collaboration--room
+         (list :transport 'transport :session 'first :session-label "first")))
+    (should-error (mevedel-collaboration--start 'second (current-buffer))
+                  :type 'user-error)))
+
+(mevedel-deftest mevedel-collaboration--stop-internal
+  (:doc "says bye to guests, stops the transport, and cancels timers")
+  (with-temp-buffer
+    (let* ((guests (make-hash-table :test #'eql))
+           (cancelled nil)
+           (sent nil)
+           (transport-stopped nil)
+           (room (list :transport 'transport
+                       :data-buffer (current-buffer)
+                       :guests guests
+                       :publish-timer 'publish-timer
+                       :ttl-timer 'ttl-timer)))
+      (puthash 1 (list :name "g") guests)
+      (let ((mevedel-collaboration--room room))
+        (cl-letf (((symbol-function 'cancel-timer)
+                   (lambda (timer) (push timer cancelled)))
+                  ((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame)
+                     (push (cons peer frame) sent)
+                     t))
+                  ((symbol-function 'mevedel-collaboration--transport-stop)
+                   (lambda (_transport) (setq transport-stopped t))))
+          (mevedel-collaboration--stop-internal 'user-stop)))
+      (should-not mevedel-collaboration--room)
+      (should (equal '(publish-timer ttl-timer) (nreverse cancelled)))
+      (should (equal "bye" (plist-get (cdr (car sent)) :t)))
+      (should transport-stopped))))
+
+(mevedel-deftest mevedel-collaboration--lifecycle-hooks
+  (:doc "stops on data-buffer, session, TTL, and Emacs lifecycle teardown")
+  (with-temp-buffer
+    (let ((room (list :data-buffer (current-buffer)))
+          reasons)
+      (let ((mevedel-collaboration--room room))
+        (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
+                   (lambda (reason) (push reason reasons)))
+                  ((symbol-function 'message) (lambda (&rest _) nil)))
+          (mevedel-collaboration--stop-for-buffer)
+          (mevedel-collaboration--stop-for-session)
+          (mevedel-collaboration--stop-for-ttl)
+          (mevedel-collaboration--stop-for-emacs))
+        (should (equal '(emacs-exit ttl-expired data-buffer-killed
+                                    data-buffer-killed)
+                       reasons))))))
+
+(mevedel-deftest mevedel-collaboration--stop-for-session
+  (:doc "stops the room when its owning data buffer ends the session")
+  (with-temp-buffer
+    (let ((stopped nil)
+          (mevedel-collaboration--room
+           (list :data-buffer (current-buffer))))
+      (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
+                 (lambda (reason) (setq stopped reason))))
+        (mevedel-collaboration--stop-for-session)
+        (should (eq 'data-buffer-killed stopped))))))
 
 ;;
 ;;; Observer and command boundaries
@@ -758,21 +926,30 @@
       (should (eq 'observer-failure stopped)))))
 
 (mevedel-deftest mevedel-collaboration-status
-  (:doc "reports safe active and inactive status without exposing the token")
-  (let ((messages nil)
-        (mevedel-collaboration--room
-         (list :session-label "share"
-               :local-origin "http://127.0.0.1:1234"
-               :public-origin "https://collab.example"
-               :token "secret-token"
-               :guest (list :authenticated t))))
+  (:doc "reports safe active and inactive status without exposing secrets")
+  (let* ((messages nil)
+         (guests (make-hash-table :test #'eql))
+         (mevedel-collaboration--room
+          (list :session-label "share"
+                :transport 'transport
+                :key "secret-key-bytes"
+                :write-token "secret-token"
+                :link-full "http://example/#room.full-secret"
+                :link-view "http://example/#room.view-secret"
+                :guests guests)))
+    (puthash 1 (list :name "Phone" :writable t :ready t) guests)
+    (puthash 2 (list :name "Laptop" :writable nil :ready t) guests)
     (cl-letf (((symbol-function 'message)
                (lambda (format-string &rest args)
-                 (push (apply #'format format-string args) messages))))
+                 (push (apply #'format format-string args) messages)))
+              ((symbol-function 'mevedel-collaboration--transport-open-p)
+               (lambda (_) t)))
       (mevedel-collaboration-status)
       (should (string-match-p "share" (car messages)))
-      (should (string-match-p "viewer authenticated" (car messages)))
-      (should-not (string-match-p "secret-token" (car messages)))
+      (should (string-match-p "connected" (car messages)))
+      (should (string-match-p "Phone" (car messages)))
+      (should (string-match-p "Laptop (view)" (car messages)))
+      (should-not (string-match-p "secret" (car messages)))
       (setq mevedel-collaboration--room nil)
       (mevedel-collaboration-status)
       (should (string-match-p "inactive" (car messages))))))
@@ -783,7 +960,8 @@
     (insert "> first line\nsecond line\n> third line")
     (let ((before (buffer-string))
           (mevedel-collaboration--room
-           (list :session-label "draft" :local-origin "http://127.0.0.1:1")))
+           (list :session-label "draft" :transport nil
+                 :guests (make-hash-table :test #'eql))))
       (cl-letf (((symbol-function 'message) (lambda (&rest _) nil)))
         (mevedel-collaboration-status))
       (should (equal before (buffer-string))))))
@@ -792,7 +970,7 @@
   (:doc "stops an active room through the public command")
   (let ((stopped nil)
         (messages nil)
-        (mevedel-collaboration--room (list :server 'server)))
+        (mevedel-collaboration--room (list :transport 'transport)))
     (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
                (lambda (reason) (setq stopped reason)))
               ((symbol-function 'message)
@@ -805,55 +983,8 @@
       (mevedel-collaboration-stop)
       (should (string-match-p "not active" (car messages))))))
 
-(mevedel-deftest mevedel-collaboration--lifecycle-hooks
-  (:doc "stops on data-buffer, session, and Emacs lifecycle teardown")
-  (with-temp-buffer
-    (let ((room (list :data-buffer (current-buffer)))
-          reasons)
-      (let ((mevedel-collaboration--room room))
-        (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
-                   (lambda (reason) (push reason reasons))))
-          (mevedel-collaboration--stop-for-buffer)
-          (mevedel-collaboration--stop-for-session)
-          (mevedel-collaboration--stop-for-emacs))
-        (should (equal '(emacs-exit data-buffer-killed data-buffer-killed)
-                       reasons))))))
-
-(mevedel-deftest mevedel-collaboration--second-session
-  (:doc "rejects a second session while one room is active")
-  (let ((mevedel-collaboration--room
-         (list :server 'server :session 'first :session-label "first")))
-    (should-error (mevedel-collaboration--start 'second (current-buffer))
-                  :type 'user-error)))
-
-(mevedel-deftest mevedel-collaboration--ws-sentinel
-  (:doc "cancels detached guest timers without attempting a close frame")
-  (let* ((guest (list :auth-timer 'auth :pump-timer 'pump
-                      :snapshot-timer 'snapshot :receive-timer 'receive
-                      :close-timer 'close))
-         (cancelled nil)
-         (sent nil)
-         (room (list :guest guest)))
-    (let ((mevedel-collaboration--room room))
-      (cl-letf (((symbol-function 'process-get)
-                 (lambda (_process _property) guest))
-                ((symbol-function 'cancel-timer)
-                 (lambda (timer) (push timer cancelled)))
-                ((symbol-function 'mevedel-collaboration--send-close-frame)
-                 (lambda (&rest _) (setq sent t))))
-        (mevedel-collaboration--ws-sentinel 'detached nil)))
-    (should (equal '(auth close pump receive snapshot)
-                   (sort cancelled (lambda (a b)
-                                     (string< (symbol-name a)
-                                              (symbol-name b))))))
-    (should-not sent)
-    (should-not (plist-get guest :pump-timer))
-    (should-not (plist-get guest :snapshot-timer))
-    (should-not (plist-get guest :receive-timer))
-    (should-not (plist-get guest :close-timer))))
-
 (mevedel-deftest mevedel-collaboration-view
-  (:doc "discloses secrets, link scope, and tunnel plaintext before starting")
+  (:doc "discloses secrets and bearer-link scope before starting")
   (let ((session (mevedel-session--create :name "share"))
         (data-buffer (generate-new-buffer " *collaboration-disclosure*"))
         prompts)
@@ -868,33 +999,35 @@
                      (lambda (prompt)
                        (push prompt prompts)
                        nil)))
-            (let ((mevedel-collaboration-public-base-url nil))
-              (should-error (mevedel-collaboration-view) :type 'user-error))
-            (let ((mevedel-collaboration-public-base-url
-                   "https://collab.example"))
-              (should-error (mevedel-collaboration-view) :type 'user-error)))
-          (should (string-match-p "credentials or secrets" (cadr prompts)))
-          (should (string-match-p "local-only" (cadr prompts)))
-          (should (string-match-p "plaintext local hop" (car prompts))))
+            (should-error (mevedel-collaboration-view) :type 'user-error))
+          (should (string-match-p "credentials or secrets" (car prompts)))
+          (should (string-match-p "bearer" (car prompts))))
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer)))))
 
-(mevedel-deftest mevedel-collaboration--stop-for-session
-  (:doc "stops the room when its owning data buffer ends the session")
-  (with-temp-buffer
-    (let ((stopped nil)
-          (mevedel-collaboration--room
-           (list :data-buffer (current-buffer))))
-      (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
-                 (lambda (reason) (setq stopped reason))))
-        (mevedel-collaboration--stop-for-session)
-        (should (eq 'data-buffer-killed stopped))))))
+(mevedel-deftest mevedel-collaboration--report-links
+  (:doc "copies the full link and reports both without other secrets")
+  (let ((room (list :link-full "http://x/#room.full"
+                    :link-view "http://x/#room.view"
+                    :key "raw-key"))
+        killed messages)
+    (cl-letf (((symbol-function 'kill-new)
+               (lambda (text) (setq killed text)))
+              ((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (push (apply #'format format-string args) messages))))
+      (mevedel-collaboration--report-links room))
+    (should (equal "http://x/#room.full" killed))
+    (should (string-match-p "http://x/#room\\.full" (car messages)))
+    (should (string-match-p "http://x/#room\\.view" (car messages)))
+    (should-not (string-match-p "raw-key" (car messages)))))
 
 (mevedel-deftest mevedel-cmd--collab
   (:doc "does not return a bearer URL to slash dispatch")
   (cl-letf (((symbol-function 'mevedel-collaboration-view)
-             (lambda () "http://127.0.0.1:1/index.html#room.secret")))
-    (should-not (mevedel-cmd--collab "view"))))
+             (lambda () "http://127.0.0.1:1/#room.secret")))
+    (should-not (mevedel-cmd--collab "view"))
+    (should-not (mevedel-cmd--collab ""))))
 
 (mevedel-deftest mevedel-skills--dispatch-slash-command
   (:doc "dispatches /collab without copying its bearer URL into messages")
@@ -903,7 +1036,7 @@
           (messages nil))
       (insert "### /collab view")
       (cl-letf (((symbol-function 'mevedel-collaboration-view)
-                 (lambda () "http://127.0.0.1:1/index.html#room.secret"))
+                 (lambda () "http://127.0.0.1:1/#room.secret"))
                 ((symbol-function 'message)
                  (lambda (format-string &rest args)
                    (push (apply #'format format-string args) messages))))
@@ -917,19 +1050,5 @@
   (progn
     (should (mevedel-skills-local-command-active-request-p "collab" "status"))
     (should (mevedel-skills-local-command-active-request-p "collab" "stop"))))
-
-(mevedel-deftest mevedel-collaboration--read-asset
-  (:doc "serves packaged viewer assets and the security disclosure")
-  (progn
-    (dolist (name '("index.html" "viewer.css" "viewer.js"))
-      (let ((asset (mevedel-collaboration--read-asset name)))
-        (should (stringp asset))
-        (should-not (multibyte-string-p asset))
-        (should (= (string-bytes asset)
-                   (file-attribute-size
-                    (file-attributes
-                     (mevedel-collaboration--asset-path name)))))
-        (should (> (length asset) 0))))
-    (should (string-match-p "bearer" (mevedel-collaboration--read-asset "index.html")))))
 
 ;;; test-mevedel-collaboration.el ends here

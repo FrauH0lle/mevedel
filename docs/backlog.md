@@ -145,9 +145,32 @@ become implemented, obsolete, or unjustified.
   is still landing. Each remaining capability has a distinct authority,
   security, dependency, and acceptance surface and should not expand that PRD.
 - **Status check:** The execution-target PRD covers the core remote workspace
-  and target-side portability foundation. The first live-collaboration PRD
-  specifies a native view-only browser guest; relay, client-side encryption,
-  steering, Remote Mevedel, and managed provisioning remain later slices.
+  and target-side portability foundation. The relay-based live collaboration
+  slice (`.scratch/browser-relay/PRD.md`) has landed: content-blind Go relay
+  in `relay/`, end-to-end sealed frames, two-tier bearer links, guest
+  prompting/interrupting, and the directive filter. Remote Mevedel and
+  managed provisioning remain later slices.
+
+### Extend the browser-relay ui-request surface to Ask
+
+- **Source:** `.scratch/browser-relay/PRD.md`, implementation decision
+  "Remote interaction answering". The ui-request bridge landed for generic
+  request prompts (approve/deny/feedback), permission prompts (one-shot
+  allow-once/deny-once/feedback -- durable authority stays Emacs-only), and
+  plan approval (accept with host-configured axes; Worktree acceptance and
+  feedback drafts stay in Emacs), gated by
+  `mevedel-collaboration-remote-interactions`. Guest attribution is durable
+  via hidden `guest-prompt` transcript audit records.
+- **What's owed:** Ask questionnaires. The Ask prompt is a multi-question
+  wizard with per-question options and free-text answers; a faithful remote
+  presentation needs its own structured frame shape (questions, options,
+  current answers) rather than the flat body-plus-buttons card, and its
+  answers settle through the wizard's own submit path rather than
+  `mevedel--prompt--settle`.
+- **Also owed:** an Emacs-side rendering of the guest badge in the shared
+  session view (the attribution audit record is persisted and shown in the
+  browser and Pending Inputs cockpit, but the Emacs transcript does not yet
+  render a badge for it).
 - **Blast radius:** Execution-target identity, readiness and bootstrap,
   durability and leases, session discovery and control transfer, worktree
   workflows, live session projection, browser rendering, transport, and
