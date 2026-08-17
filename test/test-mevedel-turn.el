@@ -166,7 +166,7 @@
    :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "reports Stop and StopFailure while the request is still live"
+  :doc "reports Stop and StopFailure without coupling the hook to the ending request"
   (let* ((ws (mevedel-workspace-get-or-create
               'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
@@ -203,14 +203,17 @@
             (should (equal "completed"
                            (plist-get (cdr (cadr stop)) :status)))
             (should-not (plist-get (cdr (cadr stop)) :terminal-reason))
-            (should (eq request (nth 4 stop)))
+            ;; No request: the turn's own teardown drains the request's
+            ;; cancellers right after this hook, which would kill the
+            ;; hook's process before it settles.
+            (should-not (nth 4 stop))
             (should (eq 'StopFailure (car failure)))
             (should (equal "aborted"
                            (plist-get (cdr (cadr failure)) :status)))
             (should (equal "backend failed"
                            (plist-get (cdr (cadr failure))
                                       :terminal-reason)))
-            (should (eq request (nth 4 failure)))))
+            (should-not (nth 4 failure))))
       (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--turn-commit
