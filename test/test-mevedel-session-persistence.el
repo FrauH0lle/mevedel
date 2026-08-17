@@ -11361,29 +11361,80 @@ The result is a plist whose :tempdir owns every created file."
 ;;
 ;;; Phase 10: resume / list / save commands
 
-(mevedel-deftest mevedel-session-persistence--entry-action ()
+(mevedel-deftest mevedel-session-persistence--entry-authority ()
   ,test
   (test)
-  :doc "labels foreign and expired portable sessions without changing them"
+  :doc "names the action a portable session's lease state actually produces"
   (let* ((root (make-temp-file "mevedel-entry-action-" t))
          (workspace
           (test-mevedel-session-persistence--make-workspace root))
-         (entry '(:save-path "/session/")))
+         (entry '(:save-path "/session/" :summary (:session-id "s-1")))
+         (status nil))
     (unwind-protect
         (cl-letf
-            (((symbol-function 'mevedel-session-durability-lease-state)
-              (lambda (&rest _) 'foreign)))
+            (((symbol-function 'mevedel-session-durability-lease-status)
+              (lambda (&rest _) status))
+             ((symbol-function
+               'mevedel-session-persistence--entry-live-buffer)
+              (lambda (&rest _) nil)))
+          (setq status '(:state foreign :host "desktop"))
           (should
-           (equal "Join read-only"
-                  (mevedel-session-persistence--entry-action
+           (equal '(:action "Join" :detail "held by desktop")
+                  (mevedel-session-persistence--entry-authority
                    workspace entry)))
-          (cl-letf
-              (((symbol-function 'mevedel-session-durability-lease-state)
-                (lambda (&rest _) 'expired)))
-            (should
-             (equal "Take over"
-                    (mevedel-session-persistence--entry-action
-                     workspace entry)))))
+          (setq status '(:state expired :host "laptop"))
+          (should
+           (equal '(:action "Take over" :detail "lease expired, was laptop")
+                  (mevedel-session-persistence--entry-authority
+                   workspace entry)))
+          ;; An unheld lease resumes wherever its files live; the machine
+          ;; that last held it is context, not a different action.
+          (setq status (list :state 'available :host "laptop"))
+          (should
+           (equal '(:action "Resume" :detail "last held by laptop")
+                  (mevedel-session-persistence--entry-authority
+                   workspace entry)))
+          (setq status (list :state 'available :host (system-name)))
+          (should
+           (equal '(:action "Resume" :detail nil)
+                  (mevedel-session-persistence--entry-authority
+                   workspace entry)))
+          ;; A lease predating recorded hosts still resumes.
+          (setq status '(:state available :host nil))
+          (should
+           (equal "Resume"
+                  (mevedel-session-persistence--entry-action
+                   workspace entry))))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry)))
+
+  :doc "prefers switching to a session this Emacs already has open"
+  (let* ((root (make-temp-file "mevedel-entry-action-" t))
+         (workspace
+          (test-mevedel-session-persistence--make-workspace root))
+         (entry '(:save-path "/session/" :summary (:session-id "s-1")))
+         (live (generate-new-buffer " *mevedel-entry-live*")))
+    (unwind-protect
+        (cl-letf
+            (((symbol-function
+               'mevedel-session-persistence--entry-live-buffer)
+              (lambda (&rest _) live))
+             ((symbol-function 'mevedel-session-durability-lease-status)
+              (lambda (&rest _)
+                (ert-fail "An open session must not cost a lease read"))))
+          (should
+           (equal '(:action "Switch" :detail "already open here")
+                  (mevedel-session-persistence--entry-authority
+                   workspace entry)))
+          (with-current-buffer live
+            (setq-local mevedel-session--read-only-mode t))
+          (should
+           (equal '(:action "Switch" :detail "already open here, read-only")
+                  (mevedel-session-persistence--entry-authority
+                   workspace entry))))
+      (when (buffer-live-p live)
+        (kill-buffer live))
       (when (file-directory-p root)
         (delete-directory root t))
       (mevedel-workspace-clear-registry))))
@@ -11398,15 +11449,20 @@ The result is a plist whose :tempdir owns every created file."
          (entry '(:save-path "/session/" :summary (:session-name "main")))
          (choice "Start new session")
          (warned nil)
+         (authority '(:action "Join" :detail "held by desktop"))
          (restored (generate-new-buffer " *mevedel-entry-restored*")))
     (unwind-protect
         (cl-letf
-            (((symbol-function 'mevedel-session-persistence-list-sessions)
+            (((symbol-function 'mevedel-session-persistence-cleanup-expired)
+              #'ignore)
+             ((symbol-function
+               'mevedel-session-persistence--sweep-stale-locks)
+              #'ignore)
+             ((symbol-function 'mevedel-session-persistence-list-sessions)
               (lambda (&rest _) (list entry)))
-             ((symbol-function 'mevedel-session-persistence--entry-action)
-              (lambda (&rest _) "Join read-only"))
-             ((symbol-function 'mevedel-session-durability-lease-state)
-              (lambda (&rest _) 'owned))
+             ((symbol-function
+               'mevedel-session-persistence--entry-authority)
+              (lambda (&rest _) authority))
              ((symbol-function
                'mevedel-session-persistence--format-session-candidate)
               (lambda (&rest _) "main"))
@@ -11425,10 +11481,19 @@ The result is a plist whose :tempdir owns every created file."
            (eq 'new
                (mevedel-session-persistence-choose-entry workspace)))
           (should warned)
-          (setq choice "Join read-only — main")
+          (setq choice "Join       main")
           (should
            (eq restored
-               (mevedel-session-persistence-choose-entry workspace))))
+               (mevedel-session-persistence-choose-entry workspace)))
+          ;; Nothing holds an unheld session, so starting an independent one
+          ;; alongside it needs no warning.
+          (setq authority '(:action "Resume" :detail nil)
+                choice "Start new session"
+                warned nil)
+          (should
+           (eq 'new
+               (mevedel-session-persistence-choose-entry workspace)))
+          (should-not warned))
       (when (buffer-live-p restored)
         (kill-buffer restored))
       (when (file-directory-p root)
@@ -12870,7 +12935,7 @@ The result is a plist whose :tempdir owns every created file."
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
 
-  :doc "resume command displays the companion view buffer"
+  :doc "session chooser displays the companion view buffer"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
@@ -12881,6 +12946,7 @@ The result is a plist whose :tempdir owns every created file."
               (progn
                 (with-current-buffer buf
                   (org-mode)
+                  (setf (mevedel-session-preset-name session) 'test-preset)
                   (insert "hello from resume display test\n")
                   (mevedel-session-persistence-save session buf))
                 (test-mevedel-session-persistence--release-and-kill
@@ -12889,17 +12955,22 @@ The result is a plist whose :tempdir owns every created file."
                 (let ((default-directory tempdir))
                   (cl-letf (((symbol-function 'mevedel-workspace)
                              (lambda (&optional _arg) workspace))
+                            ((symbol-function
+                              'mevedel-session-persistence--ordered-display-collection)
+                             (lambda (values &rest _) values))
+                            ;; The first candidate starts a new session; the
+                            ;; second is the persisted one under test.
                             ((symbol-function 'completing-read)
-                             (lambda (_prompt _collection &optional
-                                               _predicate _require-match
-                                               _initial-input _hist def
-                                               _inherit-input-method)
-                               def))
+                             (lambda (_prompt collection &rest _)
+                               (cadr collection)))
                             ((symbol-function 'display-buffer)
                              (lambda (buffer &optional _action _frame)
                                (setq displayed buffer)
                                buffer)))
-                    (setq restored (mevedel-resume))))
+                    (mevedel)))
+                (should (buffer-live-p displayed))
+                (setq restored
+                      (buffer-local-value 'mevedel--data-buffer displayed))
                 (should (buffer-live-p restored))
                 (should (eq displayed
                             (buffer-local-value 'mevedel--view-buffer

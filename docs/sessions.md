@@ -348,6 +348,52 @@ the user's own work also needs. The remote default is much longer because that
 cost is real only there, and because a command in flight is also a window in
 which a foreign process sentinel can issue its own remote operation on the same
 connection — see [Transport reentrancy](#transport-reentrancy).
+
+While a transfer is in flight — a request outstanding on either side — both
+sides poll at `mevedel-view-control-transfer-active-poll-seconds` instead.
+The idle cadence is chosen for a connection nobody is waiting on, and a
+handoff composes three separate waits: the owner noticing the request, the
+grant deadline, and the requester noticing the release fence. Paying the idle
+interval for each turns a thirty-second handoff into minutes. Both sides
+return to the idle cadence as soon as the transfer settles, so the timer is
+re-armed per tick rather than fixed when the view is set up.
+
+An unanswered request is granted by the owner's own poll once
+`mevedel-session-transfer-prompt-timeout` passes, so control can be taken
+from a machine nobody is sitting at. That requires the owner's Emacs to be
+alive and polling; an owner that has died instead lets its lease expire, and
+the successor takes over through the expired-lease path. Grant is not
+release: the owner still drains, publishes, and releases, so a request
+against a busy owner sits in `quiescing` until the work it is waiting on
+finishes. Only the owner can say what that work is, so the owner's surface
+names the blocker and the requester's says just that it is waiting.
+
+`mevedel-take-control` is the one command for the requester's side. It routes
+on lease state: an unheld or expired lease is acquired directly, because
+there is no owner to ask and the lease layer's own confirmation is the whole
+negotiation; a held one is requested. `mevedel-release-control` is the
+reverse, saving and publishing before the lease goes and leaving the buffer
+read-only and following. Neither side is privileged: the machine that just
+handed control away is a non-owner like any other and can ask for it back.
+
+### Following a session owned elsewhere
+
+A buffer whose session is being written somewhere else — a joined client, or
+a host that has handed control away — advances through the owner's committed
+publications while `mevedel-session-follow-published` is non-nil, which is
+the default and is read per buffer so one session can opt out through
+`mevedel-toggle-follow`. `mevedel-refresh-session` performs the same read on
+demand.
+
+Updates are per publication, which means whole turns rather than streaming
+tokens: a non-owner sees what the owner has committed, never work in
+progress. The publication head in the lease record names the owner's current
+generation, so an owner that has published nothing new costs one lease
+observation and no artifact reads. When it has advanced, the follower reloads
+the committed sidecar and segment through the same path a granted transfer
+ends with, minus the lease and the write enable. A locally modified buffer is
+never advanced: those edits are exactly what the transfer path refuses to
+discard.
 Like lease renewal, that poll performs no target I/O while another TRAMP
 operation is in progress or while a publication owns the bounded window: Emacs
 runs timers and process filters wherever the main loop waits, including inside
@@ -416,13 +462,31 @@ its order is load-bearing: ending the request follows the autosave, and
 inverting them drops the turn's file-history checkpoints.
 
 Without a prefix, `M-x mevedel` lists persisted workspace sessions before
-creating a buffer. Each candidate is labeled `Resume`, `Join read-only`, or
-`Take over` from its current authority state, alongside `Start new session`.
+creating a buffer, after sweeping expired sessions and locks left behind by
+dead Emacsen. Each candidate carries the action its authority produces,
+alongside `Start new session`:
+
+| Lease state | Label | Outcome |
+|---|---|---|
+| already open in this Emacs | `Switch` | switch to the live buffer |
+| `available` | `Resume` | acquire the lease, writable |
+| `foreign` | `Join` | read-only, following the owner |
+| `expired` | `Take over` | confirmed takeover |
+
+The verb comes from the lease alone. Whether the workspace is local or
+reached over TRAMP is a property of the client's vantage point, not of the
+session: two machines see one session directory through different path
+spellings, and what decides the outcome is whether anybody is writing it.
+The row's annotation names the machine involved — `held by desktop`,
+`lease expired, was laptop` — from the lease record's `:host`, since the
+client id is opaque and per-process and can only answer "is this me, now".
+A lease written before hosts were recorded reads as unknown, not as an error.
+
 Joining an active writer opens only its last committed publication and exposes
 `Request control` in the view. Expired takeover still requires the ordinary
-explicit confirmation. Starting an independent session while another writer
-is active warns that both sessions share project files and points to a
-Worktree Fork for isolation.
+explicit confirmation. Starting an independent session while another session
+is held warns that both share project files and points to a Worktree Fork for
+isolation.
 
 A failure before the manifest-head compare-and-set retains the current and
 previously retained staged sources as one transient local recovery, surfaces
@@ -985,8 +1049,8 @@ still-live publishing generation back to active before reserving a new window.
 
 ### Auto-cleanup
 
-`mevedel-session-max-age-days` (default 30) deletes expired sessions on
-`mevedel-resume` and from `kill-emacs-hook`, including sessions whose sidecars
+`mevedel-session-max-age-days` (default 30) deletes expired sessions from the
+`mevedel` session chooser and from `kill-emacs-hook`, including sessions whose sidecars
 are obsolete, unreadable, or missing. Exit cleanup scans every workspace
 registered during the Emacs invocation before releasing live-session locks.
 Cleanup uses `:updated-at` when available, otherwise the sidecar or session
@@ -1008,6 +1072,10 @@ All in `mevedel-session-persistence.el`:
   target I/O, so the owner reclaims its own expired lease)
 - `mevedel-session-lease-renewal-seconds` (in
   `mevedel-session-durability.el`, default 30)
+- `mevedel-session-follow-published` (in
+  `mevedel-session-control-transfer.el`, default t)
+- `mevedel-view-control-transfer-active-poll-seconds` (in
+  `mevedel-view-interaction.el`, default 2)
 - `mevedel-session-publication-lease-seconds` (in
   `mevedel-session-durability.el`, default 3600)
 - `mevedel-view-input-history-size` (in `mevedel-view-history.el`,

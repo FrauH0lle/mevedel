@@ -116,8 +116,8 @@ become implemented, obsolete, or unjustified.
   are deliberately defined.
 - **Why deferred:** Resume remains safe by accepting only the current sidecar
   shape, and ordinary age-based cleanup can reclaim stale data independently.
-- **Status check:** `mevedel-resume` currently drops missing, unreadable,
-  unsupported, and obsolete sidecars without reporting them.
+- **Status check:** the `mevedel` session chooser currently drops missing,
+  unreadable, unsupported, and obsolete sidecars without reporting them.
 - **Blast radius:** Silent omission looks like data loss and can leave
   unbounded workspace state without giving users enough information to decide
   whether it is disposable.

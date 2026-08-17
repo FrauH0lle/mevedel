@@ -135,6 +135,17 @@ and the publication fails closed at the next ownership check."
                  (emacs-pid) (system-name))))
   "Opaque identity of this live mevedel client.")
 
+(defun mevedel-session-durability--client-host ()
+  "Return this client's bounded display host name.
+
+The value is written into durable lease records, so it is trimmed to the
+same shape a transfer label must satisfy: one line, no control characters,
+short enough that a picker row stays readable."
+  (let ((name (replace-regexp-in-string
+               "[[:cntrl:]]" "" (or (system-name) ""))))
+    (when (string-match-p "\\S-" name)
+      (truncate-string-to-width (string-trim name) 64))))
+
 (defvar mevedel-session-durability--disclosed-targets
   (make-hash-table :test #'equal)
   "Execution targets disclosed to the user in this Emacs process.")
@@ -333,9 +344,23 @@ UNSETTLED-MUTATION records target mutation whose outcome is not yet proved."
         :publication-head publication-head
         :unsettled-mutation (and unsettled-mutation t)
         :client-id mevedel-session-durability--client-id
+        ;; The client id is opaque and per-process: it answers "is this me,
+        ;; now" and nothing else.  One session directory is reached from
+        ;; several machines, so name the holder in terms the user shares.
+        :host (mevedel-session-durability--client-host)
         :renewed-at now
         :expires-at (+ now mevedel-session-lease-seconds)
         :buffer buffer-name))
+
+(defun mevedel-session-durability-lease-holder (session-dir)
+  "Return a display name for SESSION-DIR's current lease holder, or nil.
+
+Records written before hosts were recorded carry no name, which reads as
+unknown rather than as an error."
+  (let ((lease (mevedel-session-durability--lease-head
+                (mevedel-session-durability--lease-path session-dir))))
+    (when (and lease (mevedel-session-durability--valid-lease-p lease))
+      (plist-get lease :host))))
 
 (defun mevedel-session-durability--generation-path (directory generation)
   "Return GENERATION's immutable record path below DIRECTORY."
@@ -1127,33 +1152,48 @@ renewal also normalizes this client's live `publishing\=' generation back to
 
 (defun mevedel-session-durability-lease-state (session-dir)
   "Return this client's read-only lease state for portable SESSION-DIR."
+  (plist-get (mevedel-session-durability-lease-status session-dir) :state))
+
+(defun mevedel-session-durability-lease-status (session-dir)
+  "Return `(:state STATE :host HOST)' for portable SESSION-DIR.
+
+STATE is this client's view of the lease.  HOST names the machine holding
+it, or the last one to hold it when the lease is free, and is nil for a
+session whose lease predates recorded hosts or was never held at all.  Both
+answers come from one head read: a picker asks this per candidate, and on a
+remote target each extra read is a round trip the user waits through."
   (mevedel-session-durability--assert-no-pid-lock session-dir)
   (let ((lease
          (mevedel-session-durability--lease-head
           (mevedel-session-durability--lease-path session-dir))))
-    (cond
-     ((null lease) 'available)
-     ((not (mevedel-session-durability--valid-lease-p lease))
-      (error "Invalid portable session lease: %s" session-dir))
-     ((eq (plist-get lease :status) 'released)
-      (require 'mevedel-session-transfer)
-      (let ((fence
-             (mevedel-session-transfer-release-fence
-              (mevedel-session-durability--lease-path session-dir)
-              (plist-get lease :generation))))
-        (if (and fence
-                 (not (equal mevedel-session-durability--client-id
-                             (plist-get fence :requester-client-id))))
-            'foreign
-          'available)))
-     ((<= (plist-get lease :expires-at)
-          (mevedel-session-durability--target-time
-           (mevedel-session-durability--lease-path session-dir)))
-      'expired)
-     ((equal mevedel-session-durability--client-id
-             (plist-get lease :client-id))
-      'owned)
-     (t 'foreign))))
+    (list :state (mevedel-session-durability--lease-state-of session-dir lease)
+          :host (plist-get lease :host))))
+
+(defun mevedel-session-durability--lease-state-of (session-dir lease)
+  "Return this client's lease state for SESSION-DIR given its head LEASE."
+  (cond
+   ((null lease) 'available)
+   ((not (mevedel-session-durability--valid-lease-p lease))
+    (error "Invalid portable session lease: %s" session-dir))
+   ((eq (plist-get lease :status) 'released)
+    (require 'mevedel-session-transfer)
+    (let ((fence
+           (mevedel-session-transfer-release-fence
+            (mevedel-session-durability--lease-path session-dir)
+            (plist-get lease :generation))))
+      (if (and fence
+               (not (equal mevedel-session-durability--client-id
+                           (plist-get fence :requester-client-id))))
+          'foreign
+        'available)))
+   ((<= (plist-get lease :expires-at)
+        (mevedel-session-durability--target-time
+         (mevedel-session-durability--lease-path session-dir)))
+    'expired)
+   ((equal mevedel-session-durability--client-id
+           (plist-get lease :client-id))
+    'owned)
+   (t 'foreign)))
 
 (defun mevedel-session-durability-lease-release (session-dir &optional session)
   "Release this client's portable lease for SESSION-DIR.

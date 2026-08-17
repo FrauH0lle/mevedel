@@ -400,6 +400,41 @@
           (should (<= programs 3)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-session-durability-lease-status ()
+  ,test
+  (test)
+  :doc "answers state and holding host from one lease observation"
+  (let* ((root (make-temp-file "mevedel-lease-status-" t))
+         (session-dir (file-name-concat root "session"))
+         (session (test-mevedel-session-durability--local-session root))
+         (owner (make-string 64 ?a))
+         (other (make-string 64 ?b)))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should
+           (equal '(:state available :host nil)
+                  (mevedel-session-durability-lease-status session-dir)))
+          (let ((mevedel-session-durability--client-id owner))
+            (should
+             (mevedel-session-durability-lease-acquire
+              session-dir "owner" session))
+            (should
+             (equal (list :state 'owned :host (system-name))
+                    (mevedel-session-durability-lease-status session-dir))))
+          ;; The client id is per-process and opaque, so the host is the
+          ;; only part of a held lease another machine can name.
+          (let ((mevedel-session-durability--client-id other))
+            (should
+             (equal (list :state 'foreign :host (system-name))
+                    (mevedel-session-durability-lease-status session-dir))))
+          (let ((mevedel-session-durability--client-id owner))
+            (mevedel-session-durability-lease-release session-dir session)))
+      (mevedel-session-durability--cancel-renewal session)
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
 (mevedel-deftest mevedel-session-durability-lease-state ()
   ,test
   (test)

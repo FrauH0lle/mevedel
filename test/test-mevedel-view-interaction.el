@@ -22,6 +22,10 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-workspace)
 (require 'mevedel-session-persistence)
+;; The control commands require these lazily, which would redefine stubbed
+;; symbols in the middle of a test.
+(require 'mevedel-session-control-transfer)
+(require 'mevedel-session-durability)
 (require 'mevedel-tool-ui)
 (require 'mevedel-permission-queue)
 (require 'mevedel-goal)
@@ -1354,6 +1358,99 @@
                      'kept)))
         (should (equal kinds (mapcar #'car callbacks))))))))
 
+(defmacro test-mevedel-view-interaction--with-pair (session read-only &rest body)
+  "Run BODY in a view buffer paired to a data buffer holding SESSION.
+READ-ONLY sets the data buffer's read-only session mode."
+  (declare (indent 2))
+  `(let ((data (generate-new-buffer " *mevedel-pair-data*"))
+         (view (generate-new-buffer " *mevedel-pair-view*")))
+     (unwind-protect
+         (progn
+           (with-current-buffer data
+             (setq-local mevedel--session ,session)
+             (setq-local mevedel-session--read-only-mode ,read-only))
+           (with-current-buffer view
+             (setq-local mevedel--data-buffer data)
+             ,@body))
+       (dolist (buffer (list data view))
+         (when (buffer-live-p buffer)
+           (kill-buffer buffer))))))
+
+(mevedel-deftest mevedel-take-control ()
+  ,test
+  (test)
+  :doc "routes by lease state and refuses a session already writable here"
+  (let ((session (mevedel-session--create :name "control"))
+        (state 'available)
+        (acquired 0)
+        (requested 0))
+    (setf (mevedel-session-save-path session) "/session/")
+    (cl-letf (((symbol-function 'mevedel-session-durability-lease-state)
+               (lambda (&rest _) state))
+              ((symbol-function 'mevedel-session-control-transfer-acquire)
+               (lambda (&rest _) (cl-incf acquired)))
+              ((symbol-function 'mevedel-view-control-transfer-request)
+               (lambda (&rest _) (cl-incf requested)))
+              ((symbol-function 'mevedel-view--full-rerender) #'ignore)
+              ((symbol-function 'mevedel-view--interaction-rebuild)
+               #'ignore))
+      (test-mevedel-view-interaction--with-pair session t
+        ;; Nobody holds it, so there is no owner to ask.
+        (mevedel-take-control)
+        (should (= 1 acquired))
+        (should (= 0 requested))
+        ;; An expired lease negotiates through the lease layer's own
+        ;; takeover confirmation, not through a request nobody will answer.
+        (setq state 'expired)
+        (mevedel-take-control)
+        (should (= 2 acquired))
+        (should (= 0 requested))
+        (setq state 'foreign)
+        (mevedel-take-control)
+        (should (= 2 acquired))
+        (should (= 1 requested)))
+      (test-mevedel-view-interaction--with-pair session nil
+        (should-error (mevedel-take-control) :type 'user-error)))))
+
+(mevedel-deftest mevedel-release-control ()
+  ,test
+  (test)
+  :doc "saves and hands the lease back, and refuses while work is outstanding"
+  (let ((session (mevedel-session--create :name "control"))
+        (blocker "a live execution")
+        (saved 0)
+        (released 0)
+        (reason nil))
+    (setf (mevedel-session-save-path session) "/session/")
+    (cl-letf (((symbol-function
+                'mevedel-session-control-transfer-drain-blocker)
+               (lambda (&rest _) blocker))
+              ((symbol-function 'mevedel-session-persistence-save)
+               (lambda (&rest _) (cl-incf saved)))
+              ((symbol-function 'mevedel-session-durability-lease-release)
+               (lambda (&rest _) (cl-incf released)))
+              ((symbol-function
+                'mevedel-session-persistence--apply-read-only-mode)
+               (lambda (_buffer &optional text) (setq reason text)))
+              ((symbol-function 'mevedel-view--interaction-rebuild)
+               #'ignore))
+      (test-mevedel-view-interaction--with-pair session nil
+        ;; Handing the lease over mid-execution would strand work the next
+        ;; owner cannot see, which is why a granted transfer waits too.
+        (should-error (mevedel-release-control) :type 'user-error)
+        (should (= 0 released))
+        (setq blocker nil)
+        (mevedel-test--with-captured-messages nil
+          (mevedel-release-control))
+        (should (= 1 saved))
+        (should (= 1 released))
+        ;; Releasing on purpose is not the same event as finding someone
+        ;; else holding the lock.
+        (should (stringp reason))
+        (should-not (string-match-p "another host" reason)))
+      (test-mevedel-view-interaction--with-pair session t
+        (should-error (mevedel-release-control) :type 'user-error)))))
+
 (mevedel-deftest mevedel-view--control-transfer-poll-seconds ()
   ,test
   (test)
@@ -1384,7 +1481,23 @@
   :doc "falls back to the local cadence without a session"
   (let ((mevedel-view-control-transfer-poll-seconds 5)
         (mevedel-view-control-transfer-remote-poll-seconds 30))
-    (should (= 5 (mevedel-view--control-transfer-poll-seconds nil)))))
+    (should (= 5 (mevedel-view--control-transfer-poll-seconds nil))))
+
+  :doc "polls both sides of an in-flight transfer at the active cadence"
+  ;; The idle remote cadence exists to spare a connection nobody is waiting
+  ;; on.  A handoff composes three waits, so paying it there turns a thirty
+  ;; second transfer into minutes.
+  (let ((mevedel-view-control-transfer-poll-seconds 5)
+        (mevedel-view-control-transfer-remote-poll-seconds 30)
+        (mevedel-view-control-transfer-active-poll-seconds 2)
+        (session (mevedel-session--create
+                  :name "remote"
+                  :working-directory "/ssh:user@host:/srv/project/")))
+    (dolist (state '(requested quiescing))
+      (setf (mevedel-session-control-transfer session) (list :state state))
+      (should (= 2 (mevedel-view--control-transfer-poll-seconds session))))
+    (setf (mevedel-session-control-transfer session) '(:state acquired))
+    (should (= 30 (mevedel-view--control-transfer-poll-seconds session)))))
 
 (provide 'test-mevedel-view-interaction)
 ;;; test-mevedel-view-interaction.el ends here
