@@ -18,6 +18,8 @@
 (require 'mevedel-resource)
 (require 'mevedel-workspace)
 (require 'gptel-agent-tools)
+(require 'mevedel-execution-target)
+(require 'mevedel-agent-control)
 (require 'helpers
          (file-name-concat
           (file-name-directory

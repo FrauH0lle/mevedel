@@ -7,6 +7,7 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'mevedel-resource)
 (require 'helpers
          (file-name-concat
           (file-name-directory

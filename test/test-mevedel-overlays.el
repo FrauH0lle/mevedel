@@ -11,6 +11,7 @@
 (require 'mevedel-models)
 (require 'mevedel-skills-ui)
 (require 'mevedel-structs)
+(require 'mevedel-directive)
 (require 'helpers
          (file-name-concat
           (file-name-directory

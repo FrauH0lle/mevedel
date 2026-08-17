@@ -240,3 +240,22 @@ become implemented, obsolete, or unjustified.
 - **Status check:** Still one deftest covering the module.
 - **Blast radius:** Failures report under a misleading test name; pure
   helpers are only exercised through the full view integration path.
+
+## Two test files still depend on suite load order
+
+- **What's owed:** `test/test-mevedel-overlays-source.el`
+  (`mevedel-directive-activity-archive`) and
+  `test/test-mevedel-interaction-prompt.el` (`mevedel--prompt--settle` case 3)
+  pass in a full run and fail when their file is run alone, which is the
+  documented single-file workflow.
+- **Why deferred:** the overlays-source failure is an eager macro-expansion
+  cycle in product requires -- `mevedel-session-persistence` ->
+  `mevedel-agents` -> `mevedel-tool-registry` -> `mevedel-pipeline` ->
+  `mevedel-permissions` -> `mevedel-session-persistence` -- that only closes
+  when the modules load from source in that order. Breaking it means moving
+  requires in product code, which is a wider change than test hygiene.
+- **Status check:** every other test file was made to run standalone by
+  adding the `require` it was borrowing from a sibling file; these two are
+  not missing a require.
+- **Blast radius:** a developer running one file sees failures that are not
+  theirs, and learns to distrust single-file runs.

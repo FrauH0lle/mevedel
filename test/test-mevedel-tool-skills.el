@@ -8,6 +8,7 @@
 
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-skills)
+(require 'gptel-agent-tools)
 (require 'helpers
          (file-name-concat
           (file-name-directory

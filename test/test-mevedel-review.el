@@ -16,6 +16,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-render)
 (require 'mevedel-workspace)
+(require 'mevedel-execution-target)
 (require 'helpers
          (file-name-concat
           (file-name-directory

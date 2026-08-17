@@ -8,6 +8,7 @@
 (require 'cl-lib)
 (require 'gptel)
 (require 'gptel-transient)
+(require 'mevedel-session-persistence)
 (require 'helpers
          (file-name-concat
           (file-name-directory

@@ -11,6 +11,7 @@
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-structs)
 (require 'mevedel-view)
+(require 'mevedel-view-interaction)
 (require 'helpers
          (file-name-concat
           (file-name-directory

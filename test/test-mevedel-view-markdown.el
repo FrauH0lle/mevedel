@@ -4,6 +4,7 @@
 
 ;;; Code:
 
+(require 'mevedel-session-publication)
 (require 'helpers
          (file-name-concat
           (file-name-directory

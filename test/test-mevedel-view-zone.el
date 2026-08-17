@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'mevedel-view-composer)
 (require 'helpers
          (file-name-concat
           (file-name-directory
