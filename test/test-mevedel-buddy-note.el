@@ -121,6 +121,29 @@
                        (overlay-start
                         (car (mevedel-test--note-overlays buf))))))))
 
+  :doc "`mevedel-buddy-note-update' measures in the note's own buffer"
+  ;; A tool call runs in the buffer the review started from, which under a
+  ;; workspace-wide scope is often not the one holding the note.  Measuring
+  ;; the line in whatever buffer happens to be current lays the note out to
+  ;; the wrong width.
+  (let* ((long-line (concat "(" (make-string 40 ?x) ")"))
+         (target (mevedel-test--note-buffer
+                  "measure-target" (concat "one\n" long-line "\n")))
+         (elsewhere (mevedel-test--note-buffer "measure-elsewhere" "x\n"))
+         (note (string-join (make-list 20 "word") " "))
+         (mevedel-buddy-note-width 60)
+         (mevedel-buddy-note-current-line-style 'eol)
+         (mevedel-buddy-note-other-lines-style 'eol)
+         (id (mevedel-test--add-note target 2 note))
+         (from-own-buffer
+          (with-current-buffer target
+            (goto-char (point-min))
+            (mevedel-buddy-note-update id note)
+            (mevedel-test--note-text target))))
+    (with-current-buffer elsewhere
+      (mevedel-buddy-note-update id note))
+    (should (equal from-own-buffer (mevedel-test--note-text target))))
+
   :doc "`mevedel-buddy-note-update' reports an unknown id without signalling"
   (should (string-match-p "Unknown note" (mevedel-buddy-note-update 4242 "x"))))
 
