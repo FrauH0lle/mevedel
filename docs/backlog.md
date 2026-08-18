@@ -157,8 +157,10 @@ become implemented, obsolete, or unjustified.
   "Remote interaction answering". The full surface has landed: generic
   request prompts (approve/deny/feedback), permission prompts (one-shot
   allow-once/deny-once/feedback -- durable authority stays Emacs-only),
-  plan approval (accept with host-configured axes; Worktree acceptance and
-  feedback drafts stay in Emacs), ApplyPatch review (apply the staged
+  plan approval (accept with host-configured axes and remote feedback
+  that queues the templated revision request; Worktree proposals offer
+  feedback only, and axis editing stays in Emacs), ApplyPatch review
+  (apply the staged
   selection or request a revision with whole-patch feedback), and Ask
   questionnaires (the frame carries the questions, options, and current
   answers structurally; the guest answers atomically and the host adopts
@@ -166,11 +168,34 @@ become implemented, obsolete, or unjustified.
   so guests stay in sync). Gated by
   `mevedel-collaboration-remote-interactions`. Guest attribution is
   durable via hidden `guest-prompt` transcript audit records and renders
-  as the turn heading in both surfaces.
+  as the turn heading in both surfaces. Guests can attach photos to
+  prompts (downscaled client-side, saved under the session media
+  directory, @file-mentioned with read grants), and guest input is
+  skill-inert: `$skill` tokens stay literal text at submission.
 - **Blast radius:** Execution-target identity, readiness and bootstrap,
   durability and leases, session discovery and control transfer, worktree
   workflows, live session projection, browser rendering, transport, and
   bearer-capability security.
+
+### Revisit the browser viewer
+
+- **Source:** Post-review discussion on 2026-08-18; collects the viewer
+  capabilities worth a deliberate second pass now that daily phone usage
+  is real.
+- **Skills and slash commands for guests.** Guest input is deliberately
+  skill-inert today (`$skill` tokens stay literal; slash commands are
+  never parsed). If guests should invoke skills or a curated slash
+  subset, that wants an explicit design: which skills, whose authority,
+  how the viewer discovers the roster — not a lifted ride-along.
+- **General file upload, not only photos.** The attach button accepts
+  `image/*` and re-encodes through canvas. Logs, patches, CSVs, and
+  PDFs would ride the same @file-mention pipeline but need a type
+  allowlist, a size budget without canvas downscaling, and a decision on
+  which types mention as text versus media.
+- Candidates observed in use, for the same pass: guest-visible queue
+  state (what is pending beyond the flash notice), directive-scoped
+  guest prompts (send within the active filter), and a remote
+  questionnaire cancel with a confirm step.
 
 ### Authenticate room creation on the collaboration relay
 
@@ -186,19 +211,6 @@ become implemented, obsolete, or unjustified.
   authority is the bearer link.
 - **Why deferred:** Single-operator deployment behind an unpublicized
   domain; no data exposure either way.
-
-### Fixture-test the remote ApplyPatch closures
-
-- **Source:** Remote patch review landing on 2026-08-17; flagged at the
-  time as the one coverage hole.
-- **What's owed:** The review overlay's remote options -- Apply (submit
-  the staged selection) and whole-patch feedback (set proposal
-  `:feedback`, deselect all, submit as revision) -- run real proposal
-  machinery but have no dedicated ERT fixture. Build a minimal parsed
-  proposal, attach the overlay, drive both closures, and assert the tool
-  result shapes.
-- **Why deferred:** The paths are compile-checked, exercised live, and
-  share `mevedel-patch-review--submit` with the Emacs command.
 
 ### Collaboration limitations accepted at landing
 

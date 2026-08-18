@@ -20,6 +20,9 @@
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--strip-hook-audit-blocks
                   "mevedel-transcript-audit" (text))
+
+;; `mevedel-utilities'
+(declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
 (declare-function mevedel-transcript-audit-guest-prompts
                   "mevedel-transcript-audit" ())
 (declare-function mevedel-transcript-buffer-directive-ranges
@@ -42,6 +45,9 @@ The wire bound applies to encoded JSON, where escaping expands one byte at
 most six-fold, so bounding the raw text keeps every record sendable without
 measuring an encoding that would only be rejected later.")
 (defconst mevedel-collaboration--max-tool-result-bytes 50000)
+(defconst mevedel-collaboration--tool-error-regexp
+  "\\(?:Error:\\|blocked by\\|<tool_call_error>\\)"
+  "Result text marking a settled tool call as failed.")
 
 
 ;;
@@ -172,6 +178,19 @@ query -- so a collapsed tool row says what the call did."
       (mevedel-collaboration--truncate-bytes
        (car (split-string value "\n")) 200))))
 
+(defun mevedel-collaboration--tool-extras (name args)
+  "Return the optional :detail and :diff record fields for NAME with ARGS.
+Shared by the canonical tool record and the live pending record so both
+carry the same operand summary and, for ApplyPatch, the authored patch."
+  (append
+   (when-let ((detail (mevedel-collaboration--tool-detail args)))
+     (list :detail detail))
+   (when-let (((equal (format "%s" name) "ApplyPatch"))
+              (patch (plist-get args :patch))
+              ((stringp patch)))
+     (list :diff (mevedel-collaboration--truncate-bytes
+                  patch mevedel-collaboration--max-tool-result-bytes)))))
+
 (defun mevedel-collaboration--tool-record (data-buffer segment &optional occurrence)
   "Return an allowlisted tool record for SEGMENT in DATA-BUFFER."
   (with-current-buffer data-buffer
@@ -185,24 +204,20 @@ query -- so a collapsed tool row says what the call did."
            (raw (buffer-substring-no-properties start end)))
       (unless (stringp name)
         (error "Canonical tool projection failed"))
+      (require 'mevedel-utilities)
       (let* ((id (if tool-use-id
                      (format "tool-%s" tool-use-id)
                    (mevedel-collaboration--stable-record-id
                     "tool" raw occurrence)))
-             ;; Trim only newlines on the left: leading spaces are
-             ;; significant, e.g. the right-aligned line numbers Read
-             ;; prepends to its first line.
-             (result (string-trim (if (stringp result) result "")
-                                  "[\n\r]+"))
+             (result (mevedel--trim-tool-result
+                      (if (stringp result) result "")))
              (status (if (string-match-p
-                          "\\(?:Error:\\|blocked by\\|<tool_call_error>\\)"
-                          result)
+                          mevedel-collaboration--tool-error-regexp result)
                          "failed"
                        "completed"))
              (result (mevedel-collaboration--truncate-bytes
                       result mevedel-collaboration--max-tool-result-bytes))
-             (truncated (string-suffix-p "\n[truncated]" result))
-             (args (plist-get parsed :args)))
+             (truncated (string-suffix-p "\n[truncated]" result)))
         (apply #'mevedel-collaboration--record
                id "tool"
                :revision 0
@@ -212,18 +227,8 @@ query -- so a collapsed tool row says what the call did."
                :result result
                :truncated (and truncated t)
                :identity-fixed (and tool-use-id t)
-               (append
-                (when-let ((detail (mevedel-collaboration--tool-detail
-                                    args)))
-                  (list :detail detail))
-                ;; The applied patch renders as a diff pane in the viewer;
-                ;; the result text is only the application summary.
-                (when-let (((equal (format "%s" name) "ApplyPatch"))
-                           (patch (plist-get args :patch))
-                           ((stringp patch)))
-                  (list :diff (mevedel-collaboration--truncate-bytes
-                               patch
-                               mevedel-collaboration--max-tool-result-bytes)))))))))
+               (mevedel-collaboration--tool-extras
+                name (plist-get parsed :args)))))))
 
 (defun mevedel-collaboration--directive-at (ranges position)
   "Return the directive id owning POSITION per directive RANGES, or nil."
@@ -353,13 +358,11 @@ attributed to a collaboration guest carry that guest's name."
 
 (defun mevedel-collaboration--tool-result-fields (result)
   "Return status, bounded RESULT, and truncation for tool RESULT."
+  (require 'mevedel-utilities)
   (let* ((result (if (stringp result) result (format "%s" (or result ""))))
-         ;; Left-trim newlines only: leading spaces can be significant
-         ;; alignment, e.g. Read's right-aligned line numbers.
-         (result (string-trim result "[\n\r]+"))
+         (result (mevedel--trim-tool-result result))
          (status (if (string-match-p
-                      "\\(?:Error:\\|blocked by\\|<tool_call_error>\\)"
-                      result)
+                      mevedel-collaboration--tool-error-regexp result)
                      "failed"
                    "completed"))
          (bounded (mevedel-collaboration--truncate-bytes

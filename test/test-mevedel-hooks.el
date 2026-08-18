@@ -2204,6 +2204,48 @@
             (should-not hook-result)))
       (delete-directory root t)))
 
+  :doc "announces completion after the slow notice, and only then"
+  (let* ((root (make-temp-file "mevedel-hooks-slow-echo" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hooks-slow-threshold 1)
+         (mevedel-hook-rules
+          '((Stop ((:matcher "*"
+                    :hooks ((:type elisp :function ignore)))))))
+         surfaced slow-callback handler-finish)
+    (unwind-protect
+        (cl-letf (((symbol-function 'run-at-time)
+                   (lambda (_seconds _repeat function &rest args)
+                     (setq slow-callback
+                           (lambda () (apply function args)))
+                     nil))
+                  ((symbol-function 'mevedel-hooks--run-handlers)
+                   (lambda (_event _handlers _payload _session _request
+                            _context callback _dispatch-buffer)
+                     (setq handler-finish callback)))
+                  ((symbol-function 'mevedel-hooks--surface)
+                   (lambda (text) (push text surfaced))))
+          ;; The slow notice is a bare echo; completion must overwrite it
+          ;; so a lingering notice reliably means the hook never settled.
+          (mevedel-hooks-run-event
+           'Stop '(:status "completed") #'ignore session)
+          (funcall slow-callback)
+          (should (cl-some (lambda (text)
+                             (string-match-p "still running" text))
+                           surfaced))
+          (funcall handler-finish nil)
+          (should (cl-some (lambda (text)
+                             (string-match-p "hook finished" text))
+                           surfaced))
+          ;; A hook that settles before the threshold stays silent.
+          (setq surfaced nil slow-callback nil handler-finish nil)
+          (mevedel-hooks-run-event
+           'Stop '(:status "completed") #'ignore session)
+          (funcall handler-finish nil)
+          (should-not (cl-some (lambda (text)
+                                 (string-match-p "hook finished" text))
+                               surfaced)))
+      (delete-directory root t)))
+
   :doc "normal events without handlers create neither telemetry nor progress"
   (let* ((root (make-temp-file "mevedel-hooks-no-progress" t))
          (session (mevedel-hooks-test--session root))

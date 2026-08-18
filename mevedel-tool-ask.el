@@ -352,13 +352,14 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
              ;; The remote surface gets the whole questionnaire and
              ;; answers it atomically; announcing on every screen render
              ;; keeps guests in sync with host navigation and edits.
-             (overlay-put overlay 'mevedel--remote-body
-                          (format "Ask · %d question%s"
-                                  (length questions-list)
-                                  (if (= 1 (length questions-list)) "" "s")))
-             (overlay-put overlay 'mevedel--remote-questions
-                          #'remote-questions)
-             (overlay-put overlay 'mevedel--remote-answer #'remote-answer)
+             (overlay-put overlay 'mevedel--remote
+                          (list :body
+                                (format "Ask · %d question%s"
+                                        (length questions-list)
+                                        (if (= 1 (length questions-list))
+                                            "" "s"))
+                                :questions #'remote-questions
+                                :answer #'remote-answer))
              (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
              (mevedel--prompt--register-canceller source-buffer overlay)
              (mevedel--prompt-announce overlay)))

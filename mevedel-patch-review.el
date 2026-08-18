@@ -631,21 +631,24 @@ DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
       ;; The remote surface gets the two whole-call decisions: apply the
       ;; staged selection, or request a revision with whole-patch
       ;; feedback.  Hunk editing and per-hunk feedback stay in Emacs.
-      (overlay-put overlay 'mevedel--remote-body
-                   (let ((patch (or (plist-get proposal :patch) "")))
-                     (if (> (length patch) 60000)
-                         (concat (substring patch 0 60000) "\n[truncated]")
-                       patch)))
-      (overlay-put overlay 'mevedel--remote-body-kind "diff")
-      (overlay-put overlay 'mevedel--remote-options
-                   (list (cons (lambda ()
-                                 (mevedel-patch-review--submit proposal))
-                               "Apply patch")))
-      (overlay-put overlay 'mevedel--remote-feedback
-                   (lambda (text)
-                     (plist-put proposal :feedback text)
-                     (mevedel-patch-review--deselect-all proposal)
-                     (mevedel-patch-review--submit proposal)))
+      (overlay-put overlay 'mevedel--remote
+                   (list :body
+                         (let ((patch (or (plist-get proposal :patch) "")))
+                           (if (> (length patch) 60000)
+                               (concat (substring patch 0 60000)
+                                       "\n[truncated]")
+                             patch))
+                         :body-kind "diff"
+                         :options
+                         (list (cons (lambda ()
+                                       (mevedel-patch-review--submit
+                                        proposal))
+                                     "Apply patch"))
+                         :feedback
+                         (lambda (text)
+                           (plist-put proposal :feedback text)
+                           (mevedel-patch-review--deselect-all proposal)
+                           (mevedel-patch-review--submit proposal))))
       (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
       (mevedel--prompt--register-canceller data-buffer overlay)
       (mevedel--prompt-announce overlay)))

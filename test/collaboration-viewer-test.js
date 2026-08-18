@@ -121,6 +121,17 @@ async function waitFor(predicate, what) {
 }
 
 async function main() {
+  // Shared known-answer vector, mirrored by the ERT crypto suite: 32
+  // zero-byte key, 12 zero-byte nonce, 16 zero-byte plaintext must seal to
+  // this exact ciphertext||tag, pinning WebCrypto and gnutls to each other.
+  const katKey = await crypto.subtle.importKey(
+    'raw', new Uint8Array(32), 'AES-GCM', false, ['encrypt']);
+  const katOut = new Uint8Array(await crypto.subtle.encrypt(
+    {name: 'AES-GCM', iv: new Uint8Array(12)}, katKey, new Uint8Array(16)));
+  assert.equal(Buffer.from(katOut).toString('hex'),
+               'cea7403d4d606b6e074ec5d3baf39d18'
+               + 'd0d1c8a799996bf0265b98b5d48ab919');
+
   const keyBytes = crypto.getRandomValues(new Uint8Array(32));
   const writeToken = crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false,
