@@ -27,12 +27,11 @@
 
 ;;; Commentary:
 
-;; Main entry point for mevedel.  Provides the `mevedel' and
-;; `mevedel-tutoring' commands, installation/uninstallation of hooks
-;; and presets, and the directive-processing commands
-;; (`mevedel-implement-directive', `mevedel-discuss-directive',
-;; `mevedel-request-directive-changes', `mevedel-retry-directive', and
-;; `mevedel-tutor-directive').
+;; Main entry point for mevedel.  Provides the `mevedel' command,
+;; installation/uninstallation of hooks and presets, and the
+;; directive-processing commands (`mevedel-implement-directive',
+;; `mevedel-discuss-directive', `mevedel-request-directive-changes',
+;; and `mevedel-retry-directive').
 ;;
 ;; Acts as the top-level loader that `require's every mevedel module.
 ;; Downstream consumers need only `(require 'mevedel)'.
@@ -150,8 +149,6 @@
                   "mevedel-chat"
                   (workspace working-directory prompt-session
                              &optional directory-scoped))
-(declare-function mevedel--tutor-buffer
-                  "mevedel-chat" (&optional create workspace))
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-compact'
@@ -354,26 +351,6 @@ CALLBACK receives the ordinary directive terminal arguments."
                (mevedel--instructions-at (point) 'directive) t)
               'directive)))
       (mevedel--implement-discussion directive callback)
-    (user-error "No directive found at point")))
-
-;;;###autoload
-(defun mevedel-tutor-directive (&optional callback)
-  "Guide user to solve directive through hints (no solutions).
-
-If CALLBACK is provided, it will be called when the tutoring process
-completes.  The callback will receive two arguments: ERROR (nil on
-success, a string error description on failure, or the symbol \\='abort
-if the request was aborted) and FSM (the gptel-fsm object for the
-request)."
-  (interactive)
-  (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                      (mevedel--instructions-at (point) 'directive)
-                                                      t)
-                                                     'directive)))
-      (progn
-        (overlay-put directive 'mevedel-directive-action 'tutor)
-        (mevedel--process-directive directive (alist-get 'tutor mevedel-action-preset-alist)
-                                    #'mevedel--discuss-directive-prompt callback))
     (user-error "No directive found at point")))
 
 ;;;###autoload
@@ -678,18 +655,6 @@ always prompt for the session name."
          (working-directory
           (mevedel--normalize-session-directory directory workspace)))
     (mevedel--start-chat workspace working-directory arg t)))
-
-;;;###autoload
-(defun mevedel-tutoring ()
-  "Start a tutoring chat session in the current project."
-  (interactive)
-  (let ((chat-buffer (mevedel--tutor-buffer t)))
-    (with-current-buffer chat-buffer
-      (mevedel-preset-apply 'mevedel-tutor))
-    ;; Display the view buffer, not the data buffer
-    (display-buffer (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
-                        chat-buffer)
-                    gptel-display-buffer-action)))
 
 ;;
 ;;; Installation

@@ -162,8 +162,7 @@ References are pieces of context selected from normal buffers. Directives are
 prompts that can be processed with one of mevedel's presets. A directive gathers
 context from matching references, linked references, and reference commentary;
 then the selected action decides whether the model may edit files, only discuss,
-request focused changes to existing work, retry a failure, or tutor
-Socratically.
+request focused changes to existing work, or retry a failure.
 
 This means there are two complementary workflows:
 
@@ -247,7 +246,6 @@ memory roots, the configured plans directory, and manually configured roots.
 | `mevedel-delete-all-instructions` | Delete all mevedel instructions across all buffers.                   |
 | `mevedel`                         | Start or switch to a chat session; prefix arg prompts for directory/session. |
 | `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
-| `mevedel-tutoring`                | Start a tutoring chat session in the current workspace.               |
 | `mevedel-init`                    | Bootstrap or refresh project instruction files.                       |
 | `mevedel-inspect-effective-prompt` | Inspect the live prompt components, exact prompt, and effective tools. |
 | `mevedel-process-directives`      | Batch initial implementations in source order (region, point, or buffer). |
@@ -458,7 +456,6 @@ Currently, linking is only relevant for references.
 | `mevedel-implement-discussion-directive` | Implement using the complete local discussion as additional context.  |
 | `mevedel-request-directive-changes` | Open multiline feedback after a successful implementation.                  |
 | `mevedel-retry-directive`          | Retry a failed or aborted implementation with optional guidance.             |
-| `mevedel-tutor-directive`          | Tutoring mode that guides without providing direct solutions (experimental). |
 | `mevedel-preview-directive-prompt` | Preview directive prompt at the current point.                               |
 | `mevedel-open-directive-activity`  | Open the current directive's read-only durable inspector.                    |
 | `mevedel-list-directives`          | Choose a workspace directive for inspection or further action.               |
@@ -479,8 +476,7 @@ directive prompt:
 
 [directive-preview.webm](https://github.com/user-attachments/assets/72c77cfa-5a6d-45a1-9fc4-ee6b1ad66034)
 
-The `mevedel-implement-directive` and `mevedel-tutor-directive` commands
-process the directive directly.
+The `mevedel-implement-directive` command processes the directive directly.
 `mevedel-discuss-directive` starts a complete read-only directive turn in the
 bound session's shared view. Continue discussion and other follow-ups switch the
 shared composer into an explicit directive scope with a separate draft and
@@ -502,9 +498,6 @@ implementation attempt is skipped. The batch validates each current source
 context when its turn arrives, never infers Request changes or Retry, and stops
 after the first failure or abort. Nested directives are submitted only as part
 of their parent.
-
-Note: The tutoring preset is experimental and uses a Socratic questioning
-approach to guide learning rather than providing direct solutions.
 
 Commands are also available via overlay actions. For example, you can preview
 the patch before applying it or running an `ediff` session with the patch and
@@ -573,8 +566,6 @@ evaluation, confirmed in `ask` and `edits`, automatic in `full-auto`; supports
 
 **Web:** `WebSearch`, `WebFetch`, `YouTube` (via
 [gptel-agent](https://github.com/karthink/gptel-agent))
-
-**Tutor-specific:** `GetHints`, `RecordHint` (hint history for tutoring)
 
 **Skills:** `Skill` (invoke an active skill by name from the model side)
 
@@ -1115,7 +1106,7 @@ that can be checked into version control. `AGENTS.local.md` is loaded after
 `AGENTS.md` in each directory for private checkout-specific guidance.
 
 When a prompt profile selects memory, the first 200 lines of each configured
-memory index are included. Main, tutor, and worker profiles select it;
+memory index are included. Main and worker profiles select it;
 Explorer, verifier, reviewer, guardian, and context-summary requests do not. The default
 memory roots are `.mevedel/memory/`,
 `.agents/memory/`, `~/.mevedel/memory/`, and `~/.agents/memory/`.
@@ -1200,8 +1191,6 @@ The maintained detail docs live in [`docs/`](docs/):
 - [`docs/compaction.md`](docs/compaction.md) — manual and automatic compaction,
   summaries, and segment rotation.
 - [`docs/memory.md`](docs/memory.md) — memory layout and durable-memory rules.
-- [`docs/tutor.md`](docs/tutor.md) — Socratic tutoring workflow and hint
-  persistence.
 - [`docs/reminders.md`](docs/reminders.md) — system-reminder injection.
 - [`docs/backlog.md`](docs/backlog.md) — project notes,
   todos, feature ideas, fixes, and deferred work.

@@ -60,7 +60,7 @@ Initial built-in agent policy: worker and explorer should receive `Skill` and
 roster. Discovery-only skill access is avoided because an agent that cannot
 invoke skills has no useful reason to inspect them.
 
-Main presets should expose skill tools for `discuss`, `implement`, and `tutor`.
+Main presets should expose skill tools for `discuss` and `implement`.
 The `revise` preset can stay narrow; avoid special-casing it unless existing
 tool inheritance already exposes skill tools.
 
@@ -152,3 +152,10 @@ attachment-style invocation treats even a `context: fork` skill as a non-forking
 instruction. Only a leading fork command dispatches a child. Unknown `/foo`
 remains a strict unknown-command error
 because slash is reserved for local commands.
+
+Amendment: Tutor mode was removed. It required the user to summon it before
+knowing they needed teaching, then refused to answer what was asked, so the
+chat buffer answered the same questions better without it. Its pedagogical
+angle now reaches the user through Buddy notes, which arrive unasked and cost
+nothing to ignore. Every tutor profile, component, preset, and tool named above
+is gone; the surrounding mechanism is unchanged.

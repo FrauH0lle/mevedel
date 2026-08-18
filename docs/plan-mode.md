@@ -23,7 +23,7 @@ from its overlay or inspector Settings menu. Nested directive presentations use
 their owner's setting. The setting is off by default and does not enter sticky
 session Plan mode. Implement, Implement this, Request changes, and Retry first
 send the exact eventual implementation request through a read-only planning
-turn. Discuss and Tutor are unchanged. Batch processing remains sequential: an
+turn. Discuss is unchanged. Batch processing remains sequential: an
 enabled directive reaches approval and implementation before the next item
 starts.
 
@@ -48,7 +48,7 @@ as a `SKILLS:` label line, and attaches to direct implementation-type prompts
 (Implement, Implement this, Request changes, Retry) with the accepted-plan
 handoff semantics: argument-free instruction mentions stored by canonical
 `SKILL.md` source that ignore skill model/effort, agent, hooks, and permission
-policy. Discuss and Tutor never see the attachments. Skill sources are
+policy. Discuss never sees the attachments. Skill sources are
 revalidated at every dispatch; a missing, disabled, malformed, or no longer
 user-invocable selection starts no request and leaves the directive retryable,
 and batch processing skips that directive and continues.

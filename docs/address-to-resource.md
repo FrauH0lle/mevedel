@@ -31,7 +31,7 @@ resource URI.
 
 ## Prompt availability
 
-The main, tutor, and built-in agent prompts render a compact request-time
+The main and built-in agent prompts render a compact request-time
 roster. A valid request session advertises `local://` and `artifact://` as
 normal session capabilities: local state is materialized on its first write,
 and artifact output may arise during the request, so neither family requires

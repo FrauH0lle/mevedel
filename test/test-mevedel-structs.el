@@ -561,7 +561,7 @@
   (session-name ws-name expected)
   "main"     "myproject" "*mevedel:main@myproject*"
   "refactor" "myproject" "*mevedel:refactor@myproject*"
-  "tutor"    "myproject" "*mevedel:tutor@myproject*")
+  "review"   "myproject" "*mevedel:review@myproject*")
 
 
 ;;

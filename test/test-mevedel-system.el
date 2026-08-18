@@ -35,9 +35,8 @@
 ;;; Built-in profiles
 
 (mevedel-deftest mevedel-system-build-prompt/built-ins
-  (:doc "built-in profiles select main and tutor roles without revision")
-  (let ((main (mevedel-system-build-prompt 'main))
-        (tutor (mevedel-system-build-prompt 'tutor)))
+  (:doc "built-in profiles select the main role without revision")
+  (let ((main (mevedel-system-build-prompt 'main)))
     (should (string-match-p "Task execution protocol" main))
     (should (string-match-p "Tone and style" main))
     (should (string-match-p "Tool orchestration" main))
@@ -47,7 +46,7 @@
     (should (string-match-p "final permission denial" main))
     (should (string-match-p "automatic compaction" main))
     (should (string-match-p "VERDICT: PASS" main))
-    (dolist (prompt (list main tutor))
+    (dolist (prompt (list main))
       (should (string-match-p "Resource addresses" prompt))
       (should (string-match-p "Read`, `Glob`, `Grep" prompt))
       (should (string-match-p "permitted `ApplyPatch`" prompt))
@@ -67,9 +66,6 @@
                         "history://" "memory://" "mcp://"))
         (should-not (string-match-p (regexp-quote scheme) prompt)))
       (should-not (string-match-p "omp://" prompt)))
-    (should (string-match-p "NEVER PROVIDE SOLUTIONS" tutor))
-    (should (string-match-p "Tutoring style" tutor))
-    (should-not (string-match-p "Tone and style" tutor))
     (should-error (mevedel-system-build-prompt 'revise))))
 
 

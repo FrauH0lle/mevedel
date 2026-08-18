@@ -346,7 +346,7 @@ Returns the first existing path, or the project path if neither exists."
 
 Each chat buffer has exactly one session. Multiple sessions can share a
 workspace."
-  name              ; string: "main", "refactor", "tutor", etc.
+  name              ; string: "main", "refactor", etc.
   workspace         ; mevedel-workspace struct (shared by reference)
   (execution-target nil :read-only t) ; immutable filesystem/process authority
   authority-mode    ; `portable' for project sessions, `pid-lock' for file sessions

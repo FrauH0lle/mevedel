@@ -34,7 +34,6 @@
 (require 'mevedel-goal)
 (require 'mevedel-tool-skills)
 (require 'mevedel-tool-task)
-(require 'mevedel-tool-tutor)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-web)
 
@@ -145,7 +144,6 @@
   (mevedel-tool-fs--register)
   (mevedel-tool-patch-register)
   (mevedel-tool-code--register)
-  (mevedel-tool-tutor--register)
   (mevedel-tool-exec--register)
   (mevedel-tool-goal--register)
   (mevedel-tool-ui--register)

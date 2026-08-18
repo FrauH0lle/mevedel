@@ -256,7 +256,7 @@ checks still precede approval. Oversized side tool results are bounded and
 discarded in memory rather than materializing an ephemeral session on disk.
 The side publishes only explicit file/search/code/web inspection tools,
 ApplyPatch, Bash, and managed-execution controls. Eval, delegation, Ask,
-tasks, Goals, skills, tutor/introspection tools, deferred tools, and arbitrary
+tasks, Goals, skills, introspection tools, deferred tools, and arbitrary
 MCP tool schemas are absent.
 
 The side freezes session, workspace-persistent, global-rule, protected-path,

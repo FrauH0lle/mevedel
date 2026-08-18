@@ -94,8 +94,6 @@ lazily — read them when planning work in the relevant area. The
   anchored summaries, tail preservation, segment integration
 - [`docs/telemetry.md`](docs/telemetry.md) — append-only lifecycle telemetry,
   data policy, profiler artifacts, prompt guard, Goal reproduction procedure
-- [`docs/tutor.md`](docs/tutor.md) — Socratic tutor workflow, hint
-  persistence
 - [`docs/commits.md`](docs/commits.md) — commit message format and
   guidelines
 - [`docs/backlog.md`](docs/backlog.md) — canonical
@@ -214,7 +212,6 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-ui.el          Agent/InterruptAgent/ToolSearch/SendMessage assembly
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
-  mevedel-tool-tutor.el       GetHints, RecordHint
   mevedel-tool-introspect.el  wraps gptel-agent introspection tools
   mevedel-tools.el            complete tool registration + deferred-tool machinery
   mevedel-tools-list.el       native tools cockpit list
@@ -302,9 +299,8 @@ warnings.
 - `mevedel-create-reference` / `mevedel-create-directive`
 - `mevedel-save-instructions` / `mevedel-load-instructions`
 - `mevedel-implement-directive` / `mevedel-discuss-directive` /
-  `mevedel-request-directive-changes` / `mevedel-retry-directive` /
-  `mevedel-tutor-directive`
-- `mevedel` / `mevedel-tutoring`
+  `mevedel-request-directive-changes` / `mevedel-retry-directive`
+- `mevedel`
 - `mevedel-rewind` / `mevedel-save-session` / `mevedel-rename-session`
 - `mevedel-take-control` / `mevedel-release-control` /
   `mevedel-toggle-follow` / `mevedel-refresh-session`
@@ -315,8 +311,7 @@ warnings.
 - `/plan` / `/plan PROMPT` / `mevedel-retry-plan-implementation`
 - `/btw` / `/btw PROMPT`
 - `mevedel-add/remove/list-project-roots`
-- `mevedel-toggle-tasks` / `mevedel-toggle-hints`
-- `mevedel-display-hints` / `mevedel-clear-hints`
+- `mevedel-toggle-tasks`
 - `mevedel-retry-plan-implementation`
 
 ## Code style

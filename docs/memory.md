@@ -129,7 +129,7 @@ corresponding index entry.
 The persistent memory section is produced by `mevedel-system.el` from
 `prompts/system/memory-policy.md`.
 
-For main and tutor sessions, memory is included after workspace
+For main sessions, memory is included after workspace
 configuration (`AGENTS.md`) and before environment details. The prompt cache key
 includes configured memory index metadata and the current date so the
 generated age annotation can refresh daily even when the files are
