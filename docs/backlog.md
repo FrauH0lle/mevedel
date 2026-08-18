@@ -172,6 +172,53 @@ become implemented, obsolete, or unjustified.
   workflows, live session projection, browser rendering, transport, and
   bearer-capability security.
 
+### Authenticate room creation on the collaboration relay
+
+- **Source:** Post-landing gap review of the browser-relay feature on
+  2026-08-18.
+- **What's owed:** Anyone who discovers the relay's `wss://…/r/<id>?role=host`
+  endpoint can open rooms and hold idle connections. Content is never at
+  risk -- a stranger's room carries only their own ciphertext, and
+  max-room-age bounds the lifetime -- but it is an idle-connection/DoS
+  surface on the operator's server. A `-host-token` relay flag checked at
+  the host upgrade, with a matching defcustom sent as a header or query
+  parameter, closes it in a few lines. Guests stay tokenless: their
+  authority is the bearer link.
+- **Why deferred:** Single-operator deployment behind an unpublicized
+  domain; no data exposure either way.
+
+### Fixture-test the remote ApplyPatch closures
+
+- **Source:** Remote patch review landing on 2026-08-17; flagged at the
+  time as the one coverage hole.
+- **What's owed:** The review overlay's remote options -- Apply (submit
+  the staged selection) and whole-patch feedback (set proposal
+  `:feedback`, deselect all, submit as revision) -- run real proposal
+  machinery but have no dedicated ERT fixture. Build a minimal parsed
+  proposal, attach the overlay, drive both closures, and assert the tool
+  result shapes.
+- **Why deferred:** The paths are compile-checked, exercised live, and
+  share `mevedel-patch-review--submit` with the Emacs command.
+
+### Collaboration limitations accepted at landing
+
+- **Source:** Post-landing gap review of the browser-relay feature on
+  2026-08-18. Recorded so real usage can promote any of them; none blocks
+  current use.
+- **Guest prompts always land in main chat.** The directive filter is
+  view-only; directive-scoped guest input was deferred by the PRD. If
+  wanted: carry the active filter's directive id in the prompt frame and
+  enqueue with the matching scope.
+- **One room per Emacs process.** Two sessions cannot be shared at once.
+  The frame grammar tolerates a later `session-list`/`switch-session`
+  extension additively.
+- **Compaction drops historical guest badges.** Attribution audit records
+  inside compacted spans vanish with the spans; tail-preserved turns keep
+  theirs. Cosmetic and historical only.
+- **No remote questionnaire cancel.** Ask cancellation aborts the whole
+  request, too heavy for a phone button; guests can only submit. If
+  wanted, a cancel option would need its own confirm step.
+
 ## Skills
 
 ### Add required skill attachments inside skill bodies

@@ -1422,7 +1422,11 @@ renderer to fall back to the bare `Tool' one-liner."
                                  (goto-char (point-min))
                                  (forward-sexp 1)
                                  (point)))
-                     (full-result (string-trim (substring text sexp-end)))
+                     ;; Trim only the newlines separating the call sexp from
+                     ;; its result: leading spaces are significant, e.g. the
+                     ;; right-aligned line numbers Read prepends.
+                     (full-result (string-trim (substring text sexp-end)
+                                               "[\n\r]+"))
                      (full-result
                       (if (and (derived-mode-p 'org-mode)
                                (require 'org-src nil t)
