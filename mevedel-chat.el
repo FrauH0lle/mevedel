@@ -544,21 +544,6 @@ directory, signal `user-error' instead of silently switching context."
                        mevedel--session)))))
     buf))
 
-(defun mevedel--tutor-buffer (&optional create workspace)
-  "Get or create the mevedel tutor buffer for WORKSPACE.
-
-This buffer is where LLM interactions occur.  If CREATE is non-nil,
-create the buffer if it doesn't exist.  WORKSPACE should be a
-`mevedel-workspace' struct, or nil to use the current buffer's
-workspace."
-  (let* ((workspace (or workspace (mevedel-workspace)))
-         (buf (mevedel--get-buffer "tutor" workspace create))
-         (created-p (cdr buf))
-         (buf (car buf)))
-    (when created-p
-      (mevedel--chat-buffer-setup buf workspace "tutor"))
-    buf))
-
 (defvar-local mevedel--session-start-hooks-pending nil
   "Non-nil while asynchronous SessionStart hooks are still running.")
 
@@ -809,7 +794,7 @@ the current buffer's workspace."
   "Get or create a mevedel buffer named NAME in WORKSPACE.
 
 NAME is a string used in the buffer name.  For session buffers, use the
-session name (e.g., \"main\", \"tutor\").  For auxiliary buffers, use a
+session name (e.g., \"main\", \"refactor\").  For auxiliary buffers, use a
 descriptive name (e.g., \"patch\").
 
 Buffer name format: *mevedel:NAME@WORKSPACE*.
@@ -1347,8 +1332,7 @@ FEEDBACK supplies requested changes or optional retry guidance."
     (request-changes . "Request changes")
     (retry . "Retry")
     (plan . "Plan")
-    (discuss . "Discuss")
-    (tutor . "Tutor"))
+    (discuss . "Discuss"))
   "Plain display labels for directive actions.")
 
 (defun mevedel--directive-action-label (action)
@@ -1578,7 +1562,6 @@ settling."
                 (and (eq outcome 'success) submitted-subdirectives)))))
        (mevedel-directive-recompute-state record)
        (cons 'attempt sequence))
-      ('tutor (cons 'tutor nil))
       (_ (error "Unknown directive action: %S" action)))))
 
 (defun mevedel--consume-directive-subdirectives
@@ -1678,8 +1661,8 @@ settling."
   "Process DIRECTIVE using PRESET and PROMPT-FN, calling CALLBACK when complete.
 
 DIRECTIVE is the instruction overlay to process.
-PRESET is the gptel preset to use (mevedel-implement, mevedel-discuss, or
-mevedel-tutor).
+PRESET is the gptel preset to use (mevedel-implement or
+mevedel-discuss).
 PROMPT-FN is a function that generates the prompt from the directive
 content.
 CALLBACK is called with (err fsm) when processing completes.

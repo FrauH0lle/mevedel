@@ -640,17 +640,11 @@ present."
 (mevedel-define-prompt-component main-role
   :file "prompts/system/base.md")
 
-(mevedel-define-prompt-component tutor-role
-  :file "prompts/system/tutor.md")
-
 (mevedel-define-prompt-component main-tone
   :file "prompts/tones/main.md")
 
 (mevedel-define-prompt-component report-tone
   :file "prompts/tones/report.md")
-
-(mevedel-define-prompt-component tutor-tone
-  :file "prompts/tones/tutor.md")
 
 (mevedel-define-prompt-component tool-orchestration
   :producer #'mevedel-system--tool-orchestration-prompt)
@@ -662,17 +656,6 @@ present."
   :workspace-aware t
   :components '(main-role
                 main-tone
-                tool-orchestration
-                workspace-config
-                memory
-                environment
-                skills
-                active-goal))
-
-(mevedel-define-prompt-profile tutor
-  :workspace-aware t
-  :components '(tutor-role
-                tutor-tone
                 tool-orchestration
                 workspace-config
                 memory
@@ -849,7 +832,6 @@ request-time context to dynamic components."
 (defun mevedel-system--prompt-profile-for-preset (preset)
   "Return the built-in prompt profile for PRESET, or nil."
   (pcase preset
-    ('mevedel-tutor 'tutor)
     ((or 'mevedel-discuss 'mevedel-implement) 'main)
     (_ nil)))
 

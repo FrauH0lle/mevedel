@@ -261,7 +261,7 @@
         (gptel--known-presets nil))
     (mevedel-tools-register)
     (mevedel--define-presets)
-    (dolist (preset '(mevedel-implement mevedel-tutor))
+    (dolist (preset '(mevedel-implement))
       (let* ((metadata (mevedel-preset--resolved-metadata preset))
              (resolved
               (mevedel-tool-resolve (plist-get metadata :tool-specs)))
@@ -317,19 +317,15 @@
                   :message "Inspect only."
                   :role role)))))))
 
-  :doc "selects main and tutor prompts with no revision preset"
+  :doc "selects the main prompt with no revision preset"
   (let ((mevedel-preset--registry nil)
         (gptel--known-presets nil))
     (mevedel-tools-register)
     (mevedel--define-presets)
     (let ((main (funcall (plist-get
                           (gptel-get-preset 'mevedel-discuss)
-                          :system)))
-          (tutor (funcall (plist-get
-                           (gptel-get-preset 'mevedel-tutor)
-                           :system))))
+                          :system))))
       (should (string-match-p "Task execution protocol" main))
-      (should (string-match-p "NEVER PROVIDE SOLUTIONS" tutor))
       (should-not (gptel-get-preset 'mevedel-revise)))))
 
 (mevedel-deftest mevedel-preset--variable-for-key

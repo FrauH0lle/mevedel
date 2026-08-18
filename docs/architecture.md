@@ -309,7 +309,7 @@ order (later parents win, then the child). Ordinary preset keys resolve to
 `mevedel-foo`/`mevedel--foo` before gptel variables and use gptel's value
 composition semantics. Persistent application is buffer- and session-local;
 request-only application is dynamically scoped. The built-ins are
-`mevedel-discuss`, `mevedel-implement`, and `mevedel-tutor`. Request changes
+`mevedel-discuss` and `mevedel-implement`. Request changes
 and Retry use ordinary implementation authority and focused prompt context,
 not another preset. Presets can also merge named model tiers and workload maps.
 Dispatch resolves session values, tier values, workload values, then explicit
@@ -336,7 +336,6 @@ The built-in selection is deliberate:
 | Consumer | Role/tone/context |
 | --- | --- |
 | Main | Base role/tone, tool orchestration, workspace config, memory, environment, skills, Goal |
-| Tutor | Tutor role/tone, tool orchestration, workspace config, memory, environment, skills, Goal |
 | Worker | Worker role, report tone, tool orchestration, workspace config, memory, environment, skills |
 | Explorer | Explorer role, report tone, tool orchestration, workspace config, environment, skills |
 | Verifier | Verifier role, report tone, tool orchestration, workspace config, environment |

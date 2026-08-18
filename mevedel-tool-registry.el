@@ -123,7 +123,6 @@ created as a side effect of registration and handles serialization."
     ("Glob" "Grep" "Read"
      mevedel-tool-fs mevedel-tool-fs--register)
     ("ApplyPatch" mevedel-tool-patch mevedel-tool-patch-register)
-    ("GetHints" "RecordHint" mevedel-tool-tutor mevedel-tool-tutor--register)
     ("UpdateGoal" mevedel-tool-goal mevedel-tool-goal--register)
     ("Imenu" "Treesitter" "XrefDefinitions" "XrefReferences"
      mevedel-tool-code mevedel-tool-code--register)

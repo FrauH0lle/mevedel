@@ -3,9 +3,8 @@
 ;;; Commentary:
 
 ;; Defines the three gptel presets that drive a mevedel session:
-;; `mevedel-discuss' (read-only exploration), `mevedel-implement'
-;; (full edit access, inherits discuss), and `mevedel-tutor'
-;; (tutoring assistant, inherits discuss).
+;; `mevedel-discuss' (read-only exploration) and `mevedel-implement'
+;; (full edit access, inherits discuss).
 ;;
 ;; Each preset assembles tool lists and registers sub-agents buffer-locally at
 ;; request time.  This module builds the request FSM handler chain around the
@@ -129,8 +128,7 @@
 
 (defcustom mevedel-action-preset-alist
   '((implement . mevedel-implement)
-    (discuss . mevedel-discuss)
-    (tutor . mevedel-tutor))
+    (discuss . mevedel-discuss))
   "Alist mapping actions to presets."
   :group 'mevedel
   :type '(alist :key-type symbol))
@@ -403,25 +401,6 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
     :system (lambda ()
               (mevedel-system-build-prompt
                'main
-               :session mevedel--session
-               :refresh-buffer (current-buffer))))
-
-  ;; Tutoring preset - guides through hints, never provides solutions
-  (mevedel-define-preset mevedel-tutor
-    :description "Tutoring preset - guides through hints, never provides solutions"
-    :parents (mevedel-discuss)
-    :tools (read util (:tool "Bash")
-            (:tool "WriteStdin") (:tool "ListExecutions")
-            (:tool "StopExecution")
-            (:tool "GetHints") (:tool "RecordHint")
-            (:deferred (:tool "Eval"))
-            (:deferred code)
-            (:deferred web)
-            (:deferred elisp))
-    :agents (worker explorer reviewer verifier)
-    :system (lambda ()
-              (mevedel-system-build-prompt
-               'tutor
                :session mevedel--session
                :refresh-buffer (current-buffer)))))
 
