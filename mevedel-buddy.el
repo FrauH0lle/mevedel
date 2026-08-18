@@ -352,7 +352,11 @@ are still valid when their turn comes."
         (progn
           (with-current-buffer original-buffer (insert original))
           (with-current-buffer current-buffer (insert current))
-          (diff-no-select original-buffer current-buffer "-u" t output-buffer)
+          ;; Six lines of context rather than diff's default three: a
+          ;; review covers the region around a change, so that region has
+          ;; to reach the model, not just the changed lines.
+          (diff-no-select original-buffer current-buffer "-U6" t
+                          output-buffer)
           (with-current-buffer output-buffer
             (goto-char (point-min))
             (when (re-search-forward "^@@" nil t)

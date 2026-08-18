@@ -162,6 +162,27 @@
       (should (string-match-p "(defun c ())" diff))
       (should (string-match-p "^ *3 \\+" diff))))
 
+  :doc "`mevedel-buddy--format-changes' carries the region around the change"
+  ;; A review comments on the region, not only the changed lines, so the
+  ;; surrounding code has to reach the model with line numbers on it.
+  (let ((buf (mevedel-test--buddy-buffer
+              "buddy-region.el"
+              (mapconcat (lambda (n) (format "(line %d)" n))
+                         (number-sequence 1 20) "\n"))))
+    (mevedel-test--buddy-edit
+     buf (lambda ()
+           (goto-char (point-min))
+           (forward-line 9)
+           (end-of-line)
+           (insert " ; touched")))
+    (let ((diff (mevedel-test--buddy-diff buf)))
+      ;; The changed line, plus several unchanged lines either side of it.
+      (should (string-match-p "touched" diff))
+      (should (string-match-p "^ *5  (line 5)" diff))
+      (should (string-match-p "^ *15  (line 15)" diff))
+      ;; Still a region, not the whole buffer.
+      (should-not (string-match-p "(line 1)$" diff))))
+
   :doc "`mevedel-buddy--format-changes' returns empty when edits cancel out"
   (let ((buf (mevedel-test--buddy-buffer "buddy-revert" "alpha\n")))
     (mevedel-test--buddy-edit

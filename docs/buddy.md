@@ -95,6 +95,23 @@ navigation, tinting, persistence, deletion, and subdirective resolution. No
 third instruction type exists and no instruction code path knows about notes.
 See [ADR 0108](adr/0108-buddy-notes-are-not-instructions.md).
 
+## What a review looks at
+
+A review covers the **region around your change**, not only the lines you
+touched. The payload carries six lines of context either side of each change,
+and every numbered line in it can carry a note — so a bug sitting next to an
+edit gets named even though you did not introduce it this round.
+
+It does not go further than that. `read_buffer` exists so the model can
+understand a line it can already see, not so it can audit the rest of the file.
+
+Borderline material is handled by **severity, not silence**. Something a linter
+or the byte compiler would also report is not off limits; it is just rarely
+worth more than `trivial`. Whether you ever see it is
+`mevedel-buddy-severity-floor`'s job, and that is yours to set — at `trivial`
+you get cleanups and checkdoc-style remarks along with everything else, which
+is a perfectly reasonable way to run it.
+
 ## Reviewed edits are retired
 
 A settled review discards the changes it covered, so the next one sends only
