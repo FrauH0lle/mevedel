@@ -390,6 +390,27 @@
         (put 'gptel-reasoning-effort 'custom-type old-custom)
         (put 'fast-model :reasoning-effort old-fast)
         (put 'llama3.1:8b :reasoning-effort old-llama))))
+  :doc "the buddy workload defaults to the fast tier"
+  (mevedel-models-test--with-backends
+    (let ((mevedel-model-tiers '((fast :provider "Fast:fast-model")))
+          (mevedel-model-workloads '((buddy :tier fast))))
+      (should (eq 'fast-model
+                  (plist-get (mevedel-model-resolve-workload 'buddy)
+                             :model)))))
+  :doc "the buddy workload honors an exact provider override"
+  (mevedel-models-test--with-backends
+    (let ((mevedel-model-tiers '((fast :provider "Fast:fast-model")))
+          (mevedel-model-workloads '((buddy :provider "Ollama:llama3.1:8b"))))
+      (let ((policy (mevedel-model-resolve-workload 'buddy)))
+        (should (equal "Ollama"
+                       (gptel-backend-name (plist-get policy :backend))))
+        (should (eq 'llama3.1:8b (plist-get policy :model))))))
+  :doc "a preset may override the buddy workload without touching others"
+  (let ((merged (mevedel-model-merge-workloads
+                 '((buddy :provider "Fast:fast-model"))
+                 '((buddy :tier fast) (guardian :tier fast)))))
+    (should (equal '(:provider "Fast:fast-model") (alist-get 'buddy merged)))
+    (should (equal '(:tier fast) (alist-get 'guardian merged))))
   :doc "missing workloads inherit the session provider and effort"
   (mevedel-models-test--with-backends
     (let ((gptel-backend (gptel-get-backend "Balanced"))

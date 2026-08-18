@@ -34,6 +34,27 @@
 ;;
 ;;; Built-in profiles
 
+(mevedel-deftest mevedel-system-build-prompt/buddy
+  (:doc "the buddy profiles render without a session")
+  ,test
+  (test)
+
+  :doc "the review profile renders and tolerates a nil session"
+  (let ((prompt (mevedel-system-build-prompt 'buddy :session nil)))
+    (should (string-match-p "reviewing edits" prompt))
+    (should (string-match-p "still typing" prompt))
+    (should (string-match-p "## Environment" prompt)))
+
+  :doc "the guidance profile differs from the review profile in its role"
+  (let ((review (mevedel-system-build-prompt 'buddy :session nil))
+        (guide (mevedel-system-build-prompt 'buddy-guide :session nil)))
+    (should (string-match-p "asking you what to build" guide))
+    (should (string-match-p "This is not a review" guide))
+    (should-not (string-match-p "This is not a review" review))
+    (should-not (string-match-p "asking you what to build" review))
+    ;; Only the role differs; the shared components are in both.
+    (should (string-match-p "## Environment" guide))))
+
 (mevedel-deftest mevedel-system-build-prompt/built-ins
   (:doc "built-in profiles select the main role without revision")
   (let ((main (mevedel-system-build-prompt 'main)))

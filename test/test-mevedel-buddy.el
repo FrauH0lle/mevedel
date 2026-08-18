@@ -7,6 +7,8 @@
 ;;; Code:
 
 (require 'mevedel-buddy)
+(require 'mevedel-buddy-note)
+(require 'mevedel-chat)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -210,6 +212,196 @@
                  (mevedel-test--buddy-all-changes))))
       (should (string-match-p "Buffer: buddy-live" diff))
       (should-not (string-match-p "Buffer: buddy-dead" diff)))))
+
+;;
+;;; Review settlement
+
+(mevedel-deftest mevedel-buddy--settle
+  (:after-each (progn (mevedel-test--buddy-cleanup)
+                      (clrhash mevedel-buddy--reviewed-through)
+                      (setq mevedel-buddy--running nil
+                            mevedel-buddy--running-automatic nil)))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy--settle' records the time a settled review covered"
+  (let ((now (current-time)))
+    (setq mevedel-buddy--running "scope")
+    (mevedel-buddy--settle "scope" now)
+    (should (equal now (gethash "scope" mevedel-buddy--reviewed-through)))
+    (should-not mevedel-buddy--running))
+
+  :doc "`mevedel-buddy--settle' records nothing for an abandoned review"
+  (progn
+    (setq mevedel-buddy--running "scope")
+    (mevedel-buddy--settle "scope" nil)
+    (should-not (gethash "scope" mevedel-buddy--reviewed-through))
+    (should-not mevedel-buddy--running))
+
+  :doc "`mevedel-buddy--settle' clears the annotatable buffer list"
+  (progn
+    (setq mevedel-buddy-note--scope-buffers '("some-buffer")
+          mevedel-buddy--running "scope")
+    (mevedel-buddy--settle "scope" nil)
+    (should-not mevedel-buddy-note--scope-buffers)))
+
+(mevedel-deftest mevedel-buddy-review
+  (:after-each (progn (mevedel-test--buddy-cleanup)
+                      (clrhash mevedel-buddy--reviewed-through)
+                      (setq mevedel-buddy--running nil)))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy-review' sends nothing when no edit was recorded"
+  (let ((buf (mevedel-test--buddy-buffer "review-idle" "alpha\n")))
+    (with-current-buffer buf
+      (should-not (mevedel-buddy-review))))
+
+  :doc "`mevedel-buddy-review' refuses while a review is already running"
+  (let ((buf (mevedel-test--buddy-buffer "review-busy" "alpha\n")))
+    (mevedel-test--buddy-edit
+     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (with-current-buffer buf
+      (let ((mevedel-buddy--running "another-scope"))
+        (should-not (mevedel-buddy-review)))))
+
+  :doc "`mevedel-buddy-review' marks cancelling edits reviewed without a request"
+  (let ((buf (mevedel-test--buddy-buffer "review-noop" "alpha\n")))
+    (mevedel-test--buddy-edit
+     buf (lambda ()
+           (goto-char (point-max))
+           (insert "typo\n")
+           (delete-region (- (point-max) 5) (point-max))))
+    (with-current-buffer buf
+      (should-not (mevedel-buddy-review))
+      (should (gethash (mevedel-buddy--scope-key)
+                       mevedel-buddy--reviewed-through)))))
+
+(mevedel-deftest mevedel-buddy--severity-instruction
+  (:doc "`mevedel-buddy--severity-instruction' states the configured floor")
+  ,test
+  (test)
+  (let ((mevedel-buddy-severity-floor "critical"))
+    (should (string-match-p
+             "nothing below critical"
+             (mevedel-buddy--severity-instruction)))))
+
+;;
+;;; Mode, tracking policy, and timers
+
+(mevedel-deftest mevedel-buddy--tracked-buffer-p
+  (:after-each (mevedel-test--buddy-cleanup))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy--tracked-buffer-p' accepts a configured major mode"
+  (let ((buf (mevedel-test--buddy-buffer "tracked.el" "" #'emacs-lisp-mode))
+        (mevedel-buddy-tracked-modes '(prog-mode)))
+    (should (mevedel-buddy--tracked-buffer-p buf)))
+
+  :doc "`mevedel-buddy--tracked-buffer-p' rejects an unconfigured major mode"
+  (let ((buf (mevedel-test--buddy-buffer "untracked" ""))
+        (mevedel-buddy-tracked-modes '(prog-mode)))
+    (should-not (mevedel-buddy--tracked-buffer-p buf)))
+
+  :doc "`mevedel-buddy--tracked-buffer-p' rejects a mevedel session buffer"
+  (let ((buf (mevedel-test--buddy-buffer "session.el" "" #'emacs-lisp-mode))
+        (mevedel-buddy-tracked-modes '(prog-mode)))
+    (with-current-buffer buf
+      (setq-local mevedel--session 'pretend))
+    (should-not (mevedel-buddy--tracked-buffer-p buf)))
+
+  :doc "`mevedel-buddy--tracked-buffer-p' rejects an internal buffer"
+  (let ((buf (mevedel-test--buddy-buffer " hidden.el" "" #'emacs-lisp-mode))
+        (mevedel-buddy-tracked-modes '(prog-mode)))
+    (should-not (mevedel-buddy--tracked-buffer-p buf))))
+
+(mevedel-deftest mevedel-buddy-mode
+  (:after-each (mevedel-test--buddy-cleanup))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy-mode' installs and removes the change hooks"
+  (let ((buf (mevedel-test--buddy-buffer "mode-hooks.el" "" #'emacs-lisp-mode)))
+    (with-current-buffer buf
+      (mevedel-buddy--untrack-buffer)
+      (mevedel-buddy-mode 1)
+      (should (memq #'mevedel-buddy--after-change after-change-functions))
+      (mevedel-buddy-mode -1)
+      (should-not (memq #'mevedel-buddy--after-change after-change-functions))))
+
+  :doc "`mevedel-buddy-mode' leaves no timer behind when disabled"
+  (let ((buf (mevedel-test--buddy-buffer "mode-timer.el" "" #'emacs-lisp-mode)))
+    (with-current-buffer buf
+      (mevedel-buddy-mode 1)
+      (mevedel-buddy--schedule)
+      (should mevedel-buddy--idle-timer)
+      (mevedel-buddy-mode -1)
+      (should-not mevedel-buddy--idle-timer))))
+
+
+;;
+;;; Guidance channel
+
+(mevedel-deftest mevedel-buddy--guide-payload
+  (:after-each (mevedel-test--buddy-cleanup))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy--guide-payload' describes the whole buffer with a header"
+  (let ((buf (mevedel-test--buddy-buffer "guide-all.el" "alpha\nbeta\n")))
+    (with-current-buffer buf
+      (let ((payload (mevedel-buddy--guide-payload (point-min) (point-max))))
+        (should (string-match-p "Buffer: guide-all.el" payload))
+        (should (string-match-p "Cursor: line" payload))
+        (should (string-match-p "alpha" payload))
+        (should (string-match-p "beta" payload)))))
+
+  :doc "`mevedel-buddy--guide-payload' describes only the given bounds"
+  (let ((buf (mevedel-test--buddy-buffer
+              "guide-region.el" "alpha\nbeta\ngamma\n")))
+    (with-current-buffer buf
+      (let ((payload (mevedel-buddy--guide-payload
+                      (point-min)
+                      (save-excursion (goto-char (point-min))
+                                      (forward-line 2)
+                                      (point)))))
+        (should (string-match-p "alpha" payload))
+        (should-not (string-match-p "gamma" payload)))))
+
+  :doc "`mevedel-buddy--guide-payload' numbers lines from their real position"
+  (let ((buf (mevedel-test--buddy-buffer
+              "guide-lines.el" "alpha\nbeta\ngamma\n")))
+    (with-current-buffer buf
+      (let ((payload (mevedel-buddy--guide-payload
+                      (save-excursion (goto-char (point-min))
+                                      (forward-line 2)
+                                      (point))
+                      (point-max))))
+        (should (string-match-p "^ *3  gamma" payload))
+        (should-not (string-match-p "^ *1  gamma" payload))))))
+
+(mevedel-deftest mevedel-buddy--preempt
+  (:after-each (progn (mevedel-test--buddy-cleanup)
+                      (setq mevedel-buddy--running nil
+                            mevedel-buddy--running-automatic nil)))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy--preempt' abandons an automatic review in flight"
+  (let ((buf (mevedel-test--buddy-buffer "preempt.el" "alpha\n")))
+    (with-current-buffer buf
+      (setq mevedel-buddy--running "scope"
+            mevedel-buddy--running-automatic t)
+      (mevedel-buddy--preempt)
+      (should-not mevedel-buddy--running)
+      (should-not (gethash "scope" mevedel-buddy--reviewed-through))))
+
+  :doc "`mevedel-buddy--preempt' does nothing when no review is running"
+  (progn
+    (setq mevedel-buddy--running nil)
+    (mevedel-buddy--preempt)
+    (should-not mevedel-buddy--running)))
 
 (provide 'test-mevedel-buddy)
 ;;; test-mevedel-buddy.el ends here
