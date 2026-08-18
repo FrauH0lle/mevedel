@@ -604,7 +604,7 @@
          (view-buffer (generate-new-buffer " *collab-prompt-view*"))
          (room (list :data-buffer data-buffer :guests guests
                      :transport 'transport))
-         enqueued rebuilt drained sent)
+         enqueued rebuilt drained sent granted)
     (unwind-protect
         (progn
           (puthash 1 (list :name "Phone" :writable t :ready t) guests)
@@ -623,15 +623,29 @@
                      (lambda () (setq rebuilt t)))
                     ((symbol-function 'mevedel-view--schedule-late-follow-up-drain)
                      (lambda () (setq drained t)))
+                    ((symbol-function 'mevedel-view--pop-dropped-file-grants-for-input)
+                     (lambda (_input _session) '(grant)))
+                    ((symbol-function 'mevedel-session-add-dropped-file-grant)
+                     (lambda (_session path) (push path granted)))
+                    ((symbol-function 'mevedel-collaboration--save-guest-images)
+                     (lambda (images)
+                       (when images '("/tmp/media/guest-1.jpg"))))
                     ((symbol-function 'mevedel-collaboration--transport-send)
                      (lambda (_transport peer frame)
                        (push (cons peer frame) sent)
                        t)))
             (mevedel-collaboration--handle-prompt
              room 1 (list :t "prompt" :text " check the tests \n"
-                          :name "DonHugo\n!")))
+                          :name "DonHugo\n!"
+                          :images (list (list :mime "image/jpeg"
+                                              :data "ignored")))))
           (should (equal 'follow-up (car enqueued)))
-          (should (equal "check the tests" (plist-get (cdr enqueued) :input)))
+          ;; Attached images become @file mentions with read grants.
+          (should (equal "check the tests @file:/tmp/media/guest-1.jpg"
+                         (plist-get (cdr enqueued) :input)))
+          (should (equal '("/tmp/media/guest-1.jpg") granted))
+          (should (equal '(grant)
+                         (plist-get (cdr enqueued) :dropped-file-grants)))
           ;; The prompt frame's name refreshes the hello-time default.
           (should (equal "DonHugo !" (plist-get (cdr enqueued) :guest-name)))
           (should (equal "DonHugo !" (plist-get (gethash 1 guests) :name)))
@@ -687,6 +701,46 @@
             (should-not rejects)))
       (kill-buffer view-buffer)
       (kill-buffer data-buffer))))
+
+(mevedel-deftest mevedel-collaboration--save-guest-images
+  (:doc "saves accepted image types within budget and drops invalid sets whole")
+  (let ((dir (make-temp-file "mevedel-guest-images" t)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view--media-dir)
+                   (lambda () dir)))
+          (let ((paths (mevedel-collaboration--save-guest-images
+                        (list (list :mime "image/jpeg"
+                                    :data (base64-encode-string "jpegbytes"))
+                              (list :mime "image/png"
+                                    :data (base64-encode-string "pngbytes"))))))
+            (should (= 2 (length paths)))
+            (should (string-suffix-p ".jpg" (nth 0 paths)))
+            (should (string-suffix-p ".png" (nth 1 paths)))
+            (should (equal "jpegbytes"
+                           (with-temp-buffer
+                             (set-buffer-multibyte nil)
+                             (insert-file-contents-literally (nth 0 paths))
+                             (buffer-string)))))
+          ;; Unknown type, malformed data, over-budget, and too many
+          ;; images each drop the whole set.
+          (should-not (mevedel-collaboration--save-guest-images
+                       (list (list :mime "image/svg+xml"
+                                   :data (base64-encode-string "x")))))
+          (should-not (mevedel-collaboration--save-guest-images
+                       (list (list :mime "image/png" :data "not base64!"))))
+          (should-not (mevedel-collaboration--save-guest-images
+                       (list (list :mime "image/png"
+                                   :data (base64-encode-string
+                                          (make-string
+                                           (1+ mevedel-collaboration--max-image-bytes)
+                                           ?x))))))
+          (should-not (mevedel-collaboration--save-guest-images
+                       (make-list
+                        (1+ mevedel-collaboration--max-prompt-images)
+                        (list :mime "image/png"
+                              :data (base64-encode-string "x")))))
+          (should-not (mevedel-collaboration--save-guest-images nil)))
+      (delete-directory dir t))))
 
 (mevedel-deftest mevedel-collaboration--handle-abort
   (:doc "aborts for a writable guest and ignores read-only guests")

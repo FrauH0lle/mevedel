@@ -609,3 +609,35 @@ code, pre {
   color: #fff;
   border-color: var(--accent);
 }
+
+.attachments {
+  display: flex;
+  gap: .45rem;
+  flex-wrap: wrap;
+}
+.attachments:empty { display: none; }
+.attachment {
+  position: relative;
+  display: inline-flex;
+}
+.attachment-thumb {
+  width: 3.4rem;
+  height: 3.4rem;
+  object-fit: cover;
+  border-radius: .5rem;
+  border: 1px solid var(--line);
+}
+.attachment-remove {
+  position: absolute;
+  top: -.4rem;
+  right: -.4rem;
+  width: 1.15rem;
+  height: 1.15rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--failed);
+  color: #fff;
+  font-size: .6rem;
+  line-height: 1;
+  cursor: pointer;
+}
