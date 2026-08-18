@@ -554,8 +554,23 @@ unrelated buffers."
 ;;
 ;;; Model-facing tools
 
-(defun mevedel-buddy-note-tools ()
+(defun mevedel-buddy-note--live-tool (currentp function)
+  "Wrap FUNCTION so it refuses once CURRENTP reports its review is over.
+
+A request outlives the review that started it, and the buffer allowlist
+is repopulated by whichever review runs next, so a straggler's calls
+would otherwise pass the scope check and land in that review -- with
+`remove_note' deleting its notes, since ids come from one counter."
+  (lambda (&rest args)
+    (if (funcall currentp)
+        (apply function args)
+      "This review has ended; its notes are no longer yours to change")))
+
+(defun mevedel-buddy-note-tools (currentp)
   "Return the gptel tools a Buddy review is given.
+
+CURRENTP is called with no arguments and reports whether the review that
+owns these tools is still the one in flight.
 
 These are plain gptel tools rather than registry tools: they need
 argument validation but no permission check, no snapshot, and no
@@ -564,7 +579,7 @@ persistence, and nothing outside a Buddy review may call them."
   (list
    (gptel-make-tool
     :name "read_buffer"
-    :function #'mevedel-buddy-note-read-buffer
+    :function (mevedel-buddy-note--live-tool currentp #'mevedel-buddy-note-read-buffer)
     :description
     (concat "Read numbered lines from a buffer in the current review. "
             "Use it when the diff does not give you enough context to be "
@@ -578,7 +593,7 @@ persistence, and nothing outside a Buddy review may call them."
     :category "buddy")
    (gptel-make-tool
     :name "add_note"
-    :function #'mevedel-buddy-note-add
+    :function (mevedel-buddy-note--live-tool currentp #'mevedel-buddy-note-add)
     :description
     (concat "Attach one short remark to one line of a buffer, shown to the "
             "user as an overlay. Returns the note_id you need to update or "
@@ -595,7 +610,7 @@ persistence, and nothing outside a Buddy review may call them."
     :category "buddy")
    (gptel-make-tool
     :name "update_note"
-    :function #'mevedel-buddy-note-update
+    :function (mevedel-buddy-note--live-tool currentp #'mevedel-buddy-note-update)
     :description
     (concat "Replace the text of a note you left earlier, when it is still "
             "worth making but no longer worded correctly.")
@@ -606,7 +621,7 @@ persistence, and nothing outside a Buddy review may call them."
     :category "buddy")
    (gptel-make-tool
     :name "remove_note"
-    :function #'mevedel-buddy-note-remove
+    :function (mevedel-buddy-note--live-tool currentp #'mevedel-buddy-note-remove)
     :description
     (concat "Retract a note you left earlier, because the user addressed it "
             "or it no longer applies.")
