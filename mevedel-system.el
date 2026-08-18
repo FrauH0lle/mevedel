@@ -652,6 +652,12 @@ present."
 (mevedel-define-prompt-component bash-guardian-role
   :file "prompts/permissions/bash-guardian-system.md")
 
+(mevedel-define-prompt-component buddy-role
+  :file "prompts/system/buddy.md")
+
+(mevedel-define-prompt-component buddy-guide-role
+  :file "prompts/system/buddy-guide.md")
+
 (mevedel-define-prompt-profile main
   :workspace-aware t
   :components '(main-role
@@ -666,6 +672,14 @@ present."
 (mevedel-define-prompt-profile bash-guardian
   :workspace-aware t
   :components '(bash-guardian-role workspace-config environment))
+
+(mevedel-define-prompt-profile buddy
+  :workspace-aware t
+  :components '(buddy-role workspace-config memory environment))
+
+(mevedel-define-prompt-profile buddy-guide
+  :workspace-aware t
+  :components '(buddy-guide-role workspace-config memory environment))
 
 
 ;;

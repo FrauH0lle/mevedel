@@ -249,5 +249,38 @@
                      (lambda (ov) (overlay-get ov 'mevedel-instruction))
                      (overlays-in (point-min) (point-max))))))))
 
+;;
+;;; Commands
+
+(mevedel-deftest mevedel-buddy-dismiss-note
+  (:after-each (mevedel-test--note-cleanup) :quiet t)
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy-dismiss-note' dismisses the note under point"
+  (let* ((buf (mevedel-test--note-buffer "cmd-one" "one\ntwo\n"))
+         (id (mevedel-test--add-note buf 1 "dismiss me")))
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (mevedel-buddy-dismiss-note))
+    (should (eq 'dismissed (plist-get (mevedel-buddy-note--find id) :status))))
+
+  :doc "`mevedel-buddy-dismiss-note' errors when point has no note"
+  (let ((buf (mevedel-test--note-buffer "cmd-none" "one\n")))
+    (with-current-buffer buf
+      (should-error (mevedel-buddy-dismiss-note) :type 'user-error))))
+
+(mevedel-deftest mevedel-buddy-dismiss-notes
+  (:after-each (mevedel-test--note-cleanup) :quiet t
+   :doc "`mevedel-buddy-dismiss-notes' clears this buffer's notes only")
+  (let* ((here (mevedel-test--note-buffer "cmd-here" "one\ntwo\n"))
+         (elsewhere (mevedel-test--note-buffer "cmd-elsewhere" "one\n"))
+         (kept (mevedel-test--add-note elsewhere 1 "stays")))
+    (mevedel-test--add-note here 1 "goes")
+    (mevedel-test--add-note here 2 "also goes")
+    (with-current-buffer here (mevedel-buddy-dismiss-notes))
+    (should (null (mevedel-test--note-overlays here)))
+    (should (eq 'active (plist-get (mevedel-buddy-note--find kept) :status)))))
+
 (provide 'test-mevedel-buddy-note)
 ;;; test-mevedel-buddy-note.el ends here

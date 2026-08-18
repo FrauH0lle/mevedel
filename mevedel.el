@@ -62,6 +62,8 @@
 (require 'mevedel-prompt-submission)
 (require 'mevedel-sandbox)
 (require 'mevedel-execution)
+(require 'mevedel-buddy)
+(require 'mevedel-buddy-note)
 (require 'mevedel-tools)
 (require 'mevedel-tools-list)
 (require 'mevedel-system)
