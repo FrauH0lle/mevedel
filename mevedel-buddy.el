@@ -22,6 +22,10 @@
 (eval-when-compile
   (require 'cl-lib))
 
+;; `diff'
+(declare-function diff-no-select "diff"
+                  (old new &optional switches no-async buf))
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--project-workspace "mevedel-workspace" ())
 
