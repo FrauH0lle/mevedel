@@ -60,6 +60,7 @@
                   (old new &optional switches no-async buf))
 
 ;; `mevedel-workspace'
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace--project-workspace "mevedel-workspace" ())
 
 
@@ -77,6 +78,15 @@ The floor reaches the model in the prompt rather than filtering its
 answers afterwards, so a note below it is never written instead of
 being recorded where the user cannot see or dismiss it."
   :type '(choice (const "trivial") (const "significant") (const "critical"))
+  :group 'mevedel-buddy)
+
+(defcustom mevedel-buddy-timeout 120
+  "Seconds after which a review that has not settled is abandoned.
+
+A request whose callback never arrives would otherwise hold the
+one-review-at-a-time slot and its captured markers for the rest of the
+session."
+  :type 'number
   :group 'mevedel-buddy)
 
 (defcustom mevedel-buddy-max-iterations 8
@@ -131,14 +141,24 @@ lines.")
 (defvar-local mevedel-buddy--pending-old-text nil
   "Whole lines about to be replaced by the change currently being made.")
 
+(defvar-local mevedel-buddy--scope-key-cache nil
+  "This buffer's cached scope key.
+
+`project-current' caches its answer only when it finds a project, so a
+buffer outside one would re-walk the directory tree to the filesystem
+root on every keystroke.  The answer cannot change without the buffer
+changing file, so it is computed once.")
+
 (defun mevedel-buddy--scope-key ()
   "Return the current buffer's scope key.
 
 Buffers in a project share that project's key so edits made across
 several of its files are reviewed together.  A buffer outside any
 project is its own scope."
-  (or (cdr (ignore-errors (mevedel-workspace--project-workspace)))
-      (concat "buffer:" (buffer-name))))
+  (or mevedel-buddy--scope-key-cache
+      (setq mevedel-buddy--scope-key-cache
+            (or (cdr (ignore-errors (mevedel-workspace--project-workspace)))
+                (concat "buffer:" (buffer-name))))))
 
 (defun mevedel-buddy--changes-for-scope (scope-key)
   "Return the recorded changes for SCOPE-KEY, most recent first."
@@ -221,17 +241,31 @@ non-nil when it was absorbed."
           (buffer-substring-no-properties line-beg line-end))))
 
 (defun mevedel-buddy--after-change (beg end _length)
-  "Record the change that replaced the lines around BEG and END."
-  (let* ((line-beg (or mevedel-buddy--pending-beg
+  "Record the change that replaced the lines around BEG and END.
+
+A change whose `before-change-functions' notification was consumed
+elsewhere is dropped rather than recorded with an empty replaced text.
+Emacs does not guarantee the two notifications pair one to one, and a
+record claiming it replaced nothing would make
+`mevedel-buddy--reconstruct-original' delete real text and show the
+model a diff of edits the user never made.  Losing a record only costs
+one round of feedback; fabricating one costs trust in every note."
+  (let* ((pending-beg mevedel-buddy--pending-beg)
+         (pending-old mevedel-buddy--pending-old-text)
+         (line-beg (or pending-beg
                        (save-excursion (goto-char beg)
                                        (line-beginning-position))))
          (line-end (mevedel-buddy--line-end end))
          (new-text (buffer-substring-no-properties line-beg line-end))
-         (old-text (or mevedel-buddy--pending-old-text ""))
+         (old-text pending-old)
          (scope-key (mevedel-buddy--scope-key)))
     (setq mevedel-buddy--pending-beg nil
           mevedel-buddy--pending-old-text nil)
-    (unless (mevedel-buddy--try-merge scope-key line-beg old-text new-text)
+    (unless pending-old
+      (setq old-text nil))
+    (when (and old-text
+               (not (mevedel-buddy--try-merge
+                     scope-key line-beg old-text new-text)))
       (let ((now (current-time)))
         (puthash scope-key
                  (cons (list :time now
@@ -246,15 +280,37 @@ non-nil when it was absorbed."
                        (gethash scope-key mevedel-buddy--changes))
                  mevedel-buddy--changes)))))
 
+(defun mevedel-buddy-forget-buffer (buffer-name)
+  "Discard every recorded change belonging to BUFFER-NAME.
+
+A record outlives its buffer only to describe edits that no longer
+exist.  Worse, a buffer reopened under the same name would have those
+stale offsets replayed against fresh content, so the model would be
+shown a diff nobody made."
+  (maphash
+   (lambda (scope-key records)
+     (puthash scope-key
+              (seq-remove (lambda (record)
+                            (equal (plist-get record :buffer) buffer-name))
+                          records)
+              mevedel-buddy--changes))
+   mevedel-buddy--changes))
+
+(defun mevedel-buddy--on-kill-buffer ()
+  "Forget the current buffer's recorded changes as it is killed."
+  (mevedel-buddy-forget-buffer (buffer-name)))
+
 (defun mevedel-buddy--track-buffer ()
   "Start recording changes in the current buffer."
   (add-hook 'before-change-functions #'mevedel-buddy--before-change nil t)
-  (add-hook 'after-change-functions #'mevedel-buddy--after-change nil t))
+  (add-hook 'after-change-functions #'mevedel-buddy--after-change nil t)
+  (add-hook 'kill-buffer-hook #'mevedel-buddy--on-kill-buffer nil t))
 
 (defun mevedel-buddy--untrack-buffer ()
   "Stop recording changes in the current buffer."
   (remove-hook 'before-change-functions #'mevedel-buddy--before-change t)
-  (remove-hook 'after-change-functions #'mevedel-buddy--after-change t))
+  (remove-hook 'after-change-functions #'mevedel-buddy--after-change t)
+  (remove-hook 'kill-buffer-hook #'mevedel-buddy--on-kill-buffer t))
 
 
 ;;
@@ -359,6 +415,27 @@ changed.  Edits that cancel out yield no section at all."
                       (line-number-at-pos (point))))
             (mevedel-buddy--number-diff-lines diff))))
 
+(defun mevedel-buddy--payload-lines (payload)
+  "Return an alist of (BUFFER-NAME . LINE-NUMBERS) shown in PAYLOAD.
+
+Only lines the model was actually shown can carry a note, so only those
+need a marker.  Capturing one marker per buffer line instead would put
+thousands of markers on the per-buffer marker list Emacs walks on every
+insertion, which the user feels as lag while the request is in flight."
+  (let ((buffer-name nil)
+        (result nil))
+    (dolist (line (split-string payload "\n"))
+      (cond
+       ((string-match "^=== Buffer: \\(.*?\\)  Mode: " line)
+        (setq buffer-name (match-string 1 line))
+        (unless (assoc buffer-name result)
+          (push (cons buffer-name nil) result)))
+       ((and buffer-name (string-match "^ *\\([0-9]+\\) " line))
+        (let ((entry (assoc buffer-name result)))
+          (push (string-to-number (match-string 1 line)) (cdr entry))))))
+    (mapcar (lambda (entry) (cons (car entry) (nreverse (cdr entry))))
+            (nreverse result))))
+
 (defun mevedel-buddy--format-changes (changes)
   "Return the review payload for CHANGES, or an empty string.
 
@@ -395,8 +472,11 @@ are grouped per buffer and each group becomes one section."
 An explicitly requested review may preempt one of those; it may not
 preempt another explicit request.")
 
-(defvar mevedel-buddy--reviewed-through (make-hash-table :test #'equal)
-  "Hash table mapping scope keys to the time their changes were reviewed.")
+(defvar mevedel-buddy--running-buffer nil
+  "Buffer the review in flight was started from, for `gptel-abort'.")
+
+(defvar mevedel-buddy--timeout-timer nil
+  "Timer that abandons the review in flight if it never settles.")
 
 (defun mevedel-buddy--session ()
   "Return a live session to attribute telemetry to, or nil.
@@ -421,25 +501,66 @@ is used when it happens to exist and skipped otherwise."
                      (and (buffer-live-p (get-buffer name)) name)))
                  changes))))
 
+(defun mevedel-buddy--retire-changes (scope-key reviewed-through)
+  "Drop SCOPE-KEY's changes recorded no later than REVIEWED-THROUGH.
+
+Without this every later review would re-send the whole cumulative
+diff since Emacs started, asking the model to comment again on edits it
+has already seen and growing each request without bound."
+  (puthash scope-key
+           (seq-filter
+            (lambda (record)
+              (time-less-p reviewed-through (plist-get record :last-time)))
+            (gethash scope-key mevedel-buddy--changes))
+           mevedel-buddy--changes))
+
 (defun mevedel-buddy--settle (scope-key reviewed-through)
   "Finish the review of SCOPE-KEY.
 
-REVIEWED-THROUGH is recorded only when the review settled on its own;
-an abandoned run passes nil so its changes are offered again."
+REVIEWED-THROUGH retires the changes it covered, and is passed only
+when the review settled on its own; an abandoned run passes nil so its
+changes are offered again."
   (require 'mevedel-buddy-note)
   (when reviewed-through
-    (puthash scope-key reviewed-through mevedel-buddy--reviewed-through))
+    (mevedel-buddy--retire-changes scope-key reviewed-through))
+  (when mevedel-buddy--timeout-timer
+    (cancel-timer mevedel-buddy--timeout-timer)
+    (setq mevedel-buddy--timeout-timer nil))
   (mevedel-buddy-note-release-markers)
   (setq mevedel-buddy-note--scope-buffers nil
         mevedel-buddy--running nil
-        mevedel-buddy--running-automatic nil))
+        mevedel-buddy--running-automatic nil
+        mevedel-buddy--running-buffer nil))
+
+(defun mevedel-buddy--abandon (reason)
+  "Abandon the review in flight because of REASON, retiring nothing."
+  (when mevedel-buddy--running
+    (when (buffer-live-p mevedel-buddy--running-buffer)
+      ;; `gptel-abort' matches on the buffer the request was made from,
+      ;; which is not necessarily the buffer we are standing in: scope is
+      ;; workspace-wide, so the review may have started elsewhere.
+      (ignore-errors (gptel-abort mevedel-buddy--running-buffer)))
+    (mevedel-buddy--telemetry 'buddy-abandoned
+                              :scope mevedel-buddy--running :reason reason)
+    (mevedel-buddy--settle mevedel-buddy--running nil)))
+
+;;;###autoload
+(defun mevedel-buddy-abort ()
+  "Abandon the Buddy review in flight, if any."
+  (interactive)
+  (if mevedel-buddy--running
+      (progn (mevedel-buddy--abandon 'user)
+             (message "mevedel: buddy review abandoned"))
+    (message "mevedel: no buddy review running")))
 
 (defun mevedel-buddy--preempt ()
-  "Abandon an automatic review in flight so an explicit one can run."
-  (when mevedel-buddy--running
-    (ignore-errors (gptel-abort (current-buffer)))
-    (mevedel-buddy--telemetry 'buddy-preempted :scope mevedel-buddy--running)
-    (mevedel-buddy--settle mevedel-buddy--running nil)))
+  "Abandon an automatic review in flight so an explicit one can run.
+
+Only automatic runs are preempted.  One explicit request does not
+outrank another, so a second is refused rather than silently replacing
+the first."
+  (when (and mevedel-buddy--running mevedel-buddy--running-automatic)
+    (mevedel-buddy--abandon 'preempted)))
 
 (defun mevedel-buddy--request (scope-key profile payload buffer-names
                                          reviewed-through automatic)
@@ -460,8 +581,10 @@ started by the idle timer, which an explicit request may preempt."
       (user-error "No model resolves for the buddy workload"))
     (setq mevedel-buddy--running scope-key
           mevedel-buddy--running-automatic automatic
+          mevedel-buddy--running-buffer source
           mevedel-buddy-note--scope-buffers buffer-names)
-    (mevedel-buddy-note-capture-markers buffer-names)
+    (mevedel-buddy-note-capture-markers
+     (mevedel-buddy--payload-lines payload))
     (mevedel-buddy--telemetry 'buddy-review-started
                               :scope scope-key :profile profile
                               :buffers (length buffer-names))
@@ -473,6 +596,11 @@ started by the idle timer, which an explicit request may preempt."
                                        :scope scope-key :settled ok
                                        :rounds rounds)
              (mevedel-buddy--settle scope-key (and ok reviewed-through)))))
+      (setq mevedel-buddy--timeout-timer
+            (run-at-time mevedel-buddy-timeout nil
+                         (lambda ()
+                           (setq mevedel-buddy--timeout-timer nil)
+                           (mevedel-buddy--abandon 'timeout))))
       (condition-case nil
           (let ((gptel-backend (plist-get policy :backend))
                 (gptel-model (plist-get policy :model))
@@ -532,8 +660,9 @@ user.  Returns non-nil when a request was sent."
      ((null changes) nil)
      (mevedel-buddy--running nil)
      ((string-empty-p payload)
-      ;; Everything recorded cancelled out; nothing to review.
-      (puthash scope-key reviewed-through mevedel-buddy--reviewed-through)
+      ;; Everything recorded cancelled out; there is nothing to review
+      ;; and nothing worth keeping.
+      (mevedel-buddy--retire-changes scope-key reviewed-through)
       nil)
      (t
       (mevedel-buddy--request
@@ -600,12 +729,21 @@ to happen."
       (setq mevedel-buddy--idle-timer nil)
       (let ((scope-key (mevedel-buddy--scope-key)))
         (cond
-         ;; Something is already talking to a model; try again later.
-         (mevedel-buddy--running (mevedel-buddy--schedule))
+         ;; Something is already talking to a model.  Retry on a plain
+         ;; timer: re-arming an idle timer from inside one fires it
+         ;; immediately, because Emacs is already idle past the delay.
+         (mevedel-buddy--running (mevedel-buddy--retry))
          ((not (mevedel-buddy--due-p scope-key)) nil)
          (t
           (puthash scope-key (current-time) mevedel-buddy--last-review)
           (mevedel-buddy-review t)))))))
+
+(defun mevedel-buddy--retry ()
+  "Look again once the review in flight has had time to finish."
+  (mevedel-buddy--cancel-timer)
+  (setq mevedel-buddy--idle-timer
+        (run-at-time mevedel-buddy-idle-delay nil
+                     #'mevedel-buddy--run-scheduled (current-buffer))))
 
 (defun mevedel-buddy--schedule ()
   "Arrange for this buffer's scope to be reviewed once the user pauses."
@@ -687,7 +825,8 @@ you made outranks the one a timer made."
   (interactive)
   (mevedel-buddy--preempt)
   (when mevedel-buddy--running
-    (user-error "A buddy request is already running"))
+    (user-error "A buddy request is already running; %s"
+                "abort it with `mevedel-buddy-abort'"))
   (mevedel-buddy--request
    (mevedel-buddy--scope-key) 'buddy-guide
    (mevedel-buddy--guide-payload

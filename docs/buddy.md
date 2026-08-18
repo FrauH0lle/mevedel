@@ -14,6 +14,7 @@ M-x mevedel-buddy-guide       ask what to build here, rather than what went wron
 M-x mevedel-buddy-dismiss-note   dismiss the note at point
 M-x mevedel-buddy-dismiss-notes  dismiss every note in this buffer
 M-x mevedel-buddy-clear-changes  forget the edits recorded so far
+M-x mevedel-buddy-abort          abandon a review that has wedged
 ```
 
 ## Two channels
@@ -94,6 +95,29 @@ navigation, tinting, persistence, deletion, and subdirective resolution. No
 third instruction type exists and no instruction code path knows about notes.
 See [ADR 0108](adr/0108-buddy-notes-are-not-instructions.md).
 
+## Reviewed edits are retired
+
+A settled review discards the changes it covered, so the next one sends only
+what you have written since. Edits made *while* a request was in flight survive
+it, and an abandoned or timed-out review retires nothing, so its edits are
+offered again rather than silently skipped.
+
+A review that never settles is abandoned after `mevedel-buddy-timeout`, which
+releases its markers and frees the one-at-a-time slot. `mevedel-buddy-abort`
+does the same by hand.
+
+## Scope is an allowlist, and empty means nothing
+
+While a review runs, `mevedel-buddy-note--scope-buffers` holds exactly the
+buffers it may touch, and every tool — `read_buffer`, `add_note`,
+`update_note`, `remove_note` — checks it. The note set described to the model is
+filtered the same way, so a review of one project never sees another's buffer
+names, line numbers, or note text.
+
+An empty scope denies everything. That matters because a tool call can still
+arrive after a review is abandoned or times out, and "no review is running"
+must not read as "every buffer in Emacs".
+
 ## Line numbers resolve through markers
 
 The model answers with the line numbers it was shown, but you keep typing while
@@ -101,6 +125,10 @@ the request is in flight. Buddy captures markers before sending and resolves
 the model's line numbers against them, so a note lands on the text it was
 written about even when lines were inserted above it meanwhile. Markers move
 with buffer edits; raw line numbers do not.
+
+Only the lines the model was actually shown are marked. Emacs walks a buffer's
+marker list on every insertion, so marking every line of a large file would
+make typing lag for as long as the request runs.
 
 A note on the wrong line is worse than no note, so this is not an optional
 refinement.
@@ -154,6 +182,7 @@ route that modifies a buffer unprompted is at odds with that. Notes only.
 | `mevedel-buddy-coalesce-window` | `180.0` | Seconds within which nearby edits merge into one record |
 | `mevedel-buddy-severity-floor` | `"significant"` | Lowest severity the model is asked to report |
 | `mevedel-buddy-max-iterations` | `8` | Tool rounds before a review is abandoned |
+| `mevedel-buddy-timeout` | `120` | Seconds before a review that never settles is abandoned |
 | `mevedel-buddy-note-serialize-limit` | `40` | Notes described to the model per request |
 
 mevedel's own surfaces — view, chat, cockpit, inspector — are excluded from

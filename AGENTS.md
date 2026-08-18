@@ -318,7 +318,8 @@ warnings.
 - `mevedel-toggle-tasks`
 - `mevedel-buddy-mode` / `mevedel-buddy-global-mode` /
   `mevedel-buddy-review` / `mevedel-buddy-guide`
-- `mevedel-buddy-dismiss-note` / `mevedel-buddy-dismiss-notes`
+- `mevedel-buddy-dismiss-note` / `mevedel-buddy-dismiss-notes` /
+  `mevedel-buddy-abort`
 - `mevedel-retry-plan-implementation`
 
 ## Code style

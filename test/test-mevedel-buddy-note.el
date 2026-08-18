@@ -25,11 +25,13 @@
   (let ((buf (generate-new-buffer name)))
     (push buf mevedel-test--note-buffers)
     (with-current-buffer buf (insert content))
+    (push name mevedel-buddy-note--scope-buffers)
     buf))
 
 (defun mevedel-test--note-cleanup ()
   "Kill note test buffers and discard every note."
   (mevedel-buddy-note-clear-all)
+  (setq mevedel-buddy-note--scope-buffers nil)
   (dolist (buf mevedel-test--note-buffers)
     (when (buffer-live-p buf) (kill-buffer buf)))
   (setq mevedel-test--note-buffers nil))
@@ -80,6 +82,14 @@
   :doc "`mevedel-buddy-note-add' refuses a buffer outside the scope"
   (let ((buf (mevedel-test--note-buffer "note-scope" "one\n")))
     (let ((mevedel-buddy-note--scope-buffers (list "other-buffer")))
+      (should (string-match-p
+               "not in the review scope"
+               (mevedel-buddy-note-add (buffer-name buf) 1 "nope" "trivial")))
+      (should (null (mevedel-test--note-overlays buf)))))
+
+  :doc "`mevedel-buddy-note-add' refuses everything when no review is running"
+  (let ((buf (mevedel-test--note-buffer "note-noscope" "one\n")))
+    (let ((mevedel-buddy-note--scope-buffers nil))
       (should (string-match-p
                "not in the review scope"
                (mevedel-buddy-note-add (buffer-name buf) 1 "nope" "trivial")))
@@ -281,6 +291,87 @@
     (with-current-buffer here (mevedel-buddy-dismiss-notes))
     (should (null (mevedel-test--note-overlays here)))
     (should (eq 'active (plist-get (mevedel-buddy-note--find kept) :status)))))
+
+;;
+;;; Scope isolation
+
+(mevedel-deftest mevedel-buddy-note--in-scope-p
+  (:after-each (mevedel-test--note-cleanup))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy-note-update' refuses a note outside the scope"
+  (let* ((buf (mevedel-test--note-buffer "scope-update" "one\n"))
+         (id (mevedel-test--add-note buf 1 "original")))
+    (let ((mevedel-buddy-note--scope-buffers (list "elsewhere")))
+      (should (string-match-p "not in the review scope"
+                              (mevedel-buddy-note-update id "rewritten"))))
+    (should (equal "original" (plist-get (mevedel-buddy-note--find id) :note))))
+
+  :doc "`mevedel-buddy-note-remove' refuses a note outside the scope"
+  (let* ((buf (mevedel-test--note-buffer "scope-remove" "one\n"))
+         (id (mevedel-test--add-note buf 1 "keep me")))
+    (let ((mevedel-buddy-note--scope-buffers (list "elsewhere")))
+      (should (string-match-p "not in the review scope"
+                              (mevedel-buddy-note-remove id))))
+    (should (mevedel-buddy-note--find id)))
+
+  :doc "`mevedel-buddy-note-serialize' describes only in-scope notes"
+  (let ((here (mevedel-test--note-buffer "scope-here" "one\n"))
+        (elsewhere (mevedel-test--note-buffer "scope-elsewhere" "one\n")))
+    (mevedel-test--add-note here 1 "mine")
+    (mevedel-test--add-note elsewhere 1 "other project")
+    (let* ((mevedel-buddy-note--scope-buffers (list "scope-here"))
+           (text (mevedel-buddy-note-serialize)))
+      (should (string-match-p "mine" text))
+      (should-not (string-match-p "other project" text))))
+
+  :doc "`mevedel-buddy-note-read-buffer' refuses a buffer outside the scope"
+  (let ((buf (mevedel-test--note-buffer "scope-read" "one\n")))
+    (let ((mevedel-buddy-note--scope-buffers (list "elsewhere")))
+      (should (string-match-p
+               "not in the review scope"
+               (mevedel-buddy-note-read-buffer (buffer-name buf)))))))
+
+
+;;
+;;; Markers
+
+(mevedel-deftest mevedel-buddy-note-capture-markers
+  (:after-each (mevedel-test--note-cleanup))
+  ,test
+  (test)
+
+  :doc "a note lands on its original text after lines are inserted above"
+  (let ((buf (mevedel-test--note-buffer "marker-drift" "one\ntwo\nthree\n")))
+    ;; The review is assembled and its markers taken, then the user types
+    ;; while the request is in flight, and only then does the note arrive.
+    (mevedel-buddy-note-capture-markers (list (cons "marker-drift" '(1 2 3))))
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (insert "zero\n"))
+    (mevedel-test--add-note buf 3 "about three")
+    (with-current-buffer buf
+      (should (equal "three"
+                     (buffer-substring-no-properties
+                      (overlay-start (car (mevedel-test--note-overlays buf)))
+                      (overlay-end (car (mevedel-test--note-overlays buf))))))))
+
+  :doc "`mevedel-buddy-note-capture-markers' marks only the lines it is given"
+  (let ((_buf (mevedel-test--note-buffer "marker-few" "one\ntwo\nthree\n")))
+    (mevedel-buddy-note-capture-markers (list (cons "marker-few" '(2))))
+    (should (= 1 (length (cdr (assoc "marker-few"
+                                     mevedel-buddy-note--markers))))))
+
+  :doc "`mevedel-buddy-note-release-markers' unsets every marker"
+  (let ((_buf (mevedel-test--note-buffer "marker-release" "one\ntwo\n")))
+    (mevedel-buddy-note-capture-markers (list (cons "marker-release" '(1 2))))
+    (let ((markers (mapcar #'cdr
+                           (cdr (assoc "marker-release"
+                                       mevedel-buddy-note--markers)))))
+      (mevedel-buddy-note-release-markers)
+      (should (null mevedel-buddy-note--markers))
+      (should (seq-every-p (lambda (m) (null (marker-buffer m))) markers)))))
 
 (provide 'test-mevedel-buddy-note)
 ;;; test-mevedel-buddy-note.el ends here
