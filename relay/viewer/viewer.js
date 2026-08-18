@@ -143,6 +143,18 @@
     notice.hidden = !text;
   }
 
+  // Transient acknowledgements clear themselves; a later persistent
+  // notice is never erased by a stale flash timer.
+  let flashTimer = null;
+  function flashNotice(text) {
+    showNotice(text);
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = window.setTimeout(() => {
+      flashTimer = null;
+      if (notice.textContent === text) showNotice('');
+    }, 4000);
+  }
+
   function setLiveButton(visible) {
     liveButton.hidden = !visible;
   }
@@ -638,7 +650,7 @@
       if (answers.every(answer => answer.trim())) {
         send({t: 'ui-response', reqId: frame.reqId, answers});
       } else {
-        showNotice('Answer every question before submitting.');
+        flashNotice('Answer every question before submitting.');
       }
     });
     submitRow.append(submit);
@@ -752,13 +764,13 @@
     for (const file of files) {
       if (!file.type.startsWith('image/')) continue;
       if (pendingImages.length >= MAX_IMAGES) {
-        showNotice(`At most ${MAX_IMAGES} images per prompt.`);
+        flashNotice(`At most ${MAX_IMAGES} images per prompt.`);
         break;
       }
       const budget = IMAGE_BUDGET - pendingImageBytes();
       const blob = await downscaleImage(file, budget).catch(() => null);
       if (!blob) {
-        showNotice('Image too large for the frame budget.');
+        flashNotice('Image too large for the frame budget.');
         continue;
       }
       const buffer = new Uint8Array(await blob.arrayBuffer());
@@ -818,7 +830,7 @@
       if (state.staging) state.staging.live.push({t: 'remove', ids: frame.ids});
       else removeRecords(frame.ids);
     } else if (frame.t === 'queued') {
-      showNotice('Follow-up queued for the session.');
+      flashNotice('Follow-up queued for the session.');
     } else if (frame.t === 'ui-request') {
       renderRequest(frame);
     } else if (frame.t === 'ui-request-end') {
@@ -908,7 +920,7 @@
       const text = composerInput.value;
       if (!text.trim() && !pendingImages.length) return;
       if (new TextEncoder().encode(text).length > MAX_PROMPT_BYTES) {
-        showNotice('Prompt too large.');
+        flashNotice('Prompt too large.');
         return;
       }
       localStorage.setItem('mevedel-guest-name', guestName());

@@ -169,6 +169,7 @@ async function main() {
       setItem: (k, v) => storage.set(k, v),
     },
     setTimeout: window.setTimeout,
+    clearTimeout: () => {},
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
 
