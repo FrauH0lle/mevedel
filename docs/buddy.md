@@ -118,6 +118,39 @@ An empty scope denies everything. That matters because a tool call can still
 arrive after a review is abandoned or times out, and "no review is running"
 must not read as "every buffer in Emacs".
 
+## How a note is laid out
+
+A note's text is worth more at the end than the beginning — the observation
+comes first, the reason it matters comes last — so truncating one loses the half
+that justified interrupting you. But laying every note out in full turns a busy
+buffer into a wall of blocks.
+
+Buddy takes flycheck's approach and picks the style **per line**, so exactly one
+note is ever laid out in full: the one you are reading.
+
+| | default | shows |
+| --- | --- | --- |
+| `mevedel-buddy-note-current-line-style` | `below` | the whole note, wrapped, indented under the code |
+| `mevedel-buddy-note-other-lines-style` | `eol` | one line after the code, shortened to fit |
+
+Either may also be `nil` to hide notes on those lines. Setting
+`mevedel-buddy-note-other-lines-style` to `nil` annotates only the line at
+point, the way Neovim and Helix show diagnostics.
+
+Layout uses `mevedel-buddy-note-width` — a **fixed** column budget, not the
+window width. An overlay's `after-string` is shared by every window showing its
+buffer, so a layout fitted to one window would be wrong in another and wrong
+again after a split. Truncation is acceptable in `eol` precisely because the
+full text is one cursor move away.
+
+Notes are laid out again from `post-command-hook`, which does nothing unless
+point actually changed line, and the hook is removed from a buffer once it holds
+no notes.
+
+`sideline` (flush right, `lsp-ui-sideline` style) is deliberately not
+implemented: it is the one style that needs window geometry, and `below` plus
+`eol` already solve the problem.
+
 ## Line numbers resolve through markers
 
 The model answers with the line numbers it was shown, but you keep typing while
@@ -184,6 +217,9 @@ route that modifies a buffer unprompted is at odds with that. Notes only.
 | `mevedel-buddy-max-iterations` | `8` | Tool rounds before a review is abandoned |
 | `mevedel-buddy-timeout` | `120` | Seconds before a review that never settles is abandoned |
 | `mevedel-buddy-note-serialize-limit` | `40` | Notes described to the model per request |
+| `mevedel-buddy-note-width` | `72` | Column budget for laying a note out |
+| `mevedel-buddy-note-current-line-style` | `below` | Style for the line at point |
+| `mevedel-buddy-note-other-lines-style` | `eol` | Style for every other line |
 
 mevedel's own surfaces — view, chat, cockpit, inspector — are excluded from
 tracking regardless of their major mode.

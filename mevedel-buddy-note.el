@@ -31,6 +31,36 @@
 ;;
 ;;; Customization
 
+(defcustom mevedel-buddy-note-width 72
+  "Column budget for laying out a note.
+
+Deliberately a fixed budget rather than the window width.  An overlay's
+`after-string' is shared by every window showing its buffer, so a layout
+fitted to one window would be wrong in another and wrong again after a
+split."
+  :type 'natnum
+  :group 'mevedel-buddy)
+
+(defcustom mevedel-buddy-note-current-line-style 'below
+  "How to show a note on the line point is on.
+
+`below' lays the whole note out on its own lines under the code, `eol'
+appends it after the code and shortens it to fit, and nil hides it."
+  :type '(choice (const :tag "Full text below the code" below)
+                 (const :tag "Shortened after the code" eol)
+                 (const :tag "Hidden" nil))
+  :group 'mevedel-buddy)
+
+(defcustom mevedel-buddy-note-other-lines-style 'eol
+  "How to show a note on any line point is not on.
+
+Defaults to `eol' so that at most one note is ever laid out in full: the
+one being read.  Set it to nil to annotate only the line at point."
+  :type '(choice (const :tag "Shortened after the code" eol)
+                 (const :tag "Full text below the code" below)
+                 (const :tag "Hidden" nil))
+  :group 'mevedel-buddy)
+
 (defcustom mevedel-buddy-note-serialize-limit 40
   "How many notes at most are described to the model in one request.
 
@@ -72,6 +102,9 @@ Each note is a plist with `:id', `:buffer', `:line', `:note',
 
 (defvar mevedel-buddy-note--next-id 1
   "Id to assign to the next Buddy note.")
+
+(defvar-local mevedel-buddy-note--laid-out-line nil
+  "Line number this buffer's notes were last laid out for.")
 
 (defvar mevedel-buddy-note--scope-buffers nil
   "Buffer names the running review may touch.
@@ -188,11 +221,86 @@ made before it."
                                 mevedel-buddy-note--notes)))
       (plist-put note :review-needed t))))
 
+;; Notes are laid out to a fixed column budget, never to the window width.
+;; Truncating a note is only acceptable while its full text is one cursor
+;; move away, which is why the line at point and every other line get
+;; different styles: exactly one note is ever laid out in full.
+
+(defun mevedel-buddy-note--wrap (text width)
+  "Return TEXT filled to WIDTH columns as a list of lines."
+  (with-temp-buffer
+    (let ((fill-column (max 20 width))
+          (adaptive-fill-mode nil)
+          (fill-prefix nil))
+      (insert text)
+      (fill-region (point-min) (point-max)))
+    (split-string (buffer-string) "\n")))
+
+(defun mevedel-buddy-note--eol-string (note severity column)
+  "Return NOTE for display after code ending at COLUMN, styled by SEVERITY.
+
+Shortened to what is left of the budget, because the full text is
+available by moving point onto the line."
+  (let* ((room (max 20 (- mevedel-buddy-note-width column)))
+         (text (truncate-string-to-width
+                (replace-regexp-in-string "[ \t\n]+" " " note)
+                room nil nil t)))
+    (propertize (concat "  " text)
+                'face (mevedel-buddy-note--face severity))))
+
+(defun mevedel-buddy-note--below-string (note severity indent)
+  "Return NOTE laid out under the code, indented to INDENT and faced by SEVERITY."
+  (let* ((prefix (make-string indent ?\s))
+         (lines (mevedel-buddy-note--wrap
+                 note (- mevedel-buddy-note-width indent))))
+    (propertize
+     (concat "\n"
+             (mapconcat (lambda (line) (concat prefix line)) lines "\n"))
+     'face (mevedel-buddy-note--face severity))))
+
+(defun mevedel-buddy-note--style-for (overlay)
+  "Return the display style to use for OVERLAY right now."
+  (if (and (overlay-buffer overlay)
+           (eq (overlay-buffer overlay) (current-buffer))
+           (= (line-number-at-pos (overlay-start overlay))
+              (line-number-at-pos (point))))
+      mevedel-buddy-note-current-line-style
+    mevedel-buddy-note-other-lines-style))
+
 (defun mevedel-buddy-note--render (overlay note severity)
-  "Show NOTE on OVERLAY, styled for SEVERITY."
-  (overlay-put overlay 'after-string
-               (propertize (concat "  " note)
-                           'face (mevedel-buddy-note--face severity))))
+  "Show NOTE on OVERLAY, styled for SEVERITY in the style its line calls for."
+  (let ((style (mevedel-buddy-note--style-for overlay)))
+    (overlay-put
+     overlay 'after-string
+     (pcase style
+       ('eol
+        (mevedel-buddy-note--eol-string
+         note severity
+         (save-excursion (goto-char (overlay-start overlay))
+                         (- (line-end-position) (line-beginning-position)))))
+       ('below
+        (mevedel-buddy-note--below-string
+         note severity
+         (save-excursion (goto-char (overlay-start overlay))
+                         (back-to-indentation)
+                         (current-column))))
+       (_ nil)))))
+
+(defun mevedel-buddy-note--relayout ()
+  "Lay out this buffer's notes again after point changed line.
+
+Runs from `post-command-hook', so it does nothing at all unless the line
+number actually changed."
+  (let ((line (line-number-at-pos)))
+    (unless (eq line mevedel-buddy-note--laid-out-line)
+      (setq mevedel-buddy-note--laid-out-line line)
+      (dolist (record mevedel-buddy-note--notes)
+        (let ((overlay (plist-get record :overlay)))
+          (when (and (overlayp overlay)
+                     (eq (overlay-buffer overlay) (current-buffer)))
+            (mevedel-buddy-note--render overlay
+                                        (plist-get record :note)
+                                        (plist-get record :severity))))))))
 
 (defun mevedel-buddy-note--make-overlay (buffer line note severity)
   "Return a note overlay on LINE of BUFFER showing NOTE at SEVERITY."
@@ -213,6 +321,7 @@ made before it."
                    (list #'mevedel-buddy-note--modification-hook))
       (mevedel-buddy-note--render overlay note severity)
       (add-hook 'kill-buffer-hook #'mevedel-buddy-note--on-kill-buffer nil t)
+      (add-hook 'post-command-hook #'mevedel-buddy-note--relayout nil t)
       overlay)))
 
 (defun mevedel-buddy-note--on-kill-buffer ()
@@ -285,19 +394,37 @@ Return the new note id, or an explanatory string the model can act on."
 
 (defun mevedel-buddy-note--delete (record)
   "Delete RECORD's overlay and drop it from the note set."
-  (let ((overlay (plist-get record :overlay)))
-    (when (overlayp overlay) (delete-overlay overlay)))
-  (setq mevedel-buddy-note--notes (delq record mevedel-buddy-note--notes)))
+  (let* ((overlay (plist-get record :overlay))
+         (buffer (and (overlayp overlay) (overlay-buffer overlay))))
+    (when (overlayp overlay) (delete-overlay overlay))
+    (setq mevedel-buddy-note--notes (delq record mevedel-buddy-note--notes))
+    (mevedel-buddy-note--sync-relayout-hook buffer)))
+
+(defun mevedel-buddy-note--sync-relayout-hook (buffer)
+  "Remove BUFFER's relayout hook once it holds no note overlays."
+  (when (buffer-live-p buffer)
+    (unless (seq-some
+             (lambda (record)
+               (let ((overlay (plist-get record :overlay)))
+                 (and (overlayp overlay)
+                      (eq (overlay-buffer overlay) buffer))))
+             mevedel-buddy-note--notes)
+      (with-current-buffer buffer
+        (remove-hook 'post-command-hook #'mevedel-buddy-note--relayout t)))))
 
 (defun mevedel-buddy-note-dismiss (id &optional reason)
   "Dismiss note ID for REASON, keeping the record so it is not repeated."
   (when-let* ((record (mevedel-buddy-note--find id)))
-    (let ((overlay (plist-get record :overlay)))
+    (let* ((overlay (plist-get record :overlay))
+           ;; Capture the buffer first: `overlay-buffer' is nil once the
+           ;; overlay is deleted.
+           (buffer (and (overlayp overlay) (overlay-buffer overlay))))
       (plist-put record :line (mevedel-buddy-note--line record))
       (when (overlayp overlay) (delete-overlay overlay))
       (plist-put record :overlay nil)
       (plist-put record :status 'dismissed)
-      (plist-put record :dismissed-reason (or reason "removed")))
+      (plist-put record :dismissed-reason (or reason "removed"))
+      (mevedel-buddy-note--sync-relayout-hook buffer))
     record))
 
 (defun mevedel-buddy-note-clear-all ()

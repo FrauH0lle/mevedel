@@ -413,5 +413,144 @@
       (should (plist-get arg :type))
       (should (plist-get arg :description)))))
 
+;;
+;;; Layout
+
+(mevedel-deftest mevedel-buddy-note--wrap
+  (:doc "`mevedel-buddy-note--wrap' fills text to the given width")
+  ,test
+  (test)
+
+  :doc "long text becomes several lines, none over the width"
+  (let ((lines (mevedel-buddy-note--wrap
+                (string-join (make-list 20 "word") " ") 30)))
+    (should (> (length lines) 1))
+    (should (seq-every-p (lambda (line) (<= (length line) 30)) lines)))
+
+  :doc "short text stays one line"
+  (should (equal '("short enough")
+                 (mevedel-buddy-note--wrap "short enough" 30))))
+
+(mevedel-deftest mevedel-buddy-note--eol-string
+  (:doc "`mevedel-buddy-note--eol-string' shortens a note to the room left")
+  ,test
+  (test)
+
+  :doc "a note that fits is shown whole"
+  (let ((mevedel-buddy-note-width 72))
+    (should (string-match-p "typo here"
+                            (mevedel-buddy-note--eol-string
+                             "typo here" "significant" 10))))
+
+  :doc "a note that does not fit is shortened"
+  (let* ((mevedel-buddy-note-width 40)
+         (note (concat (string-join (make-list 20 "word") " ") " caboose"))
+         (shown (mevedel-buddy-note--eol-string note "significant" 10)))
+    (should (< (length shown) (length note)))
+    (should-not (string-match-p "caboose" shown)))
+
+  :doc "a long code line still leaves a readable minimum"
+  (let* ((mevedel-buddy-note-width 40)
+         (shown (mevedel-buddy-note--eol-string
+                 "a note about something" "significant" 200)))
+    (should (> (length shown) 10)))
+
+  :doc "newlines in a note are collapsed so it stays one line"
+  (let ((mevedel-buddy-note-width 72))
+    (should-not (string-match-p
+                 "\n" (mevedel-buddy-note--eol-string
+                       "first\nsecond" "significant" 0)))))
+
+(mevedel-deftest mevedel-buddy-note--below-string
+  (:doc "`mevedel-buddy-note--below-string' lays a note out under the code")
+  ,test
+  (test)
+
+  :doc "the note starts on its own line"
+  (should (string-prefix-p
+           "\n" (mevedel-buddy-note--below-string
+                 "a note" "significant" 4)))
+
+  :doc "every line is indented to the code"
+  (let* ((mevedel-buddy-note-width 40)
+         (shown (mevedel-buddy-note--below-string
+                 (string-join (make-list 20 "word") " ") "significant" 6))
+         (lines (cdr (split-string shown "\n"))))
+    (should (> (length lines) 1))
+    (should (seq-every-p (lambda (line) (string-prefix-p "      " line))
+                         lines)))
+
+  :doc "the full text survives the layout"
+  (let ((shown (mevedel-buddy-note--below-string
+                "accumulator is never updated" "significant" 2)))
+    (should (string-match-p "accumulator" shown))
+    (should (string-match-p "updated" shown))))
+
+(mevedel-deftest mevedel-buddy-note--style-for
+  (:after-each (mevedel-test--note-cleanup))
+  ,test
+  (test)
+
+  :doc "the line at point uses the current-line style"
+  (let* ((buf (mevedel-test--note-buffer "style-here" "one\ntwo\nthree\n"))
+         (_id (mevedel-test--add-note buf 2 "about two"))
+         (mevedel-buddy-note-current-line-style 'below)
+         (mevedel-buddy-note-other-lines-style 'eol))
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (forward-line 1)
+      (should (eq 'below (mevedel-buddy-note--style-for
+                          (car (mevedel-test--note-overlays buf))))))) 
+
+  :doc "any other line uses the other-lines style"
+  (let* ((buf (mevedel-test--note-buffer "style-other" "one\ntwo\nthree\n"))
+         (_id (mevedel-test--add-note buf 2 "about two"))
+         (mevedel-buddy-note-current-line-style 'below)
+         (mevedel-buddy-note-other-lines-style 'eol))
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (should (eq 'eol (mevedel-buddy-note--style-for
+                        (car (mevedel-test--note-overlays buf))))))))
+
+(mevedel-deftest mevedel-buddy-note--relayout
+  (:after-each (mevedel-test--note-cleanup))
+  ,test
+  (test)
+
+  :doc "moving onto a note's line lays it out in full"
+  (let* ((buf (mevedel-test--note-buffer "relayout" "one\ntwo\nthree\n"))
+         (note (string-join (make-list 20 "word") " "))
+         (mevedel-buddy-note-width 40)
+         (mevedel-buddy-note-current-line-style 'below)
+         (mevedel-buddy-note-other-lines-style 'eol))
+    (mevedel-test--add-note buf 2 note)
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (mevedel-buddy-note--relayout)
+      ;; Off the line: one shortened line, no newline in the layout.
+      (should-not (string-match-p "\n" (mevedel-test--note-text buf)))
+      (forward-line 1)
+      (mevedel-buddy-note--relayout)
+      ;; On the line: the whole note, across several lines.
+      (should (string-match-p "\n" (mevedel-test--note-text buf)))))
+
+  :doc "a note is hidden when its style is nil"
+  (let* ((buf (mevedel-test--note-buffer "relayout-nil" "one\ntwo\n"))
+         (mevedel-buddy-note-current-line-style 'below)
+         (mevedel-buddy-note-other-lines-style nil))
+    (mevedel-test--add-note buf 2 "about two")
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (mevedel-buddy-note--relayout)
+      (should (string-empty-p (mevedel-test--note-text buf)))))
+
+  :doc "`mevedel-buddy-note--relayout' stops the hook once notes are gone"
+  (let* ((buf (mevedel-test--note-buffer "relayout-hook" "one\ntwo\n"))
+         (id (mevedel-test--add-note buf 1 "goes away")))
+    (with-current-buffer buf
+      (should (memq #'mevedel-buddy-note--relayout post-command-hook))
+      (mevedel-buddy-note-remove id)
+      (should-not (memq #'mevedel-buddy-note--relayout post-command-hook)))))
+
 (provide 'test-mevedel-buddy-note)
 ;;; test-mevedel-buddy-note.el ends here
