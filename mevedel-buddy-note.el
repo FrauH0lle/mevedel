@@ -416,11 +416,11 @@ persistence, and nothing outside a Buddy review may call them."
     (concat "Read numbered lines from a buffer in the current review. "
             "Use it when the diff does not give you enough context to be "
             "certain about a problem.")
-    :args '((:name "buffer_name" :type string :required t
+    :args '((:name "buffer_name" :type string
              :description "Name of the buffer to read.")
-            (:name "begin" :type integer
+            (:name "begin" :type integer :optional t
              :description "First line to read.  Omit to start at the top.")
-            (:name "end" :type integer
+            (:name "end" :type integer :optional t
              :description "Last line to read.  Omit to read to the end."))
     :category "buddy")
    (gptel-make-tool
@@ -430,13 +430,13 @@ persistence, and nothing outside a Buddy review may call them."
     (concat "Attach one short remark to one line of a buffer, shown to the "
             "user as an overlay. Returns the note_id you need to update or "
             "remove it later.")
-    :args '((:name "buffer" :type string :required t
+    :args '((:name "buffer" :type string
              :description "Name of the buffer to annotate.")
-            (:name "line_number" :type integer :required t
+            (:name "line_number" :type integer
              :description "Line to annotate, as numbered in the diff.")
-            (:name "note" :type string :required t
+            (:name "note" :type string
              :description "The remark.  One sentence.")
-            (:name "severity" :type string :required t
+            (:name "severity" :type string
              :enum ["trivial" "significant" "critical"]
              :description "How much this matters."))
     :category "buddy")
@@ -446,9 +446,9 @@ persistence, and nothing outside a Buddy review may call them."
     :description
     (concat "Replace the text of a note you left earlier, when it is still "
             "worth making but no longer worded correctly.")
-    :args '((:name "note_id" :type integer :required t
+    :args '((:name "note_id" :type integer
              :description "The note_id from the note list.")
-            (:name "note" :type string :required t
+            (:name "note" :type string
              :description "Replacement text.  One sentence."))
     :category "buddy")
    (gptel-make-tool
@@ -457,7 +457,7 @@ persistence, and nothing outside a Buddy review may call them."
     :description
     (concat "Retract a note you left earlier, because the user addressed it "
             "or it no longer applies.")
-    :args '((:name "note_id" :type integer :required t
+    :args '((:name "note_id" :type integer
              :description "The note_id from the note list."))
     :category "buddy")))
 
