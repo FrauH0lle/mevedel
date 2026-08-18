@@ -406,7 +406,8 @@
   (test)
 
   :doc "every tool is built and named"
-  (let ((names (mapcar #'gptel-tool-name (mevedel-buddy-note-tools))))
+  (let ((names (mapcar #'gptel-tool-name
+                       (mevedel-buddy-note-tools (lambda () t)))))
     (should (equal '("read_buffer" "add_note" "update_note" "remove_note")
                    names)))
 
@@ -415,12 +416,12 @@
   ;; array itself.  A stray `:required' is passed through into the
   ;; per-property schema, where JSON Schema expects an array, and strict
   ;; providers reject the whole request.
-  (dolist (tool (mevedel-buddy-note-tools))
+  (dolist (tool (mevedel-buddy-note-tools (lambda () t)))
     (dolist (arg (gptel-tool-args tool))
       (should-not (plist-member arg :required))))
 
   :doc "only genuinely optional arguments are marked optional"
-  (let* ((tools (mevedel-buddy-note-tools))
+  (let* ((tools (mevedel-buddy-note-tools (lambda () t)))
          (optional
           (mapcan
            (lambda (tool)
@@ -431,10 +432,26 @@
     (should (equal '("begin" "end") optional)))
 
   :doc "every argument declares a type and a description"
-  (dolist (tool (mevedel-buddy-note-tools))
+  (dolist (tool (mevedel-buddy-note-tools (lambda () t)))
     (dolist (arg (gptel-tool-args tool))
       (should (plist-get arg :type))
-      (should (plist-get arg :description)))))
+      (should (plist-get arg :description))))
+
+  :doc "a tool refuses once its own review is over"
+  ;; A request outlives the review that started it, and the next review
+  ;; repopulates the buffer allowlist, so a straggler's calls would pass
+  ;; the scope check and land in that review -- `remove_note' deleting its
+  ;; notes, since ids come from one counter.
+  (let* ((buf (mevedel-test--note-buffer "stale-tool" "one\ntwo\n"))
+         (id (mevedel-test--add-note buf 1 "belongs to the new review"))
+         (stale (mevedel-buddy-note-tools (lambda () nil)))
+         (remove (seq-find (lambda (tool)
+                             (equal "remove_note" (gptel-tool-name tool)))
+                           stale)))
+    (should (string-match-p "review has ended"
+                            (funcall (gptel-tool-function remove) id)))
+    (should (mevedel-buddy-note--find id))
+    (should (mevedel-test--note-overlays buf))))
 
 ;;
 ;;; Layout
@@ -587,8 +604,11 @@
       (should-not (memq #'mevedel-buddy-note--relayout post-command-hook)))))
 
 (mevedel-deftest mevedel-buddy-note--render
-  (:after-each (mevedel-test--note-cleanup)
-   :doc "`mevedel-buddy-note--render' measures the line in display columns")
+  (:after-each (mevedel-test--note-cleanup))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy-note--render' measures the line in display columns"
   ;; A tab is one character and eight columns.  Two lines that occupy the
   ;; same columns must leave the note the same room, however they are
   ;; indented; counting characters instead makes the tabbed line look
@@ -605,11 +625,9 @@
     (mevedel-test--add-note spaced 1 note)
     (should (equal (substring-no-properties (mevedel-test--note-text spaced))
                    (substring-no-properties
-                    (mevedel-test--note-text tabbed))))))
+                    (mevedel-test--note-text tabbed)))))
 
-(mevedel-deftest mevedel-buddy-note--style-for-buffer
-  (:after-each (mevedel-test--note-cleanup)
-   :doc "a note keeps its full layout when updated from another buffer")
+  :doc "a note keeps its full layout when updated from another buffer"
   ;; `update_note' runs as a tool call from the buffer the review started
   ;; in.  Deciding the style there would flip a note the user is sitting on
   ;; to the truncated style, and `--relayout' would not restore it until

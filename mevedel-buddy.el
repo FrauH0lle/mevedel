@@ -39,7 +39,7 @@
 (declare-function mevedel-buddy-note-capture-markers "mevedel-buddy-note" (buffer-names))
 (declare-function mevedel-buddy-note-release-markers "mevedel-buddy-note" ())
 (declare-function mevedel-buddy-note-serialize "mevedel-buddy-note" ())
-(declare-function mevedel-buddy-note-tools "mevedel-buddy-note" ())
+(declare-function mevedel-buddy-note-tools "mevedel-buddy-note" (currentp))
 (defvar mevedel-buddy-note--scope-buffers)
 
 ;; `mevedel-chat'
@@ -600,14 +600,14 @@ changes are offered again."
 (defun mevedel-buddy--abandon (reason)
   "Abandon the review in flight because of REASON, retiring nothing."
   (when mevedel-buddy--running
-    ;; Aborting settles synchronously and clears these, so read them first.
     (let ((scope-key mevedel-buddy--running)
           (buffer mevedel-buddy--running-buffer))
-      ;; Retire the generation here rather than leaving it to the next
-      ;; review.  `gptel-abort' cannot stop a request whose source buffer
-      ;; is gone, and if no further review starts, that straggler would
-      ;; still look current when it settles and would retire the changes
-      ;; this abandonment exists to preserve.
+      ;; Retire the generation before anything else.  `gptel-abort' cannot
+      ;; stop a request whose source buffer is gone, and if no further
+      ;; review starts, that straggler would still look current when it
+      ;; settles and would retire the changes this abandonment exists to
+      ;; preserve.  Retiring first also means the ABRT-driven callback
+      ;; finds itself stale and leaves the settle below to do the work.
       (cl-incf mevedel-buddy--generation)
       (when (buffer-live-p buffer)
         ;; `gptel-abort' matches on the buffer the request was made from,
@@ -616,8 +616,7 @@ changes are offered again."
         (ignore-errors (gptel-abort buffer)))
       (mevedel-buddy--telemetry 'buddy-abandoned
                                 :scope scope-key :reason reason)
-      (when mevedel-buddy--running
-        (mevedel-buddy--settle scope-key nil)))))
+      (mevedel-buddy--settle scope-key nil))))
 
 ;;;###autoload
 (defun mevedel-buddy-abort ()
@@ -688,7 +687,10 @@ started by the idle timer, which an explicit request may preempt."
                 (gptel-reasoning-effort (plist-get policy :effort))
                 (gptel-use-context nil)
                 (gptel-use-tools t)
-                (gptel-tools (mevedel-buddy-note-tools)))
+                (gptel-tools
+                 (mevedel-buddy-note-tools
+                  (lambda ()
+                    (mevedel-buddy--current-generation-p generation)))))
             (gptel-request
              (concat payload (mevedel-buddy-note-serialize))
              :buffer source
