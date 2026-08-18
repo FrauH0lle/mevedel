@@ -1082,6 +1082,12 @@ from gptel's API-reported token usage when available.
 | Command           | Command Description                                        |
 |-------------------|------------------------------------------------------------|
 | `mevedel-compact` | Summarize old conversation and reduce effective token use. |
+| `mevedel-buddy-mode` | Let a model comment on the edits you make in this buffer. |
+| `mevedel-buddy-global-mode` | Enable Buddy in every buffer whose mode is tracked. |
+| `mevedel-buddy-review` | Review recent edits now, without waiting for the idle timer. |
+| `mevedel-buddy-guide` | Ask what to build in this region, rather than what went wrong. |
+| `mevedel-buddy-dismiss-note` | Dismiss the Buddy note at point. |
+| `mevedel-buddy-dismiss-notes` | Dismiss every Buddy note in this buffer. |
 
 See [`docs/compaction.md`](docs/compaction.md) for the full auto-compaction,
 summary prompt, and segment-rotation contract.
@@ -1191,6 +1197,8 @@ The maintained detail docs live in [`docs/`](docs/):
 - [`docs/compaction.md`](docs/compaction.md) — manual and automatic compaction,
   summaries, and segment rotation.
 - [`docs/memory.md`](docs/memory.md) — memory layout and durable-memory rules.
+- [`docs/buddy.md`](docs/buddy.md) — unasked review of recent edits, the
+  guidance command, and note lifecycle.
 - [`docs/reminders.md`](docs/reminders.md) — system-reminder injection.
 - [`docs/backlog.md`](docs/backlog.md) — project notes,
   todos, feature ideas, fixes, and deferred work.

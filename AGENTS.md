@@ -94,6 +94,8 @@ lazily — read them when planning work in the relevant area. The
   anchored summaries, tail preservation, segment integration
 - [`docs/telemetry.md`](docs/telemetry.md) — append-only lifecycle telemetry,
   data policy, profiler artifacts, prompt guard, Goal reproduction procedure
+- [`docs/buddy.md`](docs/buddy.md) — unasked review of recent edits and
+  the guidance command, note lifecycle, ephemerality, model selection
 - [`docs/commits.md`](docs/commits.md) — commit message format and
   guidelines
 - [`docs/backlog.md`](docs/backlog.md) — canonical
@@ -213,6 +215,8 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
   mevedel-tool-introspect.el  wraps gptel-agent introspection tools
+  mevedel-buddy.el            edit recording, diff assembly, review requests
+  mevedel-buddy-note.el       ephemeral note overlays and their model tools
   mevedel-tools.el            complete tool registration + deferred-tool machinery
   mevedel-tools-list.el       native tools cockpit list
 
@@ -312,6 +316,9 @@ warnings.
 - `/btw` / `/btw PROMPT`
 - `mevedel-add/remove/list-project-roots`
 - `mevedel-toggle-tasks`
+- `mevedel-buddy-mode` / `mevedel-buddy-global-mode` /
+  `mevedel-buddy-review` / `mevedel-buddy-guide`
+- `mevedel-buddy-dismiss-note` / `mevedel-buddy-dismiss-notes`
 - `mevedel-retry-plan-implementation`
 
 ## Code style
