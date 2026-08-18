@@ -151,26 +151,22 @@ become implemented, obsolete, or unjustified.
   prompting/interrupting, and the directive filter. Remote Mevedel and
   managed provisioning remain later slices.
 
-### Extend the browser-relay ui-request surface to Ask
+### Browser-relay ui-request surface: landed
 
 - **Source:** `.scratch/browser-relay/PRD.md`, implementation decision
-  "Remote interaction answering". The ui-request bridge landed for generic
+  "Remote interaction answering". The full surface has landed: generic
   request prompts (approve/deny/feedback), permission prompts (one-shot
-  allow-once/deny-once/feedback -- durable authority stays Emacs-only), and
+  allow-once/deny-once/feedback -- durable authority stays Emacs-only),
   plan approval (accept with host-configured axes; Worktree acceptance and
-  feedback drafts stay in Emacs), gated by
-  `mevedel-collaboration-remote-interactions`. Guest attribution is durable
-  via hidden `guest-prompt` transcript audit records.
-- **What's owed:** Ask questionnaires. The Ask prompt is a multi-question
-  wizard with per-question options and free-text answers; a faithful remote
-  presentation needs its own structured frame shape (questions, options,
-  current answers) rather than the flat body-plus-buttons card, and its
-  answers settle through the wizard's own submit path rather than
-  `mevedel--prompt--settle`.
-- **Also owed:** an Emacs-side rendering of the guest badge in the shared
-  session view (the attribution audit record is persisted and shown in the
-  browser and Pending Inputs cockpit, but the Emacs transcript does not yet
-  render a badge for it).
+  feedback drafts stay in Emacs), ApplyPatch review (apply the staged
+  selection or request a revision with whole-patch feedback), and Ask
+  questionnaires (the frame carries the questions, options, and current
+  answers structurally; the guest answers atomically and the host adopts
+  them through the wizard's own submit path; host navigation re-announces
+  so guests stay in sync). Gated by
+  `mevedel-collaboration-remote-interactions`. Guest attribution is
+  durable via hidden `guest-prompt` transcript audit records and renders
+  as the turn heading in both surfaces.
 - **Blast radius:** Execution-target identity, readiness and bootstrap,
   durability and leases, session discovery and control transfer, worktree
   workflows, live session projection, browser rendering, transport, and

@@ -74,13 +74,21 @@ Then set `mevedel-collaboration-relay-url` to `wss://collab.example.net`.
 ### yunohost
 
 Everything on a yunohost domain sits behind the SSOwat portal by default.
-The relay paths must be unprotected, or browser guests get a login page and
-the Emacs host's WebSocket dial gets a redirect it cannot follow:
+The relay paths must be reachable without the portal, or browser guests get
+a login page and the Emacs host's WebSocket dial gets a redirect it cannot
+follow. Hand-editing `/etc/ssowat/conf.json.persistent` is discouraged and
+its `skipped_urls` handling has broken across releases, so go through the
+app system instead: install the `redirect_ynh` app on a dedicated
+(sub)domain in **reverse-proxy** mode targeting `http://127.0.0.1:7466`,
+then make it public:
 
 ```bash
-yunohost domain config set collab.example.net --args 'portal.enabled=false'
-# or, per-path, mark the app/paths as unprotected in SSOwat's conf
+yunohost app install redirect  # domain: collab.example.net, path: /,
+                               # mode: public proxy, target: http://127.0.0.1:7466
+yunohost user permission update redirect.main --add visitors
 ```
 
-Use a dedicated (sub)domain with the nginx snippet above; the browser needs
-HTTPS anyway because WebCrypto only unseals in a secure context.
+Check that the generated nginx location carries the WebSocket `Upgrade`
+headers and a `proxy_read_timeout` above the relay's 30s keepalive ping
+(add them via a conf.d drop-in if not). The browser needs HTTPS anyway
+because WebCrypto only unseals in a secure context.
