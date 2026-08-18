@@ -268,23 +268,29 @@ available by moving point onto the line."
     mevedel-buddy-note-other-lines-style))
 
 (defun mevedel-buddy-note--render (overlay note severity)
-  "Show NOTE on OVERLAY, styled for SEVERITY in the style its line calls for."
-  (let ((style (mevedel-buddy-note--style-for overlay)))
-    (overlay-put
-     overlay 'after-string
-     (pcase style
-       ('eol
-        (mevedel-buddy-note--eol-string
-         note severity
-         (save-excursion (goto-char (overlay-start overlay))
-                         (- (line-end-position) (line-beginning-position)))))
-       ('below
-        (mevedel-buddy-note--below-string
-         note severity
-         (save-excursion (goto-char (overlay-start overlay))
-                         (back-to-indentation)
-                         (current-column))))
-       (_ nil)))))
+  "Show NOTE on OVERLAY, styled for SEVERITY in the style its line calls for.
+
+Measuring happens in the overlay's own buffer.  `update_note' runs as a
+tool call, so the buffer current at the time is the one the review was
+started from, which under a workspace-wide scope is often not the buffer
+holding the note."
+  (when-let* ((buffer (overlay-buffer overlay)))
+    (let ((style (mevedel-buddy-note--style-for overlay)))
+      (overlay-put
+       overlay 'after-string
+       (with-current-buffer buffer
+         (save-excursion
+           (goto-char (overlay-start overlay))
+           (pcase style
+             ('eol
+              (mevedel-buddy-note--eol-string
+               note severity
+               (- (line-end-position) (line-beginning-position))))
+             ('below
+              (mevedel-buddy-note--below-string
+               note severity
+               (progn (back-to-indentation) (current-column))))
+             (_ nil))))))))
 
 (defun mevedel-buddy-note--relayout ()
   "Lay out this buffer's notes again after point changed line.
