@@ -569,6 +569,39 @@
     (cl-incf mevedel-buddy--generation)
     (should-not (mevedel-buddy--current-generation-p stale))))
 
+(mevedel-deftest mevedel-buddy--abandon
+  (:after-each (mevedel-test--buddy-cleanup))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy--abandon' retires the abandoned review's generation"
+  ;; Abandoning must not depend on another review starting to neutralise
+  ;; the straggler: `gptel-abort' cannot stop a request whose source buffer
+  ;; is gone, and if the user simply stops editing, that request would
+  ;; still look current when it settles and would retire the very changes
+  ;; abandonment exists to preserve.
+  (let ((buf (mevedel-test--buddy-buffer "abandon.el" "alpha\n")))
+    (with-current-buffer buf
+      (setq mevedel-buddy--running "scope"
+            mevedel-buddy--running-automatic t
+            mevedel-buddy--running-buffer buf)
+      (let ((generation mevedel-buddy--generation))
+        (mevedel-buddy--abandon 'timeout)
+        (should-not (mevedel-buddy--current-generation-p generation)))))
+
+  :doc "`mevedel-buddy--abandon' keeps the changes it abandoned"
+  (let ((buf (mevedel-test--buddy-buffer "abandon-keep.el" "alpha\n")))
+    (mevedel-test--buddy-edit
+     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (with-current-buffer buf
+      (let ((scope (mevedel-buddy--scope-key)))
+        (setq mevedel-buddy--running scope
+              mevedel-buddy--running-automatic t
+              mevedel-buddy--running-buffer buf)
+        (mevedel-buddy--abandon 'timeout)
+        (should (mevedel-buddy--changes-for-scope scope))
+        (should-not mevedel-buddy--running)))))
+
 (mevedel-deftest mevedel-buddy--untrack-buffer
   (:after-each (mevedel-test--buddy-cleanup)
    :doc "`mevedel-buddy--untrack-buffer' discards the buffer's records")

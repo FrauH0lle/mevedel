@@ -586,9 +586,9 @@
     (with-current-buffer buf
       (should-not (memq #'mevedel-buddy-note--relayout post-command-hook)))))
 
-(mevedel-deftest mevedel-buddy-note--eol-string
+(mevedel-deftest mevedel-buddy-note--render
   (:after-each (mevedel-test--note-cleanup)
-   :doc "an eol note measures the code line in display columns")
+   :doc "`mevedel-buddy-note--render' measures the line in display columns")
   ;; A tab is one character and eight columns.  Two lines that occupy the
   ;; same columns must leave the note the same room, however they are
   ;; indented; counting characters instead makes the tabbed line look
@@ -606,6 +606,30 @@
     (should (equal (substring-no-properties (mevedel-test--note-text spaced))
                    (substring-no-properties
                     (mevedel-test--note-text tabbed))))))
+
+(mevedel-deftest mevedel-buddy-note--style-for-buffer
+  (:after-each (mevedel-test--note-cleanup)
+   :doc "a note keeps its full layout when updated from another buffer")
+  ;; `update_note' runs as a tool call from the buffer the review started
+  ;; in.  Deciding the style there would flip a note the user is sitting on
+  ;; to the truncated style, and `--relayout' would not restore it until
+  ;; point left the line and came back.
+  (let* ((target (mevedel-test--note-buffer "style-target" "one\ntwo\n"))
+         (elsewhere (mevedel-test--note-buffer "style-elsewhere" "x\n"))
+         (note (string-join (make-list 20 "word") " "))
+         (mevedel-buddy-note-width 40)
+         (mevedel-buddy-note-current-line-style 'below)
+         (mevedel-buddy-note-other-lines-style 'eol)
+         (id (mevedel-test--add-note target 2 note)))
+    (with-current-buffer target
+      (goto-char (point-min))
+      (forward-line 1)
+      (mevedel-buddy-note--relayout)
+      (should (string-match-p "\n" (mevedel-test--note-text target))))
+    (with-current-buffer elsewhere
+      (mevedel-buddy-note-update id note))
+    ;; Point never moved, so the note is still laid out in full.
+    (should (string-match-p "\n" (mevedel-test--note-text target)))))
 
 (provide 'test-mevedel-buddy-note)
 ;;; test-mevedel-buddy-note.el ends here

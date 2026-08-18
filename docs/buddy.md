@@ -121,7 +121,17 @@ offered again rather than silently skipped.
 
 A review that never settles is abandoned after `mevedel-buddy-timeout`, which
 releases its markers and frees the one-at-a-time slot. `mevedel-buddy-abort`
-does the same by hand.
+does the same by hand. Abandoning also retires the review's generation, so a
+request that outlives it — `gptel-abort` cannot stop one whose source buffer has
+been killed — settles into nothing rather than retiring changes it never got
+notes for.
+
+Turning `mevedel-buddy-mode` off in a buffer, or disabling
+`mevedel-buddy-global-mode`, **discards that buffer's recorded edits** along
+with the tracking. Pending unreviewed feedback is lost, deliberately: without
+the tracking hooks nothing would drop those records later, and a buffer that
+reused the name — reopened, or uniquified once a second file of that name is
+visited — would have their offsets replayed against unrelated content.
 
 ## Scope is an allowlist, and empty means nothing
 
