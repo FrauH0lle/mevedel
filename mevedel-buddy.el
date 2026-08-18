@@ -24,8 +24,10 @@
 
 ;; `gptel'
 (declare-function gptel-abort "ext:gptel" (buffer))
+(declare-function gptel-make-fsm "ext:gptel-request" (&rest slots))
 (declare-function gptel-request "ext:gptel-request" (&optional prompt &rest keys))
 (defvar gptel-backend)
+(defvar gptel-request--handlers)
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
 (defvar gptel-stream)
@@ -478,24 +480,43 @@ preempt another explicit request.")
 (defvar mevedel-buddy--timeout-timer nil
   "Timer that abandons the review in flight if it never settles.")
 
-(defun mevedel-buddy--response-action (response streamingp)
+(defun mevedel-buddy--response-action (response)
   "Return what RESPONSE means for a review in flight.
 
-STREAMINGP is whether this request streams.  One of `ignore' for
-material a review has no use for, `tool-round' for a completed batch of
-tool calls, `settle' for a turn that ended without calling a tool, and
-`fail' for an error or abort.
+Either `tool-round' for a completed batch of tool calls, which is all
+the callback needs in order to bound the loop, or `ignore'.
 
-While streaming, a string is one fragment of prose and tool calls may
-still follow it, so it must not settle the review; without streaming the
-string is the whole final turn and does."
-  (cond
-   ((and (consp response) (memq (car response) '(reasoning tool-call)))
-    'ignore)
-   ((and (consp response) (eq (car response) 'tool-result)) 'tool-round)
-   ((and streamingp (stringp response)) 'ignore)
-   ((or (stringp response) (eq response t)) 'settle)
-   (t 'fail)))
+Settlement deliberately is not decided here.  A streaming callback
+receives t when one HTTP response ends, which is not the end of the
+review: with tool calls pending, gptel then runs them and issues
+another request.  Treating that t as terminal settled the review before
+its own tool calls ran, which cleared the annotatable buffer list out
+from under them and had every note refused as out of scope.  Only the
+request state machine's terminal states know the difference, so
+`mevedel-buddy--request-fsm' owns settlement."
+  (if (and (consp response) (eq (car response) 'tool-result))
+      'tool-round
+    'ignore))
+
+(defun mevedel-buddy--request-fsm (finish)
+  "Return a gptel state machine that calls FINISH when its request ends.
+
+FINISH receives non-nil once the whole request has settled, including
+every tool round, and nil when it errored or was aborted.  gptel's
+handler table is the documented extension point for this; its terminal
+states are the only place that distinguishes the end of one HTTP
+response from the end of the request."
+  (require 'gptel)
+  (gptel-make-fsm
+   :handlers
+   (mapcar
+    (lambda (entry)
+      (pcase (car entry)
+        ('DONE (append entry (list (lambda (_fsm) (funcall finish t)))))
+        ((or 'ERRS 'ABRT)
+         (append entry (list (lambda (_fsm) (funcall finish nil)))))
+        (_ entry)))
+    gptel-request--handlers)))
 
 (defun mevedel-buddy--session ()
   "Return a live session to attribute telemetry to, or nil.
@@ -630,6 +651,7 @@ started by the idle timer, which an explicit request may preempt."
             (gptel-request
              (concat payload (mevedel-buddy-note-serialize))
              :buffer source
+             :fsm (mevedel-buddy--request-fsm #'finish)
              ;; Follow the user's streaming setting rather than forcing it
              ;; off.  Buddy has no use for streamed prose, but some
              ;; providers reject a request with `stream' false outright.
@@ -640,18 +662,13 @@ started by the idle timer, which an explicit request may preempt."
                       :workspace (mevedel-buddy--workspace)
                       :working-directory default-directory)
              :callback
-             (lambda (response info)
-               (pcase (mevedel-buddy--response-action
-                       response (plist-get info :stream))
-                 ('ignore nil)
-                 ('tool-round
-                  (setq rounds (1+ rounds))
-                  (when (> rounds mevedel-buddy-max-iterations)
-                    (ignore-errors (gptel-abort source))
-                    (finish nil)))
-                 ;; A turn that calls no tool has nothing left to say.
-                 ('settle (finish t))
-                 ('fail (finish nil))))))
+             (lambda (response _info)
+               (when (eq (mevedel-buddy--response-action response) 'tool-round)
+                 (setq rounds (1+ rounds))
+                 (when (> rounds mevedel-buddy-max-iterations)
+                   ;; Aborting reaches the machine's ABRT state, which
+                   ;; settles the review without retiring its changes.
+                   (ignore-errors (gptel-abort source)))))))
         (error (finish nil))))))
 
 (defun mevedel-buddy--workspace ()
