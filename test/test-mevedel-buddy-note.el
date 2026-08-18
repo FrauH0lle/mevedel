@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-buddy-note)
+(require 'gptel)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -372,6 +373,45 @@
       (mevedel-buddy-note-release-markers)
       (should (null mevedel-buddy-note--markers))
       (should (seq-every-p (lambda (m) (null (marker-buffer m))) markers)))))
+
+;;
+;;; Tool schemas
+
+(mevedel-deftest mevedel-buddy-note-tools
+  (:doc "`mevedel-buddy-note-tools' follows gptel's argument convention")
+  ,test
+  (test)
+
+  :doc "every tool is built and named"
+  (let ((names (mapcar #'gptel-tool-name (mevedel-buddy-note-tools))))
+    (should (equal '("read_buffer" "add_note" "update_note" "remove_note")
+                   names)))
+
+  :doc "no argument carries `:required'"
+  ;; gptel marks optional arguments and derives the schema's required
+  ;; array itself.  A stray `:required' is passed through into the
+  ;; per-property schema, where JSON Schema expects an array, and strict
+  ;; providers reject the whole request.
+  (dolist (tool (mevedel-buddy-note-tools))
+    (dolist (arg (gptel-tool-args tool))
+      (should-not (plist-member arg :required))))
+
+  :doc "only genuinely optional arguments are marked optional"
+  (let* ((tools (mevedel-buddy-note-tools))
+         (optional
+          (mapcan
+           (lambda (tool)
+             (mapcar (lambda (arg) (plist-get arg :name))
+                     (seq-filter (lambda (arg) (plist-get arg :optional))
+                                 (gptel-tool-args tool))))
+           tools)))
+    (should (equal '("begin" "end") optional)))
+
+  :doc "every argument declares a type and a description"
+  (dolist (tool (mevedel-buddy-note-tools))
+    (dolist (arg (gptel-tool-args tool))
+      (should (plist-get arg :type))
+      (should (plist-get arg :description)))))
 
 (provide 'test-mevedel-buddy-note)
 ;;; test-mevedel-buddy-note.el ends here

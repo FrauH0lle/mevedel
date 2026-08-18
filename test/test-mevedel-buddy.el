@@ -489,5 +489,22 @@
     (should (equal '(("one.el" 1 2) ("two.el" 7))
                    (mevedel-buddy--payload-lines payload)))))
 
+(mevedel-deftest mevedel-buddy--response-action
+  (:doc "`mevedel-buddy--response-action' classifies what a response means")
+  (should (eq ,action (mevedel-buddy--response-action ,response ,streamingp)))
+  (action response streamingp)
+  ;; A streamed fragment is prose, and tool calls may still follow it.
+  ;; Settling on it would end the review before the model finished.
+  'ignore     "partial prose"                    t
+  'settle     "the whole final turn"             nil
+  'settle     t                                  t
+  'settle     t                                  nil
+  'ignore     '(reasoning . "thinking")          t
+  'ignore     '(tool-call . ((tool args cb)))    nil
+  'tool-round '(tool-result . ((tool args res))) t
+  'tool-round '(tool-result . ((tool args res))) nil
+  'fail       nil                                nil
+  'fail       'abort                             nil)
+
 (provide 'test-mevedel-buddy)
 ;;; test-mevedel-buddy.el ends here

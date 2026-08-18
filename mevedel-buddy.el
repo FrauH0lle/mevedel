@@ -478,6 +478,25 @@ preempt another explicit request.")
 (defvar mevedel-buddy--timeout-timer nil
   "Timer that abandons the review in flight if it never settles.")
 
+(defun mevedel-buddy--response-action (response streamingp)
+  "Return what RESPONSE means for a review in flight.
+
+STREAMINGP is whether this request streams.  One of `ignore' for
+material a review has no use for, `tool-round' for a completed batch of
+tool calls, `settle' for a turn that ended without calling a tool, and
+`fail' for an error or abort.
+
+While streaming, a string is one fragment of prose and tool calls may
+still follow it, so it must not settle the review; without streaming the
+string is the whole final turn and does."
+  (cond
+   ((and (consp response) (memq (car response) '(reasoning tool-call)))
+    'ignore)
+   ((and (consp response) (eq (car response) 'tool-result)) 'tool-round)
+   ((and streamingp (stringp response)) 'ignore)
+   ((or (stringp response) (eq response t)) 'settle)
+   (t 'fail)))
+
 (defun mevedel-buddy--session ()
   "Return a live session to attribute telemetry to, or nil.
 
@@ -611,26 +630,28 @@ started by the idle timer, which an explicit request may preempt."
             (gptel-request
              (concat payload (mevedel-buddy-note-serialize))
              :buffer source
-             :stream nil
+             ;; Follow the user's streaming setting rather than forcing it
+             ;; off.  Buddy has no use for streamed prose, but some
+             ;; providers reject a request with `stream' false outright.
+             :stream gptel-stream
              :transforms nil
              :system (mevedel-system-build-prompt
                       profile
                       :workspace (mevedel-buddy--workspace)
                       :working-directory default-directory)
              :callback
-             (lambda (response _info)
-               (cond
-                ;; Reasoning and streamed fragments are not our business.
-                ((and (consp response) (eq (car response) 'reasoning)))
-                ((and (consp response) (eq (car response) 'tool-call)))
-                ((and (consp response) (eq (car response) 'tool-result))
-                 (setq rounds (1+ rounds))
-                 (when (> rounds mevedel-buddy-max-iterations)
-                   (ignore-errors (gptel-abort source))
-                   (finish nil)))
-                ;; A turn that calls no tool has nothing left to say.
-                ((or (stringp response) (eq response t)) (finish t))
-                (t (finish nil))))))
+             (lambda (response info)
+               (pcase (mevedel-buddy--response-action
+                       response (plist-get info :stream))
+                 ('ignore nil)
+                 ('tool-round
+                  (setq rounds (1+ rounds))
+                  (when (> rounds mevedel-buddy-max-iterations)
+                    (ignore-errors (gptel-abort source))
+                    (finish nil)))
+                 ;; A turn that calls no tool has nothing left to say.
+                 ('settle (finish t))
+                 ('fail (finish nil))))))
         (error (finish nil))))))
 
 (defun mevedel-buddy--workspace ()
