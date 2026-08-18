@@ -89,11 +89,17 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+html {
+  /* iOS Safari inflates text on pages that don't pin this. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 body {
   background: var(--ground);
   color: var(--ink);
   font: 15px/1.6 "Seravek", "Segoe UI Variable Text", "Segoe UI",
     system-ui, -apple-system, sans-serif;
+  overflow-x: clip;
 }
 code, pre {
   font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code",
@@ -411,17 +417,14 @@ code, pre {
 .diff .del  { background: var(--diff-del); color: var(--diff-del-ink); }
 
 /* ── Live affordance ────────────────────────────────────────────────── */
+/* Docked above the composer so it never lands inside the transcript on a
+   short viewport. */
 .live-controls {
-  position: fixed;
-  bottom: 12rem;
-  left: 0; right: 0;
   display: flex;
   justify-content: center;
-  pointer-events: none;
-  z-index: 15;
 }
+.live-controls:not(:has(.live-button:not([hidden]))) { display: none; }
 .live-button {
-  pointer-events: auto;
   border: 0;
   border-radius: 999px;
   padding: .5rem 1rem;
@@ -441,8 +444,9 @@ code, pre {
   left: 0; right: 0; bottom: 0;
   z-index: 20;
   background: linear-gradient(transparent,
-    color-mix(in srgb, var(--ground) 94%, transparent) 22%);
-  padding: 1.6rem 1rem .6rem;
+    color-mix(in srgb, var(--ground) 96%, transparent) 14%,
+    var(--ground) 40%);
+  padding: 1.6rem 1rem calc(.6rem + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -574,6 +578,7 @@ code, pre {
   display: flex;
   align-items: center;
   gap: .5rem;
+  flex-wrap: wrap;
 }
 .composer-name {
   border: 1px solid var(--line);
@@ -583,16 +588,36 @@ code, pre {
   font: inherit;
   font-size: .78rem;
   padding: .3rem .75rem;
-  width: 9.5rem;
+  flex: 1 1 6rem;
+  min-width: 0;
+  max-width: 9.5rem;
 }
 .composer-spacer { flex: 1; }
 
 .disclosure {
+  width: 100%;
   max-width: 44rem;
   margin: 0;
   font-size: .68rem;
   line-height: 1.5;
   color: var(--muted);
+}
+.disclosure summary { cursor: pointer; }
+.disclosure p { margin: .3rem 0 0; }
+
+/* ── Small screens ──────────────────────────────────────────────────── */
+@media (max-width: 520px) {
+  .topbar { padding: .5rem .7rem; gap: .6rem; }
+  .ledger { padding: 1rem .6rem 14rem; gap: .9rem; }
+  .turn { grid-template-columns: 1.7rem 1fr; gap: .55rem; }
+  .glyph {
+    width: 1.7rem;
+    height: 1.7rem;
+    border-radius: .5rem;
+    font-size: .72rem;
+  }
+  .dock { padding-left: .6rem; padding-right: .6rem; }
+  .composer-name { max-width: 100%; }
 }
 
 .question {

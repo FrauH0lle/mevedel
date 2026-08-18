@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="light dark">
     <title>mevedel live session</title>
     <link rel="stylesheet" href="/viewer.css">
@@ -15,10 +15,10 @@
     </header>
     <main id="transcript" class="ledger" aria-live="polite"
           aria-label="Shared session transcript"></main>
-    <div class="live-controls">
-      <button id="live-button" class="live-button" type="button" hidden>Return to live</button>
-    </div>
     <div class="dock">
+      <div class="live-controls">
+        <button id="live-button" class="live-button" type="button" hidden>Return to live</button>
+      </div>
       <div id="requests" class="requests" aria-label="Pending interactions"></div>
       <p id="notice" class="notice" role="status" hidden></p>
       <form id="composer" class="composer" hidden>
@@ -37,13 +37,14 @@
           <button id="send-button" class="btn" type="submit">Send</button>
         </div>
       </form>
-      <aside class="disclosure" aria-label="Sharing and security notice">
-        This link is a bearer credential: anyone who has it can read the
-        visible prompts, responses, paths, and tool results, which may contain
-        secrets, and a full-control link can also prompt, interrupt, and answer
-        pending interactions. Frames are sealed end to end with a key that
-        lives only in the link; the relay sees ciphertext.
-      </aside>
+      <details class="disclosure" aria-label="Sharing and security notice">
+        <summary>This link is a bearer credential — treat it like a secret.</summary>
+        <p>Anyone who has it can read the visible prompts, responses, paths,
+        and tool results, which may contain secrets, and a full-control link
+        can also prompt, interrupt, and answer pending interactions. Frames
+        are sealed end to end with a key that lives only in the link; the
+        relay sees ciphertext.</p>
+      </details>
     </div>
     <script src="/viewer.js" defer></script>
   </body>
