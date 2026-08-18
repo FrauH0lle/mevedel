@@ -70,7 +70,12 @@
 (declare-function mevedel--prompt--settle
                   "mevedel-interaction-prompt" (overlay outcome))
 
+;; `mevedel-mentions'
+(declare-function mevedel-mentions-file-token "mevedel-mentions" (path))
+
 ;; `mevedel-structs'
+(declare-function mevedel-session-add-dropped-file-grant
+                  "mevedel-structs" (session path))
 (declare-function mevedel-session-enqueue-pending-input
                   "mevedel-structs" (session category entry))
 (declare-function mevedel-session-session-id "mevedel-structs" (session))
@@ -85,6 +90,9 @@
                   "mevedel-view" (data-buffer))
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view--media-dir "mevedel-view-composer" ())
+(declare-function mevedel-view--pop-dropped-file-grants-for-input
+                  "mevedel-view-composer" (input session))
 (declare-function mevedel-view--schedule-late-follow-up-drain
                   "mevedel-view-composer" ())
 
@@ -127,6 +135,15 @@ When nil, full links are capped at prompting and interrupting."
 (defconst mevedel-collaboration--publish-delay 0.1)
 (defconst mevedel-collaboration--max-prompt-bytes (* 256 1024))
 (defconst mevedel-collaboration--max-guest-name-chars 32)
+(defconst mevedel-collaboration--max-prompt-images 3)
+(defconst mevedel-collaboration--max-image-bytes (* 1536 1024)
+  "Total decoded image bytes one guest prompt may carry.
+The sealed frame must clear the relay's 2 MiB read limit with base64
+and envelope overhead included, so the viewer downscales to this
+budget and the host enforces it.")
+(defconst mevedel-collaboration--image-extensions
+  '(("image/jpeg" . "jpg") ("image/png" . "png") ("image/webp" . "webp"))
+  "Accepted guest image MIME types and their file extensions.")
 (defconst mevedel-collaboration--duplicate-prompt-window 3.0
   "Seconds within which an identical prompt from one guest is dropped.
 A human re-sending the same text this fast is a double-fired client
@@ -560,10 +577,13 @@ never enters model-visible context."
         (plist-put guest :name (mevedel-collaboration--sanitize-guest-name
                                 (plist-get frame :name))))
       ;; Drop a byte-identical repeat inside the duplicate window: a
-      ;; double-fired client submit, not a second question.
+      ;; double-fired client submit, not a second question.  Prompts
+      ;; carrying images are never deduplicated -- consecutive photo
+      ;; sends legitimately reuse the same placeholder text.
       (let ((last (plist-get guest :last-prompt))
             (now (float-time)))
         (when (and last
+                   (not (plist-get frame :images))
                    (equal (car last) text)
                    (< (- now (cdr last))
                       mevedel-collaboration--duplicate-prompt-window))
@@ -580,17 +600,76 @@ never enters model-visible context."
           (with-current-buffer view-buffer
             (require 'mevedel-view-composer)
             (require 'mevedel-utilities)
-            (mevedel-session-enqueue-pending-input
-             session 'follow-up
-             (list :input (mevedel--normalize-message-text text)
-                   :guest-name (plist-get guest :name)
-                   :queued-at-time (float-time)
-                   :queued-at-turn
-                   (or (mevedel-session-turn-count session) 0)))
+            (let ((input (mevedel--normalize-message-text text)))
+              ;; Attached images ride the same pipeline as clipboard
+              ;; images pasted in Emacs: saved under the session media
+              ;; directory, mentioned as @file tokens, and read-granted.
+              (when-let ((paths (mevedel-collaboration--save-guest-images
+                                 (plist-get frame :images))))
+                (require 'mevedel-mentions)
+                (setq input
+                      (concat input " "
+                              (mapconcat #'mevedel-mentions-file-token
+                                         paths " ")))
+                (dolist (path paths)
+                  (mevedel-session-add-dropped-file-grant session path)))
+              (mevedel-session-enqueue-pending-input
+               session 'follow-up
+               (list :input input
+                     :guest-name (plist-get guest :name)
+                     :dropped-file-grants
+                     (mevedel-view--pop-dropped-file-grants-for-input
+                      input session)
+                     :queued-at-time (float-time)
+                     :queued-at-turn
+                     (or (mevedel-session-turn-count session) 0))))
             (mevedel-view--interaction-rebuild)
             (mevedel-view--schedule-late-follow-up-drain))
           (mevedel-collaboration--transport-send
            (plist-get room :transport) peer (list :t "queued")))))))
+
+(defun mevedel-collaboration--save-guest-images (images)
+  "Save valid guest IMAGES under the session media directory.
+IMAGES is the decoded frame list of (:mime STRING :data BASE64) plists.
+Return the saved absolute paths.  Runs in the view buffer.  Anything
+invalid -- unknown type, undecodable data, or a set over the byte
+budget -- drops the whole set rather than attaching a partial one."
+  (when (and images (listp images)
+             (<= (length images) mevedel-collaboration--max-prompt-images))
+    (catch 'invalid
+      (let ((total 0)
+            (decoded nil))
+        (dolist (image images)
+          (let* ((extension (cdr (assoc (plist-get image :mime)
+                                        mevedel-collaboration--image-extensions)))
+                 (bytes (and extension
+                             (stringp (plist-get image :data))
+                             (condition-case nil
+                                 (base64-decode-string
+                                  (plist-get image :data))
+                               (error nil)))))
+            (unless (and bytes (> (length bytes) 0))
+              (throw 'invalid nil))
+            (cl-incf total (length bytes))
+            (when (> total mevedel-collaboration--max-image-bytes)
+              (throw 'invalid nil))
+            (push (cons extension bytes) decoded)))
+        (let ((dir (mevedel-view--media-dir))
+              (stamp (format-time-string "%Y%m%d-%H%M%S"))
+              (n 0)
+              paths)
+          (dolist (entry (nreverse decoded))
+            (let ((path (file-name-concat
+                         dir (format "guest-%s-%d.%s" stamp
+                                     (cl-incf n) (car entry)))))
+              (while (file-exists-p path)
+                (setq path (file-name-concat
+                            dir (format "guest-%s-%d.%s" stamp
+                                        (cl-incf n) (car entry)))))
+              (let ((coding-system-for-write 'binary))
+                (write-region (cdr entry) nil path nil 'silent))
+              (push path paths)))
+          (nreverse paths))))))
 
 (defun mevedel-collaboration--handle-abort (room peer)
   "Abort the running request for writable guest PEER."

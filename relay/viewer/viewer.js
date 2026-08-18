@@ -12,6 +12,9 @@
   const stopButton = document.getElementById('stop-button');
   const filterNav = document.getElementById('filter');
   const requests = document.getElementById('requests');
+  const attachments = document.getElementById('attachments');
+  const attachButton = document.getElementById('attach-button');
+  const imageInput = document.getElementById('image-input');
   const sessionLabel = document.getElementById('session-label');
 
   const PROTO = 2;
@@ -694,6 +697,83 @@
     if (requests) requests.replaceChildren();
   }
 
+  /* ── Image attachments ────────────────────────────────────────────── */
+  // Phone photos are downscaled client-side to fit the sealed frame under
+  // the relay's read limit; the host enforces the same budget.
+
+  const MAX_IMAGES = 3;
+  const IMAGE_BUDGET = 1536 * 1024; // total decoded bytes, all images
+  const pendingImages = []; // {mime, data (base64), bytes, url}
+
+  function renderAttachments() {
+    if (!attachments) return;
+    attachments.replaceChildren();
+    pendingImages.forEach((image, index) => {
+      const chip = el('span', 'attachment');
+      const thumb = el('img', 'attachment-thumb');
+      thumb.src = image.url;
+      thumb.alt = `attachment ${index + 1}`;
+      const removeButton = el('button', 'attachment-remove', '✕');
+      removeButton.type = 'button';
+      removeButton.setAttribute('aria-label', `Remove attachment ${index + 1}`);
+      removeButton.addEventListener('click', () => {
+        pendingImages.splice(index, 1);
+        renderAttachments();
+      });
+      chip.append(thumb, removeButton);
+      attachments.append(chip);
+    });
+  }
+
+  function pendingImageBytes() {
+    return pendingImages.reduce((sum, image) => sum + image.bytes, 0);
+  }
+
+  async function downscaleImage(file, budget) {
+    const bitmap = await createImageBitmap(file);
+    const longest = Math.max(bitmap.width, bitmap.height);
+    let scale = Math.min(1, 1568 / longest);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext('2d').drawImage(bitmap, 0, 0,
+                                        canvas.width, canvas.height);
+      const quality = Math.max(0.4, 0.85 - attempt * 0.15);
+      const blob = await new Promise(resolve =>
+        canvas.toBlob(resolve, 'image/jpeg', quality));
+      if (blob && blob.size <= budget) return blob;
+      if (attempt >= 2) scale *= 0.7;
+    }
+    return null;
+  }
+
+  async function addImages(files) {
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+      if (pendingImages.length >= MAX_IMAGES) {
+        showNotice(`At most ${MAX_IMAGES} images per prompt.`);
+        break;
+      }
+      const budget = IMAGE_BUDGET - pendingImageBytes();
+      const blob = await downscaleImage(file, budget).catch(() => null);
+      if (!blob) {
+        showNotice('Image too large for the frame budget.');
+        continue;
+      }
+      const buffer = new Uint8Array(await blob.arrayBuffer());
+      let binary = '';
+      buffer.forEach(byte => { binary += String.fromCharCode(byte); });
+      pendingImages.push({
+        mime: 'image/jpeg',
+        data: btoa(binary),
+        bytes: buffer.length,
+        url: URL.createObjectURL(blob),
+      });
+    }
+    renderAttachments();
+  }
+
   /* ── Composer ─────────────────────────────────────────────────────── */
 
   function guestName() {
@@ -826,18 +906,43 @@
     composer.addEventListener('submit', async event => {
       event.preventDefault();
       const text = composerInput.value;
-      if (!text.trim()) return;
+      if (!text.trim() && !pendingImages.length) return;
       if (new TextEncoder().encode(text).length > MAX_PROMPT_BYTES) {
         showNotice('Prompt too large.');
         return;
       }
       localStorage.setItem('mevedel-guest-name', guestName());
-      await send({t: 'prompt', text, name: guestName()});
+      const frame = {t: 'prompt', text: text.trim() || 'See the attached image.',
+                     name: guestName()};
+      if (pendingImages.length) {
+        frame.images = pendingImages.map(
+          image => ({mime: image.mime, data: image.data}));
+      }
+      await send(frame);
       composerInput.value = '';
+      pendingImages.length = 0;
+      renderAttachments();
     });
     // The Send button is type="submit", so the form's submit event already
     // covers it; a click handler here would double-send every prompt.
     stopButton.addEventListener('click', () => send({t: 'abort'}));
+    if (attachButton && imageInput) {
+      attachButton.addEventListener('click', () => imageInput.click());
+      imageInput.addEventListener('change', () => {
+        addImages([...imageInput.files]);
+        imageInput.value = '';
+      });
+    }
+    if (composerInput) {
+      composerInput.addEventListener('paste', event => {
+        const files = [...(event.clipboardData?.items || [])]
+          .filter(item => item.kind === 'file'
+                  && item.type.startsWith('image/'))
+          .map(item => item.getAsFile())
+          .filter(Boolean);
+        if (files.length) addImages(files);
+      });
+    }
     if (composerName) {
       composerName.value = localStorage.getItem('mevedel-guest-name') || '';
     }
