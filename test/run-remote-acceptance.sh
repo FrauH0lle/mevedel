@@ -82,18 +82,28 @@ docker build --tag "$image" --file "$fixture" "$root"
 docker save --output "$scratch/image.tar" "$image"
 podman load --input "$scratch/image.tar"
 
+# The targets run Bubblewrap inside themselves.  Neither the default AppArmor
+# profile nor the default seccomp filter lets a container create an
+# unprivileged user namespace, which is the whole point of these targets, so
+# both come off.
 docker run --detach \
     --name "$ssh_container" \
+    --security-opt apparmor=unconfined \
+    --security-opt seccomp=unconfined \
     --publish 127.0.0.1::22 \
     --volume "$scratch/id_ed25519.pub:/home/mevedel/.ssh/authorized_keys:ro" \
     --volume "$ssh_workspace_volume:/workspace" \
     "$image" >/dev/null
 docker run --detach \
     --name "$docker_container" \
+    --security-opt apparmor=unconfined \
+    --security-opt seccomp=unconfined \
     --volume "$docker_workspace_volume:/workspace" \
     "$image" >/dev/null
 podman run --detach \
     --name "$podman_container" \
+    --security-opt apparmor=unconfined \
+    --security-opt seccomp=unconfined \
     --volume "$podman_workspace_volume:/workspace" \
     "$image" >/dev/null
 
