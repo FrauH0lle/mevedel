@@ -341,8 +341,44 @@ async function main() {
                                   (k, v) => (k === 'parent' ? undefined : v));
   assert.match(diffFlat, /line add/);
   assert.match(diffFlat, /line del/);
+  // A questionnaire renders per-question option buttons plus a custom
+  // field, requires every answer, and submits atomically.
+  await deliver({t: 'ui-request', reqId: 43, body: 'Ask · 2 questions',
+                 bodyKind: 'text', options: [], allowFeedback: false,
+                 questions: [
+                   {question: 'Which approach?',
+                    options: [{label: 'MVP first (Recommended)'},
+                              {label: 'Risk first', description: 'slower'}]},
+                   {question: 'Which branch?', options: [{label: 'main'}],
+                    answer: 'main'},
+                 ]});
+  const askCard = nodes.requests.children.find(
+    c => c.dataset.reqId === '43');
+  const askButtons = [];
+  (function collect(node) {
+    if (typeof node === 'string') return;
+    if (node.tagName === 'button') askButtons.push(node);
+    node.children.forEach(collect);
+  })(askCard);
+  const submitButton = askButtons[askButtons.length - 1];
+  assert.equal(textOf(submitButton), 'Submit answers');
+  const askBefore = first.sent.length;
+  // Question 1 unanswered: submit refuses with a notice.
+  submitButton.dispatch('click');
+  await tick();
+  assert.equal(first.sent.length, askBefore);
+  assert.match(textOf(nodes.notice), /Answer every question/);
+  // Answer question 1 by option, keep question 2's prefilled answer.
+  askButtons[0].dispatch('click');
+  submitButton.dispatch('click');
+  await waitFor(() => first.sent.length === askBefore + 1, 'ask answers');
+  assert.deepEqual(await unseal(key, first.sent[askBefore]),
+                   {t: 'ui-response', reqId: 43,
+                    answers: ['MVP first (Recommended)', 'main']});
+
   await deliver({t: 'ui-request-end', reqId: 41});
   await deliver({t: 'ui-request-end', reqId: 42});
+  await deliver({t: 'ui-request-end', reqId: 43});
   assert.equal(nodes.requests.children.length, 0);
 
   // Unknown future frames are tolerated.

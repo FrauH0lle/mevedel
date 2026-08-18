@@ -594,3 +594,18 @@ code, pre {
   line-height: 1.5;
   color: var(--muted);
 }
+
+.question {
+  border-top: 1px solid var(--line);
+  padding: .45rem .9rem .2rem;
+}
+.question-text {
+  margin: 0 0 .35rem;
+  font-size: .82rem;
+  font-weight: 650;
+}
+.btn.option[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}

@@ -799,6 +799,31 @@
           (mevedel-collaboration--handle-ui-response
            room 1 (list :reqId 41 :feedback "  needs a dry run  "))
           (should (equal '(feedback . "needs a dry run") settled))
+          ;; A questionnaire answer set reaches the answer handler
+          ;; atomically, trimmed; incomplete answers are refused.
+          (let ((received nil))
+            (overlay-put overlay 'mevedel--remote-answer
+                         (lambda (answers) (setq received answers)))
+            (mevedel-collaboration--handle-ui-response
+             room 1 (list :reqId 41 :answers '(" MVP first " "Yes")))
+            (should (equal '("MVP first" "Yes") received))
+            (setq received nil)
+            (mevedel-collaboration--handle-ui-response
+             room 1 (list :reqId 41 :answers '("MVP first" "   ")))
+            (should-not received)
+            (mevedel-collaboration--handle-ui-response
+             room 1 (list :reqId 41 :answers '("MVP first" 42)))
+            (should-not received))
+          ;; A questionnaire overlay's frame carries the questions.
+          (overlay-put overlay 'mevedel--remote-questions
+                       (lambda ()
+                         '((("question" . "Which?")
+                            ("options" . [(("label" . "A"))])))))
+          (let ((frame (mevedel-collaboration--ui-request-frame 41 overlay)))
+            (should (equal "Which?"
+                           (cdr (assoc "question"
+                                       (aref (plist-get frame :questions)
+                                             0))))))
           ;; Settlement dismisses the request everywhere writable.
           (mevedel-collaboration--on-prompt-settled overlay)
           (should (= 0 (hash-table-count requests)))

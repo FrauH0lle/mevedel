@@ -579,6 +579,69 @@
     if (card) card.remove();
   }
 
+  // A questionnaire answers all questions atomically: option buttons or a
+  // custom text per question, then one submit with the answers array.
+  function renderQuestionnaire(card, frame) {
+    const questions = frame.questions;
+    const answers = questions.map(q => (typeof q.answer === 'string' ? q.answer : ''));
+    const marks = [];
+    questions.forEach((q, index) => {
+      const block = el('div', 'question');
+      block.append(el('p', 'question-text',
+                      `${index + 1}. ${q.question || ''}`));
+      const row = el('div', 'request-controls');
+      const buttons = [];
+      (Array.isArray(q.options) ? q.options : []).forEach(option => {
+        const button = el('button', 'btn quiet option', option.label || '');
+        button.type = 'button';
+        if (option.description) button.setAttribute('title', option.description);
+        button.addEventListener('click', () => {
+          answers[index] = option.label || '';
+          custom.value = '';
+          marks[index]();
+        });
+        buttons.push(button);
+        row.append(button);
+      });
+      const custom = el('input', 'request-feedback');
+      custom.type = 'text';
+      custom.placeholder = 'Custom answer…';
+      custom.setAttribute('aria-label', `Custom answer ${index + 1}`);
+      custom.addEventListener('input', () => {
+        answers[index] = custom.value;
+        marks[index]();
+      });
+      if (answers[index]
+          && !buttons.some(b => b.textContent === answers[index])) {
+        custom.value = answers[index];
+      }
+      marks[index] = () => {
+        buttons.forEach(button => {
+          button.setAttribute('aria-pressed',
+                              button.textContent === answers[index]
+                              && !custom.value
+                              ? 'true' : 'false');
+        });
+      };
+      marks[index]();
+      row.append(custom);
+      block.append(row);
+      card.append(block);
+    });
+    const submitRow = el('div', 'request-controls');
+    const submit = el('button', 'btn', 'Submit answers');
+    submit.type = 'button';
+    submit.addEventListener('click', () => {
+      if (answers.every(answer => answer.trim())) {
+        send({t: 'ui-response', reqId: frame.reqId, answers});
+      } else {
+        showNotice('Answer every question before submitting.');
+      }
+    });
+    submitRow.append(submit);
+    card.append(submitRow);
+  }
+
   function renderRequest(frame) {
     if (!requests) return;
     removeRequest(frame.reqId);
@@ -588,9 +651,14 @@
     if (frame.bodyKind === 'diff') {
       const body = renderDiff(frame.body || '');
       card.append(body);
-    } else {
+    } else if (frame.body) {
       card.append(el('pre', 'request-body',
                      typeof frame.body === 'string' ? frame.body : ''));
+    }
+    if (Array.isArray(frame.questions) && frame.questions.length) {
+      renderQuestionnaire(card, frame);
+      requests.append(card);
+      return;
     }
     const controls = el('div', 'request-controls');
     (Array.isArray(frame.options) ? frame.options : []).forEach(option => {

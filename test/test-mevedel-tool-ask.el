@@ -394,6 +394,61 @@
       (when (buffer-live-p agent-buffer-b) (kill-buffer agent-buffer-b))
       (when (buffer-live-p agent-buffer-a) (kill-buffer agent-buffer-a))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "exposes the questionnaire remotely and adopts an atomic guest answer"
+  (let ((data-buffer (generate-new-buffer " *mev-ask-remote-data*"))
+        (view-buffer (generate-new-buffer " *mev-ask-remote-view*"))
+        (mevedel-interaction-prompt-created-hook nil)
+        (mevedel-interaction-prompt-settled-hook nil)
+        overlay announced settled result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel--prompt--data-buffer)
+                   (lambda () data-buffer))
+                  ((symbol-function 'mevedel-view--interaction-target-buffer)
+                   (lambda (&optional _data-buffer) view-buffer))
+                  ((symbol-function 'mevedel-view--interaction-register)
+                   (lambda (_descriptor)
+                     (make-overlay (point-min) (point-min)
+                                   (current-buffer) nil t)))
+                  ((symbol-function 'mevedel--prompt--register-canceller)
+                   #'ignore))
+          (add-hook 'mevedel-interaction-prompt-created-hook
+                    (lambda (ov) (setq announced t overlay ov)))
+          (add-hook 'mevedel-interaction-prompt-settled-hook
+                    (lambda (_ov) (setq settled t)))
+          (with-current-buffer view-buffer
+            (setq-local mevedel--prompt-overlays nil))
+          (mevedel-tools--ask-user
+           (lambda (value) (setq result value))
+           [(:question "Which approach?"
+             :options ["MVP first (Recommended)"
+                       (:label "Risk first" :description "slower")])
+            (:question "Run tests?" :options ["Yes" "No"])])
+          (should announced)
+          (should (functionp (overlay-get overlay 'mevedel--remote-answer)))
+          (let ((questions (funcall (overlay-get overlay
+                                                 'mevedel--remote-questions))))
+            (should (= 2 (length questions)))
+            (should (equal "Which approach?"
+                           (cdr (assoc "question" (car questions)))))
+            (should (equal "slower"
+                           (cdr (assoc "description"
+                                       (aref (cdr (assoc "options"
+                                                         (car questions)))
+                                             1)))))
+            ;; Nothing answered yet.
+            (should-not (assoc "answer" (car questions))))
+          ;; A wrong-length answer set is refused.
+          (funcall (overlay-get overlay 'mevedel--remote-answer) '("only"))
+          (should-not result)
+          ;; The atomic guest answer submits through the same path.
+          (funcall (overlay-get overlay 'mevedel--remote-answer)
+                   '("Risk first" "Yes"))
+          (should (string-match-p "A1: Risk first" result))
+          (should (string-match-p "A2: Yes" result))
+          (should settled))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
 
 

@@ -378,19 +378,24 @@ request or prompt transaction."
 
 (defun mevedel-collaboration--ui-request-frame (request-id overlay)
   "Return the ui-request frame for OVERLAY under REQUEST-ID."
-  (list :t "ui-request"
-        :reqId request-id
-        :body (or (overlay-get overlay 'mevedel--remote-body) "")
-        :bodyKind (or (overlay-get overlay 'mevedel--remote-body-kind)
-                      "text")
-        :options
-        (vconcat
-         (cl-loop for (_outcome . label)
-                  in (overlay-get overlay 'mevedel--remote-options)
-                  for index from 0
-                  collect `(("id" . ,index) ("label" . ,label))))
-        :allowFeedback
-        (if (overlay-get overlay 'mevedel--remote-feedback) t :json-false)))
+  (append
+   (list :t "ui-request"
+         :reqId request-id
+         :body (or (overlay-get overlay 'mevedel--remote-body) "")
+         :bodyKind (or (overlay-get overlay 'mevedel--remote-body-kind)
+                       "text")
+         :options
+         (vconcat
+          (cl-loop for (_outcome . label)
+                   in (overlay-get overlay 'mevedel--remote-options)
+                   for index from 0
+                   collect `(("id" . ,index) ("label" . ,label))))
+         :allowFeedback
+         (if (overlay-get overlay 'mevedel--remote-feedback) t :json-false))
+   ;; A questionnaire travels structurally; the guest answers all
+   ;; questions atomically through the :answers response field.
+   (when-let ((questions (overlay-get overlay 'mevedel--remote-questions)))
+     (list :questions (vconcat (funcall questions))))))
 
 (defun mevedel-collaboration--on-prompt-created (overlay)
   "Present prompt OVERLAY to the active room's writable guests.
@@ -400,7 +405,8 @@ head on every selection change -- reuses the existing request id, so a
 guest sees one card updated in place instead of an accumulating pile."
   (when-let ((room mevedel-collaboration--room))
     (when (and mevedel-collaboration-remote-interactions
-               (overlay-get overlay 'mevedel--remote-options))
+               (or (overlay-get overlay 'mevedel--remote-options)
+                   (overlay-get overlay 'mevedel--remote-questions)))
       (let* ((requests (plist-get room :ui-requests))
              (interaction-id
               (overlay-get overlay 'mevedel-view-interaction-id))
@@ -467,10 +473,25 @@ answer can execute the same path the host key binding would."
         (let* ((options (overlay-get overlay 'mevedel--remote-options))
                (feedback (plist-get frame :feedback))
                (option (plist-get frame :option))
+               (answers (plist-get frame :answers))
                (feedback-handler
                 (overlay-get overlay 'mevedel--remote-feedback))
+               (answer-handler
+                (overlay-get overlay 'mevedel--remote-answer))
                (outcome
                 (cond
+                 ;; A complete questionnaire response: every answer a
+                 ;; nonblank string, submitted atomically.
+                 ((and answers
+                       (functionp answer-handler)
+                       (listp answers)
+                       (cl-every (lambda (answer)
+                                   (and (stringp answer)
+                                        (not (string-empty-p
+                                              (string-trim answer)))))
+                                 answers))
+                  (let ((trimmed (mapcar #'string-trim answers)))
+                    (lambda () (funcall answer-handler trimmed))))
                  ((and (stringp feedback)
                        (not (string-empty-p (string-trim feedback)))
                        feedback-handler)

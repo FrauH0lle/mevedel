@@ -19,9 +19,12 @@
 (declare-function mevedel--prompt--register-canceller
                   "mevedel-interaction-prompt"
                   (&optional source-buffer overlay))
+(declare-function mevedel--prompt-announce
+                  "mevedel-interaction-prompt" (overlay))
 (declare-function mevedel--prompt-attribution-line
                   "mevedel-interaction-prompt" (origin))
 (defvar mevedel--prompt-overlays)
+(defvar mevedel-interaction-prompt-settled-hook)
 
 ;; `mevedel-structs'
 (declare-function mevedel-current-origin "mevedel-structs" ())
@@ -252,10 +255,52 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
            (setq current-index 'confirm)
            (show-confirmation))
 
+         (remote-questions
+           ()
+           "Return the questionnaire as JSON-safe alists with current answers."
+           (cl-loop for q in questions-list
+                    for index from 0
+                    collect
+                    `(("question" . ,(format "%s" (plist-get q :question)))
+                      ("options"
+                       . ,(vconcat
+                           (mapcar
+                            (lambda (option)
+                              (let ((description
+                                     (mevedel-tools--ask-option-description
+                                      option)))
+                                (append
+                                 (list (cons "label"
+                                             (mevedel-tools--ask-option-label
+                                              option)))
+                                 (when description
+                                   (list (cons "description" description))))))
+                            (append (plist-get q :options) nil))))
+                      ,@(when-let ((answer (aref answers index)))
+                          `(("answer" . ,answer))))))
+
+         (remote-answer
+           (submitted)
+           "Adopt the guest's SUBMITTED answers and submit the questionnaire."
+           (when (= (length submitted) (length questions-list))
+             (cl-loop for answer in submitted
+                      for index from 0
+                      do (aset answers index answer))
+             (submit-answers)))
+
+         (settled
+           ()
+           "Announce settlement so other surfaces dismiss this Ask."
+           (when (and overlay
+                      (boundp 'mevedel-interaction-prompt-settled-hook))
+             (run-hook-with-args 'mevedel-interaction-prompt-settled-hook
+                                 overlay)))
+
          (quit-questionnaire
            ()
            "Cancel questionnaire and abort execution."
            (interactive)
+           (settled)
            (when overlay
              (when (fboundp 'mevedel-view--interaction-unregister)
                (mevedel-view--interaction-unregister interaction-id))
@@ -304,8 +349,19 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
                           :help-echo "Ask prompt")))
              (overlay-put overlay 'mevedel-user-request t)
              (overlay-put overlay 'mevedel--callback callback)
+             ;; The remote surface gets the whole questionnaire and
+             ;; answers it atomically; announcing on every screen render
+             ;; keeps guests in sync with host navigation and edits.
+             (overlay-put overlay 'mevedel--remote-body
+                          (format "Ask · %d question%s"
+                                  (length questions-list)
+                                  (if (= 1 (length questions-list)) "" "s")))
+             (overlay-put overlay 'mevedel--remote-questions
+                          #'remote-questions)
+             (overlay-put overlay 'mevedel--remote-answer #'remote-answer)
              (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
-             (mevedel--prompt--register-canceller source-buffer overlay)))
+             (mevedel--prompt--register-canceller source-buffer overlay)
+             (mevedel--prompt-announce overlay)))
 
          (update-overlay
            (index)
@@ -443,6 +499,7 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
          (cleanup-and-return
            (result)
            "Clean up overlay and return RESULT."
+           (settled)
            (when overlay
              (when (fboundp 'mevedel-view--interaction-unregister)
                (mevedel-view--interaction-unregister interaction-id))
