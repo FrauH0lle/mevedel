@@ -4859,6 +4859,17 @@ state of its inner sections"
         (should (equal '(:file_path "/tmp/f") (plist-get call :args)))
         (should (string-match-p "plain result" (plist-get call :result)))
         (should (null (plist-get call :render-data))))))
+  :doc "keeps the leading indentation of the first result line"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n  1\tfirst\n  2\tsecond\n"
+     '(tool . "call_1"))
+    (with-current-buffer data-buf
+      (let ((call (mevedel-view--tool-call-parse
+                   data-buf (point-min) (point-max))))
+        (should (equal "  1\tfirst\n  2\tsecond"
+                       (plist-get call :result))))))
   :doc "renderer path survives incremental rerender starting inside tool run"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "prefix\n" 'response)
