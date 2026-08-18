@@ -1789,6 +1789,27 @@ connection charges for, so the program path is proved here too."
           (when (file-directory-p dir-a)
             (delete-directory dir-a t)))))))
 
+(defun test-mevedel-execution-remote--reclaim-lease (session &optional timeout)
+  "Take SESSION's portable lease back after its transfer clients exit.
+
+The cooperative handoff ends in a directed release whose fence reserves the
+next claim for the requester, and the requester is gone by the time this
+returns, so a journey that simply mutates again races the fence: it is
+refused while the fence is live and admitted once it lapses.  Waiting for
+this client's own claim is what a person does with `mevedel-take-control',
+and it is the only thing that makes the next mutation deterministic.  An
+expired foreign lease confirms its takeover, which no batch client can
+answer, so the known-dead clients are confirmed away."
+  (let ((deadline (+ (float-time) (or timeout 120))))
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+      (while (not (or (mevedel-session-durability-lease-owned-p session)
+                      (mevedel-session-durability-lease-acquire
+                       (mevedel-session-save-path session)
+                       "acceptance-reclaim" session)))
+        (when (> (float-time) deadline)
+          (ert-fail "Journey never reclaimed its session lease"))
+        (accept-process-output nil 0.2)))))
+
 (defun test-mevedel-execution-remote--run-transfer-clients
     (root session-id &optional scenario)
   "Run independent owner and requester Emacsen against ROOT SESSION-ID.
@@ -2514,7 +2535,8 @@ work in flight genuinely unprovable rather than merely finished."
               (mevedel-session-durability-lease-release
                (mevedel-session-save-path session) session)
               (test-mevedel-execution-remote--run-transfer-clients
-               root (mevedel-session-session-id session)))
+               root (mevedel-session-session-id session))
+              (test-mevedel-execution-remote--reclaim-lease session))
             (when (memq method '(docker podman))
               (message "mevedel: real remote %s volume replacement" method)
                 (pcase-let ((`(,new-buffer . ,new-session)
