@@ -575,5 +575,37 @@
       (mevedel-buddy-note-remove id)
       (should-not (memq #'mevedel-buddy-note--relayout post-command-hook)))))
 
+(mevedel-deftest mevedel-buddy-note-clear-all
+  (:after-each (mevedel-test--note-cleanup)
+   :doc "`mevedel-buddy-note-clear-all' drops the layout hooks too")
+  (let ((buf (mevedel-test--note-buffer "clear-hook" "one\ntwo\n")))
+    (mevedel-test--add-note buf 1 "a note")
+    (with-current-buffer buf
+      (should (memq #'mevedel-buddy-note--relayout post-command-hook)))
+    (mevedel-buddy-note-clear-all)
+    (with-current-buffer buf
+      (should-not (memq #'mevedel-buddy-note--relayout post-command-hook)))))
+
+(mevedel-deftest mevedel-buddy-note--eol-string
+  (:after-each (mevedel-test--note-cleanup)
+   :doc "an eol note measures the code line in display columns")
+  ;; A tab is one character and eight columns.  Two lines that occupy the
+  ;; same columns must leave the note the same room, however they are
+  ;; indented; counting characters instead makes the tabbed line look
+  ;; short and overflows the budget the fixed width exists to hold.
+  (let* ((tab-width 8)
+         (note (string-join (make-list 20 "word") " "))
+         (mevedel-buddy-note-width 60)
+         (mevedel-buddy-note-current-line-style 'eol)
+         (mevedel-buddy-note-other-lines-style 'eol)
+         (tabbed (mevedel-test--note-buffer "tabbed" "\t\t\tcode\n"))
+         (spaced (mevedel-test--note-buffer
+                  "spaced" (concat (make-string 24 ?\s) "code\n"))))
+    (mevedel-test--add-note tabbed 1 note)
+    (mevedel-test--add-note spaced 1 note)
+    (should (equal (substring-no-properties (mevedel-test--note-text spaced))
+                   (substring-no-properties
+                    (mevedel-test--note-text tabbed))))))
+
 (provide 'test-mevedel-buddy-note)
 ;;; test-mevedel-buddy-note.el ends here

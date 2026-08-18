@@ -551,5 +551,36 @@
     (funcall (car (last (cdr (assq 'ABRT handlers)))) fsm)
     (should (eq nil settled))))
 
+(mevedel-deftest mevedel-buddy--current-generation-p
+  (:after-each (mevedel-test--buddy-cleanup))
+  ,test
+  (test)
+
+  :doc "the review in flight is current"
+  (let ((generation (cl-incf mevedel-buddy--generation)))
+    (should (mevedel-buddy--current-generation-p generation)))
+
+  :doc "a request outlived by its review is not"
+  ;; Abandoning a review cannot always stop its request: the source buffer
+  ;; may be gone, and `gptel-abort' matches on that buffer.  When such a
+  ;; straggler finally settles, a newer review may be running, and it must
+  ;; neither retire that review's changes nor tear down its state.
+  (let ((stale (cl-incf mevedel-buddy--generation)))
+    (cl-incf mevedel-buddy--generation)
+    (should-not (mevedel-buddy--current-generation-p stale))))
+
+(mevedel-deftest mevedel-buddy--untrack-buffer
+  (:after-each (mevedel-test--buddy-cleanup)
+   :doc "`mevedel-buddy--untrack-buffer' discards the buffer's records")
+  ;; Once the kill hook is gone nothing would drop them later, and a buffer
+  ;; reusing the name would have those offsets replayed against unrelated
+  ;; content.
+  (let ((buf (mevedel-test--buddy-buffer "untrack.el" "alpha\n")))
+    (mevedel-test--buddy-edit
+     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (should (mevedel-test--buddy-all-changes))
+    (with-current-buffer buf (mevedel-buddy--untrack-buffer))
+    (should-not (mevedel-test--buddy-all-changes))))
+
 (provide 'test-mevedel-buddy)
 ;;; test-mevedel-buddy.el ends here

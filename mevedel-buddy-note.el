@@ -104,7 +104,7 @@ Each note is a plist with `:id', `:buffer', `:line', `:note',
   "Id to assign to the next Buddy note.")
 
 (defvar-local mevedel-buddy-note--laid-out-line nil
-  "Line number this buffer's notes were last laid out for.")
+  "Start position of the line this buffer's notes were last laid out for.")
 
 (defvar mevedel-buddy-note--scope-buffers nil
   "Buffer names the running review may touch.
@@ -259,11 +259,17 @@ available by moving point onto the line."
      'face (mevedel-buddy-note--face severity))))
 
 (defun mevedel-buddy-note--style-for (overlay)
-  "Return the display style to use for OVERLAY right now."
+  "Return the display style to use for OVERLAY right now.
+
+Whether point shares the note's line is answered by comparing positions
+rather than line numbers.  `line-number-at-pos' counts newlines from
+`point-min' on every call, and this runs once per note on every command
+that moves point to another line."
   (if (and (overlay-buffer overlay)
            (eq (overlay-buffer overlay) (current-buffer))
-           (= (line-number-at-pos (overlay-start overlay))
-              (line-number-at-pos (point))))
+           (<= (line-beginning-position)
+               (overlay-start overlay)
+               (line-end-position)))
       mevedel-buddy-note-current-line-style
     mevedel-buddy-note-other-lines-style))
 
@@ -285,7 +291,11 @@ holding the note."
              ('eol
               (mevedel-buddy-note--eol-string
                note severity
-               (- (line-end-position) (line-beginning-position))))
+               ;; The display column, not the character count: a tab is
+               ;; one character and eight columns, and counting it as one
+               ;; over-estimates the room left and overflows the budget
+               ;; the fixed width exists to hold.
+               (progn (goto-char (line-end-position)) (current-column))))
              ('below
               (mevedel-buddy-note--below-string
                note severity
@@ -297,8 +307,8 @@ holding the note."
 
 Runs from `post-command-hook', so it does nothing at all unless the line
 number actually changed."
-  (let ((line (line-number-at-pos)))
-    (unless (eq line mevedel-buddy-note--laid-out-line)
+  (let ((line (line-beginning-position)))
+    (unless (eql line mevedel-buddy-note--laid-out-line)
       (setq mevedel-buddy-note--laid-out-line line)
       (dolist (record mevedel-buddy-note--notes)
         (let ((overlay (plist-get record :overlay)))
@@ -435,11 +445,19 @@ Return the new note id, or an explanatory string the model can act on."
 
 (defun mevedel-buddy-note-clear-all ()
   "Discard every note and its overlay."
-  (dolist (record (copy-sequence mevedel-buddy-note--notes))
-    (let ((overlay (plist-get record :overlay)))
-      (when (overlayp overlay) (delete-overlay overlay))))
-  (setq mevedel-buddy-note--notes nil
-        mevedel-buddy-note--next-id 1)
+  (let (buffers)
+    (dolist (record (copy-sequence mevedel-buddy-note--notes))
+      (let ((overlay (plist-get record :overlay)))
+        (when (overlayp overlay)
+          (when-let* ((buffer (overlay-buffer overlay)))
+            (cl-pushnew buffer buffers))
+          (delete-overlay overlay))))
+    (setq mevedel-buddy-note--notes nil
+          mevedel-buddy-note--next-id 1)
+    ;; Every buffer that held a note now holds none, so none of them still
+    ;; needs the hook that lays notes out.
+    (dolist (buffer buffers)
+      (mevedel-buddy-note--sync-relayout-hook buffer)))
   (mevedel-buddy-note-release-markers))
 
 (defun mevedel-buddy-note-forget-buffer (buffer-name)

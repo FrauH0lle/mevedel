@@ -309,10 +309,16 @@ shown a diff nobody made."
   (add-hook 'kill-buffer-hook #'mevedel-buddy--on-kill-buffer nil t))
 
 (defun mevedel-buddy--untrack-buffer ()
-  "Stop recording changes in the current buffer."
+  "Stop recording changes in the current buffer.
+
+Discards this buffer's records too.  Once the kill hook is gone nothing
+would drop them later, and a buffer that reuses the name -- reopened, or
+uniquified after a second file of the same name is visited -- would have
+those offsets replayed against unrelated content."
   (remove-hook 'before-change-functions #'mevedel-buddy--before-change t)
   (remove-hook 'after-change-functions #'mevedel-buddy--after-change t)
-  (remove-hook 'kill-buffer-hook #'mevedel-buddy--on-kill-buffer t))
+  (remove-hook 'kill-buffer-hook #'mevedel-buddy--on-kill-buffer t)
+  (mevedel-buddy-forget-buffer (buffer-name)))
 
 
 ;;
@@ -481,6 +487,17 @@ preempt another explicit request.")
 (defvar mevedel-buddy--running-buffer nil
   "Buffer the review in flight was started from, for `gptel-abort'.")
 
+(defvar mevedel-buddy--generation 0
+  "Counter identifying the review in flight.
+
+A request outlives the review that started it: abandoning one cannot
+always stop it, because its source buffer may be gone by then and
+`gptel-abort' matches on that buffer -- and matches any request made
+from it, not necessarily ours.  Each review takes the next generation
+and its callbacks do nothing once that number has moved on, so a
+straggler cannot retire another review's changes or tear down its
+state.")
+
 (defvar mevedel-buddy--timeout-timer nil
   "Timer that abandons the review in flight if it never settles.")
 
@@ -545,6 +562,10 @@ is used when it happens to exist and skipped otherwise."
                      (and (buffer-live-p (get-buffer name)) name)))
                  changes))))
 
+(defun mevedel-buddy--current-generation-p (generation)
+  "Return non-nil when GENERATION is still the review in flight."
+  (= generation mevedel-buddy--generation))
+
 (defun mevedel-buddy--retire-changes (scope-key reviewed-through)
   "Drop SCOPE-KEY's changes recorded no later than REVIEWED-THROUGH.
 
@@ -579,14 +600,18 @@ changes are offered again."
 (defun mevedel-buddy--abandon (reason)
   "Abandon the review in flight because of REASON, retiring nothing."
   (when mevedel-buddy--running
-    (when (buffer-live-p mevedel-buddy--running-buffer)
-      ;; `gptel-abort' matches on the buffer the request was made from,
-      ;; which is not necessarily the buffer we are standing in: scope is
-      ;; workspace-wide, so the review may have started elsewhere.
-      (ignore-errors (gptel-abort mevedel-buddy--running-buffer)))
-    (mevedel-buddy--telemetry 'buddy-abandoned
-                              :scope mevedel-buddy--running :reason reason)
-    (mevedel-buddy--settle mevedel-buddy--running nil)))
+    ;; Aborting settles synchronously and clears these, so read them first.
+    (let ((scope-key mevedel-buddy--running)
+          (buffer mevedel-buddy--running-buffer))
+      (when (buffer-live-p buffer)
+        ;; `gptel-abort' matches on the buffer the request was made from,
+        ;; which is not necessarily the buffer we are standing in: scope is
+        ;; workspace-wide, so the review may have started elsewhere.
+        (ignore-errors (gptel-abort buffer)))
+      (mevedel-buddy--telemetry 'buddy-abandoned
+                                :scope scope-key :reason reason)
+      (when mevedel-buddy--running
+        (mevedel-buddy--settle scope-key nil)))))
 
 ;;;###autoload
 (defun mevedel-buddy-abort ()
@@ -620,6 +645,7 @@ started by the idle timer, which an explicit request may preempt."
   (let ((policy (mevedel-model-resolve-workload 'buddy))
         (rounds 0)
         (settled nil)
+        (generation (cl-incf mevedel-buddy--generation))
         (source (current-buffer)))
     (unless (plist-get policy :model)
       (user-error "No model resolves for the buddy workload"))
@@ -636,10 +662,15 @@ started by the idle timer, which an explicit request may preempt."
         ((finish (ok)
            (unless settled
              (setq settled t)
-             (mevedel-buddy--telemetry 'buddy-review-settled
-                                       :scope scope-key :settled ok
-                                       :rounds rounds)
-             (mevedel-buddy--settle scope-key (and ok reviewed-through)))))
+             ;; A request that outlived its review must not retire that
+             ;; review's changes, and must not tear down whichever review
+             ;; is running now.
+             (when (mevedel-buddy--current-generation-p generation)
+               (mevedel-buddy--telemetry 'buddy-review-settled
+                                         :scope scope-key :settled ok
+                                         :rounds rounds)
+               (mevedel-buddy--settle scope-key
+                                      (and ok reviewed-through))))))
       (setq mevedel-buddy--timeout-timer
             (run-at-time mevedel-buddy-timeout nil
                          (lambda ()
