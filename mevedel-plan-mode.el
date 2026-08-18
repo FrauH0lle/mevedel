@@ -114,6 +114,8 @@
 		  (text))
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view-enqueue-external-follow-up
+                  "mevedel-view-composer" (data-buffer text &rest keys))
 (declare-function mevedel-view--clear-input "mevedel-view-composer"
 		  nil)
 (declare-function mevedel-view--input-start "mevedel-view-composer"
@@ -326,6 +328,22 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
         (goto-char start)
         (forward-line 2)))))
 
+(defun mevedel-plan-mode--remote-feedback (chat-buffer text)
+  "Queue TEXT as a revision request for CHAT-BUFFER's demoted proposal.
+The remote counterpart of the Emacs feedback draft: the same request
+template, submitted immediately as a queued follow-up instead of
+opening an editable draft."
+  (require 'mevedel-view-composer)
+  (mevedel-view-enqueue-external-follow-up
+   chat-buffer
+   (format
+    "Plan feedback:\n\n%s\n\nRevise the proposal to address this feedback. Emit one complete replacement <proposed_plan> block; the current draft is reference-only.\n\nCurrent plan artifact: %s"
+    text
+    (with-current-buffer chat-buffer
+      (mevedel-plan-resource-address mevedel-plan--relative-current-path)))
+   :guest-name (and (boundp 'mevedel-collaboration-remote-guest)
+                    mevedel-collaboration-remote-guest)))
+
 (defun mevedel-plan-mode--approval-callback
     (plan-markdown chat-buffer session outcome)
   "Handle Plan proposal OUTCOME for PLAN-MARKDOWN in CHAT-BUFFER SESSION."
@@ -333,6 +351,10 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
    ((and (proper-list-p outcome) (plist-get outcome :accept))
     (mevedel-plan-mode--accept
      plan-markdown chat-buffer session (plist-get outcome :selection)))
+   ((and (proper-list-p outcome) (plist-get outcome :remote-feedback))
+    (mevedel-plan-mode--demote-proposal session nil)
+    (mevedel-plan-mode--remote-feedback
+     chat-buffer (plist-get outcome :remote-feedback)))
    ((eq outcome 'feedback-draft)
     (mevedel-plan-mode--demote-proposal session nil)
     (mevedel-plan-mode--feedback-draft chat-buffer))
@@ -712,18 +734,22 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
             (overlay-put overlay 'mevedel--callback #'deliver)
             (overlay-put overlay 'keymap keymap)
             ;; Remote acceptance uses the host-configured axes verbatim;
-            ;; axis editing, feedback drafts, and Worktree acceptance
-            ;; (which prompts for a branch) stay in Emacs.
-            (overlay-put overlay 'mevedel--remote-body
-                         (substring-no-properties body))
-            (overlay-put overlay 'mevedel--remote-options
-                         (list (cons (lambda ()
-                                       (if (eq (plist-get selection :location)
-                                               'worktree)
-                                           (message
-                                            "mevedel: accept the Worktree plan from Emacs")
-                                         (accept)))
-                                     "Accept plan")))
+            ;; axis editing and Worktree acceptance (which prompts for a
+            ;; branch) stay in Emacs, so a Worktree proposal offers no
+            ;; remote accept at all instead of a dead button.  Remote
+            ;; feedback demotes the proposal and queues the same revision
+            ;; request the Emacs feedback draft composes.
+            (overlay-put overlay 'mevedel--remote
+                         (append
+                          (list :body (substring-no-properties body)
+                                :feedback
+                                (lambda (text)
+                                  (settle (list :remote-feedback text))))
+                          (unless (eq (plist-get selection :location)
+                                      'worktree)
+                            (list :options
+                                  (list (cons (lambda () (accept))
+                                              "Accept plan"))))))
             (mevedel--prompt-announce overlay)))))))
 
 (defun mevedel-plan-mode--post-response (start end)

@@ -200,6 +200,7 @@
                   "mevedel-transcript-restore" (&optional only-if-missing))
 
 ;; `mevedel-utilities'
+(declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
 (defvar mevedel--hook-audit-close)
 (defvar mevedel--hook-audit-open)
 
@@ -1422,11 +1423,8 @@ renderer to fall back to the bare `Tool' one-liner."
                                  (goto-char (point-min))
                                  (forward-sexp 1)
                                  (point)))
-                     ;; Trim only the newlines separating the call sexp from
-                     ;; its result: leading spaces are significant, e.g. the
-                     ;; right-aligned line numbers Read prepends.
-                     (full-result (string-trim (substring text sexp-end)
-                                               "[\n\r]+"))
+                     (full-result (mevedel--trim-tool-result
+                                   (substring text sexp-end)))
                      (full-result
                       (if (and (derived-mode-p 'org-mode)
                                (require 'org-src nil t)

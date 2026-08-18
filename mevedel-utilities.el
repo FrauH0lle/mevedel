@@ -387,6 +387,12 @@ exact `:omitted-chars'."
          :tail tail-text
          :omitted-chars omitted)))))
 
+(defun mevedel--trim-tool-result (text)
+  "Trim TEXT's blank edges, preserving first-line indentation.
+Only newlines are trimmed on the left: leading spaces are significant
+alignment, e.g. the right-aligned line numbers Read prepends."
+  (string-trim (or text "") "[\n\r]+"))
+
 (defun mevedel--normalize-message-text (text)
   "Return TEXT with raw UTF-8 byte sequences decoded for display/storage.
 

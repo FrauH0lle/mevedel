@@ -1773,6 +1773,46 @@ When FORCE is non-nil, replace the current draft unconditionally."
                :keymap mevedel-view--pending-inputs-map
                :help-echo "Open Pending Inputs cockpit"))))))
 
+(cl-defun mevedel-view-enqueue-external-follow-up
+    (data-buffer text &key guest-name paths)
+  "Queue TEXT as a follow-up that originated outside this Emacs.
+
+DATA-BUFFER owns the session.  GUEST-NAME attributes the entry to a
+collaboration guest.  PATHS are files to mention as @file tokens with
+read grants, like an Emacs-side drop.  Skill tokens in TEXT stay
+literal at submission: external input carries prompting authority only,
+never skill invocation.  Return the queued entry, or nil without a live
+session view."
+  (when-let* (((buffer-live-p data-buffer))
+              (view-buffer (buffer-local-value 'mevedel--view-buffer
+                                               data-buffer))
+              ((buffer-live-p view-buffer))
+              (session (buffer-local-value 'mevedel--session data-buffer)))
+    (with-current-buffer view-buffer
+      (require 'mevedel-utilities)
+      (let ((input (mevedel--normalize-message-text text)))
+        (when paths
+          (require 'mevedel-mentions)
+          (setq input (concat input " "
+                              (mapconcat #'mevedel-mentions-file-token
+                                         paths " ")))
+          (dolist (path paths)
+            (mevedel-session-add-dropped-file-grant session path)))
+        (let ((entry (mevedel-session-enqueue-pending-input
+                      session 'follow-up
+                      (list :input input
+                            :guest-name guest-name
+                            :inert-skills t
+                            :dropped-file-grants
+                            (mevedel-view--pop-dropped-file-grants-for-input
+                             input session)
+                            :queued-at-time (float-time)
+                            :queued-at-turn
+                            (or (mevedel-session-turn-count session) 0)))))
+          (mevedel-view--interaction-rebuild)
+          (mevedel-view--schedule-late-follow-up-drain)
+          entry)))))
+
 (defun mevedel-view--queue-follow-up (input)
   "Queue INPUT to start a separate root turn."
   (setq input (mevedel--normalize-message-text input))
@@ -2239,23 +2279,28 @@ non-nil, receives SUBMISSION instead of starting a request."
            (plist-get prepared :hook-context)))))))
 
 (defun mevedel-view--submit-planned-input
-    (input &optional before-send on-block dispatch after-insert)
+    (input &optional before-send on-block dispatch after-insert inert-skills)
   "Plan, prepare, and submit atomically bound user INPUT.
 
 BEFORE-SEND runs exactly once at the dispatch boundary.  ON-BLOCK runs when
 planning, preparation, or `UserPromptSubmit' rejects the submission.  Derived
 skill bodies and hook output are never scanned for additional invocations.
 When DISPATCH is non-nil, call it with an accepted prompt submission instead of
-starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
+starting a new request.  AFTER-INSERT runs once the prompt is durably recorded.
+When INERT-SKILLS is non-nil, skip skill planning entirely: any skill token in
+INPUT stays literal text.  External input -- a collaboration guest's prompt --
+carries prompting authority only, never skill invocation."
   (let ((view-buffer (current-buffer))
         (data-buffer mevedel--data-buffer)
         (session (mevedel-view--session)))
     (require 'mevedel-skills-plan)
     (let* ((plan
-            (with-current-buffer data-buffer
-              (mevedel-skills-refresh-bound-input input session)
-              (mevedel-skills-plan-user-input input session))))
-      (if (null (mevedel-skill-invocation-plan-occurrences plan))
+            (unless inert-skills
+              (with-current-buffer data-buffer
+                (mevedel-skills-refresh-bound-input input session)
+                (mevedel-skills-plan-user-input input session)))))
+      (if (or inert-skills
+              (null (mevedel-skill-invocation-plan-occurrences plan)))
           (if dispatch
               (mevedel-view--run-prompt-submit-hook
                input input
@@ -3074,7 +3119,8 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                       (lambda ()
                         (setq mevedel-view--pending-guest-attribution nil)
 			(mevedel-view--interaction-rebuild))
-                      nil after-insert)))))))))))))
+                      nil after-insert
+                      (plist-get entry :inert-skills))))))))))))))
 
 (defun mevedel-view--run-follow-up-drain (data-buffer)
   "Drain one pending follow-up for DATA-BUFFER if it is live.

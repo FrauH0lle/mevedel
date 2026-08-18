@@ -426,9 +426,11 @@
                        (:label "Risk first" :description "slower")])
             (:question "Run tests?" :options ["Yes" "No"])])
           (should announced)
-          (should (functionp (overlay-get overlay 'mevedel--remote-answer)))
-          (let ((questions (funcall (overlay-get overlay
-                                                 'mevedel--remote-questions))))
+          (should (functionp (plist-get (overlay-get overlay 'mevedel--remote)
+                                        :answer)))
+          (let ((questions (funcall (plist-get
+                                     (overlay-get overlay 'mevedel--remote)
+                                     :questions))))
             (should (= 2 (length questions)))
             (should (equal "Which approach?"
                            (cdr (assoc "question" (car questions)))))
@@ -440,10 +442,11 @@
             ;; Nothing answered yet.
             (should-not (assoc "answer" (car questions))))
           ;; A wrong-length answer set is refused.
-          (funcall (overlay-get overlay 'mevedel--remote-answer) '("only"))
+          (funcall (plist-get (overlay-get overlay 'mevedel--remote) :answer)
+                   '("only"))
           (should-not result)
           ;; The atomic guest answer submits through the same path.
-          (funcall (overlay-get overlay 'mevedel--remote-answer)
+          (funcall (plist-get (overlay-get overlay 'mevedel--remote) :answer)
                    '("Risk first" "Yes"))
           (should (string-match-p "A1: Risk first" result))
           (should (string-match-p "A2: Yes" result))

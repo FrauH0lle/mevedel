@@ -315,11 +315,11 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
         (overlay-put ov 'mevedel-user-request t)
         ;; The remote surface gets the one-shot outcomes only: durable
         ;; session or workspace authority is never mintable from a guest.
-        (overlay-put ov 'mevedel--remote-body
-                     (substring-no-properties content))
-        (overlay-put ov 'mevedel--remote-options
-                     '((allow-once . "Allow once") (deny-once . "Deny")))
-        (overlay-put ov 'mevedel--remote-feedback t)
+        (overlay-put ov 'mevedel--remote
+                     (list :body (substring-no-properties content)
+                           :options '((allow-once . "Allow once")
+                                      (deny-once . "Deny"))
+                           :feedback t))
         (unless entry
           (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
           (mevedel--prompt--register-canceller source-buffer ov))

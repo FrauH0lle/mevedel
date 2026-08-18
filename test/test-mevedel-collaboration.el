@@ -767,10 +767,11 @@
                        :ui-requests requests))
            (overlay (make-overlay 1 5))
            sent)
-      (overlay-put overlay 'mevedel--remote-body "Run rm -rf /tmp/x?")
-      (overlay-put overlay 'mevedel--remote-options
-                   '((allow-once . "Allow once") (deny-once . "Deny")))
-      (overlay-put overlay 'mevedel--remote-feedback t)
+      (overlay-put overlay 'mevedel--remote
+                   '(:body "Run rm -rf /tmp/x?"
+                     :options ((allow-once . "Allow once")
+                               (deny-once . "Deny"))
+                     :feedback t))
       (puthash 1 (list :name "phone" :writable t :ready t) guests)
       (puthash 2 (list :name "laptop" :writable nil :ready t) guests)
       (let ((mevedel-collaboration--room room)
@@ -817,10 +818,11 @@
            (overlay (make-overlay 1 5))
            (accepted nil)
            settled sent)
-      (overlay-put overlay 'mevedel--remote-options
-                   (list '(allow-once . "Allow once")
-                         (cons (lambda () (setq accepted t)) "Accept")))
-      (overlay-put overlay 'mevedel--remote-feedback t)
+      (overlay-put overlay 'mevedel--remote
+                   (list :options
+                         (list '(allow-once . "Allow once")
+                               (cons (lambda () (setq accepted t)) "Accept"))
+                         :feedback t))
       (puthash 1 (list :name "phone" :writable t :ready t) guests)
       (puthash 2 (list :name "laptop" :writable nil :ready t) guests)
       (puthash 41 overlay requests)
@@ -856,8 +858,11 @@
           ;; A questionnaire answer set reaches the answer handler
           ;; atomically, trimmed; incomplete answers are refused.
           (let ((received nil))
-            (overlay-put overlay 'mevedel--remote-answer
-                         (lambda (answers) (setq received answers)))
+            (overlay-put overlay 'mevedel--remote
+                         (append (overlay-get overlay 'mevedel--remote)
+                                 (list :answer
+                                       (lambda (answers)
+                                         (setq received answers)))))
             (mevedel-collaboration--handle-ui-response
              room 1 (list :reqId 41 :answers '(" MVP first " "Yes")))
             (should (equal '("MVP first" "Yes") received))
@@ -869,10 +874,12 @@
              room 1 (list :reqId 41 :answers '("MVP first" 42)))
             (should-not received))
           ;; A questionnaire overlay's frame carries the questions.
-          (overlay-put overlay 'mevedel--remote-questions
-                       (lambda ()
-                         '((("question" . "Which?")
-                            ("options" . [(("label" . "A"))])))))
+          (overlay-put overlay 'mevedel--remote
+                       (append (overlay-get overlay 'mevedel--remote)
+                               (list :questions
+                                     (lambda ()
+                                       '((("question" . "Which?")
+                                          ("options" . [(("label" . "A"))])))))))
           (let ((frame (mevedel-collaboration--ui-request-frame 41 overlay)))
             (should (equal "Which?"
                            (cdr (assoc "question"

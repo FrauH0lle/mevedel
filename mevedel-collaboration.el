@@ -47,8 +47,8 @@
                   (kind text &optional occurrence))
 (declare-function mevedel-collaboration--tool-call-key
                   "mevedel-collaboration-projection" (info))
-(declare-function mevedel-collaboration--tool-detail
-                  "mevedel-collaboration-projection" (args))
+(declare-function mevedel-collaboration--tool-extras
+                  "mevedel-collaboration-projection" (name args))
 (declare-function mevedel-collaboration--tool-records
                   "mevedel-collaboration-projection" (records))
 (declare-function mevedel-collaboration--tool-result-fields
@@ -70,35 +70,18 @@
 (declare-function mevedel--prompt--settle
                   "mevedel-interaction-prompt" (overlay outcome))
 
-;; `mevedel-mentions'
-(declare-function mevedel-mentions-file-token "mevedel-mentions" (path))
-
 ;; `mevedel-structs'
-(declare-function mevedel-session-add-dropped-file-grant
-                  "mevedel-structs" (session path))
-(declare-function mevedel-session-enqueue-pending-input
-                  "mevedel-structs" (session category entry))
 (declare-function mevedel-session-session-id "mevedel-structs" (session))
-(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
-
-;; `mevedel-utilities'
-(declare-function mevedel--normalize-message-text
-                  "mevedel-utilities" (text))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--abort-data-buffer
                   "mevedel-view" (data-buffer))
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view-enqueue-external-follow-up
+                  "mevedel-view-composer"
+                  (data-buffer text &rest keys))
 (declare-function mevedel-view--media-dir "mevedel-view-composer" ())
-(declare-function mevedel-view--pop-dropped-file-grants-for-input
-                  "mevedel-view-composer" (input session))
-(declare-function mevedel-view--schedule-late-follow-up-drain
-                  "mevedel-view-composer" ())
-
-;; `mevedel-view-interaction'
-(declare-function mevedel-view--interaction-rebuild
-                  "mevedel-view-interaction" ())
 
 ;;
 ;;; Customization and state
@@ -384,6 +367,12 @@ request or prompt transaction."
 (defvar mevedel-collaboration--ui-request-counter 0
   "Monotonic id source for ui-request frames within this Emacs process.")
 
+(defvar mevedel-collaboration-remote-guest nil
+  "Display name of the guest whose answer is being applied, or nil.
+Bound around a ui-response handler so downstream effects -- such as a
+plan revision request queued by remote feedback -- can attribute their
+output to the answering guest.")
+
 (defun mevedel-collaboration--writable-peers (room)
   "Return the peer ids of ROOM's writable guests."
   (let (peers)
@@ -395,24 +384,23 @@ request or prompt transaction."
 
 (defun mevedel-collaboration--ui-request-frame (request-id overlay)
   "Return the ui-request frame for OVERLAY under REQUEST-ID."
-  (append
-   (list :t "ui-request"
-         :reqId request-id
-         :body (or (overlay-get overlay 'mevedel--remote-body) "")
-         :bodyKind (or (overlay-get overlay 'mevedel--remote-body-kind)
-                       "text")
-         :options
-         (vconcat
-          (cl-loop for (_outcome . label)
-                   in (overlay-get overlay 'mevedel--remote-options)
-                   for index from 0
-                   collect `(("id" . ,index) ("label" . ,label))))
-         :allowFeedback
-         (if (overlay-get overlay 'mevedel--remote-feedback) t :json-false))
-   ;; A questionnaire travels structurally; the guest answers all
-   ;; questions atomically through the :answers response field.
-   (when-let ((questions (overlay-get overlay 'mevedel--remote-questions)))
-     (list :questions (vconcat (funcall questions))))))
+  (let ((remote (overlay-get overlay 'mevedel--remote)))
+    (append
+     (list :t "ui-request"
+           :reqId request-id
+           :body (or (plist-get remote :body) "")
+           :bodyKind (or (plist-get remote :body-kind) "text")
+           :options
+           (vconcat
+            (cl-loop for (_outcome . label) in (plist-get remote :options)
+                     for index from 0
+                     collect `(("id" . ,index) ("label" . ,label))))
+           :allowFeedback
+           (if (plist-get remote :feedback) t :json-false))
+     ;; A questionnaire travels structurally; the guest answers all
+     ;; questions atomically through the :answers response field.
+     (when-let ((questions (plist-get remote :questions)))
+       (list :questions (vconcat (funcall questions)))))))
 
 (defun mevedel-collaboration--on-prompt-created (overlay)
   "Present prompt OVERLAY to the active room's writable guests.
@@ -420,10 +408,12 @@ request or prompt transaction."
 A re-render of the same interaction -- the permission queue redraws its
 head on every selection change -- reuses the existing request id, so a
 guest sees one card updated in place instead of an accumulating pile."
-  (when-let ((room mevedel-collaboration--room))
+  (when-let ((room mevedel-collaboration--room)
+             (remote (overlay-get overlay 'mevedel--remote)))
     (when (and mevedel-collaboration-remote-interactions
-               (or (overlay-get overlay 'mevedel--remote-options)
-                   (overlay-get overlay 'mevedel--remote-questions)))
+               (or (plist-get remote :options)
+                   (plist-get remote :questions)
+                   (plist-get remote :feedback)))
       (let* ((requests (plist-get room :ui-requests))
              (interaction-id
               (overlay-get overlay 'mevedel-view-interaction-id))
@@ -487,14 +477,13 @@ answer can execute the same path the host key binding would."
                mevedel-collaboration-remote-interactions
                (integerp request-id))
       (when-let ((overlay (gethash request-id (plist-get room :ui-requests))))
-        (let* ((options (overlay-get overlay 'mevedel--remote-options))
+        (let* ((remote (overlay-get overlay 'mevedel--remote))
+               (options (plist-get remote :options))
                (feedback (plist-get frame :feedback))
                (option (plist-get frame :option))
                (answers (plist-get frame :answers))
-               (feedback-handler
-                (overlay-get overlay 'mevedel--remote-feedback))
-               (answer-handler
-                (overlay-get overlay 'mevedel--remote-answer))
+               (feedback-handler (plist-get remote :feedback))
+               (answer-handler (plist-get remote :answer))
                (outcome
                 (cond
                  ;; A complete questionnaire response: every answer a
@@ -524,13 +513,15 @@ answer can execute the same path the host key binding would."
             (message "mevedel: interaction answered by guest %s"
                      (plist-get guest :name))
             (with-current-buffer (overlay-buffer overlay)
-              (condition-case err
-                  (if (functionp outcome)
-                      (funcall outcome)
-                    (mevedel--prompt--settle overlay outcome))
-                (user-error
-                 (message "mevedel: remote answer rejected: %s"
-                          (error-message-string err)))))))))))
+              (let ((mevedel-collaboration-remote-guest
+                     (plist-get guest :name)))
+                (condition-case err
+                    (if (functionp outcome)
+                        (funcall outcome)
+                      (mevedel--prompt--settle overlay outcome))
+                  (user-error
+                   (message "mevedel: remote answer rejected: %s"
+                            (error-message-string err))))))))))))
 
 ;;
 ;;; Inbound guest frames
@@ -592,41 +583,22 @@ never enters model-visible context."
       (let* ((data-buffer (mevedel-collaboration--room-data-buffer room))
              (view-buffer (and data-buffer
                                (buffer-local-value 'mevedel--view-buffer
-                                                   data-buffer)))
-             (session (and data-buffer
-                           (buffer-local-value 'mevedel--session
-                                               data-buffer))))
-        (when (and session (buffer-live-p view-buffer))
-          (with-current-buffer view-buffer
-            (require 'mevedel-view-composer)
-            (require 'mevedel-utilities)
-            (let ((input (mevedel--normalize-message-text text)))
-              ;; Attached images ride the same pipeline as clipboard
-              ;; images pasted in Emacs: saved under the session media
-              ;; directory, mentioned as @file tokens, and read-granted.
-              (when-let ((paths (mevedel-collaboration--save-guest-images
-                                 (plist-get frame :images))))
-                (require 'mevedel-mentions)
-                (setq input
-                      (concat input " "
-                              (mapconcat #'mevedel-mentions-file-token
-                                         paths " ")))
-                (dolist (path paths)
-                  (mevedel-session-add-dropped-file-grant session path)))
-              (mevedel-session-enqueue-pending-input
-               session 'follow-up
-               (list :input input
-                     :guest-name (plist-get guest :name)
-                     :dropped-file-grants
-                     (mevedel-view--pop-dropped-file-grants-for-input
-                      input session)
-                     :queued-at-time (float-time)
-                     :queued-at-turn
-                     (or (mevedel-session-turn-count session) 0))))
-            (mevedel-view--interaction-rebuild)
-            (mevedel-view--schedule-late-follow-up-drain))
-          (mevedel-collaboration--transport-send
-           (plist-get room :transport) peer (list :t "queued")))))))
+                                                   data-buffer))))
+        (when (buffer-live-p view-buffer)
+          (require 'mevedel-view-composer)
+          ;; Attached images ride the same pipeline as clipboard images
+          ;; pasted in Emacs: saved under the session media directory,
+          ;; then mentioned and read-granted by the queue seam.
+          (let ((paths (with-current-buffer view-buffer
+                         (mevedel-collaboration--save-guest-images
+                          (plist-get frame :images)))))
+            (when (mevedel-view-enqueue-external-follow-up
+                   data-buffer text
+                   :guest-name (plist-get guest :name)
+                   :paths paths)
+              (mevedel-collaboration--transport-send
+               (plist-get room :transport) peer
+               (list :t "queued")))))))))
 
 (defun mevedel-collaboration--save-guest-images (images)
   "Save valid guest IMAGES under the session media directory.
@@ -971,16 +943,8 @@ The early return below needs the block a `cl-defun' establishes; a plain
                          :baseline-tool-count
                          (length (mevedel-collaboration--tool-records canonical))
                          :baseline-record-count (length canonical)
-                         (append
-                          (when-let ((detail
-                                      (mevedel-collaboration--tool-detail
-                                       (plist-get info :args))))
-                            (list :detail detail))
-                          (when-let (((equal name "ApplyPatch"))
-                                     (patch (plist-get
-                                             (plist-get info :args) :patch))
-                                     ((stringp patch)))
-                            (list :diff patch))))))
+                         (mevedel-collaboration--tool-extras
+                          name (plist-get info :args)))))
             (puthash call-key (1+ occurrence) occurrences)
             (setq room (plist-put room :pending-tools
                                   (append pending (list entry))))
