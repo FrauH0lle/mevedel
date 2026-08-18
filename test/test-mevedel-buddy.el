@@ -9,6 +9,7 @@
 (require 'mevedel-buddy)
 (require 'mevedel-buddy-note)
 (require 'mevedel-chat)
+(require 'gptel)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -490,21 +491,44 @@
                    (mevedel-buddy--payload-lines payload)))))
 
 (mevedel-deftest mevedel-buddy--response-action
-  (:doc "`mevedel-buddy--response-action' classifies what a response means")
-  (should (eq ,action (mevedel-buddy--response-action ,response ,streamingp)))
-  (action response streamingp)
-  ;; A streamed fragment is prose, and tool calls may still follow it.
-  ;; Settling on it would end the review before the model finished.
-  'ignore     "partial prose"                    t
-  'settle     "the whole final turn"             nil
-  'settle     t                                  t
-  'settle     t                                  nil
-  'ignore     '(reasoning . "thinking")          t
-  'ignore     '(tool-call . ((tool args cb)))    nil
-  'tool-round '(tool-result . ((tool args res))) t
-  'tool-round '(tool-result . ((tool args res))) nil
-  'fail       nil                                nil
-  'fail       'abort                             nil)
+  (:doc "`mevedel-buddy--response-action' counts tool rounds and nothing else")
+  (should (eq ,action (mevedel-buddy--response-action ,response)))
+  (action response)
+  'tool-round '(tool-result . ((tool args res)))
+  ;; Nothing else may settle the review.  A streaming callback receives t
+  ;; when one HTTP response ends, which with tool calls pending is not the
+  ;; end of the request: settling there cleared the annotatable buffer list
+  ;; before the model's own `add_note' ran, and every note was refused.
+  'ignore     t
+  'ignore     "prose, streamed or whole"
+  'ignore     '(reasoning . "thinking")
+  'ignore     '(tool-call . ((tool args cb)))
+  'ignore     nil
+  'ignore     'abort)
+
+(mevedel-deftest mevedel-buddy--request-fsm
+  (:doc "`mevedel-buddy--request-fsm' settles only on the terminal states")
+  ,test
+  (test)
+  (let* ((settled 'unset)
+         (fsm (mevedel-buddy--request-fsm (lambda (ok) (setq settled ok))))
+         (handlers (gptel-fsm-handlers fsm)))
+    ;; Every state gptel drives keeps its own handlers.
+    (should (assq 'WAIT handlers))
+    (should (assq 'TOOL handlers))
+    ;; A non-terminal state must not settle the review, however often it
+    ;; is entered while tool rounds continue.
+    (dolist (handler (cdr (assq 'TOOL handlers)))
+      (ignore-errors (funcall handler fsm)))
+    (should (eq 'unset settled))
+    ;; Success settles positively, failure and abort negatively.
+    (funcall (car (last (cdr (assq 'DONE handlers)))) fsm)
+    (should (eq t settled))
+    (funcall (car (last (cdr (assq 'ERRS handlers)))) fsm)
+    (should (eq nil settled))
+    (setq settled 'unset)
+    (funcall (car (last (cdr (assq 'ABRT handlers)))) fsm)
+    (should (eq nil settled))))
 
 (provide 'test-mevedel-buddy)
 ;;; test-mevedel-buddy.el ends here
