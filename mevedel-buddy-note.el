@@ -281,10 +281,12 @@ tool call, so the buffer current at the time is the one the review was
 started from, which under a workspace-wide scope is often not the buffer
 holding the note."
   (when-let* ((buffer (overlay-buffer overlay)))
-    (let ((style (mevedel-buddy-note--style-for overlay)))
-      (overlay-put
-       overlay 'after-string
-       (with-current-buffer buffer
+    (with-current-buffer buffer
+      ;; The style depends on where the user's point is, so it must be
+      ;; decided before `save-excursion' moves point to the note.
+      (let ((style (mevedel-buddy-note--style-for overlay)))
+        (overlay-put
+         overlay 'after-string
          (save-excursion
            (goto-char (overlay-start overlay))
            (pcase style

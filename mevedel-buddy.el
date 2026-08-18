@@ -603,6 +603,12 @@ changes are offered again."
     ;; Aborting settles synchronously and clears these, so read them first.
     (let ((scope-key mevedel-buddy--running)
           (buffer mevedel-buddy--running-buffer))
+      ;; Retire the generation here rather than leaving it to the next
+      ;; review.  `gptel-abort' cannot stop a request whose source buffer
+      ;; is gone, and if no further review starts, that straggler would
+      ;; still look current when it settles and would retire the changes
+      ;; this abandonment exists to preserve.
+      (cl-incf mevedel-buddy--generation)
       (when (buffer-live-p buffer)
         ;; `gptel-abort' matches on the buffer the request was made from,
         ;; which is not necessarily the buffer we are standing in: scope is
