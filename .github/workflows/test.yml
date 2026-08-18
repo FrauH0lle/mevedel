@@ -126,6 +126,12 @@ jobs:
         sudo apt-get update
         sudo apt-get -y install podman ripgrep
 
+    # Ubuntu 24.04 confines unprivileged user namespaces through AppArmor, and
+    # the restriction reaches into the containers, so the sandbox the
+    # acceptance run exercises cannot start.
+    - name: Permit unprivileged user namespaces
+      run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
     - name: Install transient
       run: npx @emacs-eask/cli install transient --force
 
