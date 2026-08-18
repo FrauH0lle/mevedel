@@ -39,7 +39,10 @@
       (with-current-buffer buf
         (mevedel-buddy--untrack-buffer))
       (kill-buffer buf)))
-  (setq mevedel-test--buddy-buffers nil)
+  (setq mevedel-test--buddy-buffers nil
+        mevedel-buddy--running nil
+        mevedel-buddy--running-automatic nil
+        mevedel-buddy--running-buffer nil)
   (mevedel-buddy-clear-changes))
 
 (defun mevedel-test--buddy-edit (buffer fn)
@@ -217,26 +220,45 @@
 ;;; Review settlement
 
 (mevedel-deftest mevedel-buddy--settle
-  (:after-each (progn (mevedel-test--buddy-cleanup)
-                      (clrhash mevedel-buddy--reviewed-through)
-                      (setq mevedel-buddy--running nil
-                            mevedel-buddy--running-automatic nil)))
+  (:after-each (mevedel-test--buddy-cleanup))
   ,test
   (test)
 
-  :doc "`mevedel-buddy--settle' records the time a settled review covered"
-  (let ((now (current-time)))
-    (setq mevedel-buddy--running "scope")
-    (mevedel-buddy--settle "scope" now)
-    (should (equal now (gethash "scope" mevedel-buddy--reviewed-through)))
-    (should-not mevedel-buddy--running))
+  :doc "`mevedel-buddy--settle' retires the changes a settled review covered"
+  (let ((buf (mevedel-test--buddy-buffer "settle-retire" "alpha\n")))
+    (mevedel-test--buddy-edit
+     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (with-current-buffer buf
+      (let ((scope (mevedel-buddy--scope-key)))
+        (should (mevedel-buddy--changes-for-scope scope))
+        (setq mevedel-buddy--running scope)
+        (mevedel-buddy--settle scope (current-time))
+        (should-not (mevedel-buddy--changes-for-scope scope))
+        (should-not mevedel-buddy--running))))
 
-  :doc "`mevedel-buddy--settle' records nothing for an abandoned review"
-  (progn
-    (setq mevedel-buddy--running "scope")
-    (mevedel-buddy--settle "scope" nil)
-    (should-not (gethash "scope" mevedel-buddy--reviewed-through))
-    (should-not mevedel-buddy--running))
+  :doc "`mevedel-buddy--settle' keeps the changes of an abandoned review"
+  (let ((buf (mevedel-test--buddy-buffer "settle-keep" "alpha\n")))
+    (mevedel-test--buddy-edit
+     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (with-current-buffer buf
+      (let ((scope (mevedel-buddy--scope-key)))
+        (setq mevedel-buddy--running scope)
+        (mevedel-buddy--settle scope nil)
+        (should (mevedel-buddy--changes-for-scope scope))
+        (should-not mevedel-buddy--running))))
+
+  :doc "`mevedel-buddy--settle' keeps a change made while the review ran"
+  (let ((buf (mevedel-test--buddy-buffer "settle-race" "alpha\n")))
+    (with-current-buffer buf
+      (let ((scope (mevedel-buddy--scope-key))
+            (sent (current-time)))
+        ;; The user keeps typing after the request went out; that edit was
+        ;; never reviewed and must survive the settle.
+        (mevedel-test--buddy-edit
+         buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+        (setq mevedel-buddy--running scope)
+        (mevedel-buddy--settle scope sent)
+        (should (mevedel-buddy--changes-for-scope scope)))))
 
   :doc "`mevedel-buddy--settle' clears the annotatable buffer list"
   (progn
@@ -246,9 +268,7 @@
     (should-not mevedel-buddy-note--scope-buffers)))
 
 (mevedel-deftest mevedel-buddy-review
-  (:after-each (progn (mevedel-test--buddy-cleanup)
-                      (clrhash mevedel-buddy--reviewed-through)
-                      (setq mevedel-buddy--running nil)))
+  (:after-each (mevedel-test--buddy-cleanup))
   ,test
   (test)
 
@@ -265,7 +285,7 @@
       (let ((mevedel-buddy--running "another-scope"))
         (should-not (mevedel-buddy-review)))))
 
-  :doc "`mevedel-buddy-review' marks cancelling edits reviewed without a request"
+  :doc "`mevedel-buddy-review' retires cancelling edits without a request"
   (let ((buf (mevedel-test--buddy-buffer "review-noop" "alpha\n")))
     (mevedel-test--buddy-edit
      buf (lambda ()
@@ -274,8 +294,8 @@
            (delete-region (- (point-max) 5) (point-max))))
     (with-current-buffer buf
       (should-not (mevedel-buddy-review))
-      (should (gethash (mevedel-buddy--scope-key)
-                       mevedel-buddy--reviewed-through)))))
+      (should-not (mevedel-buddy--changes-for-scope
+                   (mevedel-buddy--scope-key))))))
 
 (mevedel-deftest mevedel-buddy--severity-instruction
   (:doc "`mevedel-buddy--severity-instruction' states the configured floor")
@@ -392,16 +412,82 @@
   (let ((buf (mevedel-test--buddy-buffer "preempt.el" "alpha\n")))
     (with-current-buffer buf
       (setq mevedel-buddy--running "scope"
-            mevedel-buddy--running-automatic t)
+            mevedel-buddy--running-automatic t
+            mevedel-buddy--running-buffer buf)
       (mevedel-buddy--preempt)
-      (should-not mevedel-buddy--running)
-      (should-not (gethash "scope" mevedel-buddy--reviewed-through))))
+      (should-not mevedel-buddy--running)))
+
+  :doc "`mevedel-buddy--preempt' leaves an explicit request alone"
+  (let ((buf (mevedel-test--buddy-buffer "preempt-explicit.el" "alpha\n")))
+    (with-current-buffer buf
+      (setq mevedel-buddy--running "scope"
+            mevedel-buddy--running-automatic nil
+            mevedel-buddy--running-buffer buf)
+      (mevedel-buddy--preempt)
+      (should (equal "scope" mevedel-buddy--running))))
 
   :doc "`mevedel-buddy--preempt' does nothing when no review is running"
   (progn
     (setq mevedel-buddy--running nil)
     (mevedel-buddy--preempt)
     (should-not mevedel-buddy--running)))
+
+;;
+;;; Record hygiene
+
+(mevedel-deftest mevedel-buddy-forget-buffer
+  (:after-each (mevedel-test--buddy-cleanup))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy-forget-buffer' drops that buffer's records only"
+  (let ((one (mevedel-test--buddy-buffer "forget-one" "alpha\n"))
+        (two (mevedel-test--buddy-buffer "forget-two" "gamma\n")))
+    (mevedel-test--buddy-edit
+     one (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (mevedel-test--buddy-edit
+     two (lambda () (goto-char (point-max)) (insert "delta\n")))
+    (mevedel-buddy-forget-buffer "forget-one")
+    (let ((names (mapcar (lambda (record) (plist-get record :buffer))
+                         (mevedel-test--buddy-all-changes))))
+      (should-not (member "forget-one" names))
+      (should (member "forget-two" names))))
+
+  :doc "killing a tracked buffer discards its records"
+  (let ((buf (mevedel-test--buddy-buffer "forget-killed" "alpha\n")))
+    (mevedel-test--buddy-edit
+     buf (lambda () (goto-char (point-max)) (insert "beta\n")))
+    (should (mevedel-test--buddy-all-changes))
+    (kill-buffer buf)
+    (should-not (mevedel-test--buddy-all-changes))))
+
+(mevedel-deftest mevedel-buddy--after-change
+  (:after-each (mevedel-test--buddy-cleanup)
+   :doc "`mevedel-buddy--after-change' drops a change it cannot reconstruct")
+  ;; Emacs does not guarantee before/after change notifications pair one
+  ;; to one.  Recording a replacement with no replaced text would make
+  ;; reconstruction delete real content and invent a diff.
+  (let ((buf (mevedel-test--buddy-buffer "unpaired" "alpha\nbeta\n")))
+    (with-current-buffer buf
+      (setq mevedel-buddy--pending-beg nil
+            mevedel-buddy--pending-old-text nil)
+      (mevedel-buddy--after-change (point-min) (point-max) 5)
+      (should-not (mevedel-buddy--changes-for-scope
+                   (mevedel-buddy--scope-key))))))
+
+(mevedel-deftest mevedel-buddy--payload-lines
+  (:doc "`mevedel-buddy--payload-lines' returns the lines each buffer showed")
+  ,test
+  (test)
+  (let ((payload (concat "=== Buffer: one.el  Mode: x  Scope: s  Cursor: line 1 ===\n"
+                         "@@ -1 +1,2 @@\n"
+                         "     1  alpha\n"
+                         "     2 +beta\n"
+                         "   old -gone\n"
+                         "=== Buffer: two.el  Mode: x  Scope: s  Cursor: line 1 ===\n"
+                         "    7 +gamma\n")))
+    (should (equal '(("one.el" 1 2) ("two.el" 7))
+                   (mevedel-buddy--payload-lines payload)))))
 
 (provide 'test-mevedel-buddy)
 ;;; test-mevedel-buddy.el ends here

@@ -74,7 +74,11 @@ Each note is a plist with `:id', `:buffer', `:line', `:note',
   "Id to assign to the next Buddy note.")
 
 (defvar mevedel-buddy-note--scope-buffers nil
-  "Buffer names the running review may annotate, or nil for no limit.")
+  "Buffer names the running review may touch.
+
+Nil means no review is running, and denies everything.  A tool call can
+still arrive after a review is abandoned or times out, and no scope
+must not then mean every buffer in Emacs.")
 
 (defvar mevedel-buddy-note--markers nil
   "Alist of (BUFFER-NAME . MARKER-ALIST) captured for the running review.
@@ -113,33 +117,36 @@ typed while the request was in flight.")
 ;;
 ;;; Marker capture
 
-(defun mevedel-buddy-note-capture-markers (buffer-names)
-  "Capture line markers in BUFFER-NAMES for the review about to run.
+(defun mevedel-buddy-note-capture-markers (shown-lines)
+  "Capture markers for SHOWN-LINES, an alist of (BUFFER-NAME . LINES).
 
 A model answers with the line numbers it was shown, but the user keeps
 typing while the request is in flight.  Resolving those numbers through
 markers taken now means a note lands on the text it describes rather
-than wherever that number points by the time the answer arrives."
+than wherever that number points by the time the answer arrives.
+
+Only lines the model was shown are marked.  Emacs walks a buffer marker
+list on every insertion, so marking every line of a large file would
+make typing lag for as long as the request runs."
+  (mevedel-buddy-note-release-markers)
   (setq mevedel-buddy-note--markers
         (delq nil
               (mapcar
-               (lambda (buffer-name)
-                 (when-let* ((buffer (get-buffer buffer-name))
+               (lambda (entry)
+                 (when-let* ((buffer (get-buffer (car entry)))
                              ((buffer-live-p buffer)))
-                   (cons buffer-name
+                   (cons (car entry)
                          (with-current-buffer buffer
                            (save-excursion
                              (save-restriction
                                (widen)
-                               (goto-char (point-min))
-                               (let ((line 1) markers)
-                                 (while (not (eobp))
-                                   (push (cons line (copy-marker (point)))
-                                         markers)
-                                   (setq line (1+ line))
-                                   (forward-line 1))
-                                 (nreverse markers))))))))
-               buffer-names))))
+                               (mapcar
+                                (lambda (line)
+                                  (goto-char (point-min))
+                                  (forward-line (1- (max 1 line)))
+                                  (cons line (copy-marker (point))))
+                                (cdr entry))))))))
+               shown-lines))))
 
 (defun mevedel-buddy-note-release-markers ()
   "Drop the captured line markers so they stop tracking edits."
@@ -220,9 +227,10 @@ not leave records behind that name it."
 ;;; Tool operations
 
 (defun mevedel-buddy-note--in-scope-p (buffer-name)
-  "Return non-nil when BUFFER-NAME may be annotated by the running review."
-  (or (null mevedel-buddy-note--scope-buffers)
-      (member buffer-name mevedel-buddy-note--scope-buffers)))
+  "Return non-nil when BUFFER-NAME may be touched by the running review."
+  (and mevedel-buddy-note--scope-buffers
+       (member buffer-name mevedel-buddy-note--scope-buffers)
+       t))
 
 (defun mevedel-buddy-note-add (buffer-name line note severity)
   "Attach NOTE to LINE of BUFFER-NAME at SEVERITY.
@@ -255,19 +263,22 @@ Return the new note id, or an explanatory string the model can act on."
 (defun mevedel-buddy-note-update (id note)
   "Replace the text of note ID with NOTE, leaving it where it is."
   (if-let* ((record (mevedel-buddy-note--find id)))
-      (let ((overlay (plist-get record :overlay)))
-        (plist-put record :note note)
-        (plist-put record :review-needed nil)
-        (when (and (overlayp overlay) (overlay-buffer overlay))
-          (mevedel-buddy-note--render
-           overlay note (plist-get record :severity)))
-        (format "Updated note %s" (plist-get record :id)))
+      (if (not (mevedel-buddy-note--in-scope-p (plist-get record :buffer)))
+          (format "Note %s is not in the review scope" (plist-get record :id))
+        (let ((overlay (plist-get record :overlay)))
+          (plist-put record :note note)
+          (plist-put record :review-needed nil)
+          (when (and (overlayp overlay) (overlay-buffer overlay))
+            (mevedel-buddy-note--render
+             overlay note (plist-get record :severity)))
+          (format "Updated note %s" (plist-get record :id))))
     (format "Unknown note: %s" id)))
 
 (defun mevedel-buddy-note-remove (id)
   "Retract note ID."
   (if-let* ((record (mevedel-buddy-note--find id)))
-      (progn
+      (if (not (mevedel-buddy-note--in-scope-p (plist-get record :buffer)))
+          (format "Note %s is not in the review scope" (plist-get record :id))
         (mevedel-buddy-note--delete record)
         (format "Removed note %s" (plist-get record :id)))
     (format "Unknown note: %s" id)))
@@ -311,10 +322,19 @@ Return the new note id, or an explanatory string the model can act on."
 (defun mevedel-buddy-note-serialize ()
   "Return the note set described for the model, or an empty string.
 
+Only notes belonging to buffers in the running review scope are
+described: a review of one project has no business seeing another
+project buffer names, line numbers, and note text, and could otherwise
+be told to maintain notes it cannot see.
+
 Active and dismissed notes are both described.  Dismissed ones are
 labelled so the model can see what the user already rejected instead of
 raising it again."
-  (let ((notes (seq-take mevedel-buddy-note--notes
+  (let ((notes (seq-take (seq-filter
+                          (lambda (record)
+                            (mevedel-buddy-note--in-scope-p
+                             (plist-get record :buffer)))
+                          mevedel-buddy-note--notes)
                          mevedel-buddy-note-serialize-limit)))
     (if (null notes)
         ""
