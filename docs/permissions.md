@@ -305,7 +305,9 @@ Only the head is visible in the view interaction zone. The permission UI
 registers that head with `mevedel-view-interaction.el`, which owns ordering,
 callback overlays, and redraw. Rule-creating outcomes (`allow-session`,
 `deny-session`, `always-allow`) can coalesce
-queued siblings by re-running the decision chain. The queue is transient
+queued siblings by re-running the decision chain. Resolved siblings leave the
+queue before any callback runs, and every queue exit uses the permission
+queue's exactly-once settlement gate. The queue is transient
 runtime state and is not written to the session sidecar; unfinished
 prompts are aborted on their owning request or root-session teardown. A child
 turn awaiting one of these prompts remains active and continues to occupy one

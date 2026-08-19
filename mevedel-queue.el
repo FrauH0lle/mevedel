@@ -1,14 +1,11 @@
-;;; mevedel-queue.el -- Shared session FIFO queue helpers -*- lexical-binding: t -*-
+;;; mevedel-queue.el -- Shared interaction entry helpers -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Private FIFO machinery for permission prompts.  Plan approval reuses the
-;; entry UI metadata helpers but owns no queue.
+;; Private session resolution and interaction metadata shared by permission
+;; prompts and Plan approval.  Each feature owns its own lifecycle.
 
 ;;; Code:
-
-(eval-when-compile (require 'cl-lib))
-(require 'mevedel-structs)
 
 (defvar mevedel--session)
 (defvar mevedel--data-buffer)
@@ -17,21 +14,6 @@
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-unregister
                   "mevedel-view-interaction" (id))
-
-(cl-defstruct (mevedel-queue-spec (:constructor mevedel-queue-spec--create))
-  name
-  get
-  set
-  render
-  settle
-  retain-on-settle-error
-  coalesce
-  render-error-outcome
-  entry-origin)
-
-(defvar mevedel-queue--settled-cells
-  (make-hash-table :test #'eq :weakness 'key)
-  "Internal entry identity table for exactly-once queue settlement.")
 
 (defvar mevedel-queue--entry-ui-metadata
   (make-hash-table :test #'eq :weakness 'key)
@@ -60,25 +42,6 @@
            (buffer-live-p mevedel--data-buffer)
            (buffer-local-value 'mevedel--session mevedel--data-buffer))))
 
-(defun mevedel-queue--name (spec)
-  "Return SPEC's debug name."
-  (or (mevedel-queue-spec-name spec) 'queue))
-
-(defun mevedel-queue--get (spec session)
-  "Return SPEC's queue in SESSION."
-  (funcall (mevedel-queue-spec-get spec) session))
-
-(defun mevedel-queue--set (spec session queue)
-  "Set SPEC's queue in SESSION to QUEUE."
-  (funcall (mevedel-queue-spec-set spec) session queue))
-
-(defun mevedel-queue--ensure-settled-cell (entry)
-  "Return ENTRY's settled cell, adding one when absent."
-  (or (gethash entry mevedel-queue--settled-cells)
-      (let ((cell (cons nil nil)))
-        (puthash entry cell mevedel-queue--settled-cells)
-        cell)))
-
 (defun mevedel-queue--entry-interaction-buffer (entry)
   "Return the live interaction-zone view buffer recorded for ENTRY."
   (or (and (mevedel-queue--entry-metadata-get entry :view-buffer)
@@ -105,137 +68,6 @@
             (ignore-errors
               (mevedel-view--interaction-unregister id)))))
     (mevedel-queue--entry-metadata-remhash entry)))
-
-(defun mevedel-queue--same-interaction-entry-p (a b)
-  "Return non-nil when queue entries A and B own the same UI interaction."
-  (let ((a-id (mevedel-queue--entry-metadata-get a :interaction-id))
-        (b-id (mevedel-queue--entry-metadata-get b :interaction-id)))
-    (and a-id b-id (equal a-id b-id))))
-
-(defun mevedel-queue--safe-settle (spec entry outcome phase)
-  "Settle ENTRY with OUTCOME through SPEC during PHASE.
-Returns non-nil when this call delivered the outcome.  Duplicate
-settlement is ignored."
-  (let ((cell (mevedel-queue--ensure-settled-cell entry)))
-    (unless (car cell)
-      (condition-case err
-          (progn
-            (funcall (mevedel-queue-spec-settle spec) entry outcome)
-            (setcar cell t)
-            (mevedel-queue--unregister-entry-interaction entry)
-            t)
-        (error
-         (display-warning
-          'mevedel
-          (format "%s: %s callback error: %S"
-                  (mevedel-queue--name spec) phase err)
-          :warning)
-         (unless (mevedel-queue-spec-retain-on-settle-error spec)
-           (setcar cell t)
-           (mevedel-queue--unregister-entry-interaction entry))
-         (not (mevedel-queue-spec-retain-on-settle-error spec)))))))
-
-(defun mevedel-queue--render-head (spec session)
-  "Render SPEC's current head in SESSION."
-  (when-let* ((queue (mevedel-queue--get spec session))
-              (head (car queue)))
-    (condition-case err
-        (funcall (mevedel-queue-spec-render spec) head)
-      (error
-       (display-warning
-        'mevedel
-        (format "%s: render error: %S" (mevedel-queue--name spec) err)
-        :warning)
-       (mevedel-queue--pop
-        spec head
-        (if-let* ((fn (mevedel-queue-spec-render-error-outcome spec)))
-            (funcall fn head err)
-          'aborted))))))
-
-(defun mevedel-queue--enqueue (spec entry &optional session)
-  "Append ENTRY to SPEC's queue and render the visible head.
-The head is rendered after every enqueue, not only the first one,
-so head UI such as aggregate pending counts can reflect siblings
-that joined the queue while the head is already visible."
-  (let ((session (or session (mevedel-queue--current-session))))
-    (if (not session)
-        (progn
-          (display-warning
-           'mevedel
-           (format "%s: enqueue with no session" (mevedel-queue--name spec))
-           :warning)
-          (mevedel-queue--safe-settle spec entry 'aborted "no-session"))
-      (let* ((entry (plist-put (copy-sequence entry) :session session))
-             (_ (mevedel-queue--ensure-settled-cell entry))
-             (queue (mevedel-queue--get spec session)))
-        (mevedel-queue--set spec session (append queue (list entry)))
-        (mevedel-queue--render-head spec session)))))
-
-(defun mevedel-queue--pop (spec entry outcome)
-  "Settle SPEC queue head ENTRY with OUTCOME and render the next head."
-  (let* ((session (plist-get entry :session))
-         (queue (and session (mevedel-queue--get spec session)))
-         (head (car queue)))
-    (cond
-     ((not session)
-      (mevedel-queue--safe-settle spec entry outcome "pop"))
-     ((not (or (eq entry head)
-               (mevedel-queue--same-interaction-entry-p entry head)))
-      (display-warning
-       'mevedel
-       (format "%s: stale queue entry settlement ignored"
-               (mevedel-queue--name spec))
-       :warning))
-     (t
-      (setq entry head)
-      (let ((retain (mevedel-queue-spec-retain-on-settle-error spec)))
-        (unless retain
-          (mevedel-queue--set spec session (cdr queue)))
-        (when (mevedel-queue--safe-settle spec entry outcome "pop")
-          (when retain
-            (mevedel-queue--set spec session (cdr queue)))
-          (when-let* ((coalesce (mevedel-queue-spec-coalesce spec)))
-            (condition-case err
-                (funcall coalesce outcome session)
-              (error
-               (display-warning
-                'mevedel
-                (format "%s: coalesce error: %S"
-                        (mevedel-queue--name spec) err)
-                :warning))))
-          (mevedel-queue--render-head spec session)))))))
-
-(defun mevedel-queue--abort-all (spec reason &optional session)
-  "Flush SPEC's queue in SESSION, settling every entry with REASON."
-  (let* ((session (or session (mevedel-queue--current-session)))
-         (queue (and session (mevedel-queue--get spec session))))
-    (when session
-      (mevedel-queue--set spec session nil))
-    (dolist (entry queue)
-      (mevedel-queue--safe-settle spec entry reason "abort"))))
-
-(defun mevedel-queue--sweep
-    (spec predicate outcome &optional session no-render)
-  "Settle SPEC entries matching PREDICATE with OUTCOME in SESSION.
-When NO-RENDER is non-nil, leave the next head unrendered."
-  (let* ((session (or session (mevedel-queue--current-session)))
-         (queue (and session (mevedel-queue--get spec session)))
-         (head-before (car queue))
-         (kept nil)
-         (swept nil))
-    (dolist (entry queue)
-      (if (funcall predicate entry)
-          (push entry swept)
-        (push entry kept)))
-    (when session
-      (let ((new-queue (nreverse kept)))
-        (mevedel-queue--set spec session new-queue)
-        (dolist (entry (nreverse swept))
-          (mevedel-queue--safe-settle spec entry outcome "sweep"))
-        (when (and new-queue
-                   (not no-render)
-                   (not (eq head-before (car new-queue))))
-          (mevedel-queue--render-head spec session))))))
 
 (provide 'mevedel-queue)
 

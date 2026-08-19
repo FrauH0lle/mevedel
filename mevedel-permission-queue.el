@@ -80,27 +80,9 @@
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
 
-(defvar mevedel-permission-queue--spec
-  (mevedel-queue-spec--create
-   :name 'permission-queue
-   :get (lambda (session) (mevedel-session-permission-queue session))
-   :set (lambda (session queue)
-          (setf (mevedel-session-permission-queue session) queue))
-   :render #'mevedel-permission-queue--render-entry
-   :settle (lambda (entry outcome)
-             (when-let* ((cb (plist-get entry :callback)))
-               (funcall cb outcome)))
-   :coalesce (lambda (outcome session)
-               (when (memq outcome '(allow-session deny-session always-allow))
-                 (mevedel-permission-queue--coalesce outcome session)))
-   :render-error-outcome
-   (lambda (entry _error)
-     (pcase (plist-get entry :kind)
-       ('bash '(deny . "Bash permission UI unavailable"))
-       ('sandbox '(deny . "Additional permission UI unavailable"))
-       (_ 'aborted)))
-   :entry-origin (lambda (entry) (plist-get entry :origin)))
-  "Shared FIFO spec for the permission queue.")
+(defvar mevedel-permission-queue--settled-cells
+  (make-hash-table :test #'eq :weakness 'key)
+  "Entry identity table for exactly-once permission settlement.")
 
 
 (defun mevedel-permission-queue--current-session ()
@@ -118,14 +100,45 @@ SESSION defaults to the current session resolved via
 the slot through `mevedel-session-permission-queue' to mutate."
   (when-let* ((sess (or session
                         (mevedel-permission-queue--current-session))))
-    (mevedel-queue--get mevedel-permission-queue--spec sess)))
+    (mevedel-session-permission-queue sess)))
 
 (defun mevedel-permission-queue--set (queue &optional session)
   "Set SESSION's permission-queue slot to QUEUE.
 SESSION defaults to the current session."
   (when-let* ((sess (or session
                         (mevedel-permission-queue--current-session))))
-    (mevedel-queue--set mevedel-permission-queue--spec sess queue)))
+    (setf (mevedel-session-permission-queue sess) queue)))
+
+(defun mevedel-permission-queue--ensure-settled-cell (entry)
+  "Return ENTRY's settled cell, adding one when absent."
+  (or (gethash entry mevedel-permission-queue--settled-cells)
+      (let ((cell (cons nil nil)))
+        (puthash entry cell mevedel-permission-queue--settled-cells)
+        cell)))
+
+(defun mevedel-permission-queue--same-interaction-entry-p (a b)
+  "Return non-nil when permission entries A and B own one interaction."
+  (let ((a-id (mevedel-queue--entry-metadata-get a :interaction-id))
+        (b-id (mevedel-queue--entry-metadata-get b :interaction-id)))
+    (and a-id b-id (equal a-id b-id))))
+
+(defun mevedel-permission-queue--safe-settle (entry outcome phase)
+  "Settle ENTRY once with OUTCOME during PHASE.
+Return non-nil when this call delivered or consumed the outcome."
+  (let ((cell (mevedel-permission-queue--ensure-settled-cell entry)))
+    (unless (car cell)
+      (setcar cell t)
+      (unwind-protect
+          (condition-case err
+              (when-let* ((callback (plist-get entry :callback)))
+                (funcall callback outcome))
+            (error
+             (display-warning
+              'mevedel
+              (format "permission-queue: %s callback error: %S" phase err)
+              :warning)))
+        (mevedel-queue--unregister-entry-interaction entry))
+      t)))
 
 (defun mevedel-permission-queue--attribution-origin (entry)
   "Return ENTRY's non-root canonical path for prompt attribution."
@@ -240,7 +253,19 @@ ENTRY plist keys:
               callback))
            (entry (plist-put (copy-sequence entry) :callback wrapped)))
       (condition-case err
-          (mevedel-queue--enqueue mevedel-permission-queue--spec entry session)
+          (if (not session)
+              (progn
+                (display-warning
+                 'mevedel "permission-queue: enqueue with no session" :warning)
+                (mevedel-permission-queue--safe-settle
+                 entry 'aborted "no-session"))
+            (setq entry (plist-put entry :session session))
+            (mevedel-permission-queue--ensure-settled-cell entry)
+            (mevedel-permission-queue--set
+             (append (mevedel-permission-queue--get session) (list entry))
+             session)
+            ;; Re-render the head so its pending count includes new siblings.
+            (mevedel-permission-queue--render-head session))
         (error
          (when release
            (funcall release))
@@ -248,7 +273,7 @@ ENTRY plist keys:
 
 (defun mevedel-permission-queue--render-entry (entry)
   "Render ENTRY directly via the kind-specific dispatcher.
-Used by the queue's render-head and by the no-session fallback."
+Used by the permission queue's head renderer."
   (pcase (plist-get entry :kind)
     ('generic (mevedel-permission-queue--render-generic entry))
     ('bash (mevedel-permission-queue--render-bash entry))
@@ -267,9 +292,51 @@ Used by the queue's render-head and by the no-session fallback."
 (defun mevedel-permission-queue--render-head (&optional session)
   "Render the current head of SESSION's permission queue.
 Dispatches on entry's `:kind' via `--render-entry'."
-  (mevedel-queue--render-head mevedel-permission-queue--spec
-                              (or session
-                                  (mevedel-permission-queue--current-session))))
+  (when-let* ((session (or session
+                           (mevedel-permission-queue--current-session)))
+              (head (car (mevedel-permission-queue--get session))))
+    (condition-case err
+        (mevedel-permission-queue--render-entry head)
+      (error
+       (display-warning
+        'mevedel
+        (format "permission-queue: render error: %S" err)
+        :warning)
+       (mevedel-permission-queue--pop
+        head
+        (pcase (plist-get head :kind)
+          ('bash '(deny . "Bash permission UI unavailable"))
+          ('sandbox '(deny . "Additional permission UI unavailable"))
+          (_ 'aborted)))))))
+
+(defun mevedel-permission-queue--pop (entry outcome)
+  "Settle queue head ENTRY with OUTCOME and render the next head."
+  (let* ((session (plist-get entry :session))
+         (queue (and session (mevedel-permission-queue--get session)))
+         (head (car queue)))
+    (cond
+     ((not session)
+      (mevedel-permission-queue--safe-settle entry outcome "pop"))
+     ((not (or (eq entry head)
+               (mevedel-permission-queue--same-interaction-entry-p
+                entry head)))
+      (display-warning
+       'mevedel
+       "permission-queue: stale queue entry settlement ignored"
+       :warning))
+     (t
+      (setq entry head)
+      (mevedel-permission-queue--set (cdr queue) session)
+      (when (mevedel-permission-queue--safe-settle entry outcome "pop")
+        (when (memq outcome '(allow-session deny-session always-allow))
+          (condition-case err
+              (mevedel-permission-queue--coalesce outcome session)
+            (error
+             (display-warning
+              'mevedel
+              (format "permission-queue: coalesce error: %S" err)
+              :warning))))
+        (mevedel-permission-queue--render-head session))))))
 
 (defun mevedel-permission-queue--render-generic (entry)
   "Render a generic-kind permission ENTRY as the visible head."
@@ -290,8 +357,8 @@ Dispatches on entry's `:kind' via `--render-entry'."
 
 Bash uses the same FIFO machinery as generic permissions.  Read-only and
 unknown commands may offer rule-creating outcomes; dangerous and complex
-commands do not.  If the helper is unavailable, signal so the shared queue
-engine removes the head and returns the pinned tool-level denial."
+commands do not.  If the helper is unavailable, signal so the permission queue
+removes the head and returns the pinned tool-level denial."
   (require 'mevedel-permission-prompt)
   (let ((command (plist-get entry :command))
         (command-class (plist-get entry :command-class))
@@ -351,7 +418,7 @@ rather than reading the ambient `mevedel--session', so settlement
 runs correctly regardless of which buffer fired the keypress."
   (mevedel-permission-queue--log
    'permission-resolved entry nil :outcome outcome)
-  (mevedel-queue--pop mevedel-permission-queue--spec entry outcome))
+  (mevedel-permission-queue--pop entry outcome))
 
 (defun mevedel-permission-queue--translate-coalesce-outcome (kind resolved)
   "Translate RESOLVED (`'allow' / `'deny') into the vocabulary KIND expects.
@@ -381,31 +448,25 @@ still resolve to `ask' stay in place.
 Protected-path and deny precedence is handled inside
 `mevedel-check-permission': a protected resource needs an exact grant,
 while deny rules remain final."
-  (let ((q (mevedel-permission-queue--get session))
-        (kept nil))
-    (dolist (entry q)
+  (let (kept settled)
+    (dolist (entry (mevedel-permission-queue--get session))
       (let ((resolved (mevedel-permission-queue--reevaluate entry)))
-        (cond
-         ((eq resolved 'ask)
-          (push entry kept))
-         (t
-          (let ((cb (plist-get entry :callback))
-                (kind (plist-get entry :kind)))
-            (when (functionp cb)
-              (condition-case err
-                  (let ((outcome
-                         (mevedel-permission-queue--translate-coalesce-outcome
-                          kind resolved)))
-                    (mevedel-permission-queue--log
-                     'permission-coalesced entry session
-                     :resolved resolved :outcome outcome)
-                    (funcall cb outcome))
-                (error
-                 (display-warning
-                  'mevedel
-                  (format "permission-queue: coalesced callback error: %S" err)
-                  :warning)))))))))
-    (mevedel-permission-queue--set (nreverse kept) session)))
+        (if (eq resolved 'ask)
+            (push entry kept)
+          (push
+           (list entry resolved
+                 (mevedel-permission-queue--translate-coalesce-outcome
+                  (plist-get entry :kind) resolved))
+           settled))))
+    ;; Remove every resolved entry before callbacks can reenter queue teardown.
+    (mevedel-permission-queue--set (nreverse kept) session)
+    (dolist (item (nreverse settled))
+      (pcase-let ((`(,entry ,resolved ,outcome) item))
+        (mevedel-permission-queue--log
+         'permission-coalesced entry session
+         :resolved resolved :outcome outcome)
+        (mevedel-permission-queue--safe-settle
+         entry outcome "coalesced")))))
 
 (defun mevedel-permission-queue--reevaluate (entry)
   "Re-evaluate ENTRY through the decision chain with current rules.
@@ -553,8 +614,10 @@ Called from `mevedel-abort' / request-cancel-fn."
     (dolist (entry queue)
       (mevedel-permission-queue--log
        'permission-aborted entry session :outcome 'aborted))
-    (mevedel-queue--abort-all mevedel-permission-queue--spec
-                              'aborted session)))
+    (when session
+      (mevedel-permission-queue--set nil session))
+    (dolist (entry queue)
+      (mevedel-permission-queue--safe-settle entry 'aborted "abort"))))
 
 (defun mevedel-permission-queue-sweep-request
     (request-id &optional session no-render)
@@ -564,17 +627,26 @@ When NO-RENDER is non-nil, do not render the next head entry after
 sweeping."
   (when request-id
     (let* ((session (or session (mevedel-permission-queue--current-session)))
-           (queue (and session (mevedel-permission-queue--get session))))
+           (queue (and session (mevedel-permission-queue--get session)))
+           (head-before (car queue))
+           kept swept)
       (dolist (entry queue)
-        (when (equal (plist-get entry :request-id) request-id)
+        (if (equal (plist-get entry :request-id) request-id)
+            (push entry swept)
+          (push entry kept)))
+      (when session
+        (setq kept (nreverse kept))
+        (mevedel-permission-queue--set kept session)
+        (dolist (entry (nreverse swept))
           (mevedel-permission-queue--log
            'permission-swept entry session
-           :outcome 'aborted :sweep-request-id request-id)))
-      (mevedel-queue--sweep
-       mevedel-permission-queue--spec
-       (lambda (entry)
-         (equal (plist-get entry :request-id) request-id))
-       'aborted session no-render))))
+           :outcome 'aborted :sweep-request-id request-id)
+          (mevedel-permission-queue--safe-settle
+           entry 'aborted "sweep"))
+        (when (and kept
+                   (not no-render)
+                   (not (eq head-before (car kept))))
+          (mevedel-permission-queue--render-head session))))))
 
 (provide 'mevedel-permission-queue)
 
