@@ -38,6 +38,13 @@
   (let ((home (make-temp-file "mevedel-test-home-" t)))
     (setq default-directory (expand-file-name default-directory))
     (setenv "HOME" home)
+    ;; Emacs cached the real home the first time anything abbreviated a file
+    ;; name during startup.  The cache guards itself by remembering which home
+    ;; it was built from, so a stale regexp is inert -- until a test rebinds
+    ;; `abbreviated-home-dir' and the recomputation refreshes that guard
+    ;; globally while the regexp itself reverts.  Recompute both here, from the
+    ;; isolated home, so the pair can never disagree.
+    (setq abbreviated-home-dir nil)
     (dolist (entry '(("XDG_CACHE_HOME" . ".cache")
                      ("XDG_CONFIG_HOME" . ".config")
                      ("XDG_DATA_HOME" . ".local/share")

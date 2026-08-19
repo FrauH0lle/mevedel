@@ -2862,6 +2862,10 @@ default Bash keeps bare dot inspection automatic"
            :permission-mode 'ask))
          (mevedel-permission-rules nil)
          (mevedel-permission-guardian nil)
+         ;; The resource has to sit inside the allowed root, or the exact
+         ;; command never reaches the rule it is meant to store.
+         (target (file-name-concat temporary-file-directory
+                                   "mevedel-exact-target"))
          entry outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
                (lambda (queued &optional _session)
@@ -2869,7 +2873,7 @@ default Bash keeps bare dot inspection automatic"
                  (funcall (plist-get queued :callback) 'allow-session))))
       (mevedel-tool-exec--check-permission-async
        nil
-       `(:command "rm -rf /tmp/mevedel-exact-target"
+       `(:command ,(format "rm -rf %s" target)
          :permission-context
          (:session ,session :workspace ,workspace
           :mode ask :allowed-roots (,temporary-file-directory)))
@@ -2878,7 +2882,7 @@ default Bash keeps bare dot inspection automatic"
     (should (eq outcome 'allow))
     (should
      (equal
-      '(("Bash" :pattern "rm -rf /tmp/mevedel-exact-target" :action allow))
+      `(("Bash" :pattern ,(format "rm -rf %s" target) :action allow))
       (mevedel-session-permission-rules session))))
   :doc "full-auto allows dangerous Bash without enqueueing"
   (let ((mevedel-permission-mode 'full-auto)

@@ -93,8 +93,6 @@
   :doc "waits for asynchronous inherited gptel context formatting"
   (let* ((temporary-file-directory
           (file-name-as-directory (expand-file-name "~")))
-         ;; Eask changes HOME after Emacs initializes its abbreviation cache.
-         (abbreviated-home-dir nil)
          (root (make-temp-file "mevedel-btw-async-context-" t))
          (context-file (file-name-concat root "context.txt"))
          (buffer-file (file-name-concat root "buffer.txt"))

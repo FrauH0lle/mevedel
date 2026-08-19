@@ -17,6 +17,7 @@
   (error "Tests require HOME and XDG roots under temporary-file-directory"))
 
 (defvar tabulated-list-entries)
+(defvar tramp-histfile-override)
 (defvar tramp-local-host-regexp)
 (defvar tramp-methods)
 
@@ -282,7 +283,15 @@ settles at the sentinel instead of riding the grace timers."
      (let ((tramp-local-host-regexp
             (concat "\\`"
                     (regexp-opt (append ,hosts (list (system-name))))
-                    "\\'")))
+                    "\\'"))
+           ;; A real login sets HOME on the remote side.  This method reuses a
+           ;; local shell, so it inherits the blanked environment mevedel gives
+           ;; a remote child, and TRAMP's history-file probe then asks a shell
+           ;; with no HOME to `cd ~/'.  Bourne shells that decline to fall back
+           ;; to the password entry -- dash, which is /bin/sh on Debian and
+           ;; Ubuntu -- fail that probe and take every mock connection with
+           ;; them.  No history file, no probe.
+           (tramp-histfile-override t))
        (let ((original-support-tier
               (symbol-function 'mevedel-execution-target--support-tier)))
          (cl-letf (((symbol-function 'mevedel-execution-target--support-tier)
