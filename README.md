@@ -61,6 +61,8 @@ Key features:
 
 ## Requirements
 
+- A Linux host.  Portable session storage needs procfs, GNU `stat`, and
+  `bash`, and refuses to run anywhere else; CI covers Linux only.
 - Emacs version 30.2 or higher
 - [gptel](https://github.com/karthink/gptel) 0.9.9.5 or higher
 - [gptel-agent](https://github.com/karthink/gptel-agent) 0.0.1 or higher for

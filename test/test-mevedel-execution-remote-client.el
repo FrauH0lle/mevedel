@@ -378,9 +378,15 @@
                                session buffer t))
                         (unless acquired
                           (accept-process-output nil 0.05))))
-                    (should (file-exists-p
-                             (file-name-concat root ".mevedel"
-                                               "accept-transfer" "a-released")))
+                    ;; Acquisition proves the owner released: the fence is
+                    ;; the only way in.  Its marker is a separate target
+                    ;; write that the protocol does not order before the
+                    ;; claim, so waiting is the only way to observe it
+                    ;; without racing.  Failing here instead left the owner
+                    ;; waiting on a `b-acquired' marker this client would
+                    ;; never write, and the run hung rather than failed.
+                    (test-mevedel-execution-remote-client--wait
+                     root "a-released")
                     (with-current-buffer buffer
                       (should (string-match-p
                                (regexp-quote

@@ -951,15 +951,15 @@
 
 (mevedel-deftest mevedel-tool-patch--get-paths
   (:doc "Extracts every source and destination path") ,test (test)
-  (let ((default-directory "/tmp/"))
+  (let ((default-directory temporary-file-directory))
     (should (= 2 (length
                   (mevedel-tool-patch--get-paths
-                   '(:patch "*** Begin Patch\n*** Update File: a\n*** Move to: b\n*** End Patch")))))))
+                   '(:patch "*** Begin Patch\n*** Update File: a\n*** Move to: b\n*** End Patch"))))))
   :doc "Omits local operands but keeps ordinary paths in mixed proposals"
-  (let ((default-directory "/tmp/"))
-    (should (equal '("/tmp/ordinary.txt")
+  (let ((default-directory temporary-file-directory))
+    (should (equal (list (expand-file-name "ordinary.txt"))
                    (mevedel-tool-patch--get-paths
-                    '(:patch "*** Begin Patch\n*** Add File: local://scratch.txt\n+x\n*** Delete File: ordinary.txt\n*** End Patch")))))
+                    '(:patch "*** Begin Patch\n*** Add File: local://scratch.txt\n+x\n*** Delete File: ordinary.txt\n*** End Patch"))))))
 
 (mevedel-deftest mevedel-tool-patch--render
   (:doc "Produces one collapsible aggregate with per-file diff blocks") ,test (test)

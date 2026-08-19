@@ -120,6 +120,22 @@ and fails closed when a target operation misbehaves anyway."
 ;;
 ;;; Exclusive use
 
+(defun mevedel-transport--unsuspend-timeouts (suspended elapsed)
+  "Restart SUSPENDED `with-timeout' clocks, charging them ELAPSED seconds.
+
+`with-timeout-unsuspend' re-arms each timeout with the delay it had left when
+the clock stopped, because it exists for a debugger, where the time a person
+spends reading a backtrace is not the program's to answer for.  A remote
+operation is the program's, and a caller that bounded its work at thirty
+seconds means thirty seconds of its own waiting, not thirty seconds of
+whatever is left after this section.  Charging the section makes a deadline
+that passed inside it fire as soon as the connection is free again."
+  (dolist (entry suspended)
+    (let* ((timer (car entry))
+           (delay (max 0 (- (float-time (cadr entry)) elapsed))))
+      (timer-set-time timer (time-add nil delay))
+      (timer-activate timer))))
+
 (defun mevedel-transport--call-with-exclusive-connection (thunk)
   "Call THUNK with foreign timers suspended, re-arming any it schedules.
 
@@ -127,8 +143,14 @@ Binding the timer lists away is what stops a foreign timer, but it also means
 a timer THUNK arms lands on a binding that is about to be discarded.  The
 durable path does arm one -- the lease renewal timer -- so the timers scheduled
 inside are collected and re-armed against the restored lists instead of being
-dropped."
+dropped.
+
+A held timer keeps its absolute deadline and so fires overdue once it is
+back.  A held `with-timeout' would not: its clock stops, and the deadline
+would silently move by however long this section ran.  Both are therefore
+charged for the section."
   (let ((suspended (with-timeout-suspend))
+        (started (float-time))
         (scheduled nil)
         (scheduled-idle nil))
     (unwind-protect
@@ -138,7 +160,8 @@ dropped."
             ;; taking anything armed inside with them.
             (setq scheduled timer-list
                   scheduled-idle timer-idle-list)))
-      (with-timeout-unsuspend suspended)
+      (mevedel-transport--unsuspend-timeouts
+       suspended (- (float-time) started))
       (dolist (timer scheduled)
         (ignore-errors (timer-activate timer)))
       (dolist (timer scheduled-idle)
@@ -158,7 +181,8 @@ Suspending timers for the duration is what TRAMP itself does around its
 critical sections.  A timer BODY arms is re-armed on exit rather than lost, so
 BODY may schedule one; a suspended timer whose deadline passed meanwhile fires
 overdue, which for everything on this path is a latency cost and not a
-correctness one.
+correctness one.  A `with-timeout' a caller opened around BODY is charged for
+the time BODY took, so bounding remote work still bounds it.
 
 A timer BODY arms is armed on the bound lists, which are the ones Emacs
 consults while BODY runs, so it fires normally -- including the one a
