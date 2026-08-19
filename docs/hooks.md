@@ -575,6 +575,9 @@ is trusted.  A minimal first trust model:
 - trust state lives under user state, keyed by workspace id and project
   hook file hashes.
 - changed project hook files require re-trust.
+- resolution reads each project config once, checks that snapshot's hash, and
+  parses the same bytes; replacing the pathname after the check cannot
+  substitute executable rules.
 - trusting a project refreshes that workspace's trust entries to the current
   hook files only, so removed hook files are no longer trusted.
 
