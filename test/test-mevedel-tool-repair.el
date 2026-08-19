@@ -706,7 +706,7 @@
   ,test
   (test)
 
-  :doc "formats a hidden ignored side channel without summaries or values"
+  :doc "formats a producer-owned hidden side channel without values"
   (let* ((block
           (mevedel-tool-repair-format-audit-block
            'committed
@@ -715,7 +715,8 @@
                    :summary "sentinel-secret"))))
          record)
     (should (string-match-p mevedel--hook-audit-open block))
-    (should (eq 'ignore (get-text-property 0 'gptel block)))
+    (should (eq 'mevedel-hook-audit (get-text-property 0 'gptel block)))
+    (should (eq t (get-text-property 0 'mevedel-hook-audit block)))
     (with-temp-buffer
       (insert block)
       (goto-char (point-min))

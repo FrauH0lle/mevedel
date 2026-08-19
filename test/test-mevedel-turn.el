@@ -82,8 +82,7 @@
                    (data
                     (cdr
                      (mevedel-pipeline-extract-render-data
-                      (buffer-substring-no-properties
-                       block-start (point-max))))))
+                      (buffer-substring block-start (point-max))))))
               (should (eq 'request-summary (plist-get data :kind)))
               (should (eq 'error (plist-get data :outcome)))
               (should (equal (gptel-backend-name backend)
@@ -96,8 +95,11 @@
               (should (equal error-data (plist-get data :error-data)))
               (should (equal message-text (plist-get data :message)))
               (should (eq 'manual (plist-get data :retry)))
-              (should (eq 'ignore
-                          (get-text-property block-start 'gptel))))))
+              (should (eq 'mevedel-render-data
+                          (get-text-property block-start 'gptel)))
+              (should (eq t
+                          (get-text-property
+                           block-start 'mevedel-render-data))))))
       (kill-buffer chat-buf)))
 
   :doc "persists plain-string provider errors without losing their text"
@@ -128,7 +130,7 @@
             (let ((data
                    (cdr
                     (mevedel-pipeline-extract-render-data
-                     (buffer-substring-no-properties
+                     (buffer-substring
                       (match-beginning 0) (point-max))))))
               (should (equal message-text (plist-get data :error-data)))
               (should (equal message-text (plist-get data :message))))))
