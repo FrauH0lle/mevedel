@@ -1703,7 +1703,26 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
            (string-match-p
             "New direct child agents:"
             (plist-get (aref (plist-get data :messages) 1) :content))))
-      (kill-buffer buffer))))
+      (kill-buffer buffer))
+    ;; A freshly spawned child runs its first WAIT before its invocation is
+    ;; published; the handler must skip instead of erroring.
+    (let* ((session (mevedel-tools-test--make-session))
+           (invocation
+            (mevedel-agent-invocation--create
+             :agent-id "fresh-id" :path "/root/fresh"))
+           (buffer (generate-new-buffer " *mt-agent-roster-fresh*"))
+           (data (list :messages (vector)))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer buffer :backend nil :data data
+                             :mevedel-agent-invocation invocation))))
+      (setf (mevedel-agent-invocation-parent-session invocation) session)
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (setq-local mevedel--session session))
+            (mevedel-tools--handle-agent-roster-inject fsm)
+            (should (= 0 (length (plist-get data :messages)))))
+        (kill-buffer buffer)))))
 ;;
 ;;; Watchdog, bg-callback hardening, prune
 

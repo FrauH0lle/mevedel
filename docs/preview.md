@@ -63,6 +63,9 @@ path writes nothing and leaves the review open with a conflict message plus
 a recovery hint (deselect the stale file, or reject so the model re-reads).
 An incomplete rollback instead shows sanitized authored paths and tells the
 user to inspect them before retrying.
+Once submission starts, the review becomes an inert progress row on both the
+Emacs and collaboration surfaces until diagnostics finish.  Review teardown
+may still abort it, and whichever terminal result wins settles the tool once.
 
 No file changes before final submission. Application is one rollback-backed
 transaction across the selected changes, creates parent directories for added

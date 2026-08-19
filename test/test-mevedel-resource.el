@@ -613,7 +613,8 @@
           (with-temp-file (file-name-concat memory-dir "topic.md")
             (insert "remember this fact"))
           (let* ((mevedel-memory-dirs
-                  (list (file-name-concat ".mevedel" "memory")))
+                  (list (file-name-concat ".mevedel" "memory")
+                        (file-name-concat ".agents" "memory")))
                  (root (car (mevedel-system--memory-roots workspace)))
                  (key (mevedel-resource-memory-root-key root))
                  (topic (format "memory://%s/topic.md" key))
@@ -634,6 +635,8 @@
                        (insert-file-contents path)
                        (buffer-string))))))
             (should (string-match-p "Index entry" (plist-get index :result)))
+            ;; The missing `.agents/memory' root is excluded from search.
+            (should (= 1 (length (plist-get glob :resource-search-roots))))
             (should (equal
                      (concat "memory://" key)
                      (plist-get

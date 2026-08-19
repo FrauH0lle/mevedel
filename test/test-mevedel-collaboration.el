@@ -811,6 +811,7 @@
                      :options ((allow-once . "Allow once")
                                (deny-once . "Deny"))
                      :feedback t))
+      (overlay-put overlay 'mevedel-view-interaction-id 'patch-review)
       (puthash 1 (list :name "phone" :writable t :ready t) guests)
       (puthash 2 (list :name "laptop" :writable nil :ready t) guests)
       (let ((mevedel-collaboration--room room)
@@ -819,7 +820,7 @@
                    (lambda (_transport peer frame)
                      (push (cons peer frame) sent)
                      t)))
-          ;; An overlay without remote options is never broadcast.
+          ;; An overlay without a remote descriptor is never broadcast.
           (mevedel-collaboration--on-prompt-created (make-overlay 1 2))
           (should-not sent)
           (mevedel-collaboration--on-prompt-created overlay)
@@ -835,6 +836,19 @@
                                    (append (plist-get frame :options) nil))))
             (should (eq t (plist-get frame :allowFeedback)))
             (should (= 1 (hash-table-count requests)))
+            ;; An in-flight body-only update reuses the request and removes
+            ;; every decision from the guest card.
+            (setq sent nil)
+            (overlay-put overlay 'mevedel--remote
+                         '(:body "Applying patch" :body-kind "text"))
+            (mevedel-collaboration--on-prompt-created overlay)
+            (let ((update (cdr (car sent))))
+              (should (equal (plist-get frame :reqId)
+                             (plist-get update :reqId)))
+              (should (equal "Applying patch" (plist-get update :body)))
+              (should (= 0 (length (plist-get update :options))))
+              (should (eq :json-false
+                          (plist-get update :allowFeedback))))
             ;; A late-joining writable guest receives the active request.
             (setq sent nil)
             (mevedel-collaboration--send-ui-requests room 7)

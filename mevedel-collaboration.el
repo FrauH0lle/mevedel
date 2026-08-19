@@ -415,10 +415,7 @@ head on every selection change -- reuses the existing request id, so a
 guest sees one card updated in place instead of an accumulating pile."
   (when-let ((room mevedel-collaboration--room)
              (remote (overlay-get overlay 'mevedel--remote)))
-    (when (and mevedel-collaboration-remote-interactions
-               (or (plist-get remote :options)
-                   (plist-get remote :questions)
-                   (plist-get remote :feedback)))
+    (when mevedel-collaboration-remote-interactions
       (let* ((requests (plist-get room :ui-requests))
              (interaction-id
               (overlay-get overlay 'mevedel-view-interaction-id))
