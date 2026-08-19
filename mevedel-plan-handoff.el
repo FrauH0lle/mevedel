@@ -84,8 +84,6 @@
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--summary-block
                   "mevedel-session-persistence" (summary))
-(declare-function mevedel-session-persistence-ensure-files
-                  "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-persistence-restore
                   "mevedel-session-persistence" (session-dir))
 (declare-function mevedel-session-persistence-save
@@ -132,8 +130,11 @@
                   "mevedel-view-stream" (status &optional owner))
 
 ;; `mevedel-worktree'
+(declare-function mevedel-worktree--session-directory
+                  "mevedel-worktree" (branch))
 (declare-function mevedel-worktree-create-session
-                  "mevedel-worktree" (&optional branch purpose clean))
+                  "mevedel-worktree"
+                  (&optional branch purpose clean recovery))
 
 (defconst mevedel-plan-handoff--accepted-goal-objective
   (concat
@@ -337,31 +338,53 @@ needs no session."
   (require 'mevedel-worktree)
   (let* ((selection (plist-get record :selection))
          (branch (plist-get selection :branch))
-         (result
-          (with-current-buffer chat-buffer
-            (mevedel-worktree-create-session
-             branch "Accepted Plan implementation"
-             (eq (plist-get selection :context) 'summary))))
-         (target-buffer (plist-get result :buffer))
-         (target-session
-          (buffer-local-value 'mevedel--session target-buffer))
-         (target-save-path
-          (with-current-buffer target-buffer
-            (mevedel-session-persistence-ensure-files
-             target-session target-buffer)))
-         (prepared (copy-tree record)))
-    (unless (equal branch (plist-get result :branch))
-      (error "Created Worktree branch does not match the accepted branch"))
-    (setq prepared (plist-put prepared :step 'prepare-target))
-    (setq prepared (plist-put prepared :target-directory
-                              (plist-get result :directory)))
-    (setq prepared (plist-put prepared :target-save-path target-save-path))
-    (setq prepared
-          (plist-put prepared :target-session-id
-                     (mevedel-session-session-id target-session)))
-    (mevedel-plan--metadata-put session :implementation-retry prepared)
-    (mevedel-plan-handoff--persist session chat-buffer)
-    prepared))
+         (prepared (copy-tree record))
+         (recovery (plist-member prepared :target-directory)))
+    (unless recovery
+      (setq prepared
+            (plist-put
+             prepared :target-directory
+             (with-current-buffer chat-buffer
+               (mevedel-worktree--session-directory branch))))
+      (mevedel-plan--metadata-put session :implementation-retry prepared)
+      (mevedel-plan-handoff--persist session chat-buffer))
+    (let* ((result
+            (with-current-buffer chat-buffer
+              (mevedel-worktree-create-session
+               branch "Accepted Plan implementation"
+               (eq (plist-get selection :context) 'summary)
+               (and recovery prepared))))
+           (target-buffer (plist-get result :buffer))
+           (target-session
+            (buffer-local-value 'mevedel--session target-buffer)))
+      (unless (equal branch (plist-get result :branch))
+        (error "Created Worktree branch does not match the accepted branch"))
+      (unless (equal (plist-get prepared :target-directory)
+                     (plist-get result :directory))
+        (error "Created Worktree directory does not match its reservation"))
+      (condition-case err
+          (mevedel-plan-handoff--persist target-session target-buffer)
+        (error
+         (when-let* ((save-path (mevedel-session-save-path target-session))
+                     (session-id (mevedel-session-session-id target-session)))
+           (setq prepared (plist-put prepared :target-save-path save-path))
+           (setq prepared (plist-put prepared :target-session-id session-id))
+           (mevedel-plan--metadata-put
+            session :implementation-retry prepared))
+         (signal (car err) (cdr err))))
+      (unless (and (stringp (mevedel-session-save-path target-session))
+                   (stringp (mevedel-session-session-id target-session)))
+        (error "Prepared Worktree session was not persisted"))
+      (setq prepared (plist-put prepared :step 'prepare-target))
+      (setq prepared
+            (plist-put prepared :target-save-path
+                       (mevedel-session-save-path target-session)))
+      (setq prepared
+            (plist-put prepared :target-session-id
+                       (mevedel-session-session-id target-session)))
+      (mevedel-plan--metadata-put session :implementation-retry prepared)
+      (mevedel-plan-handoff--persist session chat-buffer)
+      prepared)))
 
 (defun mevedel-plan-handoff--prepare-worktree-target
     (session chat-buffer record)

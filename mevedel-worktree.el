@@ -78,6 +78,12 @@
 (declare-function mevedel-menu "mevedel-menu" ())
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-list-sessions
+                  "mevedel-session-persistence" (workspace &optional cached))
+(declare-function mevedel-session-persistence-restore
+                  "mevedel-session-persistence"
+                  (session-dir &optional lifecycle-source session-override
+                               workspace))
 (declare-function mevedel-session-persistence-save
                   "mevedel-session-persistence" (session buffer))
 
@@ -86,6 +92,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-p "mevedel-structs" (cl-x))
@@ -1105,15 +1112,90 @@ Use PREFLIGHT when it already describes SESSION's immutable Git state."
         (insert entry "\n")
         (write-region (point-min) (point-max) exclude-file nil 'silent)))))
 
-(defun mevedel-worktree--open-session (workspace worktree-directory)
-  "Open a mevedel session for WORKSPACE at WORKTREE-DIRECTORY."
+(defun mevedel-worktree--open-session
+    (workspace worktree-directory &optional recovery)
+  "Open a mevedel session for WORKSPACE at WORKTREE-DIRECTORY.
+RECOVERY names the exact prepared session or authorizes unique discovery."
   (require 'mevedel-chat)
-  (let* ((session-name (mevedel--default-session-name-for-directory
+  (let* ((expected-id (plist-get recovery :target-session-id))
+         (expected-path (plist-get recovery :target-save-path))
+         (_
+          (when (not (eq (null expected-id) (null expected-path)))
+            (error "Prepared Worktree session identity is incomplete")))
+         (live
+          (and (not expected-id)
+               (mevedel--sessions-in-working-directory
+                (mevedel--workspace-sessions workspace)
+                worktree-directory)))
+         (durable
+          (and recovery
+               (not expected-id)
+               (not live)
+               (progn
+                 (require 'mevedel-session-persistence)
+                 (cl-remove-if-not
+                  (lambda (entry)
+                    (equal
+                     (directory-file-name
+                      (mevedel-worktree--native-path
+                       (plist-get (plist-get entry :summary)
+                                  :working-directory)
+                       worktree-directory))
+                     (directory-file-name
+                      (mevedel-worktree--native-path
+                       worktree-directory worktree-directory))))
+                  (mevedel-session-persistence-list-sessions workspace)))))
+         (_
+          (when (or (cdr live) (cdr durable))
+            (error "Multiple sessions use Worktree directory: %s"
+                   worktree-directory)))
+         (session-name (mevedel--default-session-name-for-directory
                         workspace worktree-directory))
-         (chat-buffer (mevedel--chat-buffer
-                       session-name t workspace worktree-directory)))
+         (chat-buffer
+          (cond
+           (expected-id
+            (require 'mevedel-session-persistence)
+            (mevedel-session-persistence-restore
+             expected-path nil nil workspace))
+           (live (cdar live))
+           (durable
+            (mevedel-session-persistence-restore
+             (plist-get (car durable) :save-path) nil nil workspace))
+           (t
+            (mevedel--chat-buffer
+             session-name t workspace worktree-directory)))))
+    (when expected-id
+      (let ((session (buffer-local-value 'mevedel--session chat-buffer)))
+        (unless (equal expected-id (mevedel-session-session-id session))
+          (error "Prepared Worktree session identity does not match"))))
+    (unless (equal
+             (file-name-as-directory (expand-file-name worktree-directory))
+             (file-name-as-directory
+              (expand-file-name
+               (mevedel-session-working-directory
+                (buffer-local-value 'mevedel--session chat-buffer)))))
+      (error "Prepared Worktree session directory does not match"))
     (mevedel--display-chat-buffer chat-buffer)
     chat-buffer))
+
+(defun mevedel-worktree--session-directory (branch)
+  "Return the deterministic Worktree session directory for BRANCH."
+  (let* ((context (mevedel-worktree--current-context))
+         (session (plist-get context :session))
+         (source-directory
+          (and session
+               (file-name-as-directory
+                (expand-file-name
+                 (mevedel-session-working-directory session)))))
+         (workspace (and session (mevedel-session-workspace session))))
+    (unless (and session workspace source-directory)
+      (user-error "Worktree creation must run from a mevedel session"))
+    (mevedel-worktree--validate-branch-name branch source-directory)
+    (file-name-as-directory
+     (file-name-concat
+      (file-name-as-directory
+       (expand-file-name (mevedel-workspace-root workspace)))
+      ".worktrees" (mevedel-worktree--branch-leaf branch)))))
 
 (defun mevedel-worktree--format-stub
     (source-session source-dir worktree-directory branch purpose warnings)
@@ -1171,11 +1253,14 @@ new session."
      "Cleanup:\n  git worktree remove %s\n  rm -rf %s\n  git worktree prune"
      quoted quoted)))
 
-(defun mevedel-worktree-create-session (&optional branch purpose clean)
+(defun mevedel-worktree-create-session
+    (&optional branch purpose clean recovery)
   "Create and return a new worktree session from the current session.
 Prompt for BRANCH when it is nil.  PURPOSE is included in the setup
-context.  When CLEAN is non-nil, omit that context.  The return value is
-a plist with `:buffer', `:branch', `:directory', and `:warnings'."
+context.  When CLEAN is non-nil, omit that context.  RECOVERY is a persisted
+Plan retry record authorizing only its exact branch, directory, and session.
+The return value is a plist with `:buffer', `:branch', `:directory', and
+`:warnings'."
   (let* ((context (mevedel-worktree--current-context))
          (data-buffer (plist-get context :data-buffer))
          (session (plist-get context :session)))
@@ -1202,13 +1287,13 @@ a plist with `:buffer', `:branch', `:directory', and `:warnings'."
                 (mevedel-worktree--ensure-git source-directory)
                 (mevedel-worktree--collect-status context)))
              (repo-root (plist-get status :repo-root))
-             (leaf (progn
-                     (mevedel-worktree--validate-branch-name
-                      branch source-directory)
-                     (mevedel-worktree--branch-leaf branch)))
-             (worktrees-dir (file-name-concat workspace-root ".worktrees"))
-             (worktree-directory (file-name-as-directory
-                                  (file-name-concat worktrees-dir leaf)))
+             (worktree-directory
+              (mevedel-worktree--session-directory branch))
+             (worktrees-dir
+              (file-name-directory
+               (directory-file-name worktree-directory)))
+             (reserved-directory
+              (plist-get recovery :target-directory))
              (warnings (delq
                         nil
                         (list
@@ -1220,47 +1305,81 @@ a plist with `:buffer', `:branch', `:directory', and `:warnings'."
           (user-error "Current directory is not a Git repository"))
         (when (eq 'submodule (plist-get status :isolation))
           (user-error "Cannot create a worktree from a submodule"))
-        (when (file-exists-p worktree-directory)
-          (user-error "Worktree destination already exists: %s"
-                      (mevedel-worktree--native-path
-                       worktree-directory source-directory)))
-        (make-directory worktrees-dir t)
-        (mevedel-worktree--ensure-local-exclude
-         (plist-get status :git-common-dir))
-        (let ((result (mevedel-worktree--git-result
-                       source-directory
-                       "worktree" "add" "-b" branch
-                       worktree-directory)))
-          (unless (eq 0 (plist-get result :exit))
-            (user-error "Git worktree add failed: %s"
-                        (plist-get result :output))))
-        (condition-case err
-            (let ((chat-buffer (mevedel-worktree--open-session
-                                workspace worktree-directory)))
-              (unless clean
-                (with-current-buffer chat-buffer
-                  (mevedel--insert-local-user-turn
-                   (mevedel-worktree--format-stub
-                    (mevedel-session-name session)
-                    source-directory
-                    worktree-directory
-                    branch
-                    purpose
-                    warnings)
-                   nil 'worktree nil t))
-                (mevedel-worktree--save-stub chat-buffer))
-              (list :buffer chat-buffer
-                    :branch branch
-                    :directory worktree-directory
-                    :warnings warnings))
-          (error
-           (user-error
-            "Created worktree at %s, but session setup failed: %s\n%s"
-            (mevedel-worktree--native-path
-             worktree-directory source-directory)
-            (error-message-string err)
-            (mevedel-worktree--cleanup-message
-             worktree-directory workspace-root))))))))
+        (when (and recovery
+                   (not (equal
+                         (file-name-as-directory
+                          (expand-file-name worktree-directory))
+                         (file-name-as-directory
+                          (expand-file-name reserved-directory)))))
+          (user-error "Prepared Worktree directory does not match reservation"))
+        (let ((existing
+               (and (file-exists-p worktree-directory)
+                    (cl-find-if
+                     (lambda (entry)
+                       (and (equal
+                             (file-name-as-directory
+                              (expand-file-name worktree-directory))
+                             (file-name-as-directory
+                              (expand-file-name (plist-get entry :path))))
+                            (equal branch (plist-get entry :branch))))
+                     (plist-get status :worktrees)))))
+          (when (and (file-exists-p worktree-directory)
+                     (not (and recovery existing)))
+            (user-error "Worktree destination already exists: %s"
+                        (mevedel-worktree--native-path
+                         worktree-directory source-directory)))
+          (unless existing
+            (when (plist-get recovery :target-session-id)
+              (user-error "Prepared Worktree checkout is missing: %s"
+                          worktree-directory))
+            (make-directory worktrees-dir t)
+            (mevedel-worktree--ensure-local-exclude
+             (plist-get status :git-common-dir))
+            (let ((result (mevedel-worktree--git-result
+                           source-directory
+                           "worktree" "add" "-b" branch
+                           worktree-directory)))
+              (unless (eq 0 (plist-get result :exit))
+                (user-error "Git worktree add failed: %s"
+                            (plist-get result :output)))))
+          (condition-case err
+              (let ((chat-buffer
+                     (if existing
+                         (mevedel-worktree--open-session
+                          workspace worktree-directory recovery)
+                       (mevedel-worktree--open-session
+                        workspace worktree-directory))))
+                (unless (or clean existing)
+                  (with-current-buffer chat-buffer
+                    (mevedel--insert-local-user-turn
+                     (mevedel-worktree--format-stub
+                      (mevedel-session-name session)
+                      source-directory
+                      worktree-directory
+                      branch
+                      purpose
+                      warnings)
+                     nil 'worktree nil t))
+                  (mevedel-worktree--save-stub chat-buffer))
+                (list :buffer chat-buffer
+                      :branch branch
+                      :directory worktree-directory
+                      :reused (and existing t)
+                      :warnings warnings))
+            (error
+             (if existing
+                 (user-error
+                  "Could not reopen prepared Worktree at %s: %s"
+                  (mevedel-worktree--native-path
+                   worktree-directory source-directory)
+                  (error-message-string err))
+               (user-error
+                "Created worktree at %s, but session setup failed: %s\n%s"
+                (mevedel-worktree--native-path
+                 worktree-directory source-directory)
+                (error-message-string err)
+                (mevedel-worktree--cleanup-message
+                 worktree-directory workspace-root))))))))))
 
 (defun mevedel-worktree--create (args)
   "Create a new worktree session from slash command ARGS."

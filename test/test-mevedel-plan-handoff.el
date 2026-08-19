@@ -434,26 +434,43 @@
   (test)
   (let* ((source-session (mevedel-session--create :name "source"))
          (target-session
-          (mevedel-session--create :name "target" :session-id "target-id"))
+          (mevedel-session--create
+           :name "target" :session-id "target-id"
+           :save-path "/tmp/target-save"))
          (source-buffer (generate-new-buffer " *mevedel-plan-worktree-source*"))
          (target-buffer (generate-new-buffer " *mevedel-plan-worktree-target*"))
          (record
           '(:selection (:location worktree :context summary
                         :execution direct :mode edits :branch "plan/test")))
-         clean)
+         clean events)
     (unwind-protect
         (progn
           (with-current-buffer target-buffer
             (setq-local mevedel--session target-session))
-          (cl-letf (((symbol-function 'mevedel-worktree-create-session)
-                     (lambda (branch _purpose clean-arg)
+          (cl-letf (((symbol-function
+                      'mevedel-worktree--session-directory)
+                     (lambda (_) "/tmp/target"))
+                    ((symbol-function 'mevedel-worktree-create-session)
+                     (lambda (branch _purpose clean-arg recovery)
+                       (should-not recovery)
+                       (push 'create events)
+                       (should
+                        (equal
+                         "/tmp/target"
+                         (plist-get
+                          (plist-get
+                           (mevedel-session-plan-metadata source-session)
+                           :implementation-retry)
+                          :target-directory)))
                        (setq clean clean-arg)
                        (list :branch branch :directory "/tmp/target"
                              :buffer target-buffer)))
-                    ((symbol-function
-                      'mevedel-session-persistence-ensure-files)
-                     (lambda (&rest _) "/tmp/target-save"))
-                    ((symbol-function 'mevedel-plan-handoff--persist) #'ignore))
+                    ((symbol-function 'mevedel-plan-handoff--persist)
+                     (lambda (session _buffer)
+                       (push (if (eq session target-session)
+                                 'target-save
+                               'source-save)
+                             events))))
             (let ((prepared
                    (mevedel-plan-handoff--prepare-worktree
                     source-session source-buffer record)))
@@ -464,7 +481,9 @@
               (should (equal prepared
                              (plist-get
                               (mevedel-session-plan-metadata source-session)
-                              :implementation-retry))))))
+                              :implementation-retry)))
+              (should (equal '(source-save create target-save source-save)
+                             (nreverse events))))))
       (kill-buffer target-buffer)
       (kill-buffer source-buffer))))
 
