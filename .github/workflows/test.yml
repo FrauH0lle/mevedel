@@ -45,8 +45,11 @@ jobs:
     # from starting at all.  A skip renders as "passed", so neither absence
     # would show up in a green run.
     - name: Install system dependencies
+      # A runner whose Ubuntu mirror is unreachable leaves `apt-get' retrying
+      # until the job's own budget is gone, which reads as "the tests hung".
+      timeout-minutes: 6
       run: |
-        sudo apt-get update
+        sudo apt-get update -o Acquire::Retries=3
         sudo apt-get -y install ripgrep bubblewrap
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
