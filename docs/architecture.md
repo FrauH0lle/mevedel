@@ -104,8 +104,7 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   gptel realizes an owning request rather than stored for late mutation.
 - **`mevedel-tool`**: name, handler, description, summary, prompt and prompt
   provenance,
-  args, optional semantic `repair-input` callback, category,
-  read-only/destructive/async/snapshot flags, sync/async
+  args, category, read-only/destructive/async/snapshot flags, sync/async
   permission hooks, specifier extractors (`get-path`, `get-pattern`,
   `get-domain`, `get-name`), groups, max-result-size, display argument,
   render transform, renderer, and its provider-facing gptel tool.
@@ -383,8 +382,8 @@ validation, permission, execution, and persistence boundary. See
 [`tools.md`](tools.md#tool-input-validation-and-repair) and
 [`ADR 0011`](adr/0011-repair-model-tool-input-before-pipeline.md).
 
-`mevedel-tool-repair.el` owns structured contract validation plus generic and
-tool-owned atomic repair. `mevedel-tool-repair-gptel.el` isolates the temporary
+`mevedel-tool-repair.el` owns structured contract validation plus generic
+atomic repair. `mevedel-tool-repair-gptel.el` isolates the temporary
 lossless gptel decoding bridge, while `mevedel-tool-repair-diagnostics.el`
 owns value-free audit records, dispatch-result tracking, and redacted
 telemetry. `mevedel-tool-registry.el` owns the schema declarations and lowers
