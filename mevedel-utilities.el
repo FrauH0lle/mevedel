@@ -4,7 +4,7 @@
 
 ;; Shared helpers that do not belong to any single mevedel module:
 ;; colour tinting for overlay styling, tag-query prefix/infix
-;; conversion, ediff-based patch review glue, environment-info
+;; conversion, serialized ediff-based patch review glue, environment-info
 ;; string assembly for system prompts, and various text and path
 ;; manipulation utilities.
 
@@ -18,6 +18,9 @@
 ;; `color'
 (declare-function color-name-to-rgb "color" (color &optional frame))
 (declare-function color-rgb-to-hex "color" (red green blue &optional digits))
+
+;; `ediff-mult'
+(defvar ediff-session-action-function)
 
 ;; `ediff-ptch'
 (declare-function ediff-dispatch-file-patching-job "ediff-ptch" (patch-buf filename &optional startup-hooks))
@@ -854,115 +857,126 @@ Signals an error when the query is malformed."
 ;;
 ;;; Ediff
 
-(defvar mevedel--old-patch-buffer-name " *mevedel-original-patch*"
-  "Name of the buffer storing the original patch.")
-(defvar mevedel--new-patch-buffer-name " *mevedel-modified-patch*"
-  "Name of the buffer storing the modified patch.")
-(defvar mevedel--ediff-custom-diff-buffer " *mevedel-ediff-custom-diff*"
-  "Name of the buffer storing the current patch.")
+(defvar mevedel--ediff-session nil
+  "State plist for the sole active mevedel Ediff patch review.")
 
-(defvar mevedel--original-patch-string nil
-  "String containing the original patch content before `ediff' session.")
-(defvar mevedel--ediff-in-progress-p nil
-  "Non-nil when a `ediff' patch editing session is in progress.")
-(defvar mevedel--ediff-saved-wconf nil
-  "Save current window configuration for later restoration.")
-(defvar mevedel--ediff-finished-hook nil
-  "Hook run after ediff session completes and cleanup is done.")
-(defvar mevedel--current-ediff-patch-buffer nil
-  "The diff buffer driving the in-flight ediff session.
-Set by `mevedel-ediff-patch' so that ediff callbacks target the
-correct buffer instead of looking up the canonical preview name,
-which is ambiguous when multiple previews coexist.")
+(defun mevedel--ediff-owned-session (token)
+  "Return the active Ediff session owned by current buffer and TOKEN."
+  (and-let* ((session mevedel--ediff-session)
+             ((eq token (plist-get session :token)))
+             ((or (memq (current-buffer) (plist-get session :controls))
+                  (eq (current-buffer) (plist-get session :group-buffer)))))
+    session))
 
+(defun mevedel--cleanup-ediff-session (token)
+  "Clean up the Ediff patch session owned by current buffer and TOKEN."
+  (when-let* ((session (mevedel--ediff-owned-session token)))
+    (setq mevedel--ediff-session nil)
+    (when-let* ((configuration (plist-get session :window-configuration))
+                ((window-configuration-p configuration)))
+      (set-window-configuration configuration))
+    (dolist (buffer (plist-get session :temporary-buffers))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
-(defun mevedel--cleanup-ediff-session ()
-  "Clean up after an ediff patch editing session.
-
-Resets state variables, restores window configuration, removes ediff
-hooks, and kills temporary patch buffers."
-  (setq mevedel--ediff-in-progress-p nil)
-  (when (window-configuration-p mevedel--ediff-saved-wconf)
-    (set-window-configuration mevedel--ediff-saved-wconf))
-  (setq mevedel--ediff-saved-wconf nil)
-  (remove-hook 'ediff-quit-session-group-hook #'mevedel--cleanup-ediff-session)
-  (remove-hook 'ediff-quit-hook #'mevedel--cleanup-ediff-session)
-  (remove-hook 'ediff-startup-hook #'mevedel--store-old-ediff-patch)
-  (remove-hook 'ediff-startup-hook #'mevedel--setup-ediff-session)
-  (remove-hook 'ediff-quit-hook #'mevedel--create-patch-from-ediff)
-  (dolist (buf (list mevedel--old-patch-buffer-name
-                     mevedel--new-patch-buffer-name
-                     mevedel--ediff-custom-diff-buffer))
-    (kill-buffer buf))
-  (setq mevedel--current-ediff-patch-buffer nil)
-  ;; Run hook for tools that want to be notified after ediff completes
-  (run-hooks 'mevedel--ediff-finished-hook)
-  (setq mevedel--ediff-finished-hook nil))
-
-
-(defun mevedel--setup-ediff-session ()
-  "Set up the ediff session by moving to the first difference.
-
-This function is called during ediff startup to ensure the session
-begins with the cursor positioned at the first detected difference
-between the files being compared."
-  ;; Move to the first difference to start the ediff session
-  (ediff-next-difference))
+(defun mevedel--setup-ediff-session (token)
+  "Bind the current Ediff buffer to the session named by TOKEN."
+  (when-let* ((session mevedel--ediff-session)
+              ((eq token (plist-get session :token))))
+    (if (and (plist-get session :multi-p)
+             (null (plist-get session :group-buffer)))
+        (let ((action ediff-session-action-function))
+          (plist-put session :group-buffer (current-buffer))
+          (setq-local
+           ediff-session-action-function
+           (lambda (file &optional startup-hooks)
+             (when (mevedel--ediff-owned-session token)
+               (funcall action file
+                        (cons (lambda ()
+                                (mevedel--setup-ediff-session token))
+                              startup-hooks)))))
+          (add-hook 'ediff-quit-session-group-hook
+                    (lambda () (mevedel--cleanup-ediff-session token)) 90 t))
+      (plist-put session :controls
+                 (cons (current-buffer) (plist-get session :controls)))
+      (add-hook 'ediff-quit-hook
+                (lambda () (mevedel--create-patch-from-ediff token)) -90 t)
+      (unless (plist-get session :multi-p)
+        (add-hook 'ediff-quit-hook
+                  (lambda () (mevedel--cleanup-ediff-session token)) -80 t))
+      (mevedel--store-old-ediff-patch token)
+      (ediff-next-difference))))
 
 (defun mevedel-ediff-patch ()
   "Start an ediff session to review and modify the current patch.
 
 Operates on the current buffer, which must be a mevedel diff preview
 buffer with the buffer-local `mevedel--real-path' set.  Saves the
-current window configuration and launches an ediff patching job that
+current window configuration and launches a serialized patching job that
 targets `mevedel--real-path' directly, bypassing fragile
 `diff-find-file-name' handling on freshly-generated unified diffs and
-new-file stubs.  Binds `mevedel--current-ediff-patch-buffer' so the
-quit-hook callbacks can identify the right diff buffer even when
-multiple previews coexist and share the canonical buffer name."
+new-file stubs.  Startup and quit callbacks are local to the exact Ediff
+control buffers created for this review."
   (interactive)
-  (let ((patch-buf (current-buffer)))
-    (unless (and (buffer-live-p patch-buf)
-                 (buffer-local-boundp 'mevedel--real-path patch-buf))
+  (when mevedel--ediff-session
+    (user-error "A mevedel Ediff patch review is already active"))
+  (let ((preview-buffer (current-buffer)))
+    (unless (and (buffer-live-p preview-buffer)
+                 (buffer-local-boundp 'mevedel--real-path preview-buffer))
       (user-error "Not in a mevedel diff preview buffer"))
-    (setq mevedel--current-ediff-patch-buffer patch-buf)
-    (setq mevedel--ediff-saved-wconf (current-window-configuration))
-    (with-current-buffer patch-buf
+    (with-current-buffer preview-buffer
       (goto-char (point-min))
       (require 'ediff-ptch)
-      (let ((source-file (expand-file-name mevedel--real-path)))
-        (setq patch-buf (ediff-get-patch-buffer nil patch-buf))
-        (ediff-with-current-buffer patch-buf
-          (if (< (length ediff-patch-map) 2)
-              (add-hook 'ediff-quit-hook #'mevedel--cleanup-ediff-session 99)
-            (add-hook 'ediff-quit-session-group-hook
-                      #'mevedel--cleanup-ediff-session 99)))
-        (add-hook 'ediff-startup-hook #'mevedel--store-old-ediff-patch)
-        (add-hook 'ediff-startup-hook #'mevedel--setup-ediff-session)
-        (add-hook 'ediff-quit-hook #'mevedel--create-patch-from-ediff)
-        (setq mevedel--ediff-in-progress-p t)
-        (ediff-dispatch-file-patching-job patch-buf source-file)))))
+      (let* ((source-file (expand-file-name mevedel--real-path))
+             (saved-window-configuration (current-window-configuration))
+             (patch-buffer (ediff-get-patch-buffer nil preview-buffer))
+             (multi-p (ediff-with-current-buffer patch-buffer
+                        (>= (length ediff-patch-map) 2)))
+             (token (make-symbol "mevedel-ediff-session"))
+             (session
+              (list :token token
+                    :patch-buffer preview-buffer
+                    :window-configuration saved-window-configuration
+                    :multi-p multi-p
+                    :controls nil
+                    :temporary-buffers nil)))
+        (setq mevedel--ediff-session session)
+        (condition-case err
+            (ediff-dispatch-file-patching-job
+             patch-buffer source-file
+             (list (lambda ()
+                     (mevedel--setup-ediff-session token))))
+          (error
+           (when (eq mevedel--ediff-session session)
+             (setq mevedel--ediff-session nil)
+             (set-window-configuration saved-window-configuration)
+             (dolist (buffer (plist-get session :temporary-buffers))
+               (when (buffer-live-p buffer)
+                 (kill-buffer buffer))))
+           (signal (car err) (cdr err))))))))
 
-(defun mevedel--create-patch-from-ediff ()
+(defun mevedel--create-patch-from-ediff (token)
   "Create and apply an updated patch from an ediff session.
 
 This function is called as part of the ediff-quit-hook to generate a new
 patch based on changes made during the ediff session and update the
 original patch file with the new content."
-  (when mevedel--ediff-in-progress-p
-    (let* ((new-patch-buf (get-buffer-create mevedel--new-patch-buffer-name t))
+  (when-let* ((session (mevedel--ediff-owned-session token)))
+    (let* ((new-patch-buf (generate-new-buffer
+                           " *mevedel modified patch*"))
            (file-a (buffer-file-name ediff-buffer-A))
            (file-b (buffer-file-name ediff-buffer-B))
-           (patch-buffer mevedel--current-ediff-patch-buffer))
+           (patch-buffer (plist-get session :patch-buffer)))
+      (push new-patch-buf (plist-get session :temporary-buffers))
 
       ;; Generate the new patch content based on ediff changes
-      (mevedel--create-ediff-custom-patch new-patch-buf)
+      (mevedel--create-ediff-custom-patch session new-patch-buf)
 
       ;; Update the main patch buffer by replacing the original patch content
       ;; with the newly generated patch from ediff
       (when (and patch-buffer
                  (buffer-live-p patch-buffer)
-                 mevedel--original-patch-string)
+                 (plist-get session :original-patch))
         (with-current-buffer patch-buffer
           (let ((inhibit-read-only t)
                 (new-content (with-current-buffer new-patch-buf
@@ -971,9 +985,10 @@ original patch file with the new content."
             (save-excursion
               (goto-char (point-min))
               ;; Locate and replace the original patch string with new content
-              (when (search-forward mevedel--original-patch-string nil t)
+              (when (search-forward (plist-get session :original-patch) nil t)
                 (replace-match new-content t t)
-                (message "Patch updated in %s" (buffer-name patch-buffer)))))))
+                (message "mevedel: patch updated in %s"
+                         (buffer-name patch-buffer)))))))
 
       ;; Finalize the ediff session by removing read-only protection and
       ;; restoring the original file with the modified version
@@ -990,30 +1005,33 @@ original patch file with the new content."
         (with-current-buffer ediff-buffer-A
           (rename-buffer orig-buffer-name))))))
 
-(defun mevedel--store-old-ediff-patch ()
+(defun mevedel--store-old-ediff-patch (token)
   "Store the original patch state before starting an ediff session.
 
 This captures the current diff as a string to allow restoration later if
 needed during the ediff process."
-  (when mevedel--ediff-in-progress-p
-    ;; Create or get the buffer for storing the old patch
-    (let* ((old-patch-buf (get-buffer-create mevedel--old-patch-buffer-name t)))
-      ;; Generate the custom patch content and store it as a trimmed string
-      (setq mevedel--original-patch-string
-            (with-current-buffer (mevedel--create-ediff-custom-patch old-patch-buf)
-              (string-trim
-               (buffer-substring-no-properties (point-min) (point-max))))))))
+  (when-let* ((session (mevedel--ediff-owned-session token)))
+    (let ((old-patch-buf (generate-new-buffer
+                          " *mevedel original patch*")))
+      (push old-patch-buf (plist-get session :temporary-buffers))
+      (plist-put
+       session :original-patch
+       (with-current-buffer
+           (mevedel--create-ediff-custom-patch session old-patch-buf)
+         (string-trim
+          (buffer-substring-no-properties (point-min) (point-max))))))))
 
-(defun mevedel--create-ediff-custom-patch (buffer)
+(defun mevedel--create-ediff-custom-patch (session buffer)
   "Create a custom unified diff patch from an active ediff session.
 
-The patch is generated in BUFFER and formatted to match git's diff
+SESSION identifies the owning patch review.  The patch is generated in
+BUFFER and formatted to match git's diff
 format with proper a/ and b/ path prefixes for the workspace root
 directory."
   (let* (;; Get the base directory from the diff buffer (set by
          ;; setup-diff-buffer to the correct root, even for files
          ;; outside the workspace).
-         (base-dir (if-let* ((patch-buf mevedel--current-ediff-patch-buffer)
+         (base-dir (if-let* ((patch-buf (plist-get session :patch-buffer))
                              ((buffer-live-p patch-buf)))
                        (buffer-local-value 'default-directory patch-buf)
                      default-directory))
@@ -1024,7 +1042,15 @@ directory."
          (file-a-no-backup-ext (string-remove-suffix ediff-backup-extension file-a))
          (file-b-no-backup-ext (string-remove-suffix ediff-backup-extension file-b))
          ;; Create buffer for storing custom diff output
-         (ediff-custom-diff-buffer (get-buffer-create mevedel--ediff-custom-diff-buffer t))
+         (ediff-custom-diff-buffer
+          (or (and-let* ((existing (plist-get session :custom-diff-buffer))
+                         ((buffer-live-p existing)))
+                existing)
+              (let ((created (generate-new-buffer
+                              " *mevedel ediff custom diff*")))
+                (plist-put session :custom-diff-buffer created)
+                (push created (plist-get session :temporary-buffers))
+                created)))
          (orig-content (with-current-buffer ediff-buffer-A
                          (buffer-substring-no-properties (point-min) (point-max))))
          (new-content (with-current-buffer ediff-buffer-B
