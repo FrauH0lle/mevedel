@@ -96,7 +96,11 @@ recommends those elements while leaving Codex room to choose the next action.
   the event). mevedel works around it by refusing to install watchers when
   `noninteractive` (`mevedel-skills--ensure-watcher`,
   `mevedel-skills--filenotify-supported-p`); revisit if upstream fixes it.
-
+- Cursor jumps on permission promtp back to composer, seems to follow a certain tick rate
+- Markdown tables not render nicely, steal table and image auto sizing from https://old.reddit.com/r/emacs/comments/1volpch/agentshell_073_updates/
+- ApplyPatch persisted diff not rendered nicely/highlighted
+  
+  
 ## Entry format
 
 Each entry records its source, owed change, reason for deferral, current

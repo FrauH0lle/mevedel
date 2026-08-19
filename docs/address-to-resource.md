@@ -196,7 +196,7 @@ and cannot rewrite the transcript.
 
 `memory://root` is a read-only, dynamic union of configured persistent-memory
 roots. Its bare read uses the same ordered and labeled index content as the
-system prompt. `Glob` and `Grep` inspect every configured root; collision
+system prompt. `Glob` and `Grep` inspect every existing configured root; collision
 precedence remains the existing local/global and `.mevedel`/`.agents` policy,
 while search results disclose root-bound addresses and source labels for
 shadowed matches. Listed topics use stable root keys, but the union query

@@ -518,7 +518,9 @@
     (should (equal "/root/alpha"
                    (mevedel-agent-control-context-path invocation)))
     (setf (mevedel-session-agent-registry session) nil)
-    (should-error (mevedel-agent-control-context-path invocation))))
+    ;; A not-yet-published invocation (fresh spawn before first WAIT)
+    ;; resolves to nil instead of erroring.
+    (should-not (mevedel-agent-control-context-path invocation))))
 
 (mevedel-deftest mevedel-agent-control-direct-children ()
   ,test

@@ -614,6 +614,87 @@
         (when (buffer-live-p parent-data) (kill-buffer parent-data))
         (when (file-directory-p root) (delete-directory root t)))))
 
+  :doc "Held diagnostics leave one inert review and one terminal result"
+  (dolist (action '(reject remote-feedback view-kill))
+    (mevedel-view-test--with-buffers
+      (let* ((root (file-name-as-directory
+                    (make-temp-file "mevedel-patch-settlement-" t)))
+             (path (file-name-concat root "one.txt"))
+             (workspace (mevedel-workspace--create
+                         :type 'file :id root :root root :name "settlement"
+                         :file-cache (mevedel-test-file-cache-create)))
+             (session (mevedel-session-create "settlement" workspace root))
+             (patch (string-join
+                     '("*** Begin Patch"
+                       "*** Update File: one.txt"
+                       "@@"
+                       "-old"
+                       "+new"
+                       "*** End Patch")
+                     "\n"))
+             results
+             continuation
+             proposal
+             remote-feedback)
+        (unwind-protect
+            (progn
+              (with-temp-file path (insert "old\n"))
+              (with-current-buffer data-buf
+                (setq-local default-directory root
+                            mevedel--workspace workspace
+                            mevedel--session session)
+                (mevedel-tool-patch-handler
+                 (lambda (value) (push value results))
+                 (list :patch patch)))
+              (with-current-buffer view-buf
+                (goto-char (point-min))
+                (search-forward "ApplyPatch ·")
+                (setq proposal
+                      (get-text-property (match-beginning 0)
+                                         'mevedel-patch-proposal))
+                (let* ((overlay (plist-get proposal :overlay))
+                       (remote (overlay-get overlay 'mevedel--remote)))
+                  (setq remote-feedback (plist-get remote :feedback)))
+                (cl-letf (((symbol-function
+                            'mevedel-reminders-diagnostics-after-edit)
+                           (lambda (_buffer _path callback)
+                             (setq continuation callback))))
+                  (mevedel-patch-review-submit))
+                (should continuation)
+                (should-not results)
+                (let ((text (buffer-substring-no-properties
+                             (point-min) mevedel-view--input-marker))
+                      (remote (overlay-get (plist-get proposal :overlay)
+                                           'mevedel--remote)))
+                  (should (string-search "Applying patch" text))
+                  (should-not (string-search "[ Reject all ]" text))
+                  (should-not (plist-get remote :options))
+                  (should-not (plist-get remote :feedback))))
+              (pcase action
+                ('reject
+                 (with-current-buffer view-buf
+                   (goto-char (point-min))
+                   (search-forward "Applying patch")
+                   (should-error (mevedel-patch-review-reject)
+                                 :type 'user-error)))
+                ('remote-feedback
+                 (funcall remote-feedback "try something else")
+                 (should-not (plist-get proposal :feedback)))
+                ('view-kill
+                 (kill-buffer view-buf)
+                 (should (= 1 (length results)))
+                 (should (equal "Error: Patch review aborted"
+                                (plist-get (car results) :result)))))
+              (funcall continuation)
+              (should (= 1 (length results)))
+              (unless (eq action 'view-kill)
+                (should-not (plist-get (car results) :status)))
+              (should (equal "new\n"
+                             (with-temp-buffer
+                               (insert-file-contents path)
+                               (buffer-string)))))
+          (when (file-directory-p root) (delete-directory root t))))))
+
   :doc "Sanitizes local paths and warns when review rollback is incomplete"
   (mevedel-view-test--with-buffers
     (let* ((root (file-name-as-directory

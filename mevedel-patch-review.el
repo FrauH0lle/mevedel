@@ -582,9 +582,14 @@ The whole patch, each operation, and each Update hunk."
             (list :kind 'preview
                   :id (plist-get proposal :id)
                   :count 1
-                  :body (mevedel-patch-review--body proposal)
+                  :body
+                  (if (eq (plist-get proposal :state) 'submitting)
+                      (propertize
+                       "\nApplyPatch · Applying patch and refreshing diagnostics...\n"
+                       'font-lock-face 'shadow)
+                    (mevedel-patch-review--body proposal))
                   :priority 300
-                  :read-only nil
+                  :read-only (eq (plist-get proposal :state) 'submitting)
                   :body-properties-owned t))))
       (dolist (target (mevedel-patch-review--feedback-targets proposal))
         (when (plist-get target :feedback-editing)
@@ -612,6 +617,15 @@ The whole patch, each operation, and each Update hunk."
               (plist-put target :feedback-draft nil)))))
       overlay)))
 
+(defun mevedel-patch-review--settle (proposal outcome)
+  "Settle PROPOSAL exactly once with OUTCOME."
+  (unless (eq (plist-get proposal :state) 'settled)
+    (plist-put proposal :state 'settled)
+    (funcall (plist-get proposal :callback)
+             (if (eq outcome 'aborted)
+                 '(:result "Error: Patch review aborted" :status error)
+               outcome))))
+
 (defun mevedel-patch-review-start (proposal callback data-buffer)
   "Stage PROPOSAL for review and settle it through CALLBACK.
 DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
@@ -630,31 +644,30 @@ DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
       (overlay-put overlay 'mevedel-user-request t)
       (overlay-put overlay 'mevedel--callback
                    (lambda (outcome)
-                     (when (eq outcome 'aborted)
-                       (funcall callback
-                                '(:result "Error: Patch review aborted"
-                                  :status error)))))
+                     (mevedel-patch-review--settle proposal outcome)))
       ;; The remote surface gets the two whole-call decisions: apply the
       ;; staged selection, or request a revision with whole-patch
       ;; feedback.  Hunk editing and per-hunk feedback stay in Emacs.
-      (overlay-put overlay 'mevedel--remote
-                   (list :body
-                         (let ((patch (or (plist-get proposal :patch) "")))
-                           (if (> (length patch) 60000)
-                               (concat (substring patch 0 60000)
-                                       "\n[truncated]")
-                             patch))
-                         :body-kind "diff"
-                         :options
-                         (list (cons (lambda ()
-                                       (mevedel-patch-review--submit
-                                        proposal))
-                                     "Apply patch"))
-                         :feedback
-                         (lambda (text)
-                           (plist-put proposal :feedback text)
-                           (mevedel-patch-review--deselect-all proposal)
-                           (mevedel-patch-review--submit proposal))))
+      (let ((remote
+             (list :body
+                   (let ((patch (or (plist-get proposal :patch) "")))
+                     (if (> (length patch) 60000)
+                         (concat (substring patch 0 60000) "\n[truncated]")
+                       patch))
+                   :body-kind "diff"
+                   :options
+                   (list (cons (lambda ()
+                                 (mevedel-patch-review--submit proposal))
+                               "Apply patch"))
+                   :feedback
+                   (lambda (text)
+                     (unless (memq (plist-get proposal :state)
+                                   '(submitting settled))
+                       (plist-put proposal :feedback text)
+                       (mevedel-patch-review--deselect-all proposal)
+                       (mevedel-patch-review--submit proposal))))))
+        (plist-put proposal :remote remote)
+        (overlay-put overlay 'mevedel--remote remote))
       (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
       (mevedel--prompt--register-canceller data-buffer overlay)
       (mevedel--prompt-announce overlay)))
@@ -937,8 +950,12 @@ on Update files and patch-level feedback leave selection untouched."
 
 (defun mevedel-patch-review--submit (proposal)
   "Apply PROPOSAL's selected changes and settle its review."
-  (if (mevedel-side-conversation-mutation-warning-pending-p proposal)
-      (mevedel-patch-review--render proposal)
+  (cond
+   ((memq (plist-get proposal :state) '(submitting settled)))
+   ((mevedel-side-conversation-mutation-warning-pending-p proposal)
+    (mevedel-patch-review--render proposal))
+   (t
+    (plist-put proposal :state 'submitting)
     (condition-case err
         (progn
           (mevedel-tool-patch--assert-baseline proposal)
@@ -948,27 +965,32 @@ on Update files and patch-level feedback leave selection untouched."
                                   proposal)
                                  :comments)
                                 0))
-                 (callback (plist-get proposal :callback))
                  (result
                   (if (or changes feedback-p)
                       (mevedel-tool-patch--result proposal changes)
                     (list :result "Error: Patch rejected" :status 'error)))
                  (overlay (plist-get proposal :overlay)))
+            (overlay-put overlay 'mevedel--remote
+                         '(:body "ApplyPatch is being applied."
+                           :body-kind "text"))
+            (mevedel-patch-review--render proposal)
+            (mevedel--prompt-announce overlay)
             (if changes
                 (mevedel-tool-patch--apply
                  (plist-get proposal :data-buffer) changes
-                 (lambda ()
-                   (mevedel--prompt--settle overlay 'approve)
-                   (funcall callback result)))
-              (mevedel--prompt--settle overlay 'approve)
-              (funcall callback result))))
+                 (lambda () (mevedel--prompt--settle overlay result)))
+              (mevedel--prompt--settle overlay result))))
       (error
+       (plist-put proposal :state nil)
+       (overlay-put (plist-get proposal :overlay) 'mevedel--remote
+                    (plist-get proposal :remote))
        (plist-put proposal :conflict
                   (mevedel-tool-patch--sanitize-error
                    (error-message-string err) proposal))
        (plist-put proposal :rollback-incomplete
                   (eq (car err) 'mevedel-tool-patch-partial-rollback))
-       (mevedel-patch-review--render proposal)))))
+       (let ((overlay (mevedel-patch-review--render proposal)))
+         (mevedel--prompt-announce overlay)))))))
 
 (defun mevedel-patch-review-submit ()
   "Apply the selected patch changes in the review at point."

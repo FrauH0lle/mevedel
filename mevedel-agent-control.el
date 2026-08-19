@@ -574,14 +574,17 @@ Return the resolved recipient path.  Sending never activates a turn."
             (string-lessp (plist-get a :path) (plist-get b :path))))))
 
 (defun mevedel-agent-control-context-path (context)
-  "Return CONTEXT's canonical path in its root session."
+  "Return CONTEXT's canonical path in its root session.
+
+Return nil when CONTEXT is an agent invocation that is not yet published
+in its parent session's retained registry.  A freshly spawned child's
+first WAIT-state handlers run before its invocation is recorded, so an
+unregistered child is a normal transient state, not an error."
   (if (mevedel-session-p context)
       "/root"
     (let ((session (mevedel-agent-invocation-parent-session context)))
-      (or (and session
-               (mevedel-agent-control--path-for-invocation session context))
-          (error "Agent invocation is not registered: %s"
-                 (mevedel-agent-invocation-agent-id context))))))
+      (and session
+           (mevedel-agent-control--path-for-invocation session context)))))
 
 (defun mevedel-agent-control-direct-children (session parent-path)
   "Return sorted path and role references below PARENT-PATH in SESSION."

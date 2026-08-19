@@ -980,14 +980,19 @@ parent is discarded."
       "No discoverable skills")))
 
 (defun mevedel-resource--memory-search-roots (context session)
-  "Return exact helper roots for the configured memory union."
+  "Return exact helper roots for the configured memory union.
+
+Configured roots whose directory does not exist are excluded, matching
+the union index read, which already tolerates missing roots."
   (mapcar
    (lambda (root)
      (list :path (plist-get root :dir)
            :address-prefix
            (concat "memory://" (mevedel-resource--memory-root-key root))
            :label (plist-get root :label)))
-   (mevedel-resource--memory-roots context session)))
+   (cl-remove-if-not
+    (lambda (root) (file-directory-p (plist-get root :dir)))
+    (mevedel-resource--memory-roots context session))))
 
 (defun mevedel-resource--execute-logical (data options)
   "Execute virtual resource DATA using OPTIONS and return text."
