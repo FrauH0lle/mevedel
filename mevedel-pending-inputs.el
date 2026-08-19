@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Session-owned inspection and composer editing for same-turn steering and
-;; queued follow-ups.  Opening the cockpit pauses automatic delivery; queue
+;; Session-owned queueing, steering, automatic follow-up delivery, inspection,
+;; and composer editing.  Opening the cockpit pauses automatic delivery; queue
 ;; edits retain the selected entry until a validated replacement is ready.
 
 ;;; Code:
@@ -12,11 +12,21 @@
   (require 'cl-lib)
   (require 'tabulated-list))
 
+;; The follow-up drain shares the session durability transaction used by
+;; composer dispatch, so the macro must expand for interpreted loads too.
+(require 'mevedel-session-durability)
+
 ;; `gptel-request'
 (declare-function gptel--fsm-transition "ext:gptel-request"
                   (machine &optional new-state))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
+
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-root-waiting-p
+                  "mevedel-agent-control" (session))
+(declare-function mevedel-agent-control-wake-root-user
+                  "mevedel-agent-control" (session))
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
@@ -42,28 +52,65 @@
 (declare-function mevedel-mention-bindings-copy-text
                   "mevedel-mention-bindings" (text))
 
+;; `mevedel-mentions'
+(declare-function mevedel-mentions-expand-user-input
+                  "mevedel-mentions" (text session))
+(declare-function mevedel-mentions-file-token "mevedel-mentions" (path))
+
 ;; `mevedel-prompt-submission'
+(declare-function mevedel-prompt-submission-display-text
+                  "mevedel-prompt-submission" (cl-x) t)
+(declare-function mevedel-prompt-submission-outcome
+                  "mevedel-prompt-submission" (cl-x) t)
+(declare-function mevedel-prompt-submission-reserve
+                  "mevedel-prompt-submission" (submission))
 (declare-function mevedel-prompt-submission-restore
                   "mevedel-prompt-submission" (submission))
 
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-assert-new-mutation-authority
+                  "mevedel-session-persistence" (session))
+(defvar mevedel-session--read-only-mode)
+
+;; `mevedel-skills-ui'
+(declare-function mevedel-skills--parse-slash-line
+                  "mevedel-skills-ui" (text))
+
 ;; `mevedel-structs'
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session--set-active-dropped-file-grants
+                  "mevedel-structs" (session paths))
 (declare-function mevedel-session--set-dropped-file-grants
                   "mevedel-structs" (session paths))
+(declare-function mevedel-session-active-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-add-dropped-file-grant
+                  "mevedel-structs" (session path))
+(declare-function mevedel-session-directive-planning
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-dropped-file-grants
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-enqueue-pending-input
+                  "mevedel-structs" (session category entry))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-input-delivery-paused-p
+                  "mevedel-structs" (session))
 (declare-function mevedel-session-pending-input-failure-paused
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-input-paused
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-inputs
                   "mevedel-structs" (session category))
+(declare-function mevedel-session-pending-plan-approval
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-metadata
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-set-pending-input-failure-paused
                   "mevedel-structs" (session paused))
@@ -72,42 +119,86 @@
 (declare-function mevedel-session-set-pending-inputs
                   "mevedel-structs" (session category entries))
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(defvar mevedel--compaction-in-flight)
 (defvar mevedel--current-request)
+(defvar mevedel--data-buffer)
+(defvar mevedel--session)
+(defvar mevedel--view-buffer)
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+
+;; `mevedel-transport'
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk))
+
+;; `mevedel-utilities'
+(declare-function mevedel--normalize-message-text
+                  "mevedel-utilities" (text))
+
+;; `mevedel-view'
+(defvar mevedel-view--side-conversation-p)
+
+;; `mevedel-view-agent'
+(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view--assert-live-tip
+                  "mevedel-view-composer" (&optional allow-armed-fork))
 (declare-function mevedel-view--bind-input-mentions
                   "mevedel-view-composer" (session))
+(declare-function mevedel-view--clear-input "mevedel-view-composer" ())
 (declare-function mevedel-view--composer-snapshot
                   "mevedel-view-composer" (session))
-(declare-function mevedel-view-composer-scope-label
+(declare-function mevedel-view--dispatch-directive-input
+                  "mevedel-view-composer" (scope input))
+(declare-function mevedel-view--dispatch-prepared-outcome
+                  "mevedel-view-composer" (submission data-buffer &rest keys))
+(declare-function mevedel-view--ensure-interactive-chat-view
+                  "mevedel-view-composer" ())
+(declare-function mevedel-view--input-text "mevedel-view-composer" ())
+(declare-function mevedel-view--occupied-root-workflow-p
+                  "mevedel-view-composer" (session))
+(declare-function mevedel-view--queued-scope
                   "mevedel-view-composer" (&optional scope))
-(declare-function mevedel-view--pending-input-preview
-                  "mevedel-view-composer" (input))
-(declare-function mevedel-view--pending-input-text
-                  "mevedel-view-composer" (entry))
-(declare-function mevedel-view--pop-dropped-file-grants-for-input
-                  "mevedel-view-composer" (input session))
-(declare-function mevedel-view--prepare-steering-entry
-                  "mevedel-view-composer" (submission request))
+(declare-function mevedel-view--reserved-goal-handoff-id
+                  "mevedel-view-composer" (&optional session))
 (declare-function mevedel-view--restore-composer-snapshot
                   "mevedel-view-composer" (snapshot session &optional force))
-(declare-function mevedel-view--schedule-late-follow-up-drain
-                  "mevedel-view-composer" ())
+(declare-function mevedel-view--session "mevedel-view-composer" ())
 (declare-function mevedel-view--submit-planned-input
                   "mevedel-view-composer"
-                  (input &optional before-send on-block dispatch after-insert))
+                  (input &optional before-send on-block dispatch after-insert
+                         inert-skills))
+(declare-function mevedel-view-composer-scope-label
+                  "mevedel-view-composer" (&optional scope))
 (declare-function mevedel-view-refresh-input-prompt
                   "mevedel-view-composer" ())
+(declare-function mevedel-view-send "mevedel-view-composer" ())
+(defvar mevedel-view--composer-scope)
+(defvar mevedel-view--pending-skill-submission)
+(defvar mevedel-view--prompt-hook-pending)
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-assert-new-mutation-authority
-                  "mevedel-session-persistence" (session))
-(defvar mevedel--data-buffer)
-(defvar mevedel-view--pending-input-edit)
+;; `mevedel-view-history'
+(declare-function mevedel-view-history-add "mevedel-view-history" (input))
+
+;; `mevedel-view-input-files'
+(declare-function mevedel-view--activate-dropped-file-grants
+                  "mevedel-view-input-files" (paths session))
+(declare-function mevedel-view--mentioned-file-paths
+                  "mevedel-view-input-files" (input))
+(declare-function mevedel-view--pop-dropped-file-grants-for-input
+                  "mevedel-view-input-files" (input session))
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-rebuild
                   "mevedel-view-interaction" ())
+(declare-function mevedel-view--interaction-register
+                  "mevedel-view-interaction" (descriptor))
+
+;; `seq'
+(declare-function seq-take "seq" (sequence n))
 
 ;; `tabulated-list'
 (declare-function tabulated-list-get-id "tabulated-list" ())
@@ -118,11 +209,496 @@
 (defconst mevedel-pending-inputs-buffer-name "*mevedel pending inputs*"
   "Name of the Pending Inputs cockpit buffer.")
 
+(defvar-local mevedel-view--pending-input-edit nil
+  "Queue edit state active in this composer, or nil.")
+
+(defvar mevedel-view--pending-guest-attribution nil
+  "Guest name owning the follow-up currently being submitted, or nil.
+
+Set by the follow-up drain when it dispatches a collaboration guest's
+entry and consumed exactly once where the prompt and its hook audits are
+inserted, so attribution lands inside the user turn before the response
+marker exists regardless of asynchronous submit hooks.  Blocked or
+failed submissions clear it so the next host prompt is never
+mis-attributed.")
+
 (defvar-local mevedel-pending-inputs--marked-ids nil
   "Pending-input identities marked for deletion.")
 
 (defvar-local mevedel-pending-inputs--converting-id nil
   "Pending-input identity undergoing asynchronous conversion.")
+
+
+;;
+;;; Queue state and summary
+
+(defun mevedel-view--pending-follow-ups (&optional session)
+  "Return SESSION's pending follow-ups."
+  (when-let* ((sess (or session (mevedel-view--session))))
+    (mevedel-session-pending-follow-ups sess)))
+
+(defun mevedel-view--set-pending-follow-ups (entries &optional session)
+  "Set SESSION's pending follow-up ENTRIES."
+  (when-let* ((sess (or session (mevedel-view--session))))
+    (mevedel-session-set-pending-inputs sess 'follow-up entries)))
+
+(defun mevedel-view--follow-up-auto-drain-blocked-p (&optional session)
+  "Return non-nil when SESSION follow-ups should wait for user action."
+  (when-let* ((sess (or session (mevedel-view--session))))
+    (or (mevedel-session-pending-input-delivery-paused-p sess)
+        (mevedel-session-pending-plan-approval sess)
+        (when-let* ((workflow (mevedel-session-directive-planning sess)))
+          (not
+           (cl-find-if
+            (lambda (entry)
+              (let ((scope (plist-get entry :scope)))
+                (and (eq (plist-get scope :action) 'plan)
+                     (equal (plist-get scope :directive-id)
+                            (plist-get workflow :directive-id)))))
+            (mevedel-session-pending-follow-ups sess))))
+        (plist-get (mevedel-session-plan-metadata sess)
+                   :implementation-retry)
+        (mevedel-view--reserved-goal-handoff-id sess)
+        (when-let* ((goal (mevedel-session-goal sess))
+                    ((memq (mevedel-goal-status goal)
+                           '(paused blocked budget-limited)))
+                    (entry (car (mevedel-session-pending-follow-ups sess))))
+          (equal (mevedel-goal-id goal)
+                 (plist-get entry :queued-at-goal-id))))))
+
+(defun mevedel-view--pending-input-preview (input)
+  "Return a one-line preview for pending INPUT."
+  (let ((preview (string-trim
+                  (replace-regexp-in-string "[ \t\n\r]+" " " input t t))))
+    (if (> (length preview) 96)
+        (concat (substring preview 0 93) "...")
+      preview)))
+
+(defun mevedel-view--pending-input-text (entry)
+  "Return normalized input text for pending ENTRY."
+  (mevedel--normalize-message-text (or (plist-get entry :input) "")))
+
+(defvar-keymap mevedel-view--pending-inputs-map
+  :doc "Keymap on the pending-input summary."
+  "RET" #'mevedel-pending-inputs-open
+  "<return>" #'mevedel-pending-inputs-open
+  "<mouse-1>" #'mevedel-pending-inputs-open
+  "<mouse-2>" #'mevedel-pending-inputs-open)
+
+(defun mevedel-view--pending-input-category-body (label entries)
+  "Return compact pending-input summary for LABEL and ENTRIES."
+  (let ((index 0)
+        lines)
+    (dolist (entry (seq-take entries 3))
+      (cl-incf index)
+      (push (format "  %d. %s"
+                    index
+                    (concat
+                     (when-let* ((scope (plist-get entry :scope)))
+                       (format "[◆ %s] "
+                               (mevedel-view-composer-scope-label scope)))
+                     (mevedel-view--pending-input-preview
+                      (mevedel-view--pending-input-text entry))))
+            lines))
+    (when (> (length entries) 3)
+      (push (format "  %d more" (- (length entries) 3)) lines))
+    (concat "\n" label "\n"
+            (string-join (nreverse lines) "\n")
+            "\n")))
+
+(defun mevedel-view--pending-inputs-body (session)
+  "Return the main-view pending-input summary for SESSION."
+  (concat
+   (when (mevedel-session-pending-input-failure-paused session)
+     "\nPending-input delivery stopped after turn failure; review required\n")
+   (when (mevedel-session-pending-input-paused session)
+     "\nPending-input delivery paused\n")
+   (when-let* ((entries (mevedel-session-pending-steering session)))
+     (mevedel-view--pending-input-category-body "Steering" entries))
+   (when-let* ((entries (mevedel-session-pending-follow-ups session)))
+     (mevedel-view--pending-input-category-body "Follow-ups" entries))
+   "\nRET or C-c C-e manage pending inputs\n"))
+
+(defun mevedel-view--pending-inputs-render (&optional session)
+  "Render SESSION pending input into the interaction zone."
+  (when-let* ((session (or session (mevedel-view--session))))
+    (let ((entries
+           (append (mevedel-session-pending-steering session)
+                   (mevedel-session-pending-follow-ups session))))
+      (when (or entries
+                (mevedel-session-pending-input-failure-paused session))
+        (mevedel-view--interaction-register
+         (list :kind 'pending-input
+               :id 'pending-inputs
+               :count (length entries)
+               :body (mevedel-view--pending-inputs-body session)
+               :keymap mevedel-view--pending-inputs-map
+               :help-echo "Open Pending Inputs cockpit"))))))
+
+(cl-defun mevedel-view-enqueue-external-follow-up
+    (data-buffer text &key guest-name paths)
+  "Queue TEXT as a follow-up that originated outside this Emacs.
+
+DATA-BUFFER owns the session.  GUEST-NAME attributes the entry to a
+collaboration guest.  PATHS are files to mention as @file tokens with
+read grants, like an Emacs-side drop.  Skill tokens in TEXT stay
+literal at submission: external input carries prompting authority only,
+never skill invocation.  Return the queued entry, or nil without a live
+session view."
+  (when-let* (((buffer-live-p data-buffer))
+              (view-buffer (buffer-local-value 'mevedel--view-buffer
+                                               data-buffer))
+              ((buffer-live-p view-buffer))
+              (session (buffer-local-value 'mevedel--session data-buffer)))
+    (with-current-buffer view-buffer
+      (require 'mevedel-utilities)
+      (let ((input (mevedel--normalize-message-text text)))
+        (when paths
+          (require 'mevedel-mentions)
+          (setq input (concat input " "
+                              (mapconcat #'mevedel-mentions-file-token
+                                         paths " ")))
+          (dolist (path paths)
+            (mevedel-session-add-dropped-file-grant session path)))
+        (let ((entry (mevedel-session-enqueue-pending-input
+                      session 'follow-up
+                      (list :input input
+                            :guest-name guest-name
+                            :inert-skills t
+                            :dropped-file-grants
+                            (mevedel-view--pop-dropped-file-grants-for-input
+                             input session)
+                            :queued-at-time (float-time)
+                            :queued-at-turn
+                            (or (mevedel-session-turn-count session) 0)))))
+          (mevedel-view--interaction-rebuild)
+          (mevedel-view--schedule-late-follow-up-drain)
+          entry)))))
+
+(defun mevedel-view--queue-follow-up (input)
+  "Queue INPUT to start a separate root turn."
+  (setq input (mevedel--normalize-message-text input))
+  (let ((session (mevedel-view--session)))
+    (unless session
+      (user-error "No active session for follow-up"))
+    (let* ((dropped-file-grants
+            (mevedel-view--pop-dropped-file-grants-for-input input session))
+           (entry
+            (mevedel-session-enqueue-pending-input
+             session 'follow-up
+             (list :input input
+                   :scope (mevedel-view--queued-scope)
+                   :dropped-file-grants dropped-file-grants
+                   :queued-at-time (float-time)
+                   :queued-at-goal-id
+                   (or (and (mevedel-session-goal session)
+                            (mevedel-goal-id
+                             (mevedel-session-goal session)))
+                       (mevedel-view--reserved-goal-handoff-id session))
+                   :queued-at-turn
+                   (or (mevedel-session-turn-count session) 0)))))
+      (when (fboundp 'mevedel-telemetry-record)
+        (mevedel-telemetry-record
+         session 'user-message-queued
+         :message-hash (secure-hash 'sha256 input)
+         :message-chars (length input)
+         :queue-depth (length (mevedel-view--pending-follow-ups session))
+         :enqueue-goal-id (plist-get entry :queued-at-goal-id)))
+      (mevedel-view-history-add input)
+      (when (equal-including-properties (mevedel-view--input-text) input)
+        (mevedel-view--clear-input))
+      (mevedel-view--interaction-rebuild)
+      (message "mevedel: queued follow-up for a separate turn")
+      (mevedel-view--schedule-late-follow-up-drain)
+      entry)))
+
+(defun mevedel-view--steering-validation-expansion (text session)
+  "Expand TEXT for steering validation without committing its effects."
+  (let* ((paths (mevedel-view--mentioned-file-paths text))
+         (pending (mevedel-session-dropped-file-grants session))
+         (temporary-grants (cl-intersection paths pending :test #'equal))
+         (active (mevedel-session-active-dropped-file-grants session)))
+    (unwind-protect
+        (progn
+          (mevedel-session--set-active-dropped-file-grants
+           session (append temporary-grants active))
+          (with-current-buffer mevedel--data-buffer
+            (require 'mevedel-mentions)
+            (mevedel-mentions-expand-user-input text session)))
+      (mevedel-session--set-active-dropped-file-grants session active))))
+
+(defun mevedel-view--steering-request-context-supported-p (context)
+  "Return non-nil when prepared skill CONTEXT can steer an active request."
+  (cl-loop for (key value) on context by #'cddr
+           always
+           (pcase key
+             (:invoked-skills t)
+             ((or :permission-rules :hook-rules :model :effort)
+              (null value))
+             (_ nil))))
+
+(defun mevedel-view--prepare-steering-entry (submission request)
+  "Return a validated steering entry for SUBMISSION and REQUEST.
+Return nil and leave the submission pending when the live request contract no
+longer accepts the prepared input."
+  (let* ((session (mevedel-view--session))
+         (outcome (mevedel-prompt-submission-outcome submission))
+         (request-context (plist-get outcome :request-context))
+         (model-input (plist-get outcome :model-input))
+         (fsm (and request (mevedel-request-fsm request)))
+         (current-request
+          (and (buffer-live-p mevedel--data-buffer)
+               (buffer-local-value 'mevedel--current-request
+                                   mevedel--data-buffer))))
+    (cond
+     ((plist-get outcome :fork-outcome)
+      (message "mevedel: fork skills cannot steer; use C-c TAB")
+      nil)
+     ((not (mevedel-view--steering-request-context-supported-p
+            request-context))
+      (message "mevedel: skill policy cannot steer; use C-c TAB")
+      nil)
+     ((or (not (eq request current-request))
+          (not fsm)
+          (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT)))
+      (message "mevedel: request can no longer be steered; use C-c TAB")
+      nil)
+     (t
+      (let ((expansion
+             (mevedel-view--steering-validation-expansion
+              model-input session)))
+        (if (plist-get expansion :media-contexts)
+            (progn
+              (message
+               "mevedel: media cannot steer an active request; use C-c TAB")
+              nil)
+          (let* ((input
+                  (mevedel-prompt-submission-display-text submission))
+                 (dropped-file-grants
+                  (mevedel-view--pop-dropped-file-grants-for-input
+                   input session)))
+            (mevedel-prompt-submission-reserve submission)
+            (list
+             :input input
+             :model-input model-input
+             :transcript-payload
+             (concat (plist-get outcome :transcript-input)
+                     (or (plist-get outcome :render-data) ""))
+             :hook-audits (plist-get outcome :hook-audits)
+             :request-context request-context
+             :submission submission
+             :dropped-file-grants dropped-file-grants
+             :request-id (mevedel-request-id request)
+             :queued-at-time (float-time)
+             :queued-at-turn
+             (or (mevedel-session-turn-count session) 0)))))))))
+
+(defun mevedel-view--queue-prepared-steering (submission request)
+  "Queue accepted prompt SUBMISSION as steering for REQUEST."
+  (when-let* ((prepared
+               (mevedel-view--prepare-steering-entry submission request))
+              (session (mevedel-view--session))
+              (entry
+               (mevedel-session-enqueue-pending-input
+                session 'steering prepared)))
+    (let ((input (plist-get entry :input)))
+      (mevedel-view-history-add input)
+      (when (equal-including-properties
+             (mevedel-view--input-text) input)
+        (mevedel-view--clear-input))
+      (mevedel-view--interaction-rebuild)
+      (require 'mevedel-agent-control)
+      (when (mevedel-agent-control-root-waiting-p session)
+        (mevedel-agent-control-wake-root-user session))
+      (message "mevedel: queued steering for this turn")
+      entry)))
+
+(defun mevedel-view-send-follow-up ()
+  "Queue the composer as a follow-up, or send normally while idle."
+  (interactive)
+  (mevedel-view--ensure-interactive-chat-view)
+  (when mevedel-view--side-conversation-p
+    (user-error "/btw does not queue follow-ups; wait for the active response"))
+  (mevedel-view--assert-live-tip)
+  (when mevedel-view--pending-input-edit
+    (user-error "Save or cancel the pending-input edit first"))
+  (unless (and mevedel--data-buffer (buffer-live-p mevedel--data-buffer))
+    (user-error "No live data buffer associated with this view"))
+  (mevedel-session-durability-with-transaction
+   (mevedel-session-durability-with-transaction
+    (let* ((session (buffer-local-value 'mevedel--session
+                                        mevedel--data-buffer))
+           (occupied
+            (or (buffer-local-value 'mevedel--current-request
+                                    mevedel--data-buffer)
+                (mevedel-session-pending-follow-ups session)
+                (mevedel-view--occupied-root-workflow-p session)
+                mevedel-view--prompt-hook-pending
+                mevedel-view--pending-skill-submission
+                (buffer-local-value 'mevedel--compaction-in-flight
+                                    mevedel--data-buffer))))
+      (require 'mevedel-session-persistence)
+      (mevedel-session-persistence-assert-new-mutation-authority session)
+      (if (not occupied)
+          (mevedel-view-send)
+        (when (buffer-local-value 'mevedel-session--read-only-mode
+                                  mevedel--data-buffer)
+          (user-error "Session is open read-only (another host holds the lock)"))
+        (let ((input (if mevedel-view--composer-scope
+                         (mevedel-view--input-text)
+                       (mevedel-view--bind-input-mentions session))))
+          (when (string-empty-p input)
+            (user-error "Nothing to send"))
+          (when (mevedel-skills--parse-slash-line input)
+            (user-error "Slash commands cannot be queued as follow-ups"))
+          (mevedel-view--queue-follow-up input))))))
+  (goto-char (point-max)))
+
+
+;;
+;;; Automatic delivery
+
+(defun mevedel-view--drain-follow-up (data-buffer)
+  "Submit the next pending follow-up for DATA-BUFFER.
+
+Each bound entry is planned and prepared as its own turn.  The queue entry is
+removed only when the resulting prompt reaches its transcript commit boundary."
+  (when (buffer-live-p data-buffer)
+    (mevedel-session-durability-with-transaction
+     (let* ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
+            (session (buffer-local-value 'mevedel--session data-buffer)))
+       (when (and session
+                  (buffer-live-p view-buffer)
+                  (not (buffer-local-value 'mevedel--current-request
+                                           data-buffer)))
+         (with-current-buffer view-buffer
+           (when (and (not mevedel-view--agent-transcript-p)
+                      (not mevedel-view--prompt-hook-pending)
+                      (not mevedel-view--pending-skill-submission)
+                      (not (mevedel-view--follow-up-auto-drain-blocked-p
+                            session))
+                      (string-empty-p (mevedel-view--input-text)))
+             (require 'mevedel-session-persistence)
+             (mevedel-session-persistence-assert-new-mutation-authority
+              session)
+             (when-let* ((queue (mevedel-view--pending-follow-ups session)))
+               (let* ((workflow (mevedel-session-directive-planning session))
+                      (entry
+                       (if workflow
+                           (cl-find-if
+                            (lambda (candidate)
+                              (let ((scope (plist-get candidate :scope)))
+                                (and (eq (plist-get scope :action) 'plan)
+                                     (equal (plist-get scope :directive-id)
+                                            (plist-get workflow
+                                                       :directive-id)))))
+                            queue)
+                         (car queue)))
+                      (input (mevedel-view--pending-input-text entry))
+                      (scope (plist-get entry :scope))
+                      (submission (plist-get entry :submission))
+                      (dropped-file-grants
+                       (plist-get entry :dropped-file-grants)))
+                 (let ((before-send
+                        (lambda ()
+                          (mevedel-view--activate-dropped-file-grants
+                           dropped-file-grants session)))
+                       (after-insert
+                        (lambda ()
+                          (when (fboundp 'mevedel-telemetry-record)
+                            (mevedel-telemetry-record
+                             session 'user-message-dequeued
+                             :message-hash (secure-hash 'sha256 input)
+                             :queue-depth-before
+                             (length (mevedel-view--pending-follow-ups session))
+                             :queue-duration-ms
+                             (and (numberp (plist-get entry :queued-at-time))
+                                  (round
+                                   (* 1000.0
+                                      (- (float-time)
+                                         (plist-get entry
+                                                    :queued-at-time)))))
+                             :enqueue-goal-id
+                             (plist-get entry :queued-at-goal-id)
+                             :dequeue-goal-id
+                             (and (mevedel-session-goal session)
+                                  (mevedel-goal-id
+                                   (mevedel-session-goal session)))))
+                          (mevedel-view--set-pending-follow-ups
+                           (delq entry
+                                 (mevedel-view--pending-follow-ups session))
+                           session)
+                          (mevedel-view--interaction-rebuild))))
+                   ;; Consumed where the prompt and its hook audits are
+                   ;; inserted; cleared on every blocked or failed path.
+                   (setq mevedel-view--pending-guest-attribution
+                         (plist-get entry :guest-name))
+                   (cond
+                    (scope
+                     (condition-case err
+                         (progn
+                           (funcall before-send)
+                           (mevedel-view--dispatch-directive-input scope input)
+                           (funcall after-insert))
+                       (error
+                        (setq mevedel-view--pending-guest-attribution nil)
+                        (mevedel-view--interaction-rebuild)
+                        (message
+                         "mevedel: queued directive follow-up failed: %s"
+                         (error-message-string err)))))
+                    (submission
+                     (mevedel-view--dispatch-prepared-outcome
+                      submission data-buffer
+                      :before-send before-send
+                      :after-insert after-insert
+                      :on-block
+                      (lambda ()
+                        (setq mevedel-view--pending-guest-attribution nil)
+                        (mevedel-view--interaction-rebuild))))
+                    (t
+                     (mevedel-view--submit-planned-input
+                      input before-send
+                      (lambda ()
+                        (setq mevedel-view--pending-guest-attribution nil)
+                        (mevedel-view--interaction-rebuild))
+                      nil after-insert
+                      (plist-get entry :inert-skills))))))))))))))
+
+(defun mevedel-view--run-follow-up-drain (data-buffer)
+  "Drain one pending follow-up for DATA-BUFFER if it is live.
+
+The drain admits a new mutation, which is target I/O.  It is scheduled from a
+timer, and a timer fires wherever the main loop happens to be waiting -- inside
+an unrelated remote operation started by redisplay or another package included
+-- so it waits for an idle transport rather than nesting."
+  (when (buffer-live-p data-buffer)
+    (require 'mevedel-transport)
+    (mevedel-transport-run-when-idle
+     (list 'follow-up-drain data-buffer)
+     (buffer-local-value 'default-directory data-buffer)
+     (lambda ()
+       (when (buffer-live-p data-buffer)
+         (mevedel-view--drain-follow-up data-buffer))))))
+
+(defun mevedel-view--schedule-late-follow-up-drain ()
+  "Schedule a fallback follow-up drain after request cleanup."
+  (when-let* ((data-buffer mevedel--data-buffer)
+              ((buffer-live-p data-buffer))
+              ((not (buffer-local-value 'mevedel--current-request
+                                        data-buffer))))
+    (run-at-time 0 nil
+                 #'mevedel-view--run-follow-up-drain
+                 data-buffer)))
+
+(defun mevedel-view--schedule-follow-up-drain (fsm)
+  "Schedule the next follow-up after FSM completes successfully."
+  (when-let* ((info (and fsm (fboundp 'gptel-fsm-info)
+                         (gptel-fsm-info fsm)))
+              (data-buffer (plist-get info :buffer))
+              ((buffer-live-p data-buffer)))
+    (run-at-time 0 nil
+                 #'mevedel-view--run-follow-up-drain
+                 data-buffer)))
 
 (defun mevedel-pending-inputs--session (&optional context)
   "Return the Pending Inputs session for CONTEXT."

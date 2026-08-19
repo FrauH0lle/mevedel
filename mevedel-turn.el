@@ -42,6 +42,10 @@
                   (event event-plist callback
                          &optional session workspace request invocation))
 
+;; `mevedel-pending-inputs'
+(declare-function mevedel-view--schedule-follow-up-drain
+                  "mevedel-pending-inputs" (fsm))
+
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-settle-request
                   "mevedel-plan-handoff"
@@ -81,10 +85,6 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
-
-;; `mevedel-view-composer'
-(declare-function mevedel-view--schedule-follow-up-drain
-                  "mevedel-view-composer" (fsm))
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-rebuild
@@ -378,6 +378,7 @@ inverting them drops the turn's file-history checkpoints."
            (mevedel--turn-after-publication
             #'mevedel-goal-dispatch-after-turn machine))
          (lambda (machine)
+           (require 'mevedel-pending-inputs)
            (mevedel--turn-after-publication
             #'mevedel-view--schedule-follow-up-drain machine)))))
 

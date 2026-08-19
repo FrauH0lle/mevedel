@@ -823,5 +823,146 @@
       (should-not (mevedel-session-pending-steering session))
       (should-not (mevedel-session-pending-follow-ups session)))))
 
+
+;;
+;;; Queue and delivery helpers
+
+(mevedel-deftest mevedel-view--queue-follow-up
+  (:quiet t)
+  ,test
+  (test)
+  :doc "stores directive scope on queued follow-ups"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'file :id "queue-scope" :root "/tmp"
+                       :name "queue-scope"))
+           (session (mevedel-session-create "main" workspace)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session
+                    mevedel-view--composer-scope
+                    '(:directive-id "directive-1" :action discuss
+                      :attempt-index 2))
+        (cl-letf (((symbol-function 'mevedel-view--interaction-rebuild)
+                   #'ignore)
+                  ((symbol-function
+                    'mevedel-view--schedule-late-follow-up-drain)
+                   #'ignore))
+          (mevedel-view--queue-follow-up "follow up"))
+        (let ((scope
+               (plist-get (car (mevedel-session-pending-follow-ups session))
+                          :scope)))
+          (should (equal "directive-1" (plist-get scope :directive-id)))
+          (should (eq 'discuss (plist-get scope :action)))
+          (should (= 2 (plist-get scope :attempt-index))))))))
+
+(mevedel-deftest mevedel-view--pending-input-text ()
+  ,test
+  (test)
+  :doc "returns queued input and defaults a missing value to empty text"
+  (should (equal "queued" (mevedel-view--pending-input-text
+                            '(:input "queued"))))
+  (should (equal "" (mevedel-view--pending-input-text nil))))
+
+(mevedel-deftest mevedel-view--pending-input-category-body ()
+  ,test
+  (test)
+  :doc "shows three compact previews and a remaining count"
+  (let ((body
+         (mevedel-view--pending-input-category-body
+          "Steering"
+          (mapcar (lambda (n)
+                    (list :input
+                          (format "message %d\nwith extra whitespace" n)))
+                  '(1 2 3 4 5)))))
+    (dolist (n '(1 2 3))
+      (should (string-match-p (format "message %d with extra" n) body)))
+    (should-not (string-match-p "message 4" body))
+    (should (string-match-p "2 more" body))))
+
+(mevedel-deftest mevedel-view--steering-request-context-supported-p ()
+  ,test
+  (test)
+  :doc "allows bookkeeping-only skill context and rejects request policy"
+  (should
+   (mevedel-view--steering-request-context-supported-p
+    '(:permission-rules nil :hook-rules nil :invoked-skills (alpha))))
+  (dolist (context '((:permission-rules (rule))
+                     (:hook-rules (rule))
+                     (:model model)
+                     (:effort high)))
+    (should-not
+     (mevedel-view--steering-request-context-supported-p context)))
+  (should-not
+   (mevedel-view--steering-request-context-supported-p
+    '(:future-policy nil))))
+
+(mevedel-deftest mevedel-view--follow-up-auto-drain-blocked-p ()
+  ,test
+  (test)
+  :doc "blocks fallback drainage for approval and Goal handoff ownership"
+  (let ((session (mevedel-session--create
+                  :authority-mode 'pid-lock
+                  :name "main" :pending-plan-approval 'plan)))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p session))
+    (setf (mevedel-session-pending-plan-approval session) nil)
+    (should-not
+     (mevedel-view--follow-up-auto-drain-blocked-p session)))
+  (let ((here
+         (mevedel-session--create
+          :authority-mode 'pid-lock
+          :name "here"
+          :plan-metadata
+          '(:implementation-retry
+            (:goal-id "here-goal"
+             :selection (:location here :execution goal)))))
+        (source
+         (mevedel-session--create
+          :authority-mode 'pid-lock
+          :name "source"
+          :plan-metadata
+          '(:implementation-retry
+            (:goal-id "target-goal"
+             :selection (:location worktree :execution goal)))))
+        (target
+         (mevedel-session--create
+          :authority-mode 'pid-lock
+          :name "target"
+          :plan-metadata '(:implementation-goal-id "target-goal"))))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p here))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p source))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p target)))
+  (let* ((goal (mevedel-goal--create :id "goal" :status 'paused))
+         (session
+          (mevedel-session--create
+           :authority-mode 'pid-lock
+           :name "paused" :goal goal
+           :pending-follow-ups
+           '((:input "held" :queued-at-goal-id "goal")))))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p session))
+    (setf (mevedel-goal-status goal) 'active)
+    (should-not
+     (mevedel-view--follow-up-auto-drain-blocked-p session))
+    (dolist (status '(blocked budget-limited))
+      (setf (mevedel-goal-status goal) status)
+      (should (mevedel-view--follow-up-auto-drain-blocked-p session))))
+  (let ((session (mevedel-session--create
+                  :authority-mode 'pid-lock
+                  :name "failed" :pending-input-failure-paused t)))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p session)))
+  :doc "holds ordinary input but permits the owning directive Plan follow-up"
+  (let ((session
+         (mevedel-session--create
+          :authority-mode 'pid-lock
+          :name "directive-plan"
+          :directive-planning '(:directive-id "d1" :phase approval)
+          :pending-follow-ups '((:input "ordinary")))))
+    (should (mevedel-view--follow-up-auto-drain-blocked-p session))
+    (setf (mevedel-session-pending-follow-ups session)
+          '((:input "ordinary")
+            (:input "revise" :scope (:directive-id "d1" :action plan))))
+    (should-not (mevedel-view--follow-up-auto-drain-blocked-p session))))
+
 (provide 'test-mevedel-pending-inputs)
 ;;; test-mevedel-pending-inputs.el ends here

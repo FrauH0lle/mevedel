@@ -70,6 +70,11 @@
 (declare-function mevedel--prompt--settle
                   "mevedel-interaction-prompt" (overlay outcome))
 
+;; `mevedel-pending-inputs'
+(declare-function mevedel-view-enqueue-external-follow-up
+                  "mevedel-pending-inputs"
+                  (data-buffer text &rest keys))
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-session-id "mevedel-structs" (session))
 
@@ -78,10 +83,10 @@
                   "mevedel-view" (data-buffer))
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view-enqueue-external-follow-up
-                  "mevedel-view-composer"
-                  (data-buffer text &rest keys))
-(declare-function mevedel-view--media-dir "mevedel-view-composer" ())
+(declare-function mevedel-view-abort "mevedel-view-composer" ())
+
+;; `mevedel-view-input-files'
+(declare-function mevedel-view--media-dir "mevedel-view-input-files" ())
 
 ;;
 ;;; Customization and state
@@ -585,7 +590,8 @@ never enters model-visible context."
                                (buffer-local-value 'mevedel--view-buffer
                                                    data-buffer))))
         (when (buffer-live-p view-buffer)
-          (require 'mevedel-view-composer)
+          (require 'mevedel-pending-inputs)
+          (require 'mevedel-view-input-files)
           ;; Attached images ride the same pipeline as clipboard images
           ;; pasted in Emacs: saved under the session media directory,
           ;; then mentioned and read-granted by the queue seam.
@@ -648,8 +654,14 @@ budget -- drops the whole set rather than attaching a partial one."
   (let ((guest (mevedel-collaboration--guest room peer)))
     (when (and guest (plist-get guest :writable))
       (when-let ((data-buffer (mevedel-collaboration--room-data-buffer room)))
-        (require 'mevedel-view)
-        (mevedel-view--abort-data-buffer data-buffer)))))
+        (let ((view-buffer
+               (buffer-local-value 'mevedel--view-buffer data-buffer)))
+          (if (buffer-live-p view-buffer)
+              (with-current-buffer view-buffer
+                (require 'mevedel-view-composer)
+                (mevedel-view-abort))
+            (require 'mevedel-view)
+            (mevedel-view--abort-data-buffer data-buffer)))))))
 
 (defun mevedel-collaboration--on-frame (peer frame)
   "Dispatch decoded guest FRAME from PEER for the active room.

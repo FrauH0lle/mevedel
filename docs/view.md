@@ -3,7 +3,10 @@
 The view modules render a compact user-facing projection of the authoritative
 gptel data buffer. `mevedel-view.el` owns the mode, zones, and session
 coordination. `mevedel-view-composer.el` owns the editable composer,
-submission hooks, pending input, and send/fork dispatch.
+submission hooks, root dispatch, and send/fork coordination.
+`mevedel-view-input-files.el` owns local file drops and clipboard-image input.
+`mevedel-pending-inputs.el` owns steering, queued follow-ups, automatic
+delivery, and the Pending Inputs cockpit.
 `mevedel-surface-mode`, derived from `text-mode`, supplies shared ephemeral
 buffer behavior for non-transcript surfaces.
 `mevedel-view-agent.el` owns agent transcript inspection, live agent status,
@@ -819,7 +822,8 @@ Waiting for input · 2m 14s · 1 agent blocked · 1 agent running
 
 `mevedel-view-history.el` provides comint-style input history for the
 view input zone. `mevedel-view-composer.el` owns the editable input boundary,
-completion, prompt submission, and integration with that history ring:
+completion, prompt submission, and integration with that history ring. The
+related input bindings are:
 
 - `C-c RET`: send while idle, or enqueue same-turn steering for the active
   ordinary root turn

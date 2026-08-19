@@ -42,6 +42,10 @@
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlays" (instruction &optional refresh))
 
+;; `mevedel-pending-inputs'
+(declare-function mevedel-view--schedule-late-follow-up-drain
+                  "mevedel-pending-inputs" ())
+
 ;; `mevedel-plan'
 (declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))
 
@@ -86,8 +90,6 @@
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--schedule-late-follow-up-drain
-                  "mevedel-view-composer" ())
 (declare-function mevedel-view-back-to-chat "mevedel-view-composer" ())
 (declare-function mevedel-view-enter-directive-scope
                   "mevedel-view-composer"
@@ -123,6 +125,7 @@
     (with-current-buffer view-buffer
       (mevedel-view-back-to-chat)
       (when drain
+        (require 'mevedel-pending-inputs)
         (mevedel-view--schedule-late-follow-up-drain)))))
 
 (defun mevedel-directive-plan--persist (session chat-buffer)

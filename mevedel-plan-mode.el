@@ -33,6 +33,10 @@
 (declare-function mevedel-model-resolve-provider
                   "mevedel-models" (spec &optional noerror))
 
+;; `mevedel-pending-inputs'
+(declare-function mevedel-view-enqueue-external-follow-up
+                  "mevedel-pending-inputs" (data-buffer text &rest keys))
+
 ;; `mevedel-plan'
 (declare-function mevedel-plan-accept "mevedel-plan"
 		  (plan-markdown session buffer &optional skip-verification
@@ -112,8 +116,6 @@
 		  (text))
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view-enqueue-external-follow-up
-                  "mevedel-view-composer" (data-buffer text &rest keys))
 (declare-function mevedel-view--clear-input "mevedel-view-composer"
 		  nil)
 (declare-function mevedel-view--input-start "mevedel-view-composer"
@@ -331,7 +333,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
 The remote counterpart of the Emacs feedback draft: the same request
 template, submitted immediately as a queued follow-up instead of
 opening an editable draft."
-  (require 'mevedel-view-composer)
+  (require 'mevedel-pending-inputs)
   (mevedel-view-enqueue-external-follow-up
    chat-buffer
    (format
