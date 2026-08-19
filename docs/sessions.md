@@ -127,10 +127,13 @@ Worktree Fork origin (`:worktree-source-root`, `:worktree-directory`,
 `:worktree-branch`, and `:worktree-base-commit`), and
 `:agent-transcripts` presentation metadata and the explicit `:agent-registry`
 containing retained paths, frozen configurations, activity, mailboxes, and
-conversation locations. It also records `:preset-name` and the resolved
-buffer-local mevedel variables in `:preset-settings`, plus the session's exact
-`:model-provider` and explicit `:reasoning-effort`; resume restores those
-settings. A Session Fork also copies the source session's permission mode,
+conversation locations. It records only the selected `:preset-name`; resume
+rebuilds mevedel variables from that currently registered trusted preset, so
+sidecar data cannot name or populate buffer locals. It also records the
+session's exact `:model-provider` and explicit `:reasoning-effort`. This
+removal of persisted preset variable keys and values changes the sidecar format
+to `v0.5.3`; older sessions are intentionally rejected rather than migrated.
+A Session Fork also copies the source session's permission mode,
 sandbox mode, session permission rules, and exact resource grants at the fork
 point. Parent and child then diverge independently.
 gptel's other buffer-local settings continue to use its Org persistence.
@@ -183,7 +186,7 @@ grants, and additional roots.  The next save records the opened workspace's
 identity.  Superseded sidecar shapes are not migrated.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.2`.  The top-level `:authority-mode` and execution-target incarnation are
+`v0.5.3`.  The top-level `:authority-mode` and execution-target incarnation are
 required by that session format:
 project sessions persist `portable`, while file-workspace sessions
 persist `pid-lock`.  Portable project sessions always persist a non-empty

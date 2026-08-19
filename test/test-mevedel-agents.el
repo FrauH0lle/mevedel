@@ -77,6 +77,29 @@
     (setf (mevedel-agent-invocation-path invocation) "/root/Upper")
     (should-error (mevedel-agent-invocation-require-path invocation))))
 
+(mevedel-deftest mevedel-agent-request-locals-p
+  ()
+  ,test
+  (test)
+  :doc "accepts unique closed-schema subsets and complete configurations"
+  (let ((complete
+         (mapcar (lambda (symbol) (cons symbol nil))
+                 mevedel-agent-request-local-symbols)))
+    (should (mevedel-agent-request-locals-p
+             (list (car complete))))
+    (should (mevedel-agent-request-locals-p complete t)))
+  :doc "rejects unknown, duplicate, and incomplete configuration keys"
+  (let ((complete
+         (mapcar (lambda (symbol) (cons symbol nil))
+                 mevedel-agent-request-local-symbols)))
+    (should-not
+     (mevedel-agent-request-locals-p '((kill-buffer-hook ignore))))
+    (should-not
+     (mevedel-agent-request-locals-p
+      (cons (car complete) complete)))
+    (should-not
+     (mevedel-agent-request-locals-p (cdr complete) t))))
+
 (mevedel-deftest mevedel-agent--effective-specs/test
   (:before-each (test-mevedel-agents--restore-builtins))
   ,test

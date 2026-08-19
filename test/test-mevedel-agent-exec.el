@@ -362,7 +362,7 @@ fire-count and payload."
          (snapshot
           (mevedel-agent-exec-request-snapshot
            '(:backend frozen-backend :model frozen-model :effort high))))
-    (should (= (length mevedel-agent-exec--request-local-symbols)
+    (should (= (length mevedel-agent-request-local-symbols)
                (length snapshot)))
     (should (eq 'frozen-backend (alist-get 'gptel-backend snapshot)))
     (should (eq 'frozen-model (alist-get 'gptel-model snapshot)))

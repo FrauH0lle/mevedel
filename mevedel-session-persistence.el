@@ -13,7 +13,7 @@
 ;;
 ;; Sidecar plist shape:
 ;;
-;;   (:version "v0.5.2"
+;;   (:version "v0.5.3"
 ;;    :session-id "main-2026-04-23T14-30-a9f2"
 ;;    :session-name "main"
 ;;    :workspace (:type project :workspace-id ID
@@ -360,8 +360,6 @@
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x)
 		  t)
-(declare-function mevedel-session-preset-settings "mevedel-structs"
-		  (cl-x) t)
 (declare-function mevedel-session-prompt-index "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-resource-grants "mevedel-structs"
@@ -566,7 +564,7 @@ known to have been reused.  A nil value disables auto-cleanup entirely."
 ;;
 ;;; Constants
 
-(defconst mevedel-session-persistence-format-version "v0.5.2"
+(defconst mevedel-session-persistence-format-version "v0.5.3"
   "Current on-disk session sidecar format.
 
 The authority profile is part of this format.  Readers accept exactly this
@@ -588,7 +586,7 @@ add more, and we don't want to act on actions we don't understand).")
     :worktree-source-root :worktree-directory :worktree-branch
     :worktree-base-commit
     :permission-mode :sandbox-mode :plan-mode :permission-rules :resource-grants
-    :preset-name :preset-settings :model-provider :reasoning-effort
+    :preset-name :model-provider :reasoning-effort
     :last-observed-date
     :agent-types-snapshot :skills-snapshot :workspace-instruction-hashes
     :additional-roots :tasks
@@ -1020,7 +1018,6 @@ The resulting plist is round-trippable via
    :permission-rules       (plist-get authority :rules)
    :resource-grants        (plist-get authority :resource-grants)
    :preset-name            (mevedel-session-preset-name session)
-   :preset-settings        (mevedel-session-preset-settings session)
    :model-provider         (mevedel-session-model-provider session)
    :reasoning-effort       (mevedel-session-reasoning-effort session)
    :last-observed-date     (mevedel-session-last-observed-date session)
@@ -1196,8 +1193,6 @@ their hygiene filters."
                      :sandbox-mode     (plist-get plist :sandbox-mode)
                      :plan-mode        (plist-get plist :plan-mode)
                      :preset-name      (plist-get plist :preset-name)
-                     :preset-settings  (copy-tree
-                                        (plist-get plist :preset-settings))
                      :model-provider   (plist-get plist :model-provider)
                      :reasoning-effort (plist-get plist :reasoning-effort)
                      :turn-count       (plist-get plist :total-turn-count)
@@ -6535,7 +6530,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
   '(name workspace execution-target authority-mode working-directory
     tasks task-status-notes last-task-write-turn touched-files
     permission-rules resource-grants permission-mode sandbox-mode plan-mode
-    directive-planning preset-name preset-settings model-provider
+    directive-planning preset-name model-provider
     reasoning-effort turn-count reminders last-observed-date
     agent-types-snapshot skills-snapshot pending-reminders
     specialist-nudge-state deferred-set deferred-pending deferred-injected
@@ -6617,8 +6612,6 @@ The identity and timestamp keywords describe the new materialized child."
            :plan-mode (mevedel-session-plan-mode session)
            :directive-planning nil
            :preset-name (mevedel-session-preset-name session)
-           :preset-settings
-           (copy-tree (mevedel-session-preset-settings session) t)
            :model-provider (mevedel-session-model-provider session)
            :reasoning-effort (mevedel-session-reasoning-effort session)
            :turn-count turn

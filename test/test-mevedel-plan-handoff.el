@@ -477,8 +477,7 @@
          (source-session
           (mevedel-session--create
            :name "source" :save-path source-save
-           :preset-name 'source-preset
-           :preset-settings '(:model test)))
+           :preset-name 'source-preset))
          (target-session (mevedel-session--create
                           :name "target"
                           :save-path (make-temp-file "mevedel-plan-target-" t)))

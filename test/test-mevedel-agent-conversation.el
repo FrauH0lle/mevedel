@@ -109,7 +109,30 @@
 			 (should (equal root
 					(buffer-local-value 'default-directory buffer))))
 		     (kill-buffer buffer)
-		     (delete-directory root t))))
+		     (delete-directory root t)))
+
+		 :doc "rejects unknown locals before changing the target buffer"
+		 (let* ((buffer (generate-new-buffer " *agent-conversation-invalid*"))
+			(agent (mevedel-agent--create :name "default"))
+			(invocation (mevedel-agent-invocation-create agent)))
+		   (unwind-protect
+		       (progn
+			 (with-current-buffer buffer
+			   (setq-local gptel-model 'unchanged))
+			 (setf
+			  (mevedel-agent-invocation-frozen-configuration invocation)
+			  (mevedel-agent-configuration--create
+			   :agent agent
+			   :request-locals
+			   '((gptel-model . changed)
+			     (kill-buffer-hook . (ignore)))))
+			 (should-error
+			  (mevedel-agent-conversation-configure invocation buffer))
+			 (should (eq 'unchanged
+				     (buffer-local-value 'gptel-model buffer)))
+			 (should-not
+			  (local-variable-p 'kill-buffer-hook buffer)))
+		     (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-agent-conversation--reject-terminal-tool-call ()
 		 ,test

@@ -92,8 +92,6 @@
                   "mevedel-session-persistence" (session))
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x)
 		  t)
-(declare-function mevedel-session-preset-settings "mevedel-structs"
-		  (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x)
 		  t)
