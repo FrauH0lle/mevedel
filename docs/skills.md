@@ -444,14 +444,16 @@ creates a unique path such as `/root/review` or `/root/verify_2`, and attaches
 the workflow result consumer before provider dispatch. For concrete Git
 targets it writes a package under
 `.mevedel/review-packages/` and tells the reviewer or verifier to read
-that file before rerunning broad repository inspection. It supplies
+that file before rerunning broad repository inspection. Package collection
+uses one fixed Git runner that disables pagers, replacement objects,
+filesystem monitors, external diffs, and text conversion. It supplies
 skill-scoped allow rules for read-only `git` Bash commands
 used to inspect diffs (`git diff`, `git status`, `git log`, `git show`,
 `git merge-base`, `git rev-parse`, `git ls-files`, and `git cat-file`),
-plus `head` as a pipe filter for bounded object inspection. Review adds a
-local deny rule for other Bash commands; verify does not, so normal
-permission policy decides whether validation commands may run. Read tools
-come from the selected agent's tool list.
+plus exact no-argument `head` as a stdin-only pipe filter for bounded object
+inspection. Review adds a local deny rule for other Bash commands; verify does
+not, so normal permission policy decides whether validation commands may run.
+Read tools come from the selected agent's tool list.
 
 ## Allowed Tools
 

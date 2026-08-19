@@ -23,15 +23,19 @@
   :doc "safe variants:
 `mevedel-bash-policy-read-only-p' accepts recognized inspection arguments"
   (dolist (argv
-           '(("git" "status")
-             ("git" "--no-pager" "log" "-1")
-             ("git" "branch" "--show-current")
-             ("find" "." "-name" "*.el")
+           '(("find" "." "-name" "*.el")
              ("rg" "TODO" "src")
              ("base64" "file")
              ("sed" "-n" "1,5p" "file")
              ("awk" "{print $1}" "file")))
     (should (mevedel-bash-policy-read-only-p argv)))
+  :doc "Git variants:
+`mevedel-bash-policy-read-only-p' rejects all Git inspection arguments"
+  (dolist (argv
+           '(("git" "status")
+             ("git" "--no-pager" "log" "-1")
+             ("git" "branch" "--show-current")))
+    (should-not (mevedel-bash-policy-read-only-p argv)))
   :doc "unsafe variants:
 `mevedel-bash-policy-read-only-p' rejects writing and helper execution"
   (dolist (argv

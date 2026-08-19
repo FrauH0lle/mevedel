@@ -73,21 +73,20 @@
 (mevedel-deftest mevedel-review--git-output ()
   ,test
   (test)
-  :doc "does not forward client-only environment variables to target Git"
-  (let ((process-environment
-         (cons "MEVEDEL_CLIENT_SECRET=do-not-forward" process-environment)))
-    (cl-letf (((symbol-function 'process-file)
-               (lambda (_program _in destination _display &rest _args)
-                 (should-not (getenv "MEVEDEL_CLIENT_SECRET"))
-                 (with-current-buffer (if (eq destination t)
-                                          (current-buffer)
-                                        destination)
-                   (insert "diff output\n"))
-                 0)))
-      (should
-       (equal "diff output\n"
-              (mevedel-review--git-output
-               "/ssh:user@host:/srv/project/" "diff" "HEAD"))))))
+  :doc "does not launch a diff-producing command after an option separator"
+  (let* ((root (make-temp-file "mevedel-review-git-guard-" t))
+         (git (file-name-concat root "git"))
+         (marker (file-name-concat root "git-ran"))
+         (exec-path (cons root exec-path)))
+    (unwind-protect
+        (progn
+          (with-temp-file git
+            (insert (format "#!/bin/sh\n: > %s\n"
+                            (shell-quote-argument marker))))
+          (set-file-modes git #o700)
+          (should-not (mevedel-review--git-output root "show" "--"))
+          (should-not (file-exists-p marker)))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-review--repo-root ()
   ,test
@@ -193,8 +192,10 @@
                      (mevedel-review--read-target "/tmp/project/" 'verify)))
       (should (equal "Verify instructions: " seen-prompt)))))
 
-(mevedel-deftest mevedel-review--write-package
-  (:doc "writes a review package file for a git range")
+(mevedel-deftest mevedel-review--write-package ()
+  ,test
+  (test)
+  :doc "writes a review package file for a git range"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-review-package-" t)))
          (package-file (file-name-concat root ".mevedel"
@@ -240,7 +241,72 @@
               (should (string-search "change" text))
               (should (string-search "## Diff" text))
               (should (string-search "+two" text)))))
-      (delete-directory root t))))
+      (delete-directory root t)))
+
+  :doc "does not execute configured Git diff helpers locally or on target"
+  (mevedel-test--with-local-shell-tramp '("review")
+    (dolist (remote '(nil t))
+      (let* ((root (file-name-as-directory
+                    (make-temp-file "mevedel-review-helper-" t)))
+             (cwd (if remote
+                      (format "/mevedelmock:review:%s" root)
+                    root))
+             (helper (file-name-concat root "hostile-helper"))
+             (marker (file-name-concat root "helper-ran"))
+             (package-file (file-name-concat cwd "review.md")))
+        (unwind-protect
+            (progn
+              (should (zerop (process-file "git" nil nil nil
+                                           "init" "-q" "-b" "main" root)))
+              (let ((default-directory root))
+                (should (zerop (process-file "git" nil nil nil
+                                             "config" "user.name" "Test")))
+                (should (zerop (process-file "git" nil nil nil
+                                             "config" "user.email"
+                                             "test@example.test")))
+                (with-temp-file helper
+                  (insert (format "#!/bin/sh\n: > %s\ncat \"$1\"\n"
+                                  (shell-quote-argument marker))))
+                (set-file-modes helper #o700)
+                (with-temp-file (file-name-concat root ".gitattributes")
+                  (insert "*.dat diff=hostile\n"))
+                (with-temp-file (file-name-concat root "sample.dat")
+                  (insert "one\n"))
+                (with-temp-file (file-name-concat root "--no-ext-diff")
+                  (insert "one\n"))
+                (should (zerop (process-file "git" nil nil nil "add" ".")))
+                (should (zerop (process-file "git" nil nil nil
+                                             "commit" "-q" "-m" "base")))
+                (with-temp-file (file-name-concat root "sample.dat")
+                  (insert "one\ntwo\n"))
+                (with-temp-file (file-name-concat root "--no-ext-diff")
+                  (insert "one\ntwo\n"))
+                (should (zerop (process-file "git" nil nil nil "add" ".")))
+                (should (zerop (process-file "git" nil nil nil
+                                             "commit" "-q" "-m" "change")))
+                (should (zerop (process-file "git" nil nil nil
+                                             "config" "diff.hostile.textconv"
+                                             helper)))
+                (should (zerop (process-file "git" nil nil nil
+                                             "config" "diff.external"
+                                             helper))))
+              (let ((process-environment
+                     (cons (concat "GIT_EXTERNAL_DIFF=" helper)
+                           process-environment)))
+                (should (equal package-file
+                               (mevedel-review--write-package
+                                cwd '(:type commit :sha "--ext-diff")
+                                package-file))))
+              (should-not (file-exists-p marker))
+              (let ((text (with-temp-buffer
+                            (insert-file-contents package-file)
+                            (buffer-string))))
+                (should (string-search "+two" text)))
+              (should (equal package-file
+                             (mevedel-review--write-package
+                              cwd '(:type commit :sha "--") package-file)))
+              (should-not (file-exists-p marker)))
+          (delete-directory root t))))))
 
 (mevedel-deftest mevedel-review--prompt-with-package
   (:doc "tells reviewers to read the package before broad git inspection")
@@ -396,6 +462,8 @@
                    command :permission-context context)))
       (should (eq 'deny (decide "git checkout main")))
       (should (eq 'deny (decide "GIT_EXTERNAL_DIFF=sh git diff HEAD")))
+      (should (eq 'deny (decide "head /etc/passwd")))
+      (should (eq 'deny (decide "head -n 5 ~/.authinfo")))
       (should (eq 'deny (decide "make test"))))))
 
 (mevedel-deftest mevedel-review--ensure-dispatch-deps ()

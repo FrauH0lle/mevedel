@@ -214,7 +214,7 @@
     "git ls-files:*"
     "git cat-file:*"
     "git --no-pager diff:*"
-    "head:*")
+    "head")
   "Skill-scoped permission grants for the reviewer's git inspection.")
 
 (defconst mevedel-review--bash-deny-rule
@@ -327,28 +327,42 @@
                       gptel-display-buffer-action))
     buffer))
 
-(defun mevedel-review--git-lines (cwd &rest args)
-  "Run git ARGS in CWD and return output lines, or nil on failure."
+(defun mevedel-review--git-output (cwd &rest args)
+  "Run hardened Git ARGS in CWD and return raw output, or nil on failure."
   (condition-case nil
       (with-temp-buffer
         (let ((default-directory cwd)
               (process-environment
-               (unless (file-remote-p cwd) process-environment)))
-          (when (zerop (apply #'process-file "git" nil t nil args))
-            (split-string (string-trim (buffer-string)) "\n" t))))
+               (unless (file-remote-p cwd)
+                 (copy-sequence process-environment))))
+          (dolist (variable '("GIT_EXTERNAL_DIFF" "GIT_PAGER" "PAGER"))
+            (setenv variable nil))
+          (setenv "GIT_TERMINAL_PROMPT" "0")
+          (unless (and (member (car args) '("diff" "log" "show"))
+                       (member "--" args))
+            (let ((args
+                   (append
+                    '("--no-pager" "--no-replace-objects"
+                      "-c" "core.fsmonitor=false")
+                    (list (car args))
+                    (cdr args)
+                    (when (member (car args) '("diff" "log" "show"))
+                      '("--no-ext-diff" "--no-textconv")))))
+              (when (zerop (apply #'process-file "git" nil t nil args))
+                (buffer-string))))))
     (error nil)))
 
+(defun mevedel-review--git-lines (cwd &rest args)
+  "Run Git ARGS in CWD and return output lines, or nil on failure."
+  (when-let* ((output (apply #'mevedel-review--git-output cwd args)))
+    (split-string (string-trim output) "\n" t)))
+
 (defun mevedel-review--git-string (cwd &rest args)
-  "Run git ARGS in CWD and return trimmed output, or nil on failure."
-  (condition-case nil
-      (with-temp-buffer
-        (let ((default-directory cwd)
-              (process-environment
-               (unless (file-remote-p cwd) process-environment)))
-          (when (zerop (apply #'process-file "git" nil t nil args))
-            (let ((out (string-trim (buffer-string))))
-              (unless (string-empty-p out) out)))))
-    (error nil)))
+  "Run Git ARGS in CWD and return trimmed output, or nil on failure."
+  (when-let* ((output (apply #'mevedel-review--git-output cwd args))
+              (output (string-trim output))
+              ((not (string-empty-p output))))
+    output))
 
 (defun mevedel-review--local-branches (cwd)
   "Return local branch names in CWD."
@@ -532,17 +546,6 @@ CWD is used for git merge-base resolution."
 
 ;;
 ;;; Review packages
-
-(defun mevedel-review--git-output (cwd &rest args)
-  "Run git ARGS in CWD and return raw output, or nil on failure."
-  (condition-case nil
-      (with-temp-buffer
-        (let ((default-directory cwd)
-              (process-environment
-               (unless (file-remote-p cwd) process-environment)))
-          (when (zerop (apply #'process-file "git" nil t nil args))
-            (buffer-string))))
-    (error nil)))
 
 (defun mevedel-review--repo-root (cwd)
   "Return the Git repository root for CWD, or CWD if unavailable."
