@@ -51,6 +51,10 @@
 ;; `mevedel-tool-fs'
 (defvar mevedel--real-path)
 
+;; `mevedel-transcript'
+(declare-function mevedel-transcript-restore-ignored-properties
+                  "mevedel-transcript" (start end))
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
@@ -583,17 +587,28 @@ line by itself."
       (string-trim (buffer-string)))))
 
 (defun mevedel--clear-user-turn-gptel-properties (start end)
-  "Clear inherited properties between START and END except mention bindings."
+  "Clear inherited properties from START to END.
+Preserve atomic mention bindings and live structural producer provenance."
   (require 'mevedel-mention-bindings)
-  (let ((inhibit-read-only t)
-        (bindings (mevedel-mention-bindings-ranges
-                   (buffer-substring start end))))
+  (let* ((inhibit-read-only t)
+         (text (buffer-substring start end))
+         (bindings (mevedel-mention-bindings-ranges
+                    text)))
     (set-text-properties start end nil)
     (dolist (range bindings)
       (mevedel-mention-bindings-set
        (+ start (plist-get range :start))
        (+ start (plist-get range :end))
-       (plist-get range :binding))))
+       (plist-get range :binding)))
+    (dolist (property '(mevedel-hook-audit mevedel-render-data))
+      (let ((position 0))
+        (while (< position (length text))
+          (let ((next (next-single-property-change
+                       position property text (length text))))
+            (when (eq t (get-text-property position property text))
+              (add-text-properties
+               (+ start position) (+ start next) (list property t)))
+            (setq position next))))))
   (require 'mevedel-transcript)
   (mevedel-transcript-restore-ignored-properties start end))
 

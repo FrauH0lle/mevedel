@@ -77,7 +77,8 @@ refresh).  Skip past it so the rendered view starts at real content."
     (while (and (> pos (point-min))
                 (let ((prop (get-text-property (1- pos) 'gptel)))
                   (cond
-                   ((eq prop 'ignore)
+                   ((memq prop '(ignore mevedel-render-data
+                                 mevedel-hook-audit))
                     (setq pos (or (previous-single-property-change
                                    (1- pos) 'gptel nil (point-min))
                                   (point-min))))

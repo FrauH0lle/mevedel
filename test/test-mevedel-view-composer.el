@@ -2121,9 +2121,12 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (should (string-search "<!-- mevedel-render-data -->" text))
             (goto-char (point-min))
             (search-forward "<!-- mevedel-render-data -->")
-            (should (eq 'ignore
+            (should (eq 'mevedel-render-data
                         (get-text-property (match-beginning 0)
                                            'gptel)))
+            (should (eq t
+                        (get-text-property (match-beginning 0)
+                                           'mevedel-render-data)))
             (should (string-match-p
                      (regexp-quote "$myskill hello")
                      (mevedel-pipeline--strip-render-data-blocks text)))))
@@ -5019,9 +5022,12 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (should (string-match-p "rewritten prompt" text))
               (goto-char (point-min))
               (search-forward "<!-- mevedel-hook-audit -->")
-              (should (eq 'ignore
+              (should (eq 'mevedel-hook-audit
                           (get-text-property (match-beginning 0)
-                                             'gptel)))))
+                                             'gptel)))
+              (should (eq t
+                          (get-text-property (match-beginning 0)
+                                             'mevedel-hook-audit)))))
           (with-current-buffer view-buf
             (mevedel-view--full-rerender)
             (let ((text (buffer-substring-no-properties
