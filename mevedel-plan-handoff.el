@@ -896,6 +896,11 @@ the durable retry was retained"
         (cl-remf record :failure)
         (mevedel-plan--metadata-put session :implementation-retry record)
         (mevedel-plan-handoff--persist session chat-buffer)
+        (when (eq location 'here)
+          (with-current-buffer chat-buffer
+            (require 'mevedel-permissions)
+            (mevedel-permission-mode-transition
+             (plist-get selection :mode))))
         (while record
           (pcase (plist-get record :step)
             ('prepare-worktree
@@ -943,21 +948,21 @@ the durable retry was retained"
           selection accepted)))
     (mevedel-plan--metadata-put session :selection selection)
     (mevedel-plan--metadata-put session :implementation-retry record)
-    (when (eq (plist-get selection :execution) 'goal)
-      (mevedel-plan-handoff--persist session chat-buffer))
-    (when-let* ((view-buffer
-                 (ignore-errors
-                   (mevedel-view--interaction-target-buffer chat-buffer)))
-                ((fboundp 'mevedel-view--update-spinner)))
-      (with-current-buffer view-buffer
-        (mevedel-view--update-spinner
-         "Preparing implementation..." 'plan-preparation)))
-    (when (eq (plist-get selection :location) 'here)
-      (with-current-buffer chat-buffer
-        (require 'mevedel-permissions)
-        (mevedel-permission-mode-transition
-         (plist-get selection :mode))))
-    (mevedel-plan-handoff--dispatch-accepted session chat-buffer)))
+    (condition-case err
+        (progn
+          (when (eq (plist-get selection :execution) 'goal)
+            (mevedel-plan-handoff--persist session chat-buffer))
+          (when-let* ((view-buffer
+                       (ignore-errors
+                         (mevedel-view--interaction-target-buffer chat-buffer)))
+                      ((fboundp 'mevedel-view--update-spinner)))
+            (with-current-buffer view-buffer
+              (mevedel-view--update-spinner
+               "Preparing implementation..." 'plan-preparation)))
+          (mevedel-plan-handoff--dispatch-accepted session chat-buffer))
+      (error
+       (mevedel-plan-handoff--implementation-failed
+        session chat-buffer (error-message-string err))))))
 
 (defun mevedel-retry-plan-implementation (&optional session chat-buffer)
   "Retry SESSION's accepted plan implementation from CHAT-BUFFER."
