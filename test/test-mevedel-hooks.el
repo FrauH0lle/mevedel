@@ -369,20 +369,29 @@
 
 (mevedel-deftest mevedel-hooks-normalize-rules
   (:doc "normalizes Lisp hook rules and drops invalid handlers")
-  (should
-   (equal
-    (mevedel-hooks-normalize-rules
-     '((PreToolUse
-        ((:matcher "Bash"
+  (progn
+    (should
+     (equal
+      (mevedel-hooks-normalize-rules
+       '((PreToolUse
+          ((:matcher "Bash"
+            :hooks ((:type command :command "echo ok")
+                    (:type nope :command "ignored")
+                    (:type elisp :function mevedel-hooks-test--deny-fn)))))
+         (NoSuchEvent
+          ((:matcher "*" :hooks ((:type command :command "ignored")))))))
+      '((PreToolUse
+         (:matcher "Bash"
           :hooks ((:type command :command "echo ok")
-                  (:type nope :command "ignored")
-                  (:type elisp :function mevedel-hooks-test--deny-fn)))))
-       (NoSuchEvent
-        ((:matcher "*" :hooks ((:type command :command "ignored")))))))
-    '((PreToolUse
-       (:matcher "Bash"
-        :hooks ((:type command :command "echo ok")
-                (:type elisp :function mevedel-hooks-test--deny-fn))))))))
+                  (:type elisp :function mevedel-hooks-test--deny-fn)))))))
+    (should
+     (equal
+      (mevedel-hooks-normalize-rules
+       '((UserPromptSubmit
+          ((:hooks ((:type command :command "echo wildcard")))))))
+      '((UserPromptSubmit
+         (:matcher "*"
+          :hooks ((:type command :command "echo wildcard")))))))))
 
 (mevedel-deftest mevedel-hooks-normalize-rules/malformed
   (:doc "drops malformed top-level rule values")

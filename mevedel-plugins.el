@@ -527,18 +527,18 @@ Relative identities are requalified through the live WORKSPACE root."
           (push (list source) items)
           (dolist (rule (mevedel-plugins--hook-rules-from-file file))
             (let ((event (symbol-name (car rule))))
-              (push (list source event) items)
               (dolist (group (cdr-safe rule))
-                (dolist (handler (plist-get group :hooks))
-                  (pcase (plist-get handler :type)
-                    ('command
-                     (push (list source event 'command
-                                 (plist-get handler :command))
-                           items))
-                    ('elisp
-                     (push (list source event 'elisp
-                                 (plist-get handler :function))
-                           items))))))))))
+                (let ((matcher (plist-get group :matcher)))
+                  (dolist (handler (plist-get group :hooks))
+                    (pcase (plist-get handler :type)
+                      ('command
+                       (push (list source event matcher 'command
+                                   (plist-get handler :command))
+                             items))
+                      ('elisp
+                       (push (list source event matcher 'elisp
+                                   (plist-get handler :function))
+                             items)))))))))))
     (sort (delete-dups items)
           (lambda (a b)
             (string< (prin1-to-string a)
@@ -686,14 +686,19 @@ Only plugins enabled in WORKSPACE are returned."
   (let (handlers)
     (dolist (rule (mevedel-plugins--hook-rules plugin))
       (dolist (group (cdr-safe rule))
-        (dolist (handler (plist-get group :hooks))
-          (pcase (plist-get handler :type)
-            ('command
-             (push (format "command %s" (plist-get handler :command))
-                   handlers))
-            ('elisp
-             (push (format "elisp %s" (plist-get handler :function))
-                   handlers))))))
+        (let ((scope (format "%s [%s]"
+                             (car rule)
+                             (or (plist-get group :matcher) "*"))))
+          (dolist (handler (plist-get group :hooks))
+            (pcase (plist-get handler :type)
+              ('command
+               (push (format "%s: command %s"
+                             scope (plist-get handler :command))
+                     handlers))
+              ('elisp
+               (push (format "%s: elisp %s"
+                             scope (plist-get handler :function))
+                     handlers)))))))
     (sort (delete-dups handlers) #'string<)))
 
 (defun mevedel-plugins--hook-consent-summary (plugin &optional workspace)
