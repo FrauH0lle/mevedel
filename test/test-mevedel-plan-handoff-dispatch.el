@@ -13,6 +13,7 @@
 (require 'mevedel-plan-mode)
 (require 'mevedel-goal)
 (require 'mevedel-interaction-prompt)
+(require 'mevedel-pending-inputs)
 (require 'mevedel-permissions)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-session-persistence)
@@ -621,14 +622,15 @@
           (with-current-buffer target-buffer
             (setq-local mevedel--session target-session))
           (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
+                    ((symbol-function
+                      'mevedel-worktree--session-directory)
+                     (lambda (_) target-directory))
                     ((symbol-function 'mevedel-worktree-create-session)
-                     (lambda (branch _purpose _clean)
+                     (lambda (branch _purpose _clean recovery)
+                       (should-not recovery)
                        (cl-incf creates)
                        (list :buffer target-buffer :branch branch
                              :directory target-directory)))
-                    ((symbol-function
-                      'mevedel-session-persistence-ensure-files)
-                     (lambda (&rest _) target-save))
                     ((symbol-function 'mevedel-session-persistence-restore)
                      (lambda (_path) target-buffer))
                     ((symbol-function 'mevedel-plan-archive-accepted)
@@ -716,6 +718,99 @@
       (delete-directory target-save t)
       (delete-directory source-save t)))
 
+  :doc "Worktree retries target and source persistence without recreating Git state"
+  (dolist (failure '(target source))
+    (let* ((source-save
+            (make-temp-file "mevedel-plan-retry-source-" t))
+           (target-save
+            (make-temp-file "mevedel-plan-retry-target-" t))
+           (target-directory
+            (file-name-as-directory
+             (make-temp-file "mevedel-plan-retry-checkout-" t)))
+           (record
+            '(:step prepare-worktree
+              :selection
+              (:location worktree :context fresh :execution direct
+               :mode edits :branch "plan/retry"
+               :model-provider "Test:test-model")
+              :accepted (:path "local/plans/accepted.md" :hash "hash")))
+           (source-session
+            (mevedel-session--create
+             :name "source" :save-path source-save
+             :plan-metadata
+             (list :status 'accepted :implementation-retry record)))
+           (target-session
+            (mevedel-session--create
+             :name "target" :session-id "target-id"
+             :save-path target-save :working-directory target-directory))
+           (source-buffer
+            (generate-new-buffer " *plan-retry-source*"))
+           (target-buffer
+            (generate-new-buffer " *plan-retry-target*"))
+           (create-calls 0)
+           (source-saves 0)
+           (target-saves 0)
+           prepared)
+      (unwind-protect
+          (progn
+            (with-current-buffer source-buffer
+              (setq-local mevedel--session source-session))
+            (with-current-buffer target-buffer
+              (setq-local mevedel--session target-session))
+            (cl-letf
+                (((symbol-function
+                   'mevedel-worktree--session-directory)
+                  (lambda (_) target-directory))
+                 ((symbol-function 'mevedel-worktree-create-session)
+                  (lambda (branch _purpose _clean recovery)
+                    (cl-incf create-calls)
+                    (should (eq (and recovery t)
+                                (and (> create-calls 1) t)))
+                    (list :buffer target-buffer :branch branch
+                          :directory target-directory
+                          :reused (> create-calls 1))))
+                 ((symbol-function 'mevedel-plan-handoff--persist)
+                  (lambda (session _buffer)
+                    (if (eq session target-session)
+                        (progn
+                          (cl-incf target-saves)
+                          (when (and (eq failure 'target)
+                                     (= target-saves 1))
+                            (error "Target persistence failed")))
+                      (cl-incf source-saves)
+                      (when (and (eq failure 'source)
+                                 (= source-saves 3))
+                        (error "Source persistence failed")))))
+                 ((symbol-function
+                   'mevedel-plan-handoff--prepare-worktree-target)
+                  (lambda (_session _buffer retry)
+                    (setq prepared retry)
+                    nil))
+                 ((symbol-function
+                   'mevedel-view--interaction-target-buffer)
+                  (lambda (&rest _) nil)))
+              (mevedel-plan-handoff--dispatch-accepted
+               source-session source-buffer)
+              (should
+               (plist-get
+                (plist-get (mevedel-session-plan-metadata source-session)
+                           :implementation-retry)
+                :failure))
+              (mevedel-retry-plan-implementation
+               source-session source-buffer)
+              (should (= (if (eq failure 'target) 2 1) create-calls))
+              (should (= (if (eq failure 'target) 2 1) target-saves))
+              (should (eq 'prepare-target (plist-get prepared :step)))
+              (should (equal target-save
+                             (plist-get prepared :target-save-path)))
+              (should (equal "target-id"
+                             (plist-get prepared :target-session-id)))))
+        (when (buffer-live-p target-buffer) (kill-buffer target-buffer))
+        (when (buffer-live-p source-buffer) (kill-buffer source-buffer))
+        (delete-directory target-directory t)
+        (delete-directory target-save t)
+        (delete-directory source-save t))))
+
   :doc "Worktree/Summary preserves source and reuses every prepared handoff input"
   (let* ((source-save (make-temp-file "mevedel-plan-worktree-summary-source-" t))
          (target-save (make-temp-file "mevedel-plan-worktree-summary-target-" t))
@@ -795,13 +890,15 @@
                                          source-directory)))
                   #'ignore))
                ((symbol-function 'mevedel-worktree-create-session)
-                (lambda (branch _purpose clean-arg)
+                (lambda (branch _purpose clean-arg recovery)
+                  (should-not recovery)
                   (cl-incf creates)
                   (setq clean clean-arg)
                   (list :buffer target-buffer :branch branch
                         :directory target-directory)))
-               ((symbol-function 'mevedel-session-persistence-ensure-files)
-                (lambda (&rest _) target-save))
+               ((symbol-function
+                 'mevedel-worktree--session-directory)
+                (lambda (_) target-directory))
                ((symbol-function 'mevedel-session-persistence-restore)
                 (lambda (_path) target-buffer))
                ((symbol-function 'mevedel-plan-archive-accepted)

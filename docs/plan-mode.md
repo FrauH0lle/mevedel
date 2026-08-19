@@ -225,9 +225,16 @@ selected permission mode, accepted model/effort snapshot, and selected Goal
 budget. The source session keeps its original permission mode and remains
 otherwise unchanged. Branch acceptance first proves that Git and its worktree
 command are available on the source session's execution target; preparation
-then creates the linked worktree on that target and opens the target session
-there. Later Goal turns derive exact read authority only for the validated
-target-local artifact.
+then persists the deterministic branch/directory reservation before Git
+mutation, creates the linked worktree on that target, and opens the target
+session there. The target session is fully persisted before the source retry
+record advances beyond worktree preparation. If that target save or the
+following source save fails, retry validates the accepted branch at its
+deterministic worktree directory, reopens the live target or its unique durable
+session, and does not issue a second `git worktree add`. A directory registered
+to another branch, or multiple saved sessions rooted there, is a recovery
+conflict rather than authority to guess. Later Goal turns derive exact read
+authority only for the validated target-local artifact.
 
 Acceptance is final even if preparation fails. The source session persists a
 bounded retry record, and `mevedel-retry-plan-implementation` resumes from the

@@ -1665,6 +1665,146 @@
 ;;
 ;;; Create
 
+(mevedel-deftest mevedel-worktree--open-session
+  (:quiet t :doc "prefers a recorded target over a competing live session")
+  ,test
+  (test)
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-resume-" t)))
+         (directory (file-name-as-directory
+                     (file-name-concat root ".worktrees" "retry")))
+         (save-path (file-name-as-directory
+                     (file-name-concat root ".mevedel" "target")))
+         (workspace (mevedel-worktree-test--workspace root))
+         (buffer (generate-new-buffer " *mevedel-worktree-resumed*"))
+         (competitor
+          (generate-new-buffer " *mevedel-worktree-competitor*"))
+         (target-session
+          (mevedel-session--create
+           :name "target" :session-id "target-id"
+           :working-directory directory))
+         (competitor-session
+          (mevedel-session--create
+           :name "competitor" :session-id "competitor-id"
+           :working-directory directory))
+         restored displayed)
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (make-directory save-path t)
+          (with-current-buffer buffer
+            (setq-local mevedel--session target-session))
+          (with-current-buffer competitor
+            (setq-local mevedel--session competitor-session))
+          (cl-letf (((symbol-function 'mevedel--workspace-sessions)
+                     (lambda (_) (list (cons "competitor" competitor))))
+                    ((symbol-function
+                      'mevedel-session-persistence-list-sessions)
+                     (lambda (_)
+                       (ert-fail "Recorded identity fell back to discovery")))
+                    ((symbol-function 'mevedel-session-persistence-restore)
+                     (lambda (path &optional _source _session workspace-arg)
+                       (setq restored (list path workspace-arg))
+                       buffer))
+                    ((symbol-function 'mevedel--chat-buffer)
+                     (lambda (&rest _)
+                       (ert-fail "Durable target was not resumed")))
+                    ((symbol-function 'mevedel--display-chat-buffer)
+                     (lambda (candidate) (setq displayed candidate))))
+            (should (eq buffer
+                        (mevedel-worktree--open-session
+                         workspace directory
+                         (list :target-directory directory
+                               :target-save-path save-path
+                               :target-session-id "target-id"))))
+            (should (equal (list save-path workspace) restored))
+            (should (eq buffer displayed))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (buffer-live-p competitor) (kill-buffer competitor))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "resumes one real persisted target and rejects ambiguous durable targets"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-durable-" t)))
+         (directory (file-name-as-directory
+                     (file-name-concat root ".worktrees" "retry")))
+         (name (file-name-nondirectory (directory-file-name root)))
+         (workspace (progn
+                      (mevedel-workspace-clear-registry)
+                      (mevedel-workspace-get-or-create
+                       'file name root name)))
+         buffers sessions restored)
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (mevedel-workspace-identity-ensure root)
+          (dolist (session-name '("target" "competitor"))
+            (let ((session
+                   (mevedel-session-create
+                    session-name workspace directory))
+                  (buffer
+                   (generate-new-buffer
+                    (format " *mevedel-worktree-%s*" session-name))))
+              (with-current-buffer buffer
+                (org-mode)
+                (setq-local mevedel--session session)
+                (insert session-name "\n")
+                (mevedel-session-persistence-save session buffer))
+              (push session sessions)
+              (push buffer buffers)))
+          (let ((target-id (mevedel-session-session-id (cadr sessions))))
+            (mevedel-session-persistence-lock-release
+             (mevedel-session-save-path (cadr sessions)) (cadr sessions))
+            (with-current-buffer (cadr buffers)
+              (set-buffer-modified-p nil))
+            (kill-buffer (cadr buffers))
+            (setf (cadr buffers) nil)
+            (cl-letf (((symbol-function 'mevedel--display-chat-buffer)
+                       #'ignore))
+              (setq restored
+                    (mevedel-worktree--open-session
+                     workspace directory
+                     (list :target-directory directory
+                           :target-save-path
+                           (mevedel-session-save-path (cadr sessions))
+                           :target-session-id target-id))))
+            (should (equal target-id
+                           (mevedel-session-session-id
+                            (buffer-local-value
+                             'mevedel--session restored)))))
+          (when (buffer-live-p restored)
+            (let ((session (buffer-local-value 'mevedel--session restored)))
+              (mevedel-session-persistence-lock-release
+               (mevedel-session-save-path session) session))
+            (with-current-buffer restored (set-buffer-modified-p nil))
+            (kill-buffer restored)
+            (setq restored nil))
+          (dolist (pair (cl-mapcar #'cons buffers sessions))
+            (when (buffer-live-p (car pair))
+              (mevedel-session-persistence-lock-release
+               (mevedel-session-save-path (cdr pair)) (cdr pair))
+              (with-current-buffer (car pair) (set-buffer-modified-p nil))
+              (kill-buffer (car pair))))
+          (setq buffers nil)
+          (cl-letf (((symbol-function 'mevedel--display-chat-buffer)
+                     #'ignore))
+            (should-error
+             (mevedel-worktree--open-session
+              workspace directory (list :target-directory directory)))))
+      (when (buffer-live-p restored)
+        (with-current-buffer restored (set-buffer-modified-p nil))
+        (kill-buffer restored))
+      (dolist (pair (cl-mapcar #'cons buffers sessions))
+        (when (buffer-live-p (car pair))
+          (ignore-errors
+            (mevedel-session-persistence-lock-release
+             (mevedel-session-save-path (cdr pair)) (cdr pair)))
+          (with-current-buffer (car pair) (set-buffer-modified-p nil))
+          (kill-buffer (car pair))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
+
 (mevedel-deftest mevedel-worktree-create-session ()
   ,test
   (test)
@@ -1786,7 +1926,79 @@
                 (should (equal expected-dir (plist-get result :directory)))
                 (should-not (plist-get result :warnings))))))
       (when (buffer-live-p new-buffer) (kill-buffer new-buffer))
-      (delete-directory root t))))
+      (delete-directory root t)))
+  :doc "reopens the exact existing Plan worktree without a second Git creation"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-plan-worktree-reopen-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (new-buffer (generate-new-buffer " *mevedel-worktree-reopen*"))
+         (git-function (symbol-function 'mevedel-worktree--git-result))
+         (creates 0)
+         resume)
+    (unwind-protect
+        (progn
+          (mevedel-worktree-test--init-repo root)
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (setq-local default-directory root)
+            (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                       (lambda (directory &rest args)
+                         (when (equal (seq-take args 2)
+                                      '("worktree" "add"))
+                           (cl-incf creates))
+                         (apply git-function directory args)))
+                      ((symbol-function 'mevedel-worktree--open-session)
+                       (lambda (_workspace _directory &optional resume-arg)
+                         (setq resume resume-arg)
+                         new-buffer)))
+              (mevedel-worktree-create-session
+               "plan/retry" "Accepted Plan implementation" t)
+              (let ((result
+                     (mevedel-worktree-create-session
+                      "plan/retry" "Accepted Plan implementation" t
+                      (list :target-directory
+                            (file-name-as-directory
+                             (file-name-concat
+                              root ".worktrees" "retry"))))))
+                (should (= 1 creates))
+                (should resume)
+                (should (plist-get result :reused))
+                (should (eq new-buffer (plist-get result :buffer))))
+              (should-error
+               (mevedel-worktree-create-session
+                "other/retry" "Accepted Plan implementation" t
+                (list :target-directory
+                      (file-name-as-directory
+                       (file-name-concat root ".worktrees" "retry"))))
+               :type 'user-error)
+              (should (= 1 creates))))
+      (when (buffer-live-p new-buffer) (kill-buffer new-buffer))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))))
+
+(mevedel-deftest mevedel-worktree--session-directory
+  (:doc "derives the accepted branch's deterministic workspace path")
+  ,test
+  (test)
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-reservation-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (session (mevedel-session-create "main" workspace root)))
+    (unwind-protect
+        (progn
+          (mevedel-worktree-test--init-repo root)
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (setq-local default-directory root)
+            (should
+             (equal
+              (file-name-as-directory
+               (file-name-concat root ".worktrees" "accepted"))
+              (mevedel-worktree--session-directory
+               "plan/accepted")))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-cmd--worktree/create ()
   ,test
