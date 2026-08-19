@@ -530,8 +530,8 @@ For each event delivered by gptel:
   run MEVEDEL-CB so the partial accumulator and finalize gating see the
   post-insert state.
 
-Errors from either delegate are caught so a misbehaving callback cannot
-strand the FSM."
+Insertion errors are diagnostic only.  The adapter retains a terminal event
+whose runtime handoff fails and retries it from an owned timer."
   (lambda (response &rest rest)
     (let ((terminal (memq response '(t nil abort))))
       (unless terminal
@@ -540,9 +540,7 @@ strand the FSM."
             (error
              (message "mevedel: gptel insertion callback errored: %S" err)))))
       (when mevedel-cb
-        (condition-case err (apply mevedel-cb response rest)
-          (error
-           (message "mevedel: agent bookkeeping callback errored: %S" err)))))))
+        (apply mevedel-cb response rest)))))
 
 (defun mevedel-agent-exec--make-callback (main-cb agent-type description
                                                   where partial-cell)
@@ -574,86 +572,112 @@ The dispatch table is:
   transformer over the partial and fire MAIN-CB once.
 - `'abort': aborted; MAIN-CB receives a formatted abort string.
 
-A per-closure `fired' latch makes all delivery branches idempotent so
-streaming runs that emit one string chunk followed by `'t', and the
-defensive corner cases, cannot double-fire.  MAIN-CB invocations are
-wrapped in `condition-case' so a throw inside the caller does not escape
-gptel's callback chain and strand the retained turn."
-  (cl-labels ((safe-call (cb &rest args)
-                (condition-case err
-                    (apply cb args)
-                  (error
-                   (message "mevedel agent-exec main-cb error: %S" err)))))
-    (let ((fired nil)
-          (partial-prefix (or (car partial-cell) ""))
-          (partial-chunks nil)
-          (partial-chars 0))
-      ;; Accept &rest so the wrap-and-chain forwarder can pass through
-      ;; gptel's optional `raw' third argument (see
-      ;; `gptel--insert-response' / `gptel-curl--stream-insert-response')
-      ;; without tripping a wrong-number-of-arguments.
-      (lambda (resp info &rest _ignored)
-        (let ((ov (plist-get info :context)))
-          (cl-labels ((append-partial (chunk)
-                        (push chunk partial-chunks)
-                        (setq partial-chars (+ partial-chars
-                                               (length chunk))))
-                      (partial-length ()
-                        (+ (length partial-prefix) partial-chars))
-                      (partial-string ()
-                        (let ((text
-                               (if partial-chunks
-                                   (apply #'concat
-                                          partial-prefix
-                                          (nreverse partial-chunks))
-                                 partial-prefix)))
-                          (setq partial-chunks nil
-                                partial-prefix text
-                                partial-chars 0)
-                          (setcar partial-cell text)
-                          text))
-                      (finalize ()
-                        (when mevedel-agent-exec-debug
-                          (message "mevedel AGENT-EXEC FINALIZE agent=%s desc=%S \
+A per-closure `fired' latch makes accepted delivery idempotent.  A rejected
+MAIN-CB handoff remains pending and an owned timer retries it without another
+provider callback."
+  (let ((fired nil)
+        pending-terminal
+        retry-timer
+        (partial-prefix (or (car partial-cell) ""))
+        (partial-chunks nil)
+        (partial-chars 0))
+    ;; Accept &rest so the wrap-and-chain forwarder can pass through
+    ;; gptel's optional `raw' third argument (see
+    ;; `gptel--insert-response' / `gptel-curl--stream-insert-response')
+    ;; without tripping a wrong-number-of-arguments.
+    (lambda (resp info &rest _ignored)
+      (let ((ov (plist-get info :context)))
+        (cl-labels ((schedule-retry ()
+                      (unless retry-timer
+                        (setq retry-timer
+                              (run-at-time 1 nil #'retry))))
+                    (retry ()
+                      (setq retry-timer nil)
+                      (when (and pending-terminal (not fired))
+                        (deliver pending-terminal)))
+                    (deliver (value)
+                      (setq pending-terminal value)
+                      (condition-case nil
+                          (progn
+                            (funcall main-cb value)
+                            (setq pending-terminal nil
+                                  fired t)
+                            (when (timerp retry-timer)
+                              (cancel-timer retry-timer))
+                            (setq retry-timer nil))
+                        (error (schedule-retry))))
+                    (append-partial (chunk)
+                      (push chunk partial-chunks)
+                      (setq partial-chars (+ partial-chars
+                                             (length chunk))))
+                    (partial-length ()
+                      (+ (length partial-prefix) partial-chars))
+                    (partial-string ()
+                      (let ((text
+                             (if partial-chunks
+                                 (apply #'concat
+                                        partial-prefix
+                                        (nreverse partial-chunks))
+                               partial-prefix)))
+                        (setq partial-chunks nil
+                              partial-prefix text
+                              partial-chars 0)
+                        (setcar partial-cell text)
+                        text))
+                    (finalize ()
+                      (when mevedel-agent-exec-debug
+                        (message "mevedel AGENT-EXEC FINALIZE agent=%s desc=%S \
 partial-len=%d :tool-use=%S :stream=%S"
-                                   agent-type description
-                                   (partial-length)
-                                   (and (plist-get info :tool-use) t)
-                                   (and (plist-get info :stream) t)))
-                        (when (overlayp ov) (delete-overlay ov))
-                        ;; Drive transcript finalization from
-                        ;; the success path so a non-error completion
-                        ;; lands on disk before the parent sees the
-                        ;; result.
-                        (let* ((text (partial-string))
-                               (transformer (plist-get info :transformer))
-                               (text (if transformer
-                                         (funcall transformer text)
-                                       text))
-                               (inv (mevedel-agent-exec--invocation-from-info
-                                     info))
-                               (final-response
-                                (mevedel-agent-conversation-final-response inv)))
-                          (setq partial-prefix text)
-                          (setcar partial-cell text)
-                          (safe-call main-cb (or final-response text)))))
+                                 agent-type description
+                                 (partial-length)
+                                 (and (plist-get info :tool-use) t)
+                                 (and (plist-get info :stream) t)))
+                      (when (overlayp ov) (delete-overlay ov))
+                      ;; Drive transcript finalization from
+                      ;; the success path so a non-error completion
+                      ;; lands on disk before the parent sees the
+                      ;; result.
+                      (let ((terminal
+                             (condition-case err
+                                 (let* ((text (partial-string))
+                                        (transformer
+                                         (plist-get info :transformer))
+                                        (text
+                                         (if transformer
+                                             (funcall transformer text)
+                                           text))
+                                        (inv
+                                         (mevedel-agent-exec--invocation-from-info
+                                          info))
+                                        (final-response
+                                         (mevedel-agent-conversation-final-response
+                                          inv)))
+                                   (setq partial-prefix text)
+                                   (setcar partial-cell text)
+                                   (or final-response text))
+                               (error
+                                (list
+                                 :mevedel-agent-terminal-status 'error
+                                 :error-details
+                                 (error-message-string err))))))
+                        (deliver terminal))))
+          (when (and pending-terminal (not fired))
+            (deliver pending-terminal))
+          (unless fired
             (pcase resp
               ('nil
-               (unless fired
-                 (setq fired t)
-                 (let* ((fallback-partial (partial-string))
-                        (inv (mevedel-agent-exec--invocation-from-info info)))
-                   (when-let* ((reason
-                                (mevedel-agent-exec--error-reason-from-info
-                                 info)))
-                     (setf (mevedel-agent-invocation-terminal-reason inv)
-                           reason))
-                   (when (overlayp ov) (delete-overlay ov))
-                   (safe-call
-                    main-cb
-                    (list :mevedel-agent-terminal-status 'error
-                          :error-details (plist-get info :error)
-                          :fallback-partial fallback-partial)))))
+               (let* ((fallback-partial (partial-string))
+                      (inv (mevedel-agent-exec--invocation-from-info info)))
+                 (when-let* ((reason
+                              (mevedel-agent-exec--error-reason-from-info
+                               info)))
+                   (setf (mevedel-agent-invocation-terminal-reason inv)
+                         reason))
+                 (when (overlayp ov) (delete-overlay ov))
+                 (deliver
+                  (list :mevedel-agent-terminal-status 'error
+                        :error-details (plist-get info :error)
+                        :fallback-partial fallback-partial))))
               (`(tool-call . ,calls)
                (unless (plist-get info :tracking-marker)
                  (plist-put info :tracking-marker where))
@@ -666,24 +690,19 @@ partial-len=%d :tool-use=%S :stream=%S"
                (when (and (not fired)
                           (not (plist-get info :stream))
                           (not (plist-get info :tool-use)))
-                 (setq fired t)
                  (finalize)))
               ('t
                (when (and (not fired)
                           (not (plist-get info :tool-use)))
-                 (setq fired t)
                  (finalize)))
               ('abort
-               (unless fired
-                 (setq fired t)
-                 (when (overlayp ov) (delete-overlay ov))
-                 (safe-call
-                  main-cb
-                  (list :mevedel-agent-terminal-status 'aborted
-                        :response
-                        (format "Error: Task \"%s\" was aborted by the user. \
+               (when (overlayp ov) (delete-overlay ov))
+               (deliver
+                (list :mevedel-agent-terminal-status 'aborted
+                      :response
+                      (format "Error: Task \"%s\" was aborted by the user. \
 %s could not finish."
-                                description agent-type))))))))))))
+                              description agent-type)))))))))))
 
 
 ;;

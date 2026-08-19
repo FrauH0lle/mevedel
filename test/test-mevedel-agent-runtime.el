@@ -67,28 +67,6 @@
              (list :hook-event 'UserPromptSubmit)
              invocation)))))
 
-(mevedel-deftest mevedel-agent-runtime--run-start-hook ()
-  ,test
-  (test)
-  :doc "records SubagentStart metadata and its parent audit"
-  (let* ((session (mevedel-session--create :name "main"))
-         (invocation (mevedel-agent-runtime-test--invocation))
-         event
-         (mevedel-subagent-start-functions
-          (list (lambda (payload)
-                  (setq event payload)
-                  '(:additional-context ("startup context"))))))
-    (setf (mevedel-agent-invocation-parent-session invocation) session)
-    (mevedel-agent-runtime--run-start-hook
-     "explorer" "Inspect hooks" "Prompt body" invocation)
-    (should (equal (plist-get event :agent-path) "/root/explore"))
-    (should (equal (plist-get event :role) "explorer"))
-    (should (equal (plist-get event :prompt) "Prompt body"))
-    (let ((audit (car (mevedel-agent-invocation-hook-audits invocation))))
-      (should (eq (plist-get audit :type) 'subagent-context))
-      (should (equal (plist-get audit :event) "SubagentStart"))
-      (should-not (plist-member audit :context)))))
-
 (mevedel-deftest mevedel-agent-runtime--run-stop-hook ()
   ,test
   (test)
@@ -139,7 +117,7 @@
     (should (equal (plist-get event :agent-path) "/root/explore"))
     (should (equal (plist-get event :prompt) "Prompt body"))))
 
-(mevedel-deftest mevedel-agent-runtime--prepare-turn ()
+(mevedel-deftest mevedel-agent-runtime--prepare-followup ()
   ,test
   (test)
   :doc "composes retained pending context without consuming it during preparation"
@@ -155,9 +133,9 @@
                     :additional-context ("prompt context"))))))
     (setf (mevedel-agent-invocation-parent-session invocation) session)
     (let ((turn
-           (mevedel-agent-runtime--prepare-turn
-            "explorer" "Explore" "original prompt" invocation t
-            pending (lambda (entries) (setq transition entries)))))
+           (mevedel-agent-runtime--prepare-followup
+            "original prompt" invocation pending
+            (lambda (entries) (setq transition entries)))))
       (should (equal '(submit) (nreverse lifecycle)))
       (should (string-match-p "rewritten prompt" (plist-get turn :prompt)))
       (should (string-match-p "pending context" (plist-get turn :prompt)))
@@ -309,6 +287,7 @@
                    (mevedel-agent-runtime-dispatch
                     agent "Explore" "Find the entry point."
                     :path "/root/explore"
+                    :prepared-turn '(:prompt "Find the entry point.")
                     :context-snapshot "Prior context"
                     :on-invocation
                     (lambda (inv)
@@ -381,6 +360,7 @@
                   (mevedel-agent-runtime-dispatch
                    nil "Work" "Edit the file."
                    :path "/root/worker"
+                   :prepared-turn '(:prompt "Edit the file.")
                    :frozen-configuration configuration)
                   agent-buffer
                   (mevedel-agent-invocation-buffer invocation))
@@ -503,11 +483,19 @@
                     (setf (mevedel-agent-invocation-runtime-fsm invocation)
                           'provider-fsm)
                     'provider-fsm)))
-              (setq first
-                    (mevedel-agent-runtime-dispatch
-                     agent "Explore" "Initial task"
-                     :path "/root/explore"
-                     :frozen-configuration configuration))
+              (let (prepared)
+                (mevedel-agent-runtime-prepare-task
+                 agent "Explore" "Initial task" "/root/explore"
+                 (lambda (result) (setq prepared result)))
+                (should (eq 'success (plist-get prepared :outcome)))
+                (setq first
+                      (mevedel-agent-runtime-dispatch
+                       agent "Explore" "Initial task"
+                       :path "/root/explore"
+                       :frozen-configuration configuration
+                       :prepared-turn (plist-get prepared :turn)
+                       :start-hook-audits
+                       (plist-get prepared :start-hook-audits))))
               (mevedel-agent-runtime-dispatch
                nil "Continue" "Follow-up task"
                :path "/root/explore"
@@ -698,7 +686,10 @@
                 (lambda (&rest _)
                   (push (list 'callback
                               mevedel-agent-control-suppress-persistence)
-                        events)))
+                        events)
+                  (when mevedel-agent-control-suppress-persistence
+                    (cons (lambda () (push 'rollback events))
+                          (lambda () (push 'delivery events))))))
           (cl-letf (((symbol-function 'mevedel-execution-target-remote-p)
                      (lambda (candidate) (eq candidate target)))
                     ((symbol-function
@@ -720,6 +711,11 @@
                       'mevedel-session-persistence-publish-agent-terminal-state)
                      (lambda (&rest _)
                        (push 'publication events)
+                       t))
+                    ((symbol-function
+                      'mevedel-agent-control--commit-session)
+                     (lambda (_session)
+                       (push 'commit events)
                        t)))
             (mevedel-agent-runtime--settle invocation "finished"))
           (nreverse events))
@@ -780,15 +776,105 @@
           (kill-buffer buffer)))
       (delete-directory save-path t))))
 
-(mevedel-deftest mevedel-agent-runtime--settle
-  (:doc "batches only materialized remote terminal state after registry update")
+(mevedel-deftest mevedel-agent-runtime--settle ()
+  ,test
+  (test)
+  :doc "batches only materialized remote terminal state after registry update"
   (should
    (equal '((presence "session.meta.el")
-            (finalize t) (callback t) publication)
+            (finalize t) (callback t) publication delivery)
           (test-mevedel-agent-runtime--terminal-settlement-events t)))
   (should
-   (equal '((presence "session.meta.el") (finalize nil) (callback nil))
-          (test-mevedel-agent-runtime--terminal-settlement-events nil))))
+   (equal '((presence "session.meta.el")
+            (finalize nil) (callback t) commit delivery)
+          (test-mevedel-agent-runtime--terminal-settlement-events nil)))
+
+  :doc "portable publication failure rolls staged control state back"
+  (let* ((session (mevedel-session--create
+                   :name "main" :save-path temporary-file-directory
+                   :execution-target 'remote))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         events)
+    (setf (mevedel-agent-invocation-parent-session invocation) session
+          (mevedel-agent-invocation-parent-data-buffer invocation)
+          (current-buffer)
+          (mevedel-agent-invocation-buffer invocation) (current-buffer)
+          (mevedel-agent-invocation-transcript-relative-path invocation)
+          "agents/test.chat.org"
+          (mevedel-agent-invocation-runtime-settle-callback invocation)
+          (lambda (&rest _)
+            (push 'callback events)
+            (cons (lambda () (push 'rollback events))
+                  (lambda () (push 'delivery events)))))
+    (cl-letf (((symbol-function 'mevedel-execution-target-remote-p)
+               (lambda (&rest _) t))
+              ((symbol-function
+                'mevedel-session-persistence-artifact-present-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-agent-runtime--finalize)
+               (lambda (&rest _) (push 'finalize events)))
+              ((symbol-function
+                'mevedel-session-persistence-publish-agent-terminal-state)
+               (lambda (&rest _)
+                 (push 'publication events)
+                 (error "Commit unavailable"))))
+      (should-error
+       (mevedel-agent-runtime--settle invocation "finished"))
+      (should (equal '(finalize callback publication rollback)
+                     (nreverse events)))
+      (should-not
+       (mevedel-agent-invocation-runtime-settled-p invocation))
+      (should
+       (mevedel-agent-invocation-runtime-pending-response invocation))))
+
+  :doc "portable delivery retries without repeating its committed publication"
+  (let* ((session (mevedel-session--create
+                   :name "main" :save-path temporary-file-directory
+                   :execution-target 'remote))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         (callbacks 0)
+         (publications 0)
+         (deliveries 0))
+    (setf (mevedel-agent-invocation-parent-session invocation) session
+          (mevedel-agent-invocation-parent-data-buffer invocation)
+          (current-buffer)
+          (mevedel-agent-invocation-buffer invocation) (current-buffer)
+          (mevedel-agent-invocation-transcript-relative-path invocation)
+          "agents/test.chat.org"
+          (mevedel-agent-invocation-runtime-settle-callback invocation)
+          (lambda (&rest _)
+            (cl-incf callbacks)
+            (cons #'ignore
+                  (lambda ()
+                    (cl-incf deliveries)
+                    (when (= deliveries 1)
+                      (error "Delivery unavailable"))))))
+    (cl-letf (((symbol-function 'mevedel-execution-target-remote-p)
+               (lambda (&rest _) t))
+              ((symbol-function
+                'mevedel-session-persistence-artifact-present-p)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-agent-runtime--finalize) #'ignore)
+              ((symbol-function
+                'mevedel-session-persistence-publish-agent-terminal-state)
+               (lambda (&rest _)
+                 (cl-incf publications)
+                 t)))
+      (should-error
+       (mevedel-agent-runtime--settle invocation "finished"))
+      (should-not
+       (mevedel-agent-invocation-runtime-settled-p invocation))
+      (should
+       (eq 'committed
+           (plist-get
+            (mevedel-agent-invocation-runtime-pending-response invocation)
+            :phase)))
+      (mevedel-agent-runtime--settle invocation "ignored duplicate")
+      (should
+       (mevedel-agent-invocation-runtime-settled-p invocation))
+      (should (= 1 callbacks))
+      (should (= 1 publications))
+      (should (= 2 deliveries)))))
 
 (mevedel-deftest mevedel-agent-runtime--transcript-path
   (:doc "returns a published remote transcript's qualified logical path")
@@ -885,7 +971,7 @@
 (mevedel-deftest mevedel-agent-runtime--finalize ()
   ,test
   (test)
-  :doc "an early cleanup failure does not skip later terminal effects"
+  :doc "request teardown failure leaves the turn active and retryable"
   (let* ((child (generate-new-buffer " *agent-finalize-child*"))
          (parent (generate-new-buffer " *agent-finalize-parent*"))
          (session (mevedel-session--create :name "main"))
@@ -928,16 +1014,40 @@
                      (lambda (&rest _) (push 'view calls)))
                     ((symbol-function 'display-warning)
                      (lambda (&rest args) (push args warnings))))
-            (mevedel-agent-runtime--finalize invocation 'completed))
-          (dolist (effect '(executions transcript save activity tasks task-view
-                           handle sidecar hook view))
-            (should (memq effect calls)))
-          (should warnings)
-          (should-not (mevedel-agent-invocation-activity invocation))
-          (should (eq 'completed
+            (should-error
+             (mevedel-agent-runtime--finalize invocation 'completed)))
+          (should-not calls)
+          (should-not warnings)
+          (should (eq 'working
+                      (mevedel-agent-invocation-activity invocation)))
+          (should (eq 'running
                       (mevedel-agent-invocation-transcript-status invocation))))
       (kill-buffer child)
-      (kill-buffer parent))))
+      (kill-buffer parent)))
+
+  :doc "execution teardown failure cannot publish later terminal effects"
+  (let* ((child (generate-new-buffer " *agent-finalize-execution-child*"))
+         (session (mevedel-session--create :name "main"))
+         (invocation (mevedel-agent-runtime-test--invocation child))
+         calls)
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-parent-session invocation) session
+                (mevedel-agent-invocation-activity invocation) 'working)
+          (cl-letf (((symbol-function 'mevedel-request-end)
+                     (lambda (&rest _) (push 'request calls)))
+                    ((symbol-function 'mevedel-execution-stop-owner)
+                     (lambda (&rest _)
+                       (error "Injected execution failure")))
+                    ((symbol-function
+                      'mevedel-session-persistence--update-transcript-entry)
+                     (lambda (&rest _) (push 'transcript calls))))
+            (should-error
+             (mevedel-agent-runtime--finalize invocation 'completed)))
+          (should (equal '(request) calls))
+          (should (eq 'running
+                      (mevedel-agent-invocation-transcript-status invocation))))
+      (kill-buffer child))))
 
 (mevedel-deftest mevedel-agent-runtime-interrupt
   ()

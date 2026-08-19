@@ -223,7 +223,7 @@
 (declare-function mevedel-reminders-clone-list "mevedel-reminders"
 		  (reminders))
 
-;; `mevedel-session-durability'
+;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-physical-path
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-path-exists-p
@@ -232,12 +232,10 @@
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-write-file
                   "mevedel-session-control-fs" (path content))
+
+;; `mevedel-session-durability'
 (declare-function mevedel-session-durability-call-with-reserved-lease
                   "mevedel-session-durability" (session function))
-(defvar mevedel-session-durability--asserted-directories)
-(defvar mevedel-session-durability--transaction-clock)
-(declare-function mevedel-session-publication-discard-rolled-back
-                  "mevedel-session-publication" (session))
 (declare-function mevedel-session-durability-disclose
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-forget-removed-session
@@ -253,32 +251,33 @@
                   "mevedel-session-durability" (session-dir))
 (declare-function mevedel-session-durability-lease-status
                   "mevedel-session-durability" (session-dir))
-(declare-function mevedel-session-transfer-poll
-                  "mevedel-session-transfer" (session))
-(declare-function mevedel-session-transfer-decide
-                  "mevedel-session-transfer" (session decision))
-(declare-function mevedel-session-transfer-release
-                  "mevedel-session-transfer" (session))
-(declare-function mevedel-session-transfer-request
-                  "mevedel-session-transfer" (session &optional label))
+(defvar mevedel-session-durability--asserted-directories)
+(defvar mevedel-session-durability--transaction-clock)
+
+;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-committed-p
                   "mevedel-session-publication" (session artifacts))
+(declare-function mevedel-session-publication-discard-rolled-back
+                  "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-logical-path-p
                   "mevedel-session-publication" (path))
 (declare-function mevedel-session-publication-prune-committed
                   "mevedel-session-publication" (session artifacts))
 (declare-function mevedel-session-publication-publish
-                  "mevedel-session-publication" (session artifacts))
-(declare-function mevedel-session-recovery-refresh
-                  "mevedel-session-recovery" (session))
-(defvar mevedel-session-recovery--mutation-cache)
+                  "mevedel-session-publication"
+                  (session artifacts &optional require-commit))
 (declare-function mevedel-session-publication-read
                   "mevedel-session-publication" (session-dir))
+(declare-function mevedel-session-publication-uncommitted-artifact
+                  "mevedel-session-publication" (session logical))
+
+;; `mevedel-session-recovery'
 (declare-function mevedel-session-recovery-record-failure
                   "mevedel-session-recovery"
                   (session reason recovery-path))
-(declare-function mevedel-session-publication-uncommitted-artifact
-                  "mevedel-session-publication" (session logical))
+(declare-function mevedel-session-recovery-refresh
+                  "mevedel-session-recovery" (session))
+(defvar mevedel-session-recovery--mutation-cache)
 
 ;; `mevedel-session-save-as'
 (declare-function mevedel-session-save-as--rename-live-session-buffers
@@ -286,6 +285,16 @@
 (declare-function mevedel-session-save-as-run
                   "mevedel-session-save-as"
                   (session buffer new-name new-id new-save-path))
+
+;; `mevedel-session-transfer'
+(declare-function mevedel-session-transfer-decide
+                  "mevedel-session-transfer" (session decision))
+(declare-function mevedel-session-transfer-poll
+                  "mevedel-session-transfer" (session))
+(declare-function mevedel-session-transfer-release
+                  "mevedel-session-transfer" (session))
+(declare-function mevedel-session-transfer-request
+                  "mevedel-session-transfer" (session &optional label))
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-attempt-checkpoint
@@ -526,6 +535,9 @@
 
 ;; `so-long'
 (defvar so-long-predicate)
+
+(defvar mevedel-session-persistence--require-agent-commit-p nil
+  "Non-nil while an acknowledged agent mutation requires immediate commit.")
 
 ;;
 ;;; Customization
@@ -1475,12 +1487,9 @@ append and runs inline.  Emacs exit flushes inline either way."
 
 Used by sub-agent allocation: a sub-agent can spawn during
 the parent's first turn (before any DONE handler has run), so we
-need the session directory and `agents/' subdirectory but must not
-write `session.meta.el' yet.  On-disk session state reflects a
-completed turn boundary.  The parent's first DONE autosave will
-write the sidecar later, picking up any
-sub-agent transcript entries that accumulated in the in-memory
-slot.
+need the session directory and `agents/' subdirectory before its retained
+identity exists.  The later acknowledged registry commit performs the full
+root snapshot and sidecar publication.
 
 Returns SESSION's `save-path' on success, or nil on failure.  Idempotent."
   (or (mevedel-session-save-path session)
@@ -1524,6 +1533,9 @@ Returns SESSION's `save-path' on success, or nil on failure.  Idempotent."
               (unless buffer-file-name
                 (setq buffer-file-name segment-path))
               (mevedel-session-persistence--disown-save-machinery))
+            (require 'mevedel-session-control-transfer)
+            (mevedel-session-control-transfer-register-root-buffer
+             session buffer)
             save-path)
         (error
          (message "mevedel: shallow session materialization failed: %S" err)
@@ -1559,13 +1571,10 @@ The argument UPDATES is the change plist."
   "Best-effort sidecar rewrite for SESSION and BUFFER.
 
 Only writes when the sidecar file already exists on disk -- i.e.
-the parent's first DONE has fired and a full materialization has
-written `session.meta.el'.  Before that, the session is in shallow
-materialization mode (directory + lock + agents/ but no sidecar)
-and writing now would violate the completed-turn boundary contract.
-In that case the write is deferred to the parent's DONE autosave;
-the in-memory `agent-transcripts' slot still reflects current state
-and will be picked up by that autosave."
+a full root snapshot has written `session.meta.el'.  Before that, the session
+may be shallowly materialized (directory + lock + agents/ but no sidecar), so
+this observational rewrite remains deferred to the next critical agent commit
+or root autosave."
   (when (and session (mevedel-session-save-path session))
     (let* ((sidecar (mevedel-session-persistence--sidecar-path
                      (mevedel-session-save-path session)))
@@ -1604,20 +1613,11 @@ and will be picked up by that autosave."
           (:success t))))))
 
 (defun mevedel-session-persistence-save-agent-state (session)
-  "Best-effort persist SESSION's agent state through its root data buffer."
-  (let* ((save-path (mevedel-session-save-path session))
-         (segment-path
-          (and save-path
-               (mevedel-session-persistence--segment-path
-                save-path
-                (or (mevedel-session-current-segment session) 1))))
-         (buffer (mevedel-session-root-buffer session)))
-    (when (and segment-path
-               (buffer-live-p buffer)
-               (buffer-file-name buffer)
-               (equal (expand-file-name (buffer-file-name buffer))
-                      (expand-file-name segment-path)))
-      (mevedel-session-persistence--write-sidecar-now session buffer))))
+  "Commit SESSION's agent state through its authoritative root buffer."
+  (when-let* ((buffer (mevedel-session-root-buffer session))
+              ((buffer-live-p buffer)))
+    (let ((mevedel-session-persistence--require-agent-commit-p t))
+      (mevedel-session-persistence-save session buffer nil t))))
 
 
 ;;
@@ -3094,11 +3094,20 @@ continues to wait for the root turn's completed-turn publication boundary."
                 (mevedel-session-persistence--printed-value
                  (mevedel-session-persistence--build-sidecar
                   session parent))
-                :commit-marker t)))
+                :commit-marker t))
+         t)
         (when modified-p
-          (set-visited-file-modtime)
-          (set-buffer-modified-p nil)
-          (run-hooks 'after-save-hook))
+          (condition-case err
+              (progn
+                (set-visited-file-modtime)
+                (set-buffer-modified-p nil)
+                (run-hooks 'after-save-hook))
+            (error
+             (display-warning
+              'mevedel
+              (format "Agent transcript post-save cleanup failed: %s"
+                      (error-message-string err))
+              :warning))))
         (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil)
         t))))
 
@@ -3195,22 +3204,40 @@ calling this serializer."
           ;; bytes, so the buffer is no longer dirty against the target.
           (when segment-artifact
             (with-current-buffer buffer
-              (set-visited-file-modtime)
-              (set-buffer-modified-p nil)))
+              (condition-case err
+                  (progn
+                    (set-visited-file-modtime)
+                    (set-buffer-modified-p nil))
+                (error
+                 (display-warning
+                  'mevedel
+                  (format "Session post-save cleanup failed: %s"
+                          (error-message-string err))
+                  :warning)))))
         (setf (mevedel-session-updated-at session)
               (format-time-string "%FT%H-%M-%S"))
-        (mevedel-session-publication-publish
-         session
-         (mevedel-session-publication-prune-committed
-          session
-          (append leading
-                  (list (mevedel-session-persistence--sidecar-artifact
-                         session buffer)))))
+        (let ((publication
+               (mevedel-session-publication-prune-committed
+                session
+                (append leading
+                        (list (mevedel-session-persistence--sidecar-artifact
+                               session buffer))))))
+          (if mevedel-session-persistence--require-agent-commit-p
+              (mevedel-session-publication-publish session publication t)
+            (mevedel-session-publication-publish session publication)))
         (when segment-artifact
           (with-current-buffer buffer
-            (set-visited-file-modtime)
-            (set-buffer-modified-p nil)
-            (run-hooks 'after-save-hook)))))
+            (condition-case err
+                (progn
+                  (set-visited-file-modtime)
+                  (set-buffer-modified-p nil)
+                  (run-hooks 'after-save-hook))
+              (error
+               (display-warning
+                'mevedel
+                (format "Session post-save cleanup failed: %s"
+                        (error-message-string err))
+                :warning)))))))
     ;; Input history is diagnostic UI state: warn/retry independently and
     ;; never turn it into critical publication.
     (mevedel-session-persistence--notify-session-event

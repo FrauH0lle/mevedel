@@ -21,6 +21,8 @@
 (defvar gptel--request-alist)
 
 ;; `mevedel-agent-control'
+(declare-function mevedel-agent-control--commit-session
+                  "mevedel-agent-control" (session))
 (defvar mevedel-agent-control-suppress-persistence)
 
 ;; `mevedel-agent-conversation'
@@ -403,24 +405,18 @@
   "Persist terminal STATUS and lifecycle effects for INVOCATION."
   (unless (memq (mevedel-agent-invocation-transcript-status invocation)
                 '(completed error aborted))
-    (setf (mevedel-agent-invocation-transcript-status invocation) status)
     (let ((buffer (mevedel-agent-invocation-buffer invocation))
           (session (mevedel-agent-invocation-parent-session invocation))
           (parent-buffer
            (mevedel-agent-invocation-parent-data-buffer invocation)))
-      (mevedel-agent-runtime--finalize-step
-       invocation 'request
-       (lambda ()
-         (when (buffer-live-p buffer)
-           (with-current-buffer buffer
-             (mevedel-request-end)))))
-      (mevedel-agent-runtime--finalize-step
-       invocation 'executions
-       (lambda ()
-         (when session
-           (require 'mevedel-execution)
-           (mevedel-execution-stop-owner
-            session (mevedel-agent-invocation-require-path invocation)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (mevedel-request-end)))
+      (when session
+        (require 'mevedel-execution)
+        (mevedel-execution-stop-owner
+         session (mevedel-agent-invocation-require-path invocation)))
+      (setf (mevedel-agent-invocation-transcript-status invocation) status)
       (mevedel-agent-runtime--finalize-step
        invocation 'transcript-status
        (lambda ()
@@ -483,43 +479,94 @@
 (defun mevedel-agent-runtime--settle (invocation response &optional event)
   "Finalize INVOCATION and deliver RESPONSE and EVENT exactly once."
   (unless (mevedel-agent-invocation-runtime-settled-p invocation)
-    (let* ((event-status (and (listp event)
-                              (plist-get event
-                                         :mevedel-agent-terminal-status)))
-           (status (pcase event-status
-                     ('error 'error)
-                     ('aborted 'aborted)
-                     (_ 'completed)))
-           (visible
-            (pcase status
-              ('error (mevedel-agent-runtime--error-response invocation event))
-              ('aborted
-               (mevedel-agent-runtime--interrupted-response
-                invocation
-                (or (mevedel-agent-invocation-terminal-reason invocation)
-                    "interrupted")))
-              (_ (mevedel-agent-runtime--with-execution-results
-                  invocation response))))
-           (callback
-            (mevedel-agent-invocation-runtime-settle-callback invocation))
-           (session (mevedel-agent-invocation-parent-session invocation))
-           (save-path (and session (mevedel-session-save-path session)))
-           (remote-terminal-publication-p
-            (and session
-                 save-path
-                 (progn
-                   (require 'mevedel-session-persistence)
-                   (mevedel-session-persistence-artifact-present-p
-                    session "session.meta.el"))
-                 (mevedel-agent-invocation-transcript-relative-path invocation)
-                 (buffer-live-p
-                  (mevedel-agent-invocation-buffer invocation))
-                 (buffer-live-p
-                  (mevedel-agent-invocation-parent-data-buffer invocation))
-                 (when-let* ((target
-                              (mevedel-session-execution-target session)))
-                   (require 'mevedel-execution-target)
-                   (mevedel-execution-target-remote-p target)))))
+    (let* ((pending
+            (mevedel-agent-invocation-runtime-pending-response invocation))
+           (committed-p
+            (and (listp pending)
+                 (eq 'committed (plist-get pending :phase))))
+           status visible transaction remote-terminal-publication-p)
+      (if committed-p
+          (setq response (plist-get pending :response)
+                event (plist-get pending :event)
+                status (plist-get pending :status)
+                visible (plist-get pending :visible)
+                transaction (plist-get pending :transaction)
+                remote-terminal-publication-p (plist-get pending :remote))
+        (when (and (listp pending) (plist-member pending :response))
+          (setq response (plist-get pending :response)
+                event (plist-get pending :event)))
+        (setq pending (list :response response :event event))
+        (setf (mevedel-agent-invocation-runtime-pending-response invocation)
+              pending)
+        (let* ((event-status
+                (and (listp event)
+                     (plist-get event :mevedel-agent-terminal-status)))
+               (callback
+                (mevedel-agent-invocation-runtime-settle-callback invocation))
+               (session
+                (mevedel-agent-invocation-parent-session invocation))
+               (save-path (and session
+                               (mevedel-session-save-path session))))
+          (setq status (pcase event-status
+                         ('error 'error)
+                         ('aborted 'aborted)
+                         (_ 'completed))
+                visible
+                (pcase status
+                  ('error
+                   (mevedel-agent-runtime--error-response invocation event))
+                  ('aborted
+                   (mevedel-agent-runtime--interrupted-response
+                    invocation
+                    (or (mevedel-agent-invocation-terminal-reason invocation)
+                        "interrupted")))
+                  (_ (mevedel-agent-runtime--with-execution-results
+                      invocation response)))
+                remote-terminal-publication-p
+                (and session
+                     save-path
+                     (progn
+                       (require 'mevedel-session-persistence)
+                       (mevedel-session-persistence-artifact-present-p
+                        session "session.meta.el"))
+                     (mevedel-agent-invocation-transcript-relative-path
+                      invocation)
+                     (buffer-live-p
+                      (mevedel-agent-invocation-buffer invocation))
+                     (buffer-live-p
+                      (mevedel-agent-invocation-parent-data-buffer invocation))
+                     (when-let* ((target
+                                  (mevedel-session-execution-target session)))
+                       (require 'mevedel-execution-target)
+                       (mevedel-execution-target-remote-p target))))
+          (let ((mevedel-agent-runtime--defer-terminal-publication-p
+                 remote-terminal-publication-p))
+            (mevedel-agent-runtime--finalize invocation status))
+          (when callback
+            (let ((mevedel-agent-control-suppress-persistence t))
+              (setq transaction
+                    (funcall callback invocation visible event))))
+          (condition-case err
+              (if remote-terminal-publication-p
+                  (progn
+                    (require 'mevedel-session-persistence)
+                    (mevedel-session-persistence-publish-agent-terminal-state
+                     invocation))
+                (when (consp transaction)
+                  (mevedel-agent-control--commit-session session)))
+            (error
+             (when (functionp (car-safe transaction))
+               (funcall (car transaction)))
+             (signal (car err) (cdr err))))
+          (setq pending
+                (list :response response :event event :phase 'committed
+                      :status status :visible visible
+                      :transaction transaction
+                      :remote remote-terminal-publication-p))
+          (setf (mevedel-agent-invocation-runtime-pending-response invocation)
+                pending)))
+      (when (functionp (cdr-safe transaction))
+        (funcall (cdr transaction)))
       (setf (mevedel-agent-invocation-runtime-settled-p invocation) t
             (mevedel-agent-invocation-runtime-fsm invocation) nil
             (mevedel-agent-invocation-runtime-pending-response invocation) nil)
@@ -545,27 +592,6 @@
            (round
             (* 1000.0
                (float-time (time-subtract (current-time) started-at)))))))
-      (condition-case err
-          (let ((mevedel-agent-runtime--defer-terminal-publication-p
-                 remote-terminal-publication-p))
-            (mevedel-agent-runtime--finalize invocation status))
-        (error
-         (display-warning
-          'mevedel
-          (format "Agent lifecycle finalization failed: %s"
-                  (error-message-string err))
-          :warning)))
-      (when callback
-        (let ((mevedel-agent-control-suppress-persistence
-               remote-terminal-publication-p))
-          (funcall callback invocation visible event)))
-      (when remote-terminal-publication-p
-        (mevedel-agent-runtime--finalize-step
-         invocation 'terminal-publication
-         (lambda ()
-           (require 'mevedel-session-persistence)
-           (mevedel-session-persistence-publish-agent-terminal-state
-            invocation))))
       visible)))
 
 (defun mevedel-agent-runtime--budget-expired (invocation seconds)
@@ -681,31 +707,6 @@ Settle a held provider response once its last owned execution has finished."
       (accept-process-output nil 0.05))
     decision))
 
-(defun mevedel-agent-runtime--run-start-hook
-    (agent-type description prompt invocation)
-  "Run `SubagentStart' for a new retained agent and return its decision."
-  (require 'mevedel-hooks)
-  (let* ((session (mevedel-agent-invocation-parent-session invocation))
-         (workspace (and session (mevedel-session-workspace session)))
-         (decision
-          (mevedel-agent-runtime--run-hook-sync
-           'SubagentStart
-           (mevedel-hooks-event-plist
-            'SubagentStart session workspace
-            :agent-path (mevedel-agent-invocation-path invocation)
-            :role agent-type
-            :description description
-            :prompt prompt
-            :transcript-relative-path
-            (mevedel-agent-invocation-transcript-relative-path invocation))
-           invocation)))
-    (when-let* ((msg (plist-get decision :system-message)))
-      (message "mevedel: %s" msg))
-    (setf (mevedel-agent-invocation-hook-audits invocation)
-          (mevedel-hooks-context-audit-records
-           decision 'SubagentStart 'subagent-context t))
-    decision))
-
 (defun mevedel-agent-runtime--run-prompt-hook (prompt invocation)
   "Run `UserPromptSubmit' for agent PROMPT and return its decision."
   (require 'mevedel-hooks)
@@ -753,32 +754,23 @@ Settle a held provider response once its last owned execution has finished."
             (funcall runner))
         (funcall runner)))))
 
-(defun mevedel-agent-runtime--prepare-turn
-    (agent-type description prompt invocation retained-p
-                pending-hook-context on-hook-context)
-  "Prepare one agent task and return its effective prompt and audits.
-RETAINED-P suppresses the identity start hook.  PENDING-HOOK-CONTEXT belongs
-to this retained conversation; ON-HOOK-CONTEXT records its transition."
-  (let* ((start-decision
-          (and (not retained-p)
-               (mevedel-agent-runtime--run-start-hook
-                agent-type description prompt invocation))))
-    (when (and (plist-member start-decision :continue)
-               (not (plist-get start-decision :continue)))
-      (error "%s" (or (plist-get start-decision :stop-reason)
-                      "SubagentStart hook stopped sub-agent")))
-    (let* ((prompt-decision
-            (mevedel-agent-runtime--run-prompt-hook prompt invocation))
-           (prompt-context
-            (mevedel-hooks-context-entries
-             prompt-decision 'UserPromptSubmit)))
-      (when (and (plist-member prompt-decision :continue)
-                 (not (plist-get prompt-decision :continue))
-                 retained-p on-hook-context)
-        (funcall on-hook-context
-                 (append pending-hook-context prompt-context)))
-      (mevedel-agent-runtime--prepared-turn
-       prompt start-decision prompt-decision pending-hook-context))))
+(defun mevedel-agent-runtime--prepare-followup
+    (prompt invocation pending-hook-context on-hook-context)
+  "Prepare one retained follow-up PROMPT for INVOCATION.
+PENDING-HOOK-CONTEXT belongs to the conversation; ON-HOOK-CONTEXT records a
+blocked transition."
+  (let* ((prompt-decision
+          (mevedel-agent-runtime--run-prompt-hook prompt invocation))
+         (prompt-context
+          (mevedel-hooks-context-entries
+           prompt-decision 'UserPromptSubmit)))
+    (when (and (plist-member prompt-decision :continue)
+               (not (plist-get prompt-decision :continue))
+               on-hook-context)
+      (funcall on-hook-context
+               (append pending-hook-context prompt-context)))
+    (mevedel-agent-runtime--prepared-turn
+     prompt nil prompt-decision pending-hook-context)))
 
 (defun mevedel-agent-runtime--prepared-turn
     (prompt start-decision prompt-decision pending-hook-context)
@@ -966,7 +958,7 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
              (not (mevedel-agent-configuration-p frozen-configuration)))
     (error "Invalid frozen agent configuration"))
   (let ((retained-values (delq nil (list retained-id retained-buffer
-                                          retained-transcript))))
+                                         retained-transcript))))
     (when (and retained-values (/= (length retained-values) 3))
       (error "Retained agent identity requires id, buffer, and transcript")))
   (let* ((retained-p retained-id)
@@ -983,10 +975,11 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
          (invocation (mevedel-agent-invocation-create agent))
          (parent-buffer (current-buffer))
          (session (and (boundp 'mevedel--session) mevedel--session))
-         publication-ready
-         pending-settlement)
+         publication-ready)
     (unless (mevedel-session-p session)
       (error "Agent requires an active mevedel session"))
+    (unless (or retained-p prepared-turn)
+      (error "Initial agent turn requires prepared task"))
     (setf (mevedel-agent-invocation-agent-id invocation) agent-id
           (mevedel-agent-invocation-path invocation) path
           (mevedel-agent-invocation-description invocation) description
@@ -1006,8 +999,7 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
             (if publication-ready
                 (when on-settle
                   (funcall on-settle settled-invocation response event))
-              (setq pending-settlement
-                    (list settled-invocation response event)))))
+              (error "Agent invocation publication is pending"))))
     (when (fboundp 'mevedel-telemetry-record)
       (mevedel-telemetry-record
        session 'agent-dispatch
@@ -1046,10 +1038,11 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
       (let (published-p)
         (condition-case err
             (let ((turn
-                   (or prepared-turn
-                       (mevedel-agent-runtime--prepare-turn
-                        agent-type description prompt invocation retained-p
-                        pending-hook-context on-hook-context))))
+                   (if retained-p
+                       (mevedel-agent-runtime--prepare-followup
+                        prompt invocation pending-hook-context
+                        on-hook-context)
+                     prepared-turn)))
               (when start-hook-audits
                 (setf (mevedel-agent-invocation-hook-audits invocation)
                       start-hook-audits))
@@ -1071,13 +1064,10 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                       agent-type description invocation buffer)))
                 (unless fsm
                   (error "Agent provider request did not start"))
-                (setq published-p t)
                 (when on-invocation
                   (funcall on-invocation invocation))
-                (setq publication-ready t)
-                (when (and pending-settlement on-settle)
-                  (apply on-settle pending-settlement)
-                  (setq pending-settlement nil))
+                (setq published-p t
+                      publication-ready t)
                 (when (fboundp 'mevedel-telemetry-record)
                   (mevedel-telemetry-record
                    session 'agent-request-sent
@@ -1095,6 +1085,10 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                   invocation nil
                   (list :mevedel-agent-terminal-status 'error
                         :error-details (error-message-string err))))
+             (when (mevedel-agent-invocation-runtime-fsm invocation)
+               (mevedel-agent-runtime--finalize invocation 'error)
+               (setf (mevedel-agent-invocation-runtime-settled-p invocation) t
+                     (mevedel-agent-invocation-runtime-fsm invocation) nil))
              (unless retained-p
                (mevedel-agent-runtime-dispatch--abandon-persistence invocation)
                (when (buffer-live-p buffer)

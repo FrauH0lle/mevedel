@@ -59,6 +59,24 @@
     :root temporary-file-directory
     :name "agent-control")))
 
+(defun mevedel-agent-control-test--settle
+    (session record invocation response &optional event)
+  "Settle one test turn through the runtime-owned commit boundary."
+  (when-let* ((transaction
+               (mevedel-agent-control--settle
+                session record invocation response event)))
+    (let (committed)
+      (condition-case err
+          (progn
+            (mevedel-agent-control--commit-session session)
+            (setq committed t)
+            (funcall (cdr transaction)))
+        (error
+         (unless committed
+           (funcall (car transaction)))
+         (signal (car err) (cdr err)))))
+    transaction))
+
 (mevedel-deftest mevedel-agent-control-active-activity-p ()
   ,test
   (test)
@@ -374,18 +392,38 @@
     (should-not
      (mevedel-agent-control-list-agents session "/root/missing"))))
 
-(mevedel-deftest mevedel-agent-control--persist-session ()
+(mevedel-deftest mevedel-agent-control--commit-session ()
   ,test
   (test)
-  :doc "delegates materialized state to the session persistence boundary"
+  :doc "requires a successful materialized persistence commit"
   (let ((session (mevedel-agent-control-test--session))
         seen)
     (setf (mevedel-session-save-path session) temporary-file-directory)
     (cl-letf (((symbol-function
                 'mevedel-session-persistence-save-agent-state)
                (lambda (value) (setq seen value) t)))
-      (should (mevedel-agent-control--persist-session session)))
-    (should (eq session seen)))
+      (should (mevedel-agent-control--commit-session session)))
+    (should (eq session seen))
+    (cl-letf (((symbol-function
+                'mevedel-session-persistence-save-agent-state)
+               (lambda (_value) nil)))
+      (should-error (mevedel-agent-control--commit-session session))))
+  :doc "accepts unmaterialized or explicitly staged state"
+  (let ((session (mevedel-agent-control-test--session)))
+    (should (mevedel-agent-control--commit-session session))
+    (setf (mevedel-session-save-path session) temporary-file-directory)
+    (let ((mevedel-agent-control-suppress-persistence t))
+      (should (mevedel-agent-control--commit-session session)))))
+
+(mevedel-deftest mevedel-agent-control--persist-session ()
+  ,test
+  (test)
+  :doc "keeps observational persistence best effort"
+  (let ((session (mevedel-agent-control-test--session)))
+    (setf (mevedel-session-save-path session) temporary-file-directory)
+    (cl-letf (((symbol-function 'mevedel-agent-control--commit-session)
+               (lambda (_session) (error "Commit unavailable"))))
+      (should-not (mevedel-agent-control--persist-session session))))
   :doc "does nothing before session materialization or while suppressed"
   (let ((session (mevedel-agent-control-test--session)))
     (should-not (mevedel-agent-control--persist-session session))
@@ -432,13 +470,11 @@
                       (stringp (mevedel-agent-record-settled-result record)))))
              (mevedel-session-agent-registry session)))
     (should (zerop (mevedel-agent-control-recover-interrupted session)))
-    (should (= 5 (length (mevedel-session-messages session))))))
+    (should (= 5 (length (mevedel-session-messages session)))))
 
-(mevedel-deftest mevedel-agent-control--recovery-result ()
-  ,test
-  (test)
   :doc "includes useful restored partial output and transcript location"
-  (let* ((buffer (generate-new-buffer " *agent-recovery-partial*"))
+  (let* ((session (mevedel-agent-control-test--session))
+         (buffer (generate-new-buffer " *agent-recovery-partial*"))
          (invocation (mevedel-agent-invocation-create
                       (mevedel-agent-default)))
          (record
@@ -448,11 +484,14 @@
            :conversation-location "agents/partial.chat.org")))
     (unwind-protect
         (progn
+          (setf (mevedel-session-agent-registry session)
+                (list (cons "/root/partial" record)))
           (setf (mevedel-agent-invocation-buffer invocation) buffer)
           (with-current-buffer buffer
             (setq-local mevedel--agent-invocation invocation)
             (insert (propertize "Useful restored work." 'gptel 'response)))
-          (let ((payload (mevedel-agent-control--recovery-result record)))
+          (should (= 1 (mevedel-agent-control-recover-interrupted session)))
+          (let ((payload (mevedel-agent-record-settled-result record)))
             (should (string-match-p "Useful restored work" payload))
             (should (string-match-p "agents/partial.chat.org" payload))))
       (kill-buffer buffer))))
@@ -593,7 +632,7 @@
 (mevedel-deftest mevedel-agent-control--publish-result ()
   ,test
   (test)
-  :doc "queues a workflow-owned RESULT before consuming it after delivery"
+  :doc "durably consumes a workflow RESULT before invoking its handler"
   (let* ((session (mevedel-agent-control-test--session))
          (result '(:type RESULT :sender "/root/review"
                    :recipient "/root" :outcome completed :payload "done"))
@@ -608,16 +647,17 @@
              (setq seen value)
              (setq queued-during-handler
                    (memq value (mevedel-session-messages session)))))))
-    (cl-letf (((symbol-function 'mevedel-agent-control--persist-session)
+    (setf (mevedel-session-save-path session) temporary-file-directory)
+    (cl-letf (((symbol-function 'mevedel-agent-control--commit-session)
                (lambda (_session) (cl-incf persisted))))
       (mevedel-agent-control--publish-result session record result))
     (should (eq result seen))
-    (should queued-during-handler)
+    (should-not queued-during-handler)
     (should (= 2 persisted))
     (should-not (mevedel-agent-record-result-handler record))
     (should-not (mevedel-session-messages session)))
 
-  :doc "falls back to ordinary parent mail when the workflow handler fails"
+  :doc "falls back to durable parent mail when the workflow handler fails"
   (let* ((session (mevedel-agent-control-test--session))
          (queued-during-handler nil)
          (record
@@ -634,11 +674,36 @@
     (cl-letf (((symbol-function 'display-warning)
                (lambda (&rest args) (setq warning args))))
       (mevedel-agent-control--publish-result session record result))
-    (should queued-during-handler)
+    (should-not queued-during-handler)
     (should (eq result (car (mevedel-session-messages session))))
     (should-not (mevedel-agent-record-result-handler record))
     (should (string-match-p "result handler failed"
-                            (cadr warning)))))
+                            (cadr warning))))
+
+  :doc "withholds a successful handler until RESULT consumption commits"
+  (let* ((session (mevedel-agent-control-test--session))
+         (result '(:type RESULT :sender "/root/review"
+                   :recipient "/root" :outcome completed :payload "done"))
+         (calls 0)
+         (commits 0)
+         (record
+          (mevedel-agent-record--create
+           :path "/root/review" :parent-path "/root"
+           :result-handler (lambda (_value) (cl-incf calls)))))
+    (cl-letf (((symbol-function 'mevedel-agent-control--commit-session)
+               (lambda (_session)
+                 (cl-incf commits)
+                 (when (= commits 2)
+                   (error "Consumption commit unavailable")))))
+      (should-error
+       (mevedel-agent-control--publish-result session record result))
+      (should (zerop calls))
+      (should (memq result (mevedel-session-messages session)))
+      (should (mevedel-agent-record-result-handler record))
+      (mevedel-agent-control--publish-result session record result t))
+    (should (= 1 calls))
+    (should-not (mevedel-session-messages session))
+    (should-not (mevedel-agent-record-result-handler record))))
 
 (mevedel-deftest mevedel-agent-control--settle ()
   ,test
@@ -654,10 +719,11 @@
                   :invocation invocation
                   :blockers '((permission-blocked stale)))))
     (setf (mevedel-agent-invocation-transcript-status invocation) 'error)
-    (mevedel-agent-control--settle
+    (mevedel-agent-control-test--settle
      session record invocation "fallback details"
      '(:error-details "Provider failed"))
-    (mevedel-agent-control--settle session record invocation "duplicate")
+    (mevedel-agent-control-test--settle
+     session record invocation "duplicate")
     (let ((result (car (mevedel-session-messages session))))
       (should (= 1 (length (mevedel-session-messages session))))
       (should (eq 'idle (mevedel-agent-record-activity record)))
@@ -681,8 +747,10 @@
            :activity 'running :invocation invocation
            :result-handler (lambda (result) (push result results)))))
     (setf (mevedel-agent-invocation-transcript-status invocation) 'completed)
-    (mevedel-agent-control--settle session record invocation "review result")
-    (mevedel-agent-control--settle session record invocation "duplicate")
+    (mevedel-agent-control-test--settle
+     session record invocation "review result")
+    (mevedel-agent-control-test--settle
+     session record invocation "duplicate")
     (should (= 1 (length results)))
     (should (eq 'completed (plist-get (car results) :outcome)))
     (should (equal "review result" (plist-get (car results) :payload)))
@@ -707,7 +775,8 @@
                   :activity 'running
                   :invocation invocation)))
     (setf (mevedel-agent-invocation-transcript-status invocation) 'completed)
-    (mevedel-agent-control--settle session record invocation payload)
+    (mevedel-agent-control-test--settle
+     session record invocation payload)
     (let* ((message (car (mevedel-session-messages session)))
            (delivered (plist-get message :payload))
            (retained (mevedel-agent-control-settled-result record)))
@@ -721,6 +790,38 @@
       (should (<= (length delivered)
                   mevedel-agent-control--result-limit))
       (should-not (equal payload delivered))))
+
+  :doc "commit failure retains the active turn and withholds RESULT and wake"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation (mevedel-agent-invocation-create
+                      (mevedel-agent-default)))
+         (record (mevedel-agent-record--create
+                  :path "/root/work" :parent-path "/root"
+                  :activity 'running :invocation invocation
+                  :blockers '((waiting live))))
+         reasons)
+    (setf (mevedel-session-save-path session) temporary-file-directory
+          (mevedel-session-agent-root-waiter session)
+          (mevedel-agent-waiter--create
+           :callback (lambda (reason) (push reason reasons)))
+          (mevedel-agent-invocation-transcript-status invocation) 'completed)
+    (dolist (failure '(nil error))
+      (cl-letf (((symbol-function
+                  'mevedel-session-persistence-save-agent-state)
+                 (if (eq failure 'error)
+                     (lambda (&rest _) (error "Injected commit failure"))
+                   (lambda (&rest _) nil))))
+        (should-error
+         (mevedel-agent-control-test--settle
+          session record invocation "retryable result")))
+      (should (eq 'running (mevedel-agent-record-activity record)))
+      (should (eq invocation (mevedel-agent-record-invocation record)))
+      (should (equal '((waiting live))
+                     (mevedel-agent-record-blockers record)))
+      (should-not (mevedel-agent-record-settled-result record))
+      (should-not (mevedel-session-messages session))
+      (should-not reasons)
+      (should (mevedel-session-agent-root-waiter session))))
 
 (mevedel-deftest mevedel-agent-control-settled-result ()
   ,test
@@ -826,7 +927,7 @@
                         'aborted)
                   (let ((response
                          "Agent turn interrupted.\n\nReason: interrupted by /root\n\nPartial response: useful work"))
-                    (mevedel-agent-control--settle
+                    (mevedel-agent-control-test--settle
                      session record seen-invocation response
                      (list :mevedel-agent-terminal-status 'aborted
                            :response response))
@@ -914,13 +1015,13 @@
             (setf (mevedel-agent-invocation-transcript-status
                    seen-invocation)
                   'aborted)
-            (mevedel-agent-control--settle
+            (mevedel-agent-control-test--settle
              session record seen-invocation "interrupted first"
              '(:mevedel-agent-terminal-status aborted
                :response "interrupted first")))))
       (mevedel-agent-control-interrupt session "/root/race"))
     (setf (mevedel-agent-invocation-transcript-status invocation) 'completed)
-    (mevedel-agent-control--settle
+    (mevedel-agent-control-test--settle
      session record invocation "late completion")
     (should (= 1 (length (mevedel-session-messages session))))
     (should (eq 'interrupted
@@ -944,7 +1045,7 @@
             (setf (mevedel-agent-invocation-transcript-status
                    seen-invocation)
                   'completed)
-            (mevedel-agent-control--settle
+            (mevedel-agent-control-test--settle
              session record seen-invocation "completed first")
             "too late")))
       (let ((result
@@ -981,7 +1082,47 @@
     (should (eq record
                 (cdr (assoc "/root/worker"
                             (mevedel-session-agent-registry session)))))
-    (kill-buffer buffer)))
+    (kill-buffer buffer))
+
+  :doc "commit failure restores the reservation and record fields"
+  (let* ((session (mevedel-agent-control-test--session))
+         (record (mevedel-agent-record--create
+                  :path "/root/worker" :activity 'starting
+                  :configuration '(:role "worker")))
+         (invocation (mevedel-agent-invocation-create
+                      (mevedel-agent-default)))
+         (buffer (generate-new-buffer " *agent-control-record-failure*")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) temporary-file-directory
+                (mevedel-session-agent-reservations session)
+                (list (cons "/root/worker" record))
+                (mevedel-agent-invocation-agent-id invocation) "new-id"
+                (mevedel-agent-invocation-path invocation) "/root/worker"
+                (mevedel-agent-invocation-buffer invocation) buffer
+                (mevedel-agent-invocation-transcript-relative-path invocation)
+                "agents/new.chat.org")
+          (dolist (failure '(nil error))
+            (cl-letf (((symbol-function
+                        'mevedel-session-persistence-save-agent-state)
+                       (if (eq failure 'error)
+                           (lambda (&rest _)
+                             (error "Injected commit failure"))
+                         (lambda (&rest _) nil))))
+              (should-error
+               (mevedel-agent-control--record-invocation
+                session record invocation)))
+            (should (eq record
+                        (cdr (assoc
+                              "/root/worker"
+                              (mevedel-session-agent-reservations session)))))
+            (should-not (mevedel-session-agent-registry session))
+            (should (eq 'starting (mevedel-agent-record-activity record)))
+            (should-not (mevedel-agent-record-id record))
+            (should-not (mevedel-agent-record-invocation record))
+            (should (equal '(:role "worker")
+                           (mevedel-agent-record-configuration record)))))
+      (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-agent-control--set-hook-context ()
   ,test
@@ -1127,7 +1268,7 @@
             (should (equal "/root/peer" (plist-get mail :sender)))
             (should (equal "Review the peer's update."
                            (plist-get mail :payload))))
-          (mevedel-agent-control--settle
+          (mevedel-agent-control-test--settle
            session target target-invocation "Peer review complete."))
       (kill-buffer buffer))
     (let ((result (car (mevedel-session-messages session))))
@@ -1238,7 +1379,9 @@
                          "Agent Control" :key "test"
                          :models '(test-model))))
           (setq-local gptel-model 'test-model)
-          (cl-letf (((symbol-function 'mevedel-agent-exec-run)
+          (cl-letf (((symbol-function 'mevedel-version)
+                     (lambda (&rest _) "test"))
+                    ((symbol-function 'mevedel-agent-exec-run)
                      (lambda (_callback role _description child
                                         _buffer &optional _configure)
                        (push role roles)
@@ -1248,6 +1391,11 @@
               (mevedel-agent-control-spawn
                session "worker" "Implement the change."
                (lambda (value) (setq outcome value)))
+              (should-not (plist-get outcome :error))
+              (should
+               (file-exists-p
+                (file-name-concat (mevedel-session-save-path session)
+                                  "session.meta.el")))
               (let ((record (plist-get outcome :record)))
               (should (equal "/root/worker"
                              (mevedel-agent-record-path record)))
@@ -1257,10 +1405,14 @@
             (let* ((parent-invocation (car invocations))
                    (mevedel--agent-invocation parent-invocation)
                    outcome)
-              (mevedel-agent-control-spawn
-               session "research" "Investigate first."
-               (lambda (value) (setq outcome value))
-               :role "explorer")
+              (cl-letf (((symbol-function
+                          'mevedel-session-persistence-save-agent-state)
+                         (lambda (&rest _) t)))
+                (mevedel-agent-control-spawn
+                 session "research" "Investigate first."
+                 (lambda (value) (setq outcome value))
+                 :role "explorer"))
+              (should-not (plist-get outcome :error))
               (let ((nested (plist-get outcome :record)))
               (should (equal "/root/worker/research"
                              (mevedel-agent-record-path nested)))
@@ -1271,8 +1423,11 @@
               (should (equal "explorer" (car roles)))
               (let ((nested-invocation
                      (mevedel-agent-record-invocation nested)))
-                (mevedel-agent-control--settle
-                 session nested nested-invocation "Nested result."))
+                (cl-letf (((symbol-function
+                            'mevedel-session-persistence-save-agent-state)
+                           (lambda (&rest _) t)))
+                  (mevedel-agent-control-test--settle
+                   session nested nested-invocation "Nested result.")))
               (should-not (mevedel-session-messages session))
               (let ((result
                      (car (mevedel-agent-control--mailbox
@@ -1305,7 +1460,7 @@
                     (mevedel-agent-invocation-buffer invocation)
                   (should (= 1 (how-many "Hook-accepted task"
                                          (point-min) (point-max)))))
-                (mevedel-agent-control--settle
+                (mevedel-agent-control-test--settle
                  session record invocation "Hooked result.")))
             (should-error
              (mevedel-agent-control-spawn
@@ -1315,6 +1470,52 @@
              :type 'user-error)
             (should-not (assoc "/root/unknown"
                                (mevedel-session-agent-registry session))))
+          (let (outcome)
+            (cl-letf (((symbol-function
+                        'mevedel-session-persistence-save-agent-state)
+                       (lambda (&rest _)
+                         (error "Injected commit failure"))))
+              (mevedel-agent-control-spawn
+               session "commit_error" "Fail durable publication."
+               (lambda (value) (setq outcome value))))
+            (should (eq 'error (plist-get outcome :outcome)))
+            (should-not (assoc "/root/commit_error"
+                               (mevedel-session-agent-registry session)))
+            (should-not (assoc "/root/commit_error"
+                               (mevedel-session-agent-reservations session))))
+          (let (outcome diagnostics)
+            (cl-letf
+                (((symbol-function 'mevedel-agent-exec-run)
+                  (lambda (_callback _role _description invocation
+                                     _buffer &optional _configure)
+                    (push invocation invocations)
+                    (setf (mevedel-agent-invocation-runtime-fsm invocation)
+                          'provider-request)
+                    'provider-request))
+                 ((symbol-function
+                   'mevedel-session-persistence-save-agent-state)
+                  (lambda (&rest _) t)))
+              (mevedel-test--with-captured-diagnostics diagnostics
+                (mevedel-agent-control-spawn
+                 session "observer_error" "Keep the committed provider."
+                 (lambda (value) (setq outcome value))
+                 :result-handler #'ignore
+                 :on-invocation
+                 (lambda (_invocation)
+                   (error "Injected observer failure")))))
+            (should-not (plist-get outcome :error))
+            (should (eq 'success (plist-get outcome :outcome)))
+            (should (string-match-p "Injected observer failure" diagnostics))
+            (let* ((record (plist-get outcome :record))
+                   (invocation (mevedel-agent-record-invocation record)))
+              (should (eq 'running (mevedel-agent-record-activity record)))
+              (should (eq 'provider-request
+                          (mevedel-agent-invocation-runtime-fsm invocation)))
+              (cl-letf (((symbol-function
+                          'mevedel-session-persistence-save-agent-state)
+                         (lambda (&rest _) t)))
+                (mevedel-agent-control-test--settle
+                 session record invocation "Observer-safe result."))))
           (let ((mevedel-agents--specs
                  '(("explorer" :description "available"))))
             (should-error
@@ -1325,12 +1526,32 @@
              :type 'user-error)
             (should-not (assoc "/root/unavailable"
                                (mevedel-session-agent-registry session))))
-          (let (synchronous-results)
-            (cl-letf (((symbol-function 'mevedel-agent-exec-run)
+          (let (synchronous-results scheduled
+                (commits 0))
+            (cl-letf (((symbol-function 'mevedel-version)
+                       (lambda (&rest _) "test"))
+                      ((symbol-function 'run-at-time)
+                       (lambda (_delay _repeat function &rest args)
+                         (setq scheduled (cons function args))
+                         'fake-terminal-retry))
+                      ((symbol-function 'mevedel-agent-control--commit-session)
+                       (lambda (_session)
+                         (cl-incf commits)
+                         (when (= commits 2)
+                           (error "Injected terminal commit failure"))
+                         t))
+                      ((symbol-function 'mevedel-agent-exec-run)
                      (lambda (callback _role _description child
-                                       _buffer &optional _configure)
+                                       buffer &optional _configure)
                        (push child invocations)
-                       (funcall callback "Synchronous completion.")
+                       (let ((adapter
+                              (mevedel-agent-exec--make-callback
+                               callback "worker" "Complete immediately."
+                               (with-current-buffer buffer (point-min-marker))
+                               (list nil))))
+                         (funcall
+                          adapter "Synchronous completion."
+                          (list :mevedel-agent-invocation child)))
                        'provider-request)))
               (let (outcome)
                 (mevedel-agent-control-spawn
@@ -1338,13 +1559,27 @@
                  (lambda (value) (setq outcome value))
                  :result-handler
                  (lambda (result) (push result synchronous-results)))
+                (should-not (plist-get outcome :error))
                 (let ((record (plist-get outcome :record)))
-                (should (eq 'idle (mevedel-agent-record-activity record)))
-                (should (= 1 (mevedel-agent-control--active-count session)))
-                (should (= 1 (length synchronous-results)))
-                (should (eq 'completed
-                            (plist-get (car synchronous-results) :outcome)))
-                (should-not (mevedel-session-messages session))))))
+                  (should (eq 'running
+                              (mevedel-agent-record-activity record)))
+                  (should scheduled)
+                  (let ((retry scheduled))
+                    (setq scheduled nil)
+                    (apply (car retry) (cdr retry)))
+                  (should (eq 'running
+                              (mevedel-agent-record-activity record)))
+                  (should scheduled)
+                  (let ((retry scheduled))
+                    (setq scheduled nil)
+                    (apply (car retry) (cdr retry)))
+                  (should (eq 'idle (mevedel-agent-record-activity record)))
+                  (should-not scheduled)
+                  (should (= 1 (mevedel-agent-control--active-count session)))
+                  (should (= 1 (length synchronous-results)))
+                  (should (eq 'completed
+                              (plist-get (car synchronous-results) :outcome)))
+                  (should-not (mevedel-session-messages session))))))
           (let (runner-called)
             (cl-letf (((symbol-function
                         'mevedel-agent-conversation-save)
@@ -1490,6 +1725,9 @@
                         captured-focus (plist-get args :focus)
                         summary-callback callback)
                   (lambda () (setq summary-cancelled t))))
+               ((symbol-function
+                 'mevedel-session-persistence-save-agent-state)
+                (lambda (&rest _) t))
                ((symbol-function 'mevedel-agent-exec-run)
                 (lambda (callback &rest _)
                   (push callback provider-callbacks)
@@ -1518,6 +1756,7 @@
             (funcall summary-callback
                      '(:outcome success :summary "## Scope\n- background"
                        :backend test-backend :model test-model :effort high))
+            (should-not (plist-get outcome :error))
             (should (eq 'success (plist-get outcome :outcome)))
             (should (string-match-p "<task-background>"
                                     (get 'mevedel-agent-control-spawn
@@ -1760,7 +1999,31 @@
                     ("/root/missing" "body")))
       (should-error
        (mevedel-agent-control-send-message
-        session (car args) (cadr args))))))
+        session (car args) (cadr args)))))
+
+  :doc "commit failure restores the queue and does not wake its consumer"
+  (let* ((session (mevedel-agent-control-test--session))
+         (record (mevedel-agent-record--create
+                  :id "worker" :path "/root/worker" :activity 'idle))
+         reasons)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record))
+          (mevedel-session-save-path session) temporary-file-directory
+          (mevedel-agent-record-waiter record)
+          (mevedel-agent-waiter--create
+           :callback (lambda (reason) (push reason reasons))))
+    (dolist (failure '(nil error))
+      (cl-letf (((symbol-function
+                  'mevedel-session-persistence-save-agent-state)
+                 (if (eq failure 'error)
+                     (lambda (&rest _) (error "Injected commit failure"))
+                   (lambda (&rest _) nil))))
+        (should-error
+         (mevedel-agent-control-send-message
+          session "/root/worker" "must persist")))
+      (should-not (mevedel-agent-record-mailbox record))
+      (should-not reasons)
+      (should (mevedel-agent-record-waiter record)))))
 
 (mevedel-deftest mevedel-agent-control-wait ()
   ,test
@@ -1788,6 +2051,27 @@
       (should (equal '(mailbox) reasons))
       (apply (car scheduled) (cdr scheduled))
       (should (equal '(mailbox) reasons))))
+
+  :doc "retains the waiter when its callback fails after durable enqueue"
+  (let ((session (mevedel-agent-control-test--session))
+        (attempts 0))
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (&rest _) 'fake-timer)))
+      (mevedel-agent-control-wait
+       session
+       (lambda (_reason)
+         (cl-incf attempts)
+         (when (= attempts 1)
+           (error "Injected delivery failure")))
+       10000)
+      (should-error
+       (mevedel-agent-control-send-message session "/root" "arrived"))
+      (should (= 1 attempts))
+      (should (mevedel-session-agent-root-waiter session))
+      (should (= 1 (length (mevedel-agent-control--mailbox session "/root"))))
+      (should (mevedel-agent-control--wake session "/root" 'mailbox))
+      (should (= 2 attempts))
+      (should-not (mevedel-session-agent-root-waiter session))))
 
   :doc "times out and clamps or defaults out-of-range timeouts"
   (let ((session (mevedel-agent-control-test--session))

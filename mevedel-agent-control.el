@@ -206,12 +206,22 @@ Return the normalized payload stored in the record."
           (mevedel-agent-record-settled-outcome record) outcome)
     payload))
 
+(defun mevedel-agent-control--commit-session (session)
+  "Commit SESSION's materialized agent state or signal an error."
+  (unless mevedel-agent-control-suppress-persistence
+    (when (mevedel-session-save-path session)
+      (require 'mevedel-session-persistence)
+      (unless (mevedel-session-persistence-save-agent-state session)
+        (error "Agent state could not be persisted"))))
+  t)
+
 (defun mevedel-agent-control--persist-session (session)
   "Best-effort persist SESSION's changed agent state."
   (unless mevedel-agent-control-suppress-persistence
     (when (mevedel-session-save-path session)
-      (require 'mevedel-session-persistence)
-      (mevedel-session-persistence-save-agent-state session))))
+      (condition-case nil
+          (mevedel-agent-control--commit-session session)
+        (error nil)))))
 
 (defun mevedel-agent-control-block-turn (session path activity)
   "Block PATH's current turn in SESSION with durable ACTIVITY.
@@ -420,8 +430,8 @@ REASON is the wake outcome, or `cancelled' when omitted."
   "Wake PATH's waiter in SESSION with REASON exactly once."
   (when-let* ((waiter (mevedel-agent-control--waiter session path)))
     (let ((callback (mevedel-agent-waiter-callback waiter)))
-      (mevedel-agent-control-cancel-wait session path reason)
       (funcall callback reason)
+      (mevedel-agent-control-cancel-wait session path reason)
       t)))
 
 (defun mevedel-agent-control--wait-timeout (session path waiter)
@@ -480,13 +490,25 @@ Return the caller path when suspended, and nil after an immediate release."
 
 (defun mevedel-agent-control--enqueue
     (session recipient record &optional wake-reason)
-  "Queue RECORD for RECIPIENT in SESSION and wake a matching wait."
-  (mevedel-agent-control--set-mailbox-queue
-   session recipient
-   (cons record (mevedel-agent-control--mailbox-queue session recipient)))
-  (mevedel-agent-control--wake
-   session recipient (or wake-reason 'mailbox))
-  (mevedel-agent-control--persist-session session))
+  "Durably queue RECORD for RECIPIENT, then wake a matching wait."
+  (let ((previous
+         (mevedel-agent-control--mailbox-queue session recipient))
+        committed)
+    (mevedel-agent-control--set-mailbox-queue
+     session recipient (cons record previous))
+    (condition-case err
+        (progn
+          (mevedel-agent-control--commit-session session)
+          (setq committed t)
+          (unless mevedel-agent-control-suppress-persistence
+            (mevedel-agent-control--wake
+             session recipient (or wake-reason 'mailbox)))
+          record)
+      (error
+       (unless committed
+         (mevedel-agent-control--set-mailbox-queue
+          session recipient previous))
+       (signal (car err) (cdr err))))))
 
 (defun mevedel-agent-control-steer-user
     (session message &optional before-wake metadata)
@@ -619,11 +641,6 @@ unregistered child is a normal transient state, not an error."
       (when location
         (format "\n\nTranscript: %s" location)))))
 
-(defun mevedel-agent-control--recovery-result (record)
-  "Return RECORD's bounded interrupted recovery payload."
-  (mevedel-agent-control--bounded-result
-   record (mevedel-agent-control--recovery-result-text record)))
-
 (defun mevedel-agent-control-recover-interrupted (session)
   "Recover every persisted active turn in SESSION as an interrupted RESULT.
 
@@ -736,37 +753,63 @@ positive decimal strings, or \"summary\"."
                :text)))
         (concat preview suffix)))))
 
-(defun mevedel-agent-control--publish-result (session record result)
+(defun mevedel-agent-control--publish-result
+    (session record result &optional staged)
   "Publish RECORD's canonical RESULT in SESSION.
 
 Every turn first enqueues RESULT for the spawn parent.  A workflow may install
 a one-shot result handler when it owns the parent interaction.  Successful
 workflow delivery consumes that exact queued record; a failed handler leaves
-it queued for ordinary parent delivery."
+it queued for ordinary parent delivery.  When STAGED is non-nil, the caller
+already committed RESULT."
   (let* ((recipient (mevedel-agent-record-parent-path record))
          (handler (mevedel-agent-record-result-handler record)))
-    (mevedel-agent-control--enqueue session recipient result)
-    (when handler
-      (setf (mevedel-agent-record-result-handler record) nil)
-      (condition-case err
-          (progn
-            (funcall handler result)
-            (mevedel-agent-control--set-mailbox-queue
-             session recipient
-             (delq result
-                   (mevedel-agent-control--mailbox-queue session recipient)))
-            (mevedel-agent-control--persist-session session))
-        (error
-         (display-warning
-          'mevedel
-          (format "Agent result handler failed for %s: %s"
-                  (mevedel-agent-record-path record)
-                  (error-message-string err))
-          :warning))))))
+    (unless staged
+      (let ((previous
+             (mevedel-agent-control--mailbox-queue session recipient)))
+        (mevedel-agent-control--set-mailbox-queue
+         session recipient (cons result previous))
+        (condition-case err
+            (mevedel-agent-control--commit-session session)
+          (error
+           (mevedel-agent-control--set-mailbox-queue
+            session recipient previous)
+           (signal (car err) (cdr err))))))
+    (if (not handler)
+        (mevedel-agent-control--wake session recipient 'mailbox)
+      (let ((queued
+             (mevedel-agent-control--mailbox-queue session recipient)))
+        (mevedel-agent-control--set-mailbox-queue
+         session recipient (delq result (copy-sequence queued)))
+        (condition-case err
+            (mevedel-agent-control--commit-session session)
+          (error
+           (mevedel-agent-control--set-mailbox-queue
+            session recipient queued)
+           (signal (car err) (cdr err))))
+        (condition-case err
+            (progn
+              (funcall handler result)
+              (setf (mevedel-agent-record-result-handler record) nil))
+          (error
+           (mevedel-agent-control--set-mailbox-queue
+            session recipient
+            (cons result
+                  (mevedel-agent-control--mailbox-queue session recipient)))
+           (mevedel-agent-control--commit-session session)
+           (setf (mevedel-agent-record-result-handler record) nil)
+           (display-warning
+            'mevedel
+            (format "Agent result handler failed for %s: %s"
+                    (mevedel-agent-record-path record)
+                    (error-message-string err))
+            :warning)
+           (mevedel-agent-control--wake session recipient 'mailbox)))))))
 
 (defun mevedel-agent-control--settle
     (session record invocation response &optional event)
-  "Settle RECORD's INVOCATION in SESSION from RESPONSE and terminal EVENT."
+  "Stage RECORD's terminal RESPONSE and EVENT in SESSION.
+Return rollback and post-commit delivery closures for INVOCATION."
   (when (and (eq invocation (mevedel-agent-record-invocation record))
              (mevedel-agent-control--active-p record))
     (let* ((outcome
@@ -782,23 +825,50 @@ it queued for ordinary parent delivery."
                 (or (and (listp event) (plist-get event :error-details))
                     (mevedel-agent-invocation-terminal-reason invocation)
                     "Agent turn failed")
-              response)))
-      (setq payload
-            (mevedel-agent-control--record-settled-result
-             record outcome payload))
-      (setf (mevedel-agent-record-activity record) 'idle)
-      (setf (mevedel-agent-record-invocation record) nil)
-      (setf (mevedel-agent-record-blockers record) nil)
-      (mevedel-agent-control-cancel-wait
-       session (mevedel-agent-record-path record))
-      (mevedel-agent-control--publish-result
-       session record
-       (list :type 'RESULT
-             :sender (mevedel-agent-record-path record)
-             :recipient (mevedel-agent-record-parent-path record)
-             :outcome outcome
-             :payload (mevedel-agent-control--bounded-result record payload)
-             :timestamp (current-time))))))
+              response))
+           (recipient (mevedel-agent-record-parent-path record))
+           (previous-queue
+            (mevedel-agent-control--mailbox-queue session recipient))
+           (previous-activity (mevedel-agent-record-activity record))
+           (previous-invocation (mevedel-agent-record-invocation record))
+           (previous-blockers (mevedel-agent-record-blockers record))
+           (previous-result (mevedel-agent-record-settled-result record))
+           (previous-outcome (mevedel-agent-record-settled-outcome record))
+           result)
+      (cl-labels
+          ((rollback ()
+             (setf (mevedel-agent-record-activity record) previous-activity
+                   (mevedel-agent-record-invocation record)
+                   previous-invocation
+                   (mevedel-agent-record-blockers record) previous-blockers
+                   (mevedel-agent-record-settled-result record)
+                   previous-result
+                   (mevedel-agent-record-settled-outcome record)
+                   previous-outcome)
+             (mevedel-agent-control--set-mailbox-queue
+              session recipient previous-queue))
+           (deliver ()
+             (mevedel-agent-control-cancel-wait
+              session (mevedel-agent-record-path record))
+             (mevedel-agent-control--publish-result
+              session record result t)))
+        (setq payload
+              (mevedel-agent-control--record-settled-result
+               record outcome payload))
+        (setf (mevedel-agent-record-activity record) 'idle
+              (mevedel-agent-record-invocation record) nil
+              (mevedel-agent-record-blockers record) nil)
+        (setq result
+              (list :type 'RESULT
+                    :sender (mevedel-agent-record-path record)
+                    :recipient recipient
+                    :outcome outcome
+                    :payload
+                    (mevedel-agent-control--bounded-result record payload)
+                    :timestamp (current-time)))
+        (mevedel-agent-control--set-mailbox-queue
+         session recipient (cons result previous-queue))
+        (cons #'rollback #'deliver)))))
 
 (defun mevedel-agent-control--record-invocation
     (session record invocation)
@@ -807,32 +877,61 @@ it queued for ordinary parent delivery."
                  (mevedel-agent-record-path record))
     (error "Agent invocation path mismatch: %s"
            (mevedel-agent-invocation-path invocation)))
-  (setf (mevedel-agent-record-id record)
-        (mevedel-agent-invocation-agent-id invocation))
-  (mevedel-agent-control--clear-settled-result record)
-  (setf (mevedel-agent-record-invocation record) invocation)
-  (setf (mevedel-agent-record-blockers record) nil)
-  (setf (mevedel-agent-record-conversation-buffer record)
-        (mevedel-agent-invocation-buffer invocation))
-  (setf (mevedel-agent-record-conversation-location record)
-        (mevedel-agent-invocation-transcript-relative-path invocation))
-  (setf (mevedel-agent-record-configuration record)
-        (mevedel-agent-invocation-frozen-configuration invocation))
   (let* ((path (mevedel-agent-record-path record))
          (reservation
           (assoc path (mevedel-session-agent-reservations session)))
-         (published (assoc path (mevedel-session-agent-registry session))))
-    (cond
-     (reservation
+         (published (assoc path (mevedel-session-agent-registry session)))
+         (previous-reservations
+          (mevedel-session-agent-reservations session))
+         (previous-registry (mevedel-session-agent-registry session))
+         (previous
+          (list (mevedel-agent-record-id record)
+                (mevedel-agent-record-configuration record)
+                (mevedel-agent-record-activity record)
+                (mevedel-agent-record-conversation-location record)
+                (mevedel-agent-record-conversation-buffer record)
+                (mevedel-agent-record-invocation record)
+                (mevedel-agent-record-blockers record)
+                (mevedel-agent-record-settled-result record)
+                (mevedel-agent-record-settled-outcome record))))
+    (unless (or reservation (eq (cdr published) record))
+      (error "Agent record is not reserved or published: %s" path))
+    (setf (mevedel-agent-record-id record)
+          (mevedel-agent-invocation-agent-id invocation)
+          (mevedel-agent-record-configuration record)
+          (mevedel-agent-invocation-frozen-configuration invocation)
+          (mevedel-agent-record-activity record) 'running
+          (mevedel-agent-record-conversation-location record)
+          (mevedel-agent-invocation-transcript-relative-path invocation)
+          (mevedel-agent-record-conversation-buffer record)
+          (mevedel-agent-invocation-buffer invocation)
+          (mevedel-agent-record-invocation record) invocation
+          (mevedel-agent-record-blockers record) nil
+          (mevedel-agent-record-settled-result record) nil
+          (mevedel-agent-record-settled-outcome record) nil)
+    (when reservation
       (mevedel-session--set-agent-reservations
-       session
-       (assoc-delete-all path (mevedel-session-agent-reservations session)))
+       session (assoc-delete-all path previous-reservations))
       (mevedel-session--set-agent-registry
-       session
-       (cons (cons path record)
-             (mevedel-session-agent-registry session))))
-     ((not (eq (cdr published) record))
-      (error "Agent record is not reserved or published: %s" path)))))
+       session (cons (cons path record) previous-registry)))
+    (condition-case err
+        (mevedel-agent-control--commit-session session)
+      (error
+       (mevedel-session--set-agent-reservations
+        session previous-reservations)
+       (mevedel-session--set-agent-registry session previous-registry)
+       (setf (mevedel-agent-record-id record) (nth 0 previous)
+             (mevedel-agent-record-configuration record) (nth 1 previous)
+             (mevedel-agent-record-activity record) (nth 2 previous)
+             (mevedel-agent-record-conversation-location record)
+             (nth 3 previous)
+             (mevedel-agent-record-conversation-buffer record)
+             (nth 4 previous)
+             (mevedel-agent-record-invocation record) (nth 5 previous)
+             (mevedel-agent-record-blockers record) (nth 6 previous)
+             (mevedel-agent-record-settled-result record) (nth 7 previous)
+             (mevedel-agent-record-settled-outcome record) (nth 8 previous))
+       (signal (car err) (cdr err))))))
 
 (defun mevedel-agent-control--set-hook-context (record entries)
   "Replace RECORD's pending hook context with a copy of ENTRIES."
@@ -874,9 +973,6 @@ it queued for ordinary parent delivery."
            (apply-partially
             #'mevedel-agent-control--settle session record))
         (error "Agent provider request did not start")))
-    (when (eq (mevedel-agent-record-activity record) 'starting)
-      (setf (mevedel-agent-record-activity record) 'running))
-    (mevedel-agent-control--persist-session session)
     record))
 
 (cl-defun mevedel-agent-control-followup
@@ -1025,7 +1121,15 @@ idempotent cancellation thunk for the unpublished preparation transaction."
                              session record invocation)
                             (setq committed t)
                             (when on-invocation
-                              (funcall on-invocation invocation)))
+                              (condition-case err
+                                  (funcall on-invocation invocation)
+                                (error
+                                 (display-warning
+                                  'mevedel
+                                  (format
+                                   "Agent invocation observer failed: %s"
+                                   (error-message-string err))
+                                  :warning)))))
                           :on-settle
                           (apply-partially
                            #'mevedel-agent-control--settle session record))
@@ -1033,10 +1137,6 @@ idempotent cancellation thunk for the unpublished preparation transaction."
                      (unless (mevedel-agent-record-conversation-location
                               record)
                        (error "Agent conversation could not be persisted"))
-                     (when (eq (mevedel-agent-record-activity record)
-                               'starting)
-                       (setf (mevedel-agent-record-activity record) 'running))
-                     (mevedel-agent-control--persist-session session)
                      (settle (list :outcome 'success
                                    :record record
                                    :summary-metadata summary-metadata)))

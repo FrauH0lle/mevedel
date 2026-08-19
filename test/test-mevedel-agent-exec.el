@@ -255,6 +255,49 @@ fire-count and payload."
 							            "aborted by the user"
 							            (plist-get event :response)))))
 
+                 :doc "terminal bookkeeping errors become one structured error event"
+                 (mevedel-agent-exec-test--with-callback cb
+                                                         (funcall cb "answer"
+                                                                  (list :transformer
+                                                                        (lambda (_text)
+                                                                          (error "Broken transformer"))))
+                                                         (should (= 1 (length fired)))
+                                                         (let ((event (car (car fired))))
+                                                           (should (eq 'error
+                                                                       (plist-get
+                                                                        event :mevedel-agent-terminal-status)))
+                                                           (should (string-match-p
+                                                                    "Broken transformer"
+                                                                    (plist-get event :error-details)))))
+
+                 :doc "a rejected terminal handoff stays pending for one later retry"
+                 (let* ((attempts 0)
+                        (delivered nil)
+                        scheduled
+                        (main-cb
+                         (lambda (value)
+                           (cl-incf attempts)
+                           (if (= attempts 1)
+                               (error "Commit unavailable")
+                             (setq delivered value))))
+                        (inv (mevedel-agent-invocation--create
+                              :path "/root/test_agent"
+                              :agent (mevedel-agent--create :name "explorer")))
+                        (cb (mevedel-agent-exec--make-callback
+                             main-cb "explorer" "Test task"
+                             (point-min-marker) (list "")))
+                        (info (list :stream t :mevedel-agent-invocation inv)))
+                   (cl-letf (((symbol-function 'run-at-time)
+                              (lambda (_delay _repeat function &rest args)
+                                (setq scheduled (cons function args))
+                                'retry-timer)))
+                     (funcall cb t info)
+                     (should (= 1 attempts))
+                     (should-not delivered)
+                     (apply (car scheduled) (cdr scheduled)))
+                   (should (= 2 attempts))
+                   (should (equal "" delivered)))
+
 
 		 )
 
