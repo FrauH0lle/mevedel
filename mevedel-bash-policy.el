@@ -26,15 +26,6 @@
     "-fprintf" "-ok" "-okdir")
   "Find options that mutate, execute commands, or write files.")
 
-(defconst mevedel-bash-policy--safe-git-global-options
-  '("--literal-pathspecs" "--no-pager" "--no-replace-objects"
-    "--glob-pathspecs" "--noglob-pathspecs" "--icase-pathspecs")
-  "Git global options accepted before a read-only subcommand.")
-
-(defconst mevedel-bash-policy--unsafe-git-subcommand-options
-  '("--exec" "--ext-diff" "--output" "--textconv")
-  "Git subcommand options that write or affect helper execution.")
-
 (defun mevedel-bash-policy--base64-read-only-p (argv)
   "Return non-nil when base64 ARGV has no output-file option."
   (not
@@ -63,49 +54,6 @@
           (string-prefix-p "--hostname-bin=" argument)
           (string-prefix-p "--pre=" argument)))
     (cdr argv))))
-
-(defun mevedel-bash-policy--git-unsafe-subcommand-option-p (argument)
-  "Return non-nil when Git subcommand ARGUMENT has an unsafe effect."
-  (or (member argument mevedel-bash-policy--unsafe-git-subcommand-options)
-      (string-prefix-p "--exec=" argument)
-      (string-prefix-p "--output=" argument)))
-
-(defun mevedel-bash-policy--git-branch-read-only-p (arguments)
-  "Return non-nil when Git branch ARGUMENTS describe only a query."
-  (or (null arguments)
-      (and
-       (cl-some
-        (lambda (argument)
-          (or (member argument
-                      '("--all" "--list" "--remotes" "--show-current"
-                        "--verbose" "-a" "-l" "-r" "-v" "-vv"))
-              (string-prefix-p "--format=" argument)))
-        arguments)
-       (cl-every
-        (lambda (argument)
-          (or (member argument
-                      '("--all" "--list" "--remotes" "--show-current"
-                        "--verbose" "-a" "-l" "-r" "-v" "-vv"))
-              (string-prefix-p "--format=" argument)))
-        arguments))))
-
-(defun mevedel-bash-policy--git-read-only-p (argv)
-  "Return non-nil when Git ARGV is a recognized inspection command."
-  (let ((remaining (cdr argv))
-        global-options)
-    (while (and remaining (string-prefix-p "-" (car remaining)))
-      (push (pop remaining) global-options))
-    (let ((subcommand (pop remaining)))
-      (and (cl-every
-            (lambda (option)
-              (member option mevedel-bash-policy--safe-git-global-options))
-            global-options)
-           (member subcommand '("branch" "diff" "log" "show" "status"))
-           (not (cl-some
-                 #'mevedel-bash-policy--git-unsafe-subcommand-option-p
-                 remaining))
-           (or (not (string-equal subcommand "branch"))
-               (mevedel-bash-policy--git-branch-read-only-p remaining))))))
 
 (defun mevedel-bash-policy--sed-address-p (program)
   "Return non-nil when PROGRAM is one numeric print address."
@@ -154,8 +102,6 @@
            (mevedel-bash-policy--base64-read-only-p argv))
           ((string-equal command "find")
            (mevedel-bash-policy--find-read-only-p argv))
-          ((string-equal command "git")
-           (mevedel-bash-policy--git-read-only-p argv))
           ((string-equal command "rg")
            (mevedel-bash-policy--rg-read-only-p argv))
           ((string-equal command "sed")

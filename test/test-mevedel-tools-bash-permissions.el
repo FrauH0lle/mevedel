@@ -1866,24 +1866,24 @@ the decision log identifies complete confinement bypass authority"
 \`mevedel-tools--check-bash-permission' allows safe inspection variants"
   (let ((mevedel-permission-rules nil))
     (dolist (command
-             '("git status"
-               "git --no-pager log -1"
-               "git diff -p"
-               "git show HEAD"
-               "git branch"
-               "git branch --show-current"
-               "find . -name '*.el'"
+             '("find . -name '*.el'"
                "rg TODO src"
                "base64 file"
                "sed -n 1,5p file"
                "awk '{print $1}' file"))
       (should (eq 'allow
                   (mevedel-tools--check-bash-permission command)))))
-  :doc "argument-aware unsafe policies:
-\`mevedel-tools--check-bash-permission' asks for effectful command variants"
+  :doc "argument-aware unsafe or unproven policies:
+\`mevedel-tools--check-bash-permission' asks for unproven command variants"
   (let ((mevedel-permission-rules nil))
     (dolist (command
-             '("git diff --output=file"
+             '("git status"
+               "git --no-pager log -1"
+               "git diff -p"
+               "git show HEAD"
+               "git branch"
+               "git branch --show-current"
+               "git diff --output=file"
                "git -c core.pager=cat log"
                "git --paginate log"
                "git branch new-name"
@@ -2110,7 +2110,7 @@ for effects despite reusable authority"
     (should
      (eq 'allow
          (mevedel-tools--check-bash-permission
-          "git status" :permission-context context)))
+          "rg TODO" :permission-context context)))
     (should
      (eq 'ask
          (mevedel-tools--check-bash-permission

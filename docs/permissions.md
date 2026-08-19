@@ -341,12 +341,13 @@ normally configured Bash Tree-sitter grammar when available and a conservative
 scanner otherwise.  Redirections, substitutions, expansions, assignments,
 subshells, here-documents, control flow, parse errors, and unsupported operators
 are complex.  A dangerous component takes precedence in a compound request.
-Read-only classification uses argument-aware built-in policies.  Git status,
-log, diff, show, and query-only branch forms are recognized only without
-output, configuration, pager, helper-execution, or mutation options.  Find,
-ripgrep, base64, sed, and awk likewise reject deletion, helper execution,
-output-file options, and unrecognized programs.  Safe forms need no broad
-default allow patterns; variants outside these narrow policies remain unknown.
+Read-only classification uses argument-aware built-in policies. Git has no
+built-in read-only classification because repository and system configuration
+can attach helper processes to inspection commands; it requires explicit Bash
+authority even when its argv looks read-only. Find, ripgrep, base64, sed, and
+awk reject deletion, helper execution, output-file options, and unrecognized
+programs. Safe forms need no broad default allow patterns; variants outside
+these narrow policies remain unknown.
 Bash keeps its specialized permission entry and controls, but an `ask` passes
 through the pipeline's shared `PermissionRequest` boundary before that entry
 is admitted.
