@@ -328,21 +328,29 @@ before falling back to its captured committed manifest; readers never treat
 the fixed caches as authority.
 
 Cooperative control transfer uses immutable generation-specific request and
-decision records below `.lease/requests/`. A request names the lease
-generation at which it was filed; the owner's generation legitimately
-advances while it is pending (settling the durable mutation latch and
-publication both rotate the continuously owned lease), so the owner polls
-the newest request at or below its current generation and pairs the
-decision with the request's own generation. A request must still name the
+decision records below `.lease/requests/`. Each lease records its open transfer
+generation. Ordinary rotations preserve it, so every contender uses the same
+exclusive request path even when a lease rotation lands between lookup and
+creation. A successful rejection rotation opens the next transfer generation;
+the decision alone does not. The owner pairs a decision with that request's
+generation, and the pending request remains the only requester across ordinary
+lease rotations. A request must still name the
 current lease's client as its owner, so one left over from an earlier
 ownership cannot cross a release. Granting a request does not move
 authority: the owner drains existing work, commits one final publication, and
 releases with a short requester-only fence. New mutation admission is refused
 while draining; the named requester acquires only after observing the released
 successor, then reloads the committed sidecar and transcript before its buffer
-becomes writable. A failed refresh releases the new lease and leaves the
-requester read-only. Transfer state is transient session state and is not
-serialized in the sidecar. A view polls that state every
+becomes writable. The requester also reads its exact immutable decision, so a
+rejection ends the pending state and exposes a fresh request action. The fence
+records the later generation actually released, while retaining the request's
+identity; retries therefore remain idempotent after the owner's normal
+generation drift. A failed refresh releases the new lease and leaves the
+requester read-only. Sidecar, transcript, target, and instruction restoration
+are staged before the live session or buffer advances, so a failed follower
+refresh remains retryable. View-owned drain predicates survive committed-state
+adoption. Transfer state is transient session state and is not serialized in
+the sidecar. A view polls that state every
 `mevedel-view-control-transfer-poll-seconds`, or every
 `mevedel-view-control-transfer-remote-poll-seconds` when the session lives on a
 target; each poll reads the lease head, the target clock, and the mailbox, so

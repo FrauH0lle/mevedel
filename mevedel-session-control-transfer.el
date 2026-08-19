@@ -1,4 +1,4 @@
-;;; mevedel-session-control-transfer.el --- transfer coordination -*- lexical-binding: t; -*-
+;;; mevedel-session-control-transfer.el -- Transfer coordination -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
@@ -9,9 +9,78 @@
 
 ;;; Code:
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-active-turn-p
+                  "mevedel-agent-control" (session))
+
+;; `mevedel-execution'
+(declare-function mevedel-execution-session-live-p
+                  "mevedel-execution" (session))
+(declare-function mevedel-execution-unsettled-mutation-p
+                  "mevedel-execution" (session))
+
+;; `mevedel-overlays'
+(declare-function mevedel--instruction-state-rollback
+                  "mevedel-overlays" (workspace))
+
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-lease-acquire
+                  "mevedel-session-durability"
+                  (session-dir buffer-name &optional session))
+(declare-function mevedel-session-durability-lease-release
+                  "mevedel-session-durability"
+                  (session-dir &optional session))
+(declare-function mevedel-session-durability-publication-head
+                  "mevedel-session-durability" (session-dir))
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--apply-read-only-mode
+                  "mevedel-session-persistence" (buffer &optional reason))
+(declare-function mevedel-session-persistence--check-target-incarnation
+                  "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence--copy-session-state
+                  "mevedel-session-persistence" (from to))
+(declare-function mevedel-session-persistence--load-instructions
+                  "mevedel-session-persistence"
+                  (session buffer &optional turn directive-records
+                           preserve-directives-p))
+(declare-function mevedel-session-persistence--segment-path
+                  "mevedel-session-persistence" (save-path segment))
+(declare-function mevedel-session-persistence-deserialize
+                  "mevedel-session-persistence" (plist workspace))
+(declare-function mevedel-session-persistence-load-sidecar
+                  "mevedel-session-persistence" (path))
+(declare-function mevedel-session-persistence-read-artifact
+                  "mevedel-session-persistence"
+                  (session logical &optional committed-only))
+(declare-function mevedel-session-persistence-save
+                  "mevedel-session-persistence"
+                  (session buffer &optional settled force))
+
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-read
+                  "mevedel-session-publication" (session-dir))
+
+;; `mevedel-session-transfer'
+(declare-function mevedel-session-transfer-decide
+                  "mevedel-session-transfer" (session decision))
+(declare-function mevedel-session-transfer-observe-decision
+                  "mevedel-session-transfer" (session request))
+(declare-function mevedel-session-transfer-poll
+                  "mevedel-session-transfer" (session))
+(declare-function mevedel-session-transfer-request
+                  "mevedel-session-transfer" (session &optional label))
+(declare-function mevedel-session-transfer-release
+                  "mevedel-session-transfer" (session))
+
 ;; `mevedel-structs'
 (declare-function mevedel-request-active-p
                   "mevedel-structs" (&optional buffer))
+(declare-function mevedel-session-adopt-committed-state
+                  "mevedel-structs"
+                  (session workspace save-path lease lease-renewal-timer
+                           publication control-transfer control-transfer-drains
+                           root-buffer))
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-control-transfer-drains
@@ -20,14 +89,12 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-set-execution-target
-                  "mevedel-structs" (session target))
 (declare-function mevedel-session-lease
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-lease-renewal-timer
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-publication
-                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-p
+                  "mevedel-structs" (cl-x))
 (declare-function mevedel-session-pending-input-p
                   "mevedel-structs" (session))
 (declare-function mevedel-session-pending-plan-approval
@@ -36,32 +103,38 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-queue
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-publication
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-publication-active-p
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-p
-                  "mevedel-structs" (cl-x))
-(declare-function mevedel-session-set-control-transfer-drains
-                  "mevedel-structs" (session predicates))
-(declare-function mevedel-session-set-control-transfer
-                  "mevedel-structs" (session transfer))
 (declare-function mevedel-session-root-buffer
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-adopt-committed-state
-                  "mevedel-structs"
-                  (session workspace save-path lease lease-renewal-timer
-                           publication control-transfer root-buffer))
+(declare-function mevedel-session-set-control-transfer
+                  "mevedel-structs" (session transfer))
+(declare-function mevedel-session-set-control-transfer-drains
+                  "mevedel-structs" (session predicates))
+(declare-function mevedel-session-set-execution-target
+                  "mevedel-structs" (session target))
 (declare-function mevedel-session-set-root-buffer
                   "mevedel-structs" (session buffer))
-(declare-function mevedel-session-save-path
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-transcript-restore'
+(declare-function mevedel-transcript-restore-gptel-state
+                  "mevedel-transcript-restore" ())
+
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p
+                  "mevedel-transport" (&optional path))
 
 (defcustom mevedel-session-follow-published t
   "Whether a non-owner session buffer follows the owner's committed state.
@@ -90,70 +163,6 @@ with `mevedel-toggle-follow'."
 (defvar mevedel-session-control-transfer--presentations
   (make-hash-table :test #'eq :weakness 'key)
   "Registered transient presentation buffers keyed by session.")
-
-;; `mevedel-agent-control'
-(declare-function mevedel-agent-control-active-turn-p
-                  "mevedel-agent-control" (session))
-
-;; `mevedel-execution'
-(declare-function mevedel-execution-session-live-p
-                  "mevedel-execution" (session))
-(declare-function mevedel-execution-unsettled-mutation-p
-                  "mevedel-execution" (session))
-
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--apply-read-only-mode
-                  "mevedel-session-persistence" (buffer &optional reason))
-(declare-function mevedel-session-persistence--check-target-incarnation
-                  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence--copy-session-state
-                  "mevedel-session-persistence" (from to))
-(declare-function mevedel-session-persistence--load-instructions
-                  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence--segment-path
-                  "mevedel-session-persistence" (save-path segment))
-(declare-function mevedel-session-persistence-read-artifact
-                  "mevedel-session-persistence" (session logical &optional required))
-(declare-function mevedel-session-persistence-deserialize
-                  "mevedel-session-persistence" (plist workspace))
-(declare-function mevedel-session-persistence-load-sidecar
-                  "mevedel-session-persistence" (path))
-(declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence" (session buffer &optional settled))
-(declare-function mevedel-session-persistence--sidecar-path
-                  "mevedel-session-persistence" (save-path))
-
-;; `mevedel-session-durability'
-(declare-function mevedel-session-durability-lease-acquire
-                  "mevedel-session-durability"
-                  (session-dir buffer-name &optional session))
-(declare-function mevedel-session-durability-lease-release
-                  "mevedel-session-durability"
-                  (session-dir &optional session))
-(declare-function mevedel-session-durability-publication-head
-                  "mevedel-session-durability" (session-dir))
-
-;; `mevedel-transcript-restore'
-(declare-function mevedel-transcript-restore-gptel-state
-                  "mevedel-transcript-restore" ())
-
-;; `mevedel-session-publication'
-(declare-function mevedel-session-publication-read
-                  "mevedel-session-publication" (session-dir))
-
-;; `mevedel-session-transfer'
-(declare-function mevedel-session-transfer-request
-                  "mevedel-session-transfer" (session &optional label))
-(declare-function mevedel-session-transfer-poll
-                  "mevedel-session-transfer" (session))
-(declare-function mevedel-session-transfer-decide
-                  "mevedel-session-transfer" (session decision))
-(declare-function mevedel-session-transfer-release
-                  "mevedel-session-transfer" (session))
-
-;; `mevedel-transport'
-(declare-function mevedel-transport-busy-p
-                  "mevedel-transport" (&optional path))
 
 (defun mevedel-session-control-transfer-register-observer
     (session observer)
@@ -405,6 +414,87 @@ owner's side repoints the visited file here too."
       (set-buffer-modified-p nil)
       (set-visited-file-modtime))))
 
+(defun mevedel-session-control-transfer--stage-session
+    (session refreshed publication buffer)
+  "Attach SESSION's live runtime owners to REFRESHED for staged adoption."
+  (mevedel-session-set-execution-target
+   refreshed
+   (when-let ((target (mevedel-session-execution-target session)))
+     (copy-sequence target)))
+  (mevedel-session-adopt-committed-state
+   refreshed
+   (mevedel-session-workspace session)
+   (mevedel-session-save-path session)
+   (mevedel-session-lease session)
+   (mevedel-session-lease-renewal-timer session)
+   publication
+   (mevedel-session-control-transfer session)
+   (mevedel-session-control-transfer-drains session)
+   buffer)
+  refreshed)
+
+(defun mevedel-session-control-transfer--install-staged-segment
+    (buffer staging-buffer)
+  "Install STAGING-BUFFER into BUFFER, restoring BUFFER if a hook fails."
+  (let ((original (generate-new-buffer " *mevedel-transfer-original*"))
+        (file-name (buffer-local-value 'buffer-file-name buffer))
+        (file-truename (buffer-local-value 'buffer-file-truename buffer))
+        (directory (buffer-local-value 'default-directory buffer))
+        (coding (buffer-local-value 'buffer-file-coding-system buffer))
+        (modified (with-current-buffer buffer (buffer-modified-p)))
+        (modtime (with-current-buffer buffer (visited-file-modtime)))
+        (point (with-current-buffer buffer (point)))
+        (narrowing
+         (with-current-buffer buffer
+           (and (buffer-narrowed-p) (cons (point-min) (point-max))))))
+    (unwind-protect
+        (progn
+          (with-current-buffer original
+            (insert
+             (with-current-buffer buffer
+               (save-restriction
+                 (widen)
+                 (buffer-substring (point-min) (point-max))))))
+          (condition-case err
+              (with-current-buffer buffer
+                (save-restriction
+                  (widen)
+                  (let ((inhibit-read-only t))
+                    (setq buffer-file-name
+                          (buffer-local-value
+                           'buffer-file-name staging-buffer)
+                          buffer-file-truename nil
+                          default-directory
+                          (buffer-local-value
+                           'default-directory staging-buffer)
+                          buffer-file-coding-system
+                          (buffer-local-value
+                           'buffer-file-coding-system staging-buffer))
+                    (replace-buffer-contents staging-buffer)
+                    (set-buffer-modified-p nil)
+                    (set-visited-file-modtime))))
+            (error
+             (with-current-buffer buffer
+               (save-restriction
+                 (widen)
+                 (let ((inhibit-modification-hooks t)
+                       (inhibit-read-only t))
+                   (setq buffer-file-name file-name
+                         buffer-file-truename file-truename
+                         default-directory directory
+                         buffer-file-coding-system coding)
+                   (replace-buffer-contents original)
+                   (set-buffer-modified-p modified)
+                   (set-visited-file-modtime modtime)
+                   (when narrowing
+                     (narrow-to-region (car narrowing) (cdr narrowing)))
+                   (goto-char (min point (point-max))))))
+             (signal (car err) (cdr err)))))
+      (when (buffer-live-p original)
+        (with-current-buffer original
+          (set-buffer-modified-p nil))
+        (kill-buffer original)))))
+
 (defun mevedel-session-control-transfer--follow-published
     (session buffer &optional force)
   "Advance read-only BUFFER to SESSION's newest committed publication.
@@ -435,10 +525,6 @@ conflict on the user's behalf."
                              (plist-get (mevedel-session-publication session)
                                         :head))))
         (let* ((workspace (mevedel-session-workspace session))
-               (target (mevedel-session-execution-target session))
-               (lease (mevedel-session-lease session))
-               (timer (mevedel-session-lease-renewal-timer session))
-               (transfer (mevedel-session-control-transfer session))
                (publication (mevedel-session-publication-read save-path))
                (sidecar
                 (and publication
@@ -449,18 +535,27 @@ conflict on the user's behalf."
                      (plist-get
                       (mevedel-session-persistence-deserialize
                        sidecar workspace)
-                      :session))))
+                      :session)))
+               (staging-buffer
+                (and refreshed
+                     (generate-new-buffer " *mevedel-follow-staging*"))))
           (when refreshed
-            (mevedel-session-persistence--copy-session-state refreshed session)
-            (mevedel-session-set-execution-target session target)
-            ;; The follower holds no lease and runs no renewal timer; adopting
-            ;; committed state must not invent either.
-            (mevedel-session-adopt-committed-state
-             session workspace save-path lease timer publication transfer
-             buffer)
-            (mevedel-session-control-transfer--insert-committed-segment
-             session buffer)
-            t))))))
+            (unwind-protect
+                (progn
+                  (mevedel-session-control-transfer--stage-session
+                   session refreshed publication staging-buffer)
+                  (mevedel-session-control-transfer--insert-committed-segment
+                   refreshed staging-buffer)
+                  (mevedel-session-control-transfer--install-staged-segment
+                   buffer staging-buffer)
+                  (mevedel-session-persistence--copy-session-state
+                   refreshed session)
+                  (mevedel-session-set-root-buffer session buffer)
+                  t)
+              (when (buffer-live-p staging-buffer)
+                (with-current-buffer staging-buffer
+                  (set-buffer-modified-p nil))
+                (kill-buffer staging-buffer)))))))))
 
 (defun mevedel-session-control-transfer--adopt-control (session buffer)
   "Adopt SESSION's committed state into BUFFER under a freshly held lease.
@@ -469,14 +564,12 @@ The caller has already acquired the lease.  Losing it again on any failure is
 the point of the unwind: a client that cannot finish adopting committed state
 must not keep other clients out.
 
-The target incarnation check runs after committed session state is copied and
-before transcript bytes are inserted or the buffer becomes writable."
+The target incarnation, transcript, and instruction restore are staged before
+the live session or buffer changes."
+  (require 'mevedel-overlays)
   (condition-case err
       (let* ((save-path (mevedel-session-save-path session))
              (workspace (mevedel-session-workspace session))
-             (target (mevedel-session-execution-target session))
-             (lease (mevedel-session-lease session))
-             (timer (mevedel-session-lease-renewal-timer session))
              (transfer (mevedel-session-control-transfer session))
              (publication
               (or (mevedel-session-publication-read save-path)
@@ -487,26 +580,52 @@ before transcript bytes are inserted or the buffer becomes writable."
              (refreshed
               (plist-get
                (mevedel-session-persistence-deserialize sidecar workspace)
-               :session)))
+               :session))
+             (staging-buffer
+              (generate-new-buffer " *mevedel-transfer-staging*"))
+             (instruction-rollback
+              (mevedel--instruction-state-rollback workspace)))
         (unless refreshed
           (error "Transferred session has no valid committed sidecar"))
-        (mevedel-session-persistence--copy-session-state refreshed session)
-        (mevedel-session-set-execution-target session target)
-        (mevedel-session-adopt-committed-state
-         session workspace save-path lease timer publication transfer buffer)
-        (mevedel-session-control-transfer-register-root-buffer session buffer)
-        (mevedel-session-persistence--check-target-incarnation session buffer)
-        (mevedel-session-control-transfer--insert-committed-segment
-         session buffer)
-        (with-current-buffer buffer
-          (setq buffer-read-only nil
-                mevedel-session--read-only-mode nil))
-        (mevedel-session-persistence--load-instructions session buffer)
-        (mevedel-session-set-control-transfer
-         session
-         (list :state 'acquired :request (plist-get transfer :request)))
-        (message "mevedel: control acquired; session is writable")
-        t)
+        (unwind-protect
+            (progn
+              (mevedel-session-control-transfer--stage-session
+               session refreshed publication staging-buffer)
+              (mevedel-session-control-transfer--insert-committed-segment
+               refreshed staging-buffer)
+              (mevedel-session-control-transfer-register-root-buffer
+               refreshed staging-buffer)
+              (mevedel-session-persistence--check-target-incarnation
+               refreshed staging-buffer)
+              (condition-case install-error
+                  (progn
+                    (unless
+                        (mevedel-session-persistence--load-instructions
+                         refreshed staging-buffer)
+                      (error "Transferred instruction snapshot is invalid"))
+                    (mevedel-session-control-transfer--install-staged-segment
+                     buffer staging-buffer))
+                (error
+                 (funcall instruction-rollback)
+                 (signal (car install-error) (cdr install-error))))
+              (mevedel-session-persistence--copy-session-state
+               refreshed session)
+              (mevedel-session-control-transfer-register-root-buffer
+               session buffer)
+              (with-current-buffer buffer
+                (setq buffer-read-only nil
+                      mevedel-session--read-only-mode nil))
+              (mevedel-session-set-control-transfer
+               session
+               (list :state 'acquired :request (plist-get transfer :request)))
+              (message "mevedel: control acquired; session is writable")
+              t)
+          (when (buffer-live-p staging-buffer)
+            (mevedel-session-control-transfer-register-root-buffer
+             session buffer)
+            (with-current-buffer staging-buffer
+              (set-buffer-modified-p nil))
+            (kill-buffer staging-buffer))))
     (error
      (mevedel-session-durability-lease-release
       (mevedel-session-save-path session) session)
@@ -516,18 +635,36 @@ before transcript bytes are inserted or the buffer becomes writable."
   "Acquire SESSION into BUFFER after its committed release fence is visible."
   (when (and (buffer-live-p buffer)
              (mevedel-session-save-path session)
-             (eq (plist-get (mevedel-session-control-transfer session) :state)
-                 'requested))
+             (memq (plist-get (mevedel-session-control-transfer session) :state)
+                   '(requested quiescing)))
     (mevedel-session-control-transfer-register-root-buffer session buffer)
     (when (buffer-modified-p buffer)
       (user-error "Read-only session changed locally; refresh before transfer"))
     (require 'mevedel-session-durability)
     (require 'mevedel-session-publication)
-    (when (mevedel-session-durability-lease-acquire
-           (mevedel-session-save-path session)
-           (buffer-name buffer)
-           session)
-      (mevedel-session-control-transfer--adopt-control session buffer))))
+    (require 'mevedel-session-transfer)
+    (let* ((transfer (mevedel-session-control-transfer session))
+           (request (plist-get transfer :request))
+           (decision
+            (or (plist-get transfer :decision)
+                (mevedel-session-transfer-observe-decision
+                 session request))))
+      (cond
+       ((eq 'reject (plist-get decision :decision))
+        (mevedel-session-set-control-transfer
+         session (list :state 'rejected :request request :decision decision))
+        t)
+       (t
+        (when decision
+          (mevedel-session-set-control-transfer
+           session
+           (list :state 'quiescing :request request :decision decision)))
+        (when (mevedel-session-durability-lease-acquire
+               (mevedel-session-save-path session)
+               (buffer-name buffer)
+               session)
+          (mevedel-session-control-transfer--adopt-control
+           session buffer)))))))
 
 (defun mevedel-session-control-transfer-acquire (session buffer)
   "Take SESSION's unheld lease directly into BUFFER.

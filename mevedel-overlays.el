@@ -840,6 +840,35 @@ overlay is restored.")
   (mevedel--instruction-activate-workspace
    (mevedel--instruction-buffer-workspace (or buffer (current-buffer)))))
 
+(defun mevedel--instruction-state-rollback (workspace)
+  "Return a function that restores WORKSPACE's exact instruction state."
+  (let* ((key (mevedel--instruction-workspace-key workspace))
+         (state (copy-tree (mevedel--instruction-state key)))
+         (current-key mevedel--instruction-current-state-key)
+         (highlighted mevedel--highlighted-instruction)
+         (directives (copy-sequence (mevedel-workspace-directives workspace)))
+         overlays)
+    (dolist (entry (plist-get state :instructions))
+      (when (bufferp (car entry))
+        (dolist (instruction (cdr entry))
+          (when (overlayp instruction)
+            (push (list instruction
+                        (overlay-buffer instruction)
+                        (overlay-start instruction)
+                        (overlay-end instruction))
+                  overlays)))))
+    (lambda ()
+      (mevedel--clear-instruction-state workspace)
+      (puthash key state mevedel--instruction-states)
+      (setq mevedel--instruction-current-state-key current-key
+            mevedel--highlighted-instruction highlighted)
+      (mevedel-workspace-set-directives workspace directives)
+      (dolist (snapshot overlays)
+        (when (buffer-live-p (nth 1 snapshot))
+          (move-overlay (nth 0 snapshot)
+                        (nth 2 snapshot) (nth 3 snapshot)
+                        (nth 1 snapshot)))))))
+
 (defun mevedel--clear-instruction-state (&optional workspace)
   "Delete all visible instruction overlays in WORKSPACE and clear its state."
   (let ((mevedel--instruction-state-key-override

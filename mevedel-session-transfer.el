@@ -40,29 +40,27 @@
                   "mevedel-session-durability"
                   (directory expected buffer-name
                              &optional status unsettled-mutation-p
-                             unsettled-mutation))
-(defvar mevedel-session-durability--client-id)
+                             unsettled-mutation transfer-generation))
 (declare-function mevedel-session-durability--create-plist
                   "mevedel-session-durability" (path plist))
 (declare-function mevedel-session-durability--ensure-lease-directory
                   "mevedel-session-durability" (directory))
+(declare-function mevedel-session-durability--lease-head
+                  "mevedel-session-durability" (directory &optional names))
+(declare-function mevedel-session-durability--lease-path
+                  "mevedel-session-durability" (session-dir))
 (declare-function mevedel-session-durability--newest-generation
                   "mevedel-session-durability" (names))
 (declare-function mevedel-session-durability--observe-lease
                   "mevedel-session-durability" (directory generation))
 (declare-function mevedel-session-durability--observed-names
                   "mevedel-session-durability" (observed))
-(declare-function mevedel-session-durability--lease-head
-                  "mevedel-session-durability" (directory &optional names))
-(declare-function mevedel-session-durability--lease-path
-                  "mevedel-session-durability" (session-dir))
 (declare-function mevedel-session-durability--owned-lease-record-p
                   "mevedel-session-durability" (lease directory &optional now))
 (declare-function mevedel-session-durability--portable-session-p
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability--read-plist
                   "mevedel-session-durability" (path))
-(defvar mevedel-session-durability--observed-time)
 (declare-function mevedel-session-durability--target-time
                   "mevedel-session-durability" (directory))
 (declare-function mevedel-session-durability--valid-lease-p
@@ -70,15 +68,17 @@
 (declare-function mevedel-session-durability-lease-release
                   "mevedel-session-durability"
                   (session-dir &optional session))
+(defvar mevedel-session-durability--client-id)
+(defvar mevedel-session-durability--observed-time)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-set-control-transfer
-                  "mevedel-structs" (session transfer))
+(declare-function mevedel-session-lease "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-lease "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-set-control-transfer
+                  "mevedel-structs" (session transfer))
 
 
 (defcustom mevedel-session-transfer-prompt-timeout 30
@@ -274,19 +274,24 @@ target directories would mutate the session on behalf of an observer."
        (mevedel-session-transfer--finite-nonnegative-number-p
         (plist-get record :decided-at))))
 
-(defun mevedel-session-transfer--record-matches-p
+(defun mevedel-session-transfer--record-identity-matches-p
     (request record)
-  "Return non-nil when immutable transfer RECORD matches REQUEST."
+  "Return non-nil when transfer RECORD carries REQUEST's identity."
   (and (equal (plist-get request :request-id)
               (plist-get record :request-id))
        (equal (plist-get request :session-id)
               (plist-get record :session-id))
-       (equal (plist-get request :generation)
-              (plist-get record :generation))
        (equal (plist-get request :owner-client-id)
               (plist-get record :owner-client-id))
        (equal (plist-get request :requester-client-id)
               (plist-get record :requester-client-id))))
+
+(defun mevedel-session-transfer--record-matches-p
+    (request record)
+  "Return non-nil when immutable transfer RECORD matches REQUEST."
+  (and (mevedel-session-transfer--record-identity-matches-p request record)
+       (equal (plist-get request :generation)
+              (plist-get record :generation))))
 
 (defun mevedel-session-transfer--request-id ()
   "Return a fresh opaque control-transfer request ID."
@@ -323,6 +328,28 @@ cross a release."
              (equal (plist-get lease :client-id)
                     (plist-get request :owner-client-id))
              request)))))
+
+(defun mevedel-session-transfer-observe-decision (session request)
+  "Return REQUEST's validated immutable decision for requester SESSION."
+  (unless (and (mevedel-session-durability--portable-session-p session)
+               (equal (mevedel-session-session-id session)
+                      (plist-get request :session-id))
+               (equal mevedel-session-durability--client-id
+                      (plist-get request :requester-client-id)))
+    (error "Control-transfer request does not belong to this session client"))
+  (let* ((directory
+          (mevedel-session-durability--lease-path
+           (mevedel-session-save-path session)))
+         (path
+          (mevedel-session-transfer--decision-path
+           directory (plist-get request :generation)))
+         (decision (mevedel-session-durability--read-plist path)))
+    (when decision
+      (unless (and (mevedel-session-transfer--valid-decision-p decision)
+                   (mevedel-session-transfer--record-matches-p
+                    request decision))
+        (error "Invalid portable control-transfer decision: %s" path))
+      decision)))
 
 (defun mevedel-session-transfer--set-state
     (session state request &optional decision observed-at)
@@ -373,62 +400,83 @@ explicitly decides and releases its lease."
       (unless (and (mevedel-session-durability--valid-lease-p lease)
                    (memq (plist-get lease :status) '(active publishing))
                    (> (plist-get lease :expires-at) now))
-	(error "Control transfer requires a live portable lease"))
+        (error "Control transfer requires a live portable lease"))
       (when (equal mevedel-session-durability--client-id
                    (plist-get lease :client-id))
-	(error "The current lease owner cannot request control transfer"))
-      (let* ((generation (plist-get lease :generation))
+        (error "The current lease owner cannot request control transfer"))
+      (let* ((live-request
+              (mevedel-session-transfer--current-request
+               directory lease session-id now))
+             (live-decision
+              (and live-request
+                   (mevedel-session-durability--read-plist
+                    (mevedel-session-transfer--decision-path
+                     directory (plist-get live-request :generation)))))
+             (_
+              (when (and live-decision
+                         (not
+                          (and
+                           (mevedel-session-transfer--valid-decision-p
+                            live-decision)
+                           (mevedel-session-transfer--record-matches-p
+                            live-request live-decision))))
+                (error "Invalid portable control-transfer decision")))
+             (existing
+              (and live-request
+                   (not (and live-decision
+                             (eq 'reject
+                                 (plist-get live-decision :decision))))
+                   live-request))
+             (rejected
+              (and live-request live-decision
+                   (eq 'reject (plist-get live-decision :decision))))
+             (request-generation
+              (plist-get lease :transfer-generation))
              (request-path
               (mevedel-session-transfer--request-path
-               directory generation))
+               directory request-generation))
              (decision-path
               (mevedel-session-transfer--decision-path
-               directory generation))
-             (existing
-              (when (mevedel-session-control-fs-path-exists-p request-path)
-		(let ((request (mevedel-session-durability--read-plist
-				request-path)))
-                  (unless (mevedel-session-transfer--valid-request-p
-                           request now)
+               directory request-generation)))
+        (if existing
+            (and (equal mevedel-session-durability--client-id
+                        (plist-get existing :requester-client-id))
+                 (equal session-id (plist-get existing :session-id))
+                 existing)
+          (unless (and rejected
+                       (/= request-generation
+                           (1+ (plist-get live-request :generation))))
+            (when (mevedel-session-control-fs-path-exists-p decision-path)
+              (error "Portable control-transfer decision has no request: %s"
+                     decision-path))
+            (let* ((request
+                    (list :protocol-version 1
+                          :request-id
+                          (mevedel-session-transfer--request-id)
+                          :session-id session-id
+                          :generation request-generation
+                          :owner-client-id (plist-get lease :client-id)
+                          :requester-client-id
+                          mevedel-session-durability--client-id
+                          :requester-label label
+                          :created-at now
+                          :deadline
+                          (+ now mevedel-session-transfer-prompt-timeout))))
+              (unless (mevedel-session-transfer--valid-request-p request now)
+                (error "Invalid control-transfer request"))
+              (if (mevedel-session-durability--create-plist
+                   request-path request)
+                  request
+                (let ((winner (mevedel-session-durability--read-plist
+                               request-path)))
+                  (unless
+                      (mevedel-session-transfer--valid-request-p winner now)
                     (error "Invalid portable control-transfer request: %s"
                            request-path))
-                  request))))
-	(if existing
-            (and (equal mevedel-session-durability--client-id
-			(plist-get existing :requester-client-id))
-		 (equal session-id (plist-get existing :session-id))
-		 existing)
-          (when (mevedel-session-control-fs-path-exists-p decision-path)
-            (error "Portable control-transfer decision has no request: %s"
-                   decision-path))
-          (let* ((request
-                  (list :protocol-version 1
-			:request-id
-			(mevedel-session-transfer--request-id)
-			:session-id session-id
-			:generation generation
-			:owner-client-id (plist-get lease :client-id)
-			:requester-client-id
-			mevedel-session-durability--client-id
-			:requester-label label
-			:created-at now
-			:deadline
-			(+ now mevedel-session-transfer-prompt-timeout))))
-            (unless (mevedel-session-transfer--valid-request-p request now)
-              (error "Invalid control-transfer request"))
-            (if (mevedel-session-durability--create-plist
-		 request-path request)
-		request
-              (let ((winner (mevedel-session-durability--read-plist
-                             request-path)))
-		(unless
-				    (mevedel-session-transfer--valid-request-p winner now)
-                  (error "Invalid portable control-transfer request: %s"
-			 request-path))
-		(and (equal mevedel-session-durability--client-id
-                            (plist-get winner :requester-client-id))
-                     (equal session-id (plist-get winner :session-id))
-                     winner)))))))))
+                  (and (equal mevedel-session-durability--client-id
+                              (plist-get winner :requester-client-id))
+                       (equal session-id (plist-get winner :session-id))
+                       winner))))))))))
 
 (defun mevedel-session-transfer-poll (session)
   "Poll SESSION's immutable control-transfer request and decision records.
@@ -629,7 +677,9 @@ attempting to rewrite an existing decision fails."
           (if (eq 'reject (plist-get existing :decision))
               (let ((successor
                      (mevedel-session-durability--claim-next
-                      directory current (plist-get current :buffer))))
+                      directory current (plist-get current :buffer)
+                      nil nil nil
+                      (1+ (plist-get request :generation)))))
                 (unless successor
                   (error
                    "Could not rotate rejected control-transfer generation"))
@@ -651,75 +701,97 @@ acceptance alone never changes the lease owner."
     (error "Control transfer requires a portable project session"))
   (let* ((transfer (mevedel-session-control-transfer session))
          (request (plist-get transfer :request))
+         (decision (plist-get transfer :decision))
          (session-dir (mevedel-session-save-path session))
          (directory (and session-dir
                          (mevedel-session-durability--lease-path session-dir)))
+         (current (and directory
+                       (mevedel-session-durability--lease-head directory)))
          (now (and directory
                    (mevedel-session-durability--target-time directory)))
+         (release-generation
+          (or (plist-get transfer :release-generation)
+              (and (mevedel-session-durability--valid-lease-p current)
+                   (eq 'released (plist-get current :status))
+                   (equal (plist-get request :owner-client-id)
+                          (plist-get current :client-id))
+                   (plist-get current :generation))))
          (released-fence
-          (and (eq (plist-get transfer :state) 'released)
+          (and release-generation
                (mevedel-session-transfer-release-fence
-                directory (plist-get request :generation))))
-         (decision (plist-get transfer :decision))
-         (bound (mevedel-session-lease session))
-         (current (and directory
-                       (mevedel-session-durability--lease-head directory))))
-    (if (eq (plist-get transfer :state) 'released)
-        (or released-fence
-            (error "Released control-transfer fence has expired"))
+                directory release-generation))))
+    (when released-fence
+      (unless (mevedel-session-transfer--record-identity-matches-p
+               request released-fence)
+        (error "Invalid portable control-transfer fence: %s"
+               (mevedel-session-transfer--fence-path
+                directory release-generation))))
+    (cond
+     ((eq (plist-get transfer :state) 'released)
+      (or released-fence
+          (error "Released control-transfer fence has expired")))
+     ((and (eq (plist-get current :status) 'released) released-fence)
+      (mevedel-session-set-control-transfer
+       session
+       (list :state 'released :request request :decision decision
+             :release-generation release-generation))
+      released-fence)
+     (t
       (unless (mevedel-session-transfer--valid-timeout-p
                mevedel-session-transfer-prompt-timeout)
         (error "Invalid control-transfer timeout: %S"
                mevedel-session-transfer-prompt-timeout))
-      (unless (and session-dir
-                   (eq (plist-get transfer :state) 'quiescing)
-                   request
-                   (eq (plist-get decision :decision) 'grant)
-                   (mevedel-session-durability--valid-lease-p current)
-                   (mevedel-session-durability--owned-lease-record-p
-                    current directory now)
-                   (equal (plist-get bound :generation)
-                          (plist-get current :generation))
-                   ;; Settling the work the requester is waiting for advances
-                   ;; this owner's generation, so the request names an earlier
-                   ;; generation of the same continuously owned lease.  The
-                   ;; owner identity, not the generation number, is what the
-                   ;; release may not cross.
-                   (natnump (plist-get request :generation))
-                   (<= (plist-get request :generation)
-                       (plist-get current :generation))
-                   (equal (plist-get request :owner-client-id)
-                          (plist-get current :client-id)))
-        (error "Control transfer is not ready to release"))
+      (let ((bound (mevedel-session-lease session)))
+        (unless (and session-dir
+                     (eq (plist-get transfer :state) 'quiescing)
+                     request
+                     (eq (plist-get decision :decision) 'grant)
+                     (mevedel-session-durability--valid-lease-p current)
+                     (mevedel-session-durability--owned-lease-record-p
+                      current directory now)
+                     (equal (plist-get bound :generation)
+                            (plist-get current :generation))
+                     (natnump (plist-get request :generation))
+                     (<= (plist-get request :generation)
+                         (plist-get current :generation))
+                     (equal (plist-get request :owner-client-id)
+                            (plist-get current :client-id)))
+          (error "Control transfer is not ready to release")))
+      (setq release-generation (plist-get current :generation))
       (let* ((path (mevedel-session-transfer--fence-path
-                    directory (plist-get current :generation)))
-           (candidate
-            (list :protocol-version 1
-                  :generation (plist-get current :generation)
-                  :request-id (plist-get request :request-id)
-                  :session-id (plist-get request :session-id)
-                  :owner-client-id (plist-get current :client-id)
-                  :requester-client-id
-                  (plist-get request :requester-client-id)
-                  :expires-at
-                  (+ now mevedel-session-transfer-prompt-timeout)))
-           (fence
-            (if (mevedel-session-durability--create-plist path candidate)
-                candidate
-              (let ((value (mevedel-session-durability--read-plist path)))
-                (unless (and
-                         (mevedel-session-transfer--valid-fence-p
-                          value now)
-                         (mevedel-session-transfer--record-matches-p
-                          request value)
-                         (equal (plist-get value :owner-client-id)
-                                (plist-get current :client-id)))
-                  (error "Invalid portable control-transfer fence: %s" path))
-                value))))
-      (mevedel-session-durability-lease-release session-dir session)
-      (mevedel-session-transfer--set-state
-       session 'released request decision)
-        fence))))
+                    directory release-generation))
+             (candidate
+              (list :protocol-version 1
+                    :generation release-generation
+                    :request-id (plist-get request :request-id)
+                    :session-id (plist-get request :session-id)
+                    :owner-client-id (plist-get current :client-id)
+                    :requester-client-id
+                    (plist-get request :requester-client-id)
+                    :expires-at
+                    (+ now mevedel-session-transfer-prompt-timeout)))
+             (fence
+              (if (mevedel-session-durability--create-plist path candidate)
+                  candidate
+                (let ((value (mevedel-session-durability--read-plist path)))
+                  (unless
+                      (and (mevedel-session-transfer--valid-fence-p value now)
+                           (mevedel-session-transfer--record-identity-matches-p
+                            request value)
+                           (equal (plist-get value :owner-client-id)
+                                  (plist-get current :client-id)))
+                    (error "Invalid portable control-transfer fence: %s" path))
+                  value))))
+        (mevedel-session-set-control-transfer
+         session
+         (list :state 'quiescing :request request :decision decision
+               :release-generation release-generation))
+        (mevedel-session-durability-lease-release session-dir session)
+        (mevedel-session-set-control-transfer
+         session
+         (list :state 'released :request request :decision decision
+               :release-generation release-generation))
+        fence)))))
 
 (provide 'mevedel-session-transfer)
 

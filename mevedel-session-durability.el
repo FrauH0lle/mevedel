@@ -333,13 +333,16 @@ accept still passes its own validator."
 
 (defun mevedel-session-durability--lease-record
     (buffer-name generation &optional status publication-head
-                 unsettled-mutation now)
+                 unsettled-mutation now transfer-generation)
   "Return a fresh lease record for BUFFER-NAME and GENERATION.
 STATUS defaults to `active'.  PUBLICATION-HEAD is an immutable manifest path.
-UNSETTLED-MUTATION records target mutation whose outcome is not yet proved."
+UNSETTLED-MUTATION records target mutation whose outcome is not yet proved.
+TRANSFER-GENERATION identifies the request round open for this owner and
+defaults to GENERATION."
   (unless (numberp now)
     (error "Lease record requires target-authoritative time"))
   (list :generation generation
+        :transfer-generation (or transfer-generation generation)
         :status (or status 'active)
         :publication-head publication-head
         :unsettled-mutation (and unsettled-mutation t)
@@ -629,6 +632,10 @@ saves re-reading a record this client just wrote."
   (and (proper-list-p lease)
        (natnump (plist-get lease :generation))
        (> (plist-get lease :generation) 0)
+       (natnump (plist-get lease :transfer-generation))
+       (> (plist-get lease :transfer-generation) 0)
+       (<= (plist-get lease :transfer-generation)
+           (plist-get lease :generation))
        (memq (plist-get lease :status)
              '(claiming active publishing released aborted))
        (stringp (plist-get lease :client-id))
@@ -661,14 +668,17 @@ otherwise mutate the session lease."
 
 (defun mevedel-session-durability--claim-next
     (directory expected buffer-name
-               &optional status unsettled-mutation-p unsettled-mutation)
+               &optional status unsettled-mutation-p unsettled-mutation
+               transfer-generation)
   "Claim DIRECTORY's next generation after EXPECTED for BUFFER-NAME.
 
 The candidate fences older writers as soon as its exclusive generation file
 appears.  It becomes active only if EXPECTED remained byte-for-byte unchanged;
 otherwise it is marked aborted and removed best-effort.  STATUS defaults to
 `active'.  When UNSETTLED-MUTATION-P is non-nil, the successor records
-UNSETTLED-MUTATION instead of preserving EXPECTED's value."
+UNSETTLED-MUTATION instead of preserving EXPECTED's value.
+TRANSFER-GENERATION explicitly opens that request round; otherwise a
+same-owner successor preserves EXPECTED's round."
   (let* ((status (or status 'active))
          ;; One observation answers the clock and the known generations.
          ;; Any record created after it is a foreign claim at the same
@@ -699,13 +709,18 @@ UNSETTLED-MUTATION instead of preserving EXPECTED's value."
                  (if (eq status 'publishing)
                      mevedel-session-publication-lease-seconds
                    mevedel-session-lease-seconds)))
-            (mevedel-session-durability--lease-record
-             buffer-name generation 'claiming
-             (plist-get expected :publication-head)
-             (if unsettled-mutation-p
-                 unsettled-mutation
-               (plist-get expected :unsettled-mutation))
-             now)))
+             (mevedel-session-durability--lease-record
+              buffer-name generation 'claiming
+              (plist-get expected :publication-head)
+              (if unsettled-mutation-p
+                  unsettled-mutation
+                (plist-get expected :unsettled-mutation))
+              now
+              (or transfer-generation
+                  (and expected
+                       (equal mevedel-session-durability--client-id
+                              (plist-get expected :client-id))
+                       (plist-get expected :transfer-generation))))))
          ;; The fencing create and the predecessor reads are one program:
          ;; the create is first, so a lost race skips the reads.
          (results
@@ -812,7 +827,8 @@ When SESSION is non-nil, record the resulting lease state on it."
                     buffer-name (plist-get existing :generation) 'active
                     (plist-get existing :publication-head)
                     (plist-get existing :unsettled-mutation)
-                    now)))
+                    now
+                    (plist-get existing :transfer-generation))))
               (mevedel-session-durability--write-generation directory record)
               (and (mevedel-session-durability--same-generation-p
                     record
@@ -977,7 +993,8 @@ preserved unsettled-mutation flag with UNSETTLED-MUTATION."
                      (if unsettled-mutation-p
                          unsettled-mutation
                        (plist-get existing :unsettled-mutation))
-                     now)))
+                     now
+                     (plist-get existing :transfer-generation))))
                  (committed
                   (mevedel-session-durability--commit-lease
                    directory (plist-get existing :generation)

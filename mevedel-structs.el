@@ -521,7 +521,7 @@ back to an authority inferred from a path or process locality."
 
 (defun mevedel-session-adopt-committed-state
     (session workspace save-path lease lease-renewal-timer publication
-             control-transfer root-buffer)
+             control-transfer control-transfer-drains root-buffer)
   "Adopt committed durable state into SESSION after a control transfer.
 
 The coordinator supplies the already validated committed values.  Keep this
@@ -532,7 +532,9 @@ owner alongside the newly committed session state."
         (mevedel-session-lease session) lease
         (mevedel-session-lease-renewal-timer session) lease-renewal-timer
         (mevedel-session-publication session) publication
-        (mevedel-session-control-transfer session) control-transfer)
+        (mevedel-session-control-transfer session) control-transfer
+        (mevedel-session-control-transfer-drains session)
+        control-transfer-drains)
   (mevedel-session-set-root-buffer session root-buffer))
 
 

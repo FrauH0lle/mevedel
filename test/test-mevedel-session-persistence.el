@@ -6375,6 +6375,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
                 (lambda (_path _name actual)
                   (setf (mevedel-session-lease actual) '(:state owned))
                   t))
+               ((symbol-function 'mevedel-session-transfer-observe-decision)
+                (lambda (&rest _) nil))
                ((symbol-function
                  'mevedel-session-publication-read)
                 (lambda (_) '(:sidecar "/committed/session.meta.el")))
@@ -6388,8 +6390,9 @@ rotation never saves through a rebound temporary visited filename or prompts"
                ((symbol-function
                  'mevedel-session-persistence--check-target-incarnation)
                 (lambda (_session checked-buffer)
-                  (should (eq checked-buffer buffer))
-                  (should buffer-read-only)
+                  (should-not (eq checked-buffer buffer))
+                  (should (buffer-live-p checked-buffer))
+                  (should (with-current-buffer buffer buffer-read-only))
                   (setq incarnation-checked t)))
                ((symbol-function 'mevedel-transcript-restore-gptel-state)
                 #'ignore)
@@ -6437,6 +6440,8 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (cl-letf
               (((symbol-function 'mevedel-session-durability-lease-acquire)
                 (lambda (&rest _) t))
+               ((symbol-function 'mevedel-session-transfer-observe-decision)
+                (lambda (&rest _) nil))
                ((symbol-function
                  'mevedel-session-publication-read)
                 (lambda (_) (error "Injected refresh failure")))

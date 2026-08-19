@@ -224,6 +224,36 @@
       (should (overlay-get instruction 'mevedel-bg-color))
       (should (overlay-get instruction 'face)))))
 
+(mevedel-deftest mevedel--instruction-state-rollback ()
+  ,test
+  (test)
+  :doc "restores exact in-memory overlays after replacement state is installed"
+  (let* ((workspace
+          (mevedel-workspace--create
+           :type 'file :id "rollback" :root "/tmp" :name "rollback"))
+         original incoming rollback uuid)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--workspace workspace)
+          (insert "original incoming")
+          (setq original (mevedel--create-reference-in (current-buffer) 1 9)
+                uuid (overlay-get original 'mevedel-uuid)
+                mevedel--highlighted-instruction original
+                rollback (mevedel--instruction-state-rollback workspace))
+          (mevedel--clear-instruction-state workspace)
+          (setq incoming
+                (mevedel--create-reference-in (current-buffer) 10 18))
+          (funcall rollback)
+          (should-not (overlay-buffer incoming))
+          (should (eq original
+                      (mevedel--instruction-with-uuid uuid workspace)))
+          (should (eq original mevedel--highlighted-instruction))
+          (should (equal "original"
+                         (buffer-substring-no-properties
+                          (overlay-start original) (overlay-end original)))))
+      (mevedel--clear-instruction-state workspace)
+      (mevedel-workspace-clear-registry))))
+
 (mevedel-deftest mevedel--update-instruction-overlay-tree ()
   ,test
   (test)
