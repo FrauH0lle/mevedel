@@ -500,6 +500,30 @@
       (mevedel-permission-queue--coalesce 'deny-session session))
     (should (memq 'deny outcomes)))
 
+  :doc "removes coalesced entries before reentrant teardown settles callbacks"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         outcomes)
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               #'ignore))
+      (dolist (id '(first second))
+        (let ((entry-id id))
+          (mevedel-permission--enqueue
+           (list :kind 'generic :tool-name "Read"
+                 :specifier-value "/reentrant.el"
+                 :resource-access 'read
+                 :origin "/root"
+                 :callback
+                 (lambda (outcome)
+                   (push (cons entry-id outcome) outcomes)
+                   (when (eq entry-id 'first)
+                     (mevedel-permission-queue-abort-all session)))))))
+      (mevedel-permission-add-session-resource-grant
+       session "/reentrant.el" 'read)
+      (mevedel-permission-queue--coalesce 'allow-session session))
+    (should (equal '((second . allow) (first . allow)) outcomes))
+    (should-not (mevedel-session-permission-queue session)))
+
   :doc "queued sibling whose rule does not cover it stays queued"
   (let* ((session (test-pq--make-session))
          (mevedel--session session)
