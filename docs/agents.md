@@ -320,6 +320,10 @@ path, so immutable publication filenames never reach tools, prompts, or views.
 frozen request-local installation, activity snapshots, response extraction,
 and transcript saves. `mevedel-agent-exec.el` is the provider adapter: it owns
 the gptel request FSM, prompt dispatch, and streaming callback contract.
+Frozen request locals use one closed symbol schema owned by
+`mevedel-agents.el`. Durable configurations contain every schema entry exactly
+once, and hydration rejects unknown, duplicate, or missing keys before it
+changes a conversation buffer.
 
 Persisted agents may compact older history immediately before a continuation
 request.  The canonical transcript path remains stable, the original task and

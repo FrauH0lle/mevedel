@@ -107,6 +107,46 @@
   (agent nil :type mevedel-agent)
   (request-locals nil :type list))
 
+(defconst mevedel-agent-request-local-symbols
+  '(gptel--num-messages-to-send
+    gptel--request-params
+    gptel--schema
+    gptel-backend
+    gptel-cache
+    gptel-context
+    gptel-include-reasoning
+    gptel-max-tokens
+    gptel-mode
+    gptel-model
+    gptel-reasoning-effort
+    gptel-stream
+    gptel-system-prompt
+    gptel-temperature
+    gptel-tools
+    gptel-track-media
+    gptel-track-response
+    gptel-use-context
+    gptel-use-curl
+    gptel-use-tools
+    mevedel-model-tiers
+    mevedel-model-workloads)
+  "Closed buffer-local schema for frozen retained-agent requests.")
+
+(defun mevedel-agent-request-locals-p (locals &optional complete)
+  "Return non-nil when LOCALS has unique allowed keys.
+When COMPLETE is non-nil, require every request-local key exactly once."
+  (and (proper-list-p locals)
+       (cl-every (lambda (entry)
+                   (and (consp entry)
+                        (memq (car entry)
+                              mevedel-agent-request-local-symbols)))
+                 locals)
+       (= (length locals)
+          (length (delete-dups (mapcar #'car locals))))
+       (or (not complete)
+           (= (length locals)
+              (length mevedel-agent-request-local-symbols)))))
+
 (defvar mevedel-agent--registry nil
   "Alist mapping agent name strings to `mevedel-agent' structs.")
 

@@ -51,13 +51,18 @@
     :hook-rules nil
     :frozen-p t)
    :request-locals
-   (list (cons 'gptel-backend
+   (mapcar
+    (lambda (symbol)
+      (cons symbol
+            (pcase symbol
+              ('gptel-backend
                (or gptel-backend
                    (mevedel-agent-persistence-test--backend)))
-         (cons 'gptel-model 'test-model)
-         (cons 'gptel-tools
+              ('gptel-model 'test-model)
+              ('gptel-tools
                (list (gptel-get-tool '("mevedel" "Read"))))
-         (cons 'gptel-context context))))
+              ('gptel-context context))))
+    mevedel-agent-request-local-symbols)))
 
 (defun mevedel-agent-persistence-test--session (&optional root)
   "Return a fresh session rooted at optional ROOT."
@@ -130,7 +135,14 @@
     (should (assq 'gptel-backend
                   (plist-get encoded :request-locals))))
   :doc "rejects a missing frozen configuration"
-  (should-error (mevedel-agent-persistence--encode-configuration nil)))
+  (should-error (mevedel-agent-persistence--encode-configuration nil))
+  :doc "rejects an incomplete durable request-local configuration"
+  (let ((configuration
+         (mevedel-agent-persistence-test--configuration)))
+    (setf (mevedel-agent-configuration-request-locals configuration)
+          (cdr (mevedel-agent-configuration-request-locals configuration)))
+    (should-error
+     (mevedel-agent-persistence--encode-configuration configuration))))
 
 (mevedel-deftest mevedel-agent-persistence--serialize-record ()
   ,test
@@ -212,7 +224,21 @@
              (mevedel-agent-configuration-agent decoded))))
     (should-error
      (mevedel-agent-persistence--decode-configuration encoded "other")
-     :type 'mevedel-agent-persistence-invalid-data)))
+     :type 'mevedel-agent-persistence-invalid-data)
+    (dolist (locals
+             (list
+              (cons '(kill-buffer-hook . (ignore))
+                    (copy-tree (plist-get encoded :request-locals)))
+              (append (copy-tree (plist-get encoded :request-locals))
+                      '((gptel-model . duplicate)))
+              (assq-delete-all
+               'gptel-model
+               (copy-tree (plist-get encoded :request-locals)))))
+      (let ((invalid (copy-tree encoded)))
+        (setf (plist-get invalid :request-locals) locals)
+        (should-error
+         (mevedel-agent-persistence--decode-configuration invalid "default")
+         :type 'mevedel-agent-persistence-invalid-data)))))
 
 (mevedel-deftest mevedel-agent-persistence--deserialize-record ()
   ,test

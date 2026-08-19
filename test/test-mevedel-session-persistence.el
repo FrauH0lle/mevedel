@@ -271,13 +271,18 @@ publication."
     :hook-rules nil
     :frozen-p t)
    :request-locals
-   (list (cons 'gptel-backend
+   (mapcar
+    (lambda (symbol)
+      (cons symbol
+            (pcase symbol
+              ('gptel-backend
                (or gptel-backend
                    (test-mevedel-session-persistence--agent-backend)))
-         (cons 'gptel-model 'test-model)
-         (cons 'gptel-tools
+              ('gptel-model 'test-model)
+              ('gptel-tools
                (list (gptel-get-tool '("mevedel" "Read"))))
-         (cons 'gptel-context '(("/tmp/persisted-context.el"))))))
+              ('gptel-context '(("/tmp/persisted-context.el"))))))
+    mevedel-agent-request-local-symbols)))
 
 (defun test-mevedel-session-persistence--complete-sidecar (plist)
   "Return a current complete sidecar with PLIST values overriding defaults."
@@ -315,7 +320,6 @@ publication."
                :permission-rules nil
                :resource-grants nil
                :preset-name nil
-               :preset-settings nil
                :model-provider nil
                :reasoning-effort nil
                :last-observed-date "2026-01-01"
@@ -614,12 +618,7 @@ publication."
                         (mevedel-session-preset-name session) 'test-preset
                         (mevedel-session-model-provider session)
                         "Test:test-model"
-                        (mevedel-session-reasoning-effort session) 'high
-                        (mevedel-session-preset-settings session)
-                        '((mevedel-model-tiers
-                           (strong :provider "Test:test-model" :effort high))
-                          (mevedel-model-workloads
-                           (planning :tier strong)))))
+                        (mevedel-session-reasoning-effort session) 'high))
                (plist (mevedel-session-persistence-serialize
                        session
                        :first-user-message "Refactor X"
@@ -642,11 +641,7 @@ publication."
           (should (equal "Test:test-model"
                          (plist-get plist :model-provider)))
           (should (eq 'high (plist-get plist :reasoning-effort)))
-          (should (equal '((mevedel-model-tiers
-                            (strong :provider "Test:test-model" :effort high))
-                           (mevedel-model-workloads
-                            (planning :tier strong)))
-                         (plist-get plist :preset-settings)))
+          (should-not (plist-member plist :preset-settings))
           (should (= 2 (plist-get plist :current-segment)))
           (should (= 5 (plist-get plist :total-turn-count)))
           (should (= 4 (plist-get plist :last-task-write-turn)))
@@ -917,11 +912,6 @@ publication."
                         (mevedel-session-model-provider source)
                         "Test:test-model"
                         (mevedel-session-reasoning-effort source) 'high
-                        (mevedel-session-preset-settings source)
-                        '((mevedel-model-tiers
-                           (strong :provider "Test:test-model" :effort high))
-                          (mevedel-model-workloads
-                           (review :tier strong)))
                         (mevedel-session-pending-steering source)
                         '((:id 1 :input "steer"))
                         (mevedel-session-pending-follow-ups source)
@@ -953,11 +943,6 @@ publication."
                          (mevedel-session-model-provider session)))
           (should (eq 'high
                       (mevedel-session-reasoning-effort session)))
-          (should (equal '((mevedel-model-tiers
-                            (strong :provider "Test:test-model" :effort high))
-                           (mevedel-model-workloads
-                            (review :tier strong)))
-                         (mevedel-session-preset-settings session)))
           (should (= 5 (mevedel-session-turn-count session)))
           (should (= 4 (mevedel-session-last-task-write-turn session)))
           (should (equal '(("alpha" . "Alpha helper"))
@@ -9404,7 +9389,7 @@ The result is a plist whose :tempdir owns every created file."
 (mevedel-deftest mevedel-session-persistence--clone-session
   (:doc "covers every session slot and isolates both clone policies")
   (progn
-    (should (= 90
+    (should (= 89
              (length
               (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-persistence--assert-clone-slot-completeness))
@@ -9443,7 +9428,6 @@ The result is a plist whose :tempdir owns every created file."
            :sandbox-mode 'off
            :plan-mode t
            :preset-name 'clone-preset
-           :preset-settings '((clone-setting (:nested source)))
            :model-provider "clone:model"
            :reasoning-effort 'high
            :turn-count 1
@@ -9575,7 +9559,6 @@ The result is a plist whose :tempdir owns every created file."
     (dolist (getter '(mevedel-session-task-status-notes
                       mevedel-session-permission-rules
                       mevedel-session-resource-grants
-                      mevedel-session-preset-settings
                       mevedel-session-agent-types-snapshot
                       mevedel-session-skills-snapshot
                       mevedel-session-deferred-set
@@ -9661,8 +9644,6 @@ The result is a plist whose :tempdir owns every created file."
                            :action allow))
                         (mevedel-session-preset-name session) 'test-preset
                         (mevedel-session-sandbox-mode session) 'required
-                        (mevedel-session-preset-settings session)
-                        '((mevedel-test-setting base))
                         (mevedel-session-model-provider session)
                         "test-backend:test-model"
                         (mevedel-session-reasoning-effort session) 'high
@@ -9776,13 +9757,8 @@ The result is a plist whose :tempdir owns every created file."
                                (mevedel-session-touched-files session)))
           (should-not (gethash '(file . "child.el")
                                (mevedel-session-mentions-shown session)))
-          (setcar (cdr (assq 'mevedel-test-setting
-                             (mevedel-session-preset-settings child)))
-                  'child)
-          (should (equal '((mevedel-test-setting base))
-                         (mevedel-session-preset-settings session)))
-          (should (equal '((mevedel-test-setting child))
-                         (mevedel-session-preset-settings child)))
+          (should (eq 'test-preset
+                      (mevedel-session-preset-name child)))
           (mevedel-permission-add-session-resource-grant
            child "/tmp/child-only" 'read)
           (setf (mevedel-session-permission-mode child) 'ask
@@ -13019,7 +12995,9 @@ The result is a plist whose :tempdir owns every created file."
                              (lambda (buffer &optional _action _frame)
                                (setq displayed buffer)
                                buffer)))
-                    (mevedel)))
+                    (let ((mevedel-preset--registry
+                           '((test-preset :parents nil :settings nil))))
+                      (mevedel))))
                 (should (buffer-live-p displayed))
                 (setq restored
                       (buffer-local-value 'mevedel--data-buffer displayed))

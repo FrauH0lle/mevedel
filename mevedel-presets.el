@@ -73,7 +73,6 @@
 (declare-function mevedel-request-begin
                   "mevedel-structs" (session &optional directive-uuid))
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-preset-settings "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -229,16 +228,7 @@ Mevedel public and private variables take precedence over gptel variables."
             (set symbol value)
           (set (make-local-variable symbol) value))))
     (when (and (not mevedel-preset--temporary-p) mevedel--session)
-      (let ((resolved
-             (mapcar (lambda (symbol)
-                       (cons symbol (symbol-value symbol)))
-                     (delete-dups
-                      (mapcar #'car
-                              (mevedel-preset--setting-specs name))))))
-        (setf (mevedel-session-preset-name mevedel--session) name
-              (mevedel-session-preset-settings mevedel--session)
-              (copy-tree resolved))
-        resolved))))
+      (setf (mevedel-session-preset-name mevedel--session) name))))
 
 (defun mevedel-preset--post (name user-post)
   "Run USER-POST and required mevedel setup for preset NAME."
@@ -317,10 +307,11 @@ Mevedel public and private variables take precedence over gptel variables."
             (set (make-local-variable symbol) value)))))
 
 (defun mevedel-preset-restore-session (session &optional buffer)
-  "Restore SESSION's saved mevedel preset settings in BUFFER."
+  "Rebuild SESSION's selected mevedel preset settings in BUFFER."
   (with-current-buffer (or buffer (current-buffer))
-    (dolist (setting (mevedel-session-preset-settings session))
-      (set (make-local-variable (car setting)) (cdr setting)))))
+    (when-let* ((name (mevedel-session-preset-name session)))
+      (dolist (setting (mevedel-preset-resolve-settings name))
+        (set (make-local-variable (car setting)) (cdr setting))))))
 
 (defmacro mevedel-with-preset (name &rest body)
   "Run BODY with mevedel preset NAME applied for this request only."

@@ -109,7 +109,6 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-preset-settings "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
@@ -395,8 +394,6 @@ needs no session."
     (unless existing
       (setf (mevedel-session-preset-name target-session)
             (mevedel-session-preset-name session)
-            (mevedel-session-preset-settings target-session)
-            (copy-tree (mevedel-session-preset-settings session))
             (mevedel-session-plan-metadata target-session)
             (append
              (list :status 'accepted

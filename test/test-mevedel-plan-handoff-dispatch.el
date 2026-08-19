@@ -595,7 +595,6 @@
            :authority-mode 'pid-lock
            :name "source" :save-path source-save :permission-mode 'ask
            :preset-name 'source-preset
-           :preset-settings '((mevedel-model-tiers . ((fast . source))))
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
          (target-session
@@ -691,12 +690,8 @@
                        (with-temp-buffer
                          (insert-file-contents-literally target-path)
                          (buffer-string))))
-              (should (equal
-                       (mevedel-session-preset-settings source-session)
-                       (mevedel-session-preset-settings target-session)))
-              (should-not
-               (eq (mevedel-session-preset-settings source-session)
-                   (mevedel-session-preset-settings target-session)))
+              (should (eq 'source-preset
+                          (mevedel-session-preset-name target-session)))
               (should (eq 'ask
                           (mevedel-session-permission-mode source-session)))
               (should (eq 'full-auto
@@ -746,7 +741,6 @@
            :name "source" :save-path source-save
            :working-directory source-directory :permission-mode 'ask
            :preset-name 'source-preset
-           :preset-settings '((mevedel-model-tiers . ((fast . source))))
            :plan-metadata
            (list :status 'accepted :implementation-retry record)))
          (target-session

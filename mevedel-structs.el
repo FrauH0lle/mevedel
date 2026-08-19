@@ -362,7 +362,6 @@ workspace."
   plan-mode         ; non-nil during a sticky Plan conversation
   directive-planning ; transient active directive-planning record
   preset-name       ; selected mevedel preset symbol
-  preset-settings   ; alist of resolved buffer-local mevedel variables
   model-provider    ; exact "BACKEND:MODEL" session selector or nil
   reasoning-effort  ; explicit session effort symbol or nil for default
   turn-count        ; integer: for reminder throttling

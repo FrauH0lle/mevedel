@@ -702,8 +702,8 @@
                  #'ignore))
         (mevedel-preset-apply 'test-child))
       (should (equal '(base parent child) mevedel-test-setting))
-      (should (equal '((mevedel-test-setting base parent child))
-                     (mevedel-session-preset-settings mevedel--session)))))
+      (should (eq 'test-child
+                  (mevedel-session-preset-name mevedel--session)))))
   :doc "stores resolved preset-local model policy on the session"
   (let ((mevedel-model-tiers '((balanced)))
         (mevedel-model-workloads nil))
@@ -723,22 +723,25 @@
                      (alist-get 'strong mevedel-model-tiers)))
       (should (equal '(:tier strong)
                      (alist-get 'review mevedel-model-workloads)))
-      (should (assq 'mevedel-model-tiers
-                    (mevedel-session-preset-settings mevedel--session))))))
+      (should (eq 'test-child
+                  (mevedel-session-preset-name mevedel--session))))))
 
 (mevedel-deftest mevedel-preset-restore-session
-  (:doc "restores saved settings buffer-locally")
+  (:doc "rebuilds trusted preset settings without installing persisted keys")
   ,test
   (test)
-  (with-temp-buffer
-    (let ((session
-           (mevedel-session--create
-            :name "test"
-            :preset-name 'test-preset
-            :preset-settings '((mevedel-test-setting . restored)))))
-      (mevedel-preset-restore-session session)
-      (should (local-variable-p 'mevedel-test-setting))
-      (should (eq 'restored mevedel-test-setting)))))
+  (let ((mevedel-preset--registry nil)
+        (gptel--known-presets (copy-tree gptel--known-presets)))
+    (mevedel-define-preset test-preset :test-setting 'registered)
+    (with-temp-buffer
+      (let ((session
+             (mevedel-session--create
+              :name "test"
+              :preset-name 'test-preset)))
+        (mevedel-preset-restore-session session)
+        (should (local-variable-p 'mevedel-test-setting))
+        (should (eq 'registered mevedel-test-setting))
+        (should-not (local-variable-p 'kill-buffer-hook))))))
 
 (mevedel-deftest mevedel-with-preset
   (:after-each

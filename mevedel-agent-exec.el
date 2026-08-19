@@ -127,6 +127,7 @@
 (declare-function mevedel-agent-invocation-transcript-relative-path
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
+(defvar mevedel-agent-request-local-symbols)
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-handle-agent-wait
@@ -384,35 +385,10 @@ Skill-scoped model and effort policy applies to direct skill dispatches."
            agent-spec
            (list :include-reasoning gptel-include-reasoning))))
 
-(defconst mevedel-agent-exec--request-local-symbols
-  '(gptel--num-messages-to-send
-    gptel--request-params
-    gptel--schema
-    gptel-backend
-    gptel-cache
-    gptel-context
-    gptel-include-reasoning
-    gptel-max-tokens
-    gptel-mode
-    gptel-model
-    gptel-reasoning-effort
-    gptel-stream
-    gptel-system-prompt
-    gptel-temperature
-    gptel-tools
-    gptel-track-media
-    gptel-track-response
-    gptel-use-context
-    gptel-use-curl
-    gptel-use-tools
-    mevedel-model-tiers
-    mevedel-model-workloads)
-  "Frozen request state installed buffer-locally for retained agent turns.")
-
 (defun mevedel-agent-exec-request-snapshot (policy)
   "Return one frozen request-local snapshot with model POLICY applied."
   (cl-loop
-   for symbol in mevedel-agent-exec--request-local-symbols
+   for symbol in mevedel-agent-request-local-symbols
    for value = (pcase symbol
                  ('gptel-backend (plist-get policy :backend))
                  ('gptel-model (plist-get policy :model))

@@ -37,6 +37,10 @@
                   (invocation parent-data-buffer logical-path
                               &optional inspection))
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-request-locals-p
+                  "mevedel-agents" (locals &optional complete))
+
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--recipe-p
                   "mevedel-reminders" (recipe))
@@ -173,7 +177,7 @@ callers reverse it only when delivering the mailbox as FIFO."
              (or (null max-turns)
                  (and (integerp max-turns) (> max-turns 0)))
              (proper-list-p hook-rules) (mevedel--plain-data-p hook-rules)
-             (proper-list-p request-locals))
+             (mevedel-agent-request-locals-p request-locals t))
       (error "Invalid live frozen agent configuration"))
     (list
      :agent
@@ -370,6 +374,9 @@ succeed after silently losing an addressable agent."
              (proper-list-p locals-data))
       (mevedel-agent-persistence--invalid
        "Invalid persisted agent configuration"))
+    (unless (mevedel-agent-request-locals-p locals-data t)
+      (mevedel-agent-persistence--invalid
+       "Invalid persisted agent request-local schema"))
     (let* ((agent
             (mevedel-agent--create
              :name name

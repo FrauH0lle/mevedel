@@ -80,9 +80,12 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-verdict
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-request-locals-p
+                  "mevedel-agents" (locals &optional complete))
 (declare-function mevedel-agents-set-specs
                   "mevedel-agents" (specs))
 (declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
+(defvar mevedel-agent-request-local-symbols)
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-sandbox-summary-class
@@ -406,15 +409,19 @@ BUFFER defaults to INVOCATION's retained conversation buffer."
                     (mevedel-agent-invocation-buffer invocation))))
     (unless (mevedel-agent-configuration-p configuration)
       (error "Agent request configuration is not frozen"))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (setq default-directory
-              (mevedel-agent-conversation--working-directory
-               (mevedel-agent-invocation-parent-session invocation)
-               (and (boundp 'mevedel--workspace) mevedel--workspace)))
-        (dolist (entry
-                 (mevedel-agent-configuration-request-locals configuration))
-          (set (make-local-variable (car entry)) (cdr entry)))))))
+    (let ((locals
+           (mevedel-agent-configuration-request-locals configuration)))
+      (unless (mevedel-agent-request-locals-p locals)
+        (error "Agent request-local configuration is invalid"))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (setq default-directory
+                (mevedel-agent-conversation--working-directory
+                 (mevedel-agent-invocation-parent-session invocation)
+                 (and (boundp 'mevedel--workspace) mevedel--workspace)))
+          (dolist (symbol mevedel-agent-request-local-symbols)
+            (when-let* ((entry (assq symbol locals)))
+              (set (make-local-variable symbol) (cdr entry)))))))))
 
 
 ;;
