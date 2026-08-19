@@ -622,29 +622,8 @@
                      (funcall (mevedel-tool-render-transform tool)
                               "WrappedRenderTransform" nil "abcd")))))
 
-  :doc ":repair-input is stored on native tools"
-  (progn
-    (mevedel-define-tool
-     :name "NativeRepair"
-     :handler #'ignore
-     :description "Native repair callback"
-     :repair-input #'ignore)
-    (should (eq #'ignore
-                (mevedel-tool-repair-input
-                 (mevedel-tool-get "NativeRepair" "mevedel")))))
-
-  :doc ":repair-input is stored on wrapped tools"
-  (let ((source (gptel-make-tool
-                 :name "WrappedRepair"
-                 :function #'ignore
-                 :description "Wrapped repair callback"
-                 :args nil
-                 :category "test-repair")))
-    (mevedel-define-tool :wrap source :repair-input #'ignore)
-    (should
-     (eq #'ignore
-         (mevedel-tool-repair-input
-          (mevedel-tool-get "WrappedRepair" "mevedel-test-repair")))))
+  :doc "semantic repair extension is absent"
+  (should-not (fboundp 'mevedel-tool-repair-input))
 
   :doc "wrapped tool dispatch suppresses interactive file-visit side effects"
   (let (captured result)

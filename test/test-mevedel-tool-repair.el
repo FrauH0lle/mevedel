@@ -468,88 +468,7 @@
     (should (eq 'invalid (plist-get outcome :status)))
     (should-not (plist-member outcome :args)))
 
-  :doc "runs one semantic callback and repairs its output in a second pass"
-  (let* ((calls 0)
-         (tool
-         (mevedel-tool--create
-          :name "Semantic"
-          :args '((ids array :required "IDs" :items (:type integer)))
-          :repair-input
-          (lambda (_args _issues)
-            (setq calls (1+ calls))
-            '(:args (:ids "[1,2]")
-              :repairs ((:rule supply-ids
-                         :paths ((ids))
-                         :before object
-                         :after string
-                         :summary "Supplied the default ID list.")))))))
-    (let ((outcome
-           (mevedel-tool-repair-attempt tool '(:ids (:placeholder t)))))
-      (should (= 1 calls))
-      (should (eq 'repaired (plist-get outcome :status)))
-      (should (equal [1 2] (plist-get (plist-get outcome :args) :ids)))
-      (should
-       (equal '(supply-ids parse-json-value)
-              (mapcar (lambda (record) (plist-get record :rule))
-                      (plist-get outcome :repairs))))))
-
-  :doc "runs semantic defaults even when each individual field is valid"
-  (let ((tool
-         (mevedel-tool--create
-          :name "Read"
-          :args '((offset integer :optional "Offset")
-                  (limit integer :optional "Limit"))
-          :repair-input
-          (lambda (args _issues)
-            (when (and (plist-member args :limit)
-                       (not (plist-member args :offset)))
-              (list
-               :args (plist-put (copy-sequence args) :offset 0)
-               :repairs
-               '((:rule default-offset
-                  :paths ((offset))
-                  :before missing
-                  :after integer
-                  :summary "Defaulted the missing offset to zero."))))))))
-    (let ((outcome (mevedel-tool-repair-attempt tool '(:limit 30))))
-      (should (equal '(:limit 30 :offset 0) (plist-get outcome :args)))
-      (should (eq 'default-offset
-                  (plist-get (car (plist-get outcome :repairs)) :rule)))))
-
-  :doc "rejects callback changes not covered by value-free records"
-  (let ((tool
-         (mevedel-tool--create
-          :name "Broken"
-          :args '((count integer :required "Count"))
-          :repair-input
-          (lambda (_args _issues)
-            '(:args (:count 1) :repairs nil)))))
-    (should-error
-     (mevedel-tool-repair-attempt tool '(:count "one"))
-     :type 'error))
-
-  :doc "detects callback reversals across both generic passes"
-  (let ((tool
-         (mevedel-tool--create
-          :name "Cycle"
-          :args '((names array :required "Names" :items (:type string))
-                  (count integer :required "Count"))
-          :repair-input
-          (lambda (args _issues)
-            (list
-             :args (plist-put (copy-sequence args) :names "alice")
-             :repairs
-             '((:rule reverse-array-repair
-                :paths ((names))
-                :before array
-                :after string
-                :summary "Reversed the array repair.")))))))
-    (should-error
-     (mevedel-tool-repair-attempt
-     tool '(:names "alice" :count "not-json"))
-     :type 'error))
-
-  :doc "fails closed when the shared repair-attempt bound is exhausted"
+  :doc "fails closed when the generic repair-attempt bound is exhausted"
   (let (specs args)
     (dotimes (index 33)
       (let ((name (intern (format "field%d" index))))
@@ -559,31 +478,6 @@
            (mevedel-tool--create :name "TooManyRepairs"
                                  :args (nreverse specs))))
       (should-error (mevedel-tool-repair-attempt tool args) :type 'error)))
-
-  :doc "rejects invalid callback identifiers and false schema paths separately"
-  (dolist
-      (record '((:rule nil :paths ((count)) :before string :after integer
-                       :summary "Changed count.")
-                (:rule unsafe-path :paths ((count "sentinel-secret"))
-                       :before string :after integer :summary "Changed count.")
-                (:rule nil-shape :paths ((count)) :before nil :after integer
-                       :summary "Changed count.")
-                (:rule secret-shape :paths ((count)) :before alice :after integer
-                       :summary "Changed count.")
-                (:rule false-path :paths ((count bogus))
-                       :before string :after integer :summary "Changed count.")
-                (:rule wrong-container :paths ((count 0))
-                       :before string :after integer :summary "Changed count.")))
-    (let ((tool
-           (mevedel-tool--create
-            :name "UnsafeRecord"
-            :args '((count integer :required "Count"))
-            :repair-input
-            (lambda (_args _issues)
-              (list :args '(:count 1) :repairs (list record))))))
-      (should-error
-       (mevedel-tool-repair-attempt tool '(:count "one"))
-       :type 'error)))
 
   :doc "unwraps exact HTTP and HTTPS auto-links in the final path component"
   (let ((tool
@@ -811,38 +705,6 @@
       (should (eq 'abandoned (plist-get event :outcome)))
       (should (equal '(wrap-array-singleton) (plist-get event :rules)))
       (should (equal '((names) (count)) (plist-get event :paths)))))
-
-  :doc "settles internal callback errors instead of leaking them to gptel"
-  (let ((session (mevedel-session--create :name "main"))
-        (tool
-         (mevedel-tool--create
-          :name "BrokenRepair"
-          :category "mevedel"
-          :args '((count integer :required "Count"))
-          :repair-input
-          (lambda (&rest _)
-            (error "Repair exploded with /private/sentinel-secret")))))
-    (mevedel-tool-register tool)
-    (with-temp-buffer
-      (setq-local mevedel--session session)
-      (let (warning)
-        (cl-letf (((symbol-function 'display-warning)
-                   (lambda (_type message &rest _)
-                     (setq warning message))))
-          (let* ((info '(:name "BrokenRepair" :args (:count "twelve")))
-                 (result
-                 (mevedel-tool-repair-pre-tool-call
-                  info)))
-            (should (string-prefix-p "Error:" (plist-get result :result)))
-            (should (string-match-p "internally" (plist-get result :result)))
-            (mevedel-tool-repair-post-tool-call
-             (append info (list :result (plist-get result :result))))))
-        (should warning)
-        (should-not (string-match-p "private\|sentinel-secret" warning))))
-    (let ((event (car (mevedel-session-repair-log session))))
-      (should (eq 'internal-repair-error
-                  (plist-get event :failure-class)))
-      (should (equal '(internal-error) (plist-get event :issue-kinds)))))
 
   :doc "pairs pre-pipeline validation and repair telemetry"
   (let ((session (mevedel-session--create :name "main"))

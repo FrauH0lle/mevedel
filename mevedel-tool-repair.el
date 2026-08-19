@@ -37,7 +37,6 @@
 (declare-function mevedel-tool-get "mevedel-tool-registry"
                   (name &optional category))
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-repair-input "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-address-like-p "mevedel-resource" (value))
@@ -396,21 +395,6 @@ positional dispatch, which represents omitted optional arguments as nil."
   (let ((mevedel-tool-repair--raw-input-p t))
     (mevedel-tool-repair-validate tool args)))
 
-(defun mevedel-tool-repair--declared-path-p (tool path)
-  "Return non-nil when PATH names a declared schema location in TOOL."
-  (let* ((spec (assq (car path) (mevedel-tool-args tool)))
-         (schema (and spec (append (list :type (cadr spec))
-                                   (nthcdr 4 spec)))))
-    (dolist (part (cdr path))
-      (setq schema
-            (cond
-             ((and (integerp part) (eq 'array (plist-get schema :type)))
-              (plist-get schema :items))
-             ((and (symbolp part) (eq 'object (plist-get schema :type)))
-              (plist-get (plist-get schema :properties)
-                         (mevedel-tool-repair--key part))))))
-    (not (null schema))))
-
 (defun mevedel-tool-repair--value-at-path (value path)
   "Return the value below VALUE at PATH."
   (dolist (part path value)
@@ -579,12 +563,12 @@ positional dispatch, which represents omitted optional arguments as nil."
                        (mevedel-tool-repair-format-path path))))))))))
     nil))
 
-(defun mevedel-tool-repair--generic-pass (tool args &optional seen remaining)
-  "Apply generic repairs to TOOL ARGS using shared SEEN and REMAINING state."
+(defun mevedel-tool-repair--generic-pass (tool args)
+  "Apply bounded generic repairs to TOOL ARGS."
   (let ((candidate args)
         records
-        (seen seen)
-        (remaining (or remaining 32))
+        seen
+        (remaining 32)
         done)
     (while (not done)
       (let* ((issues (mevedel-tool-repair--validate-raw tool candidate))
@@ -615,9 +599,7 @@ positional dispatch, which represents omitted optional arguments as nil."
                   (append records (list (plist-get change :record))))))))
     (list :args candidate
           :repairs records
-          :issues (mevedel-tool-repair--validate-raw tool candidate)
-          :seen seen
-          :remaining remaining)))
+          :issues (mevedel-tool-repair--validate-raw tool candidate))))
 
 (defun mevedel-tool-repair--plist-keys (plist)
   "Return keys in PLIST."
@@ -626,73 +608,6 @@ positional dispatch, which represents omitted optional arguments as nil."
       (push (pop plist) keys)
       (pop plist))
     (nreverse keys)))
-
-(defun mevedel-tool-repair--changed-keys (before after)
-  "Return top-level keys whose presence or values differ in BEFORE and AFTER."
-  (let (changed)
-    (dolist (key (delete-dups
-                  (append (mevedel-tool-repair--plist-keys before)
-                          (mevedel-tool-repair--plist-keys after))))
-      (unless (and (eq (not (null (plist-member before key)))
-                       (not (null (plist-member after key))))
-                   (equal (plist-get before key) (plist-get after key)))
-        (push (mevedel-tool-repair--name key) changed)))
-    (nreverse changed)))
-
-(defun mevedel-tool-repair--validate-callback-record (tool record)
-  "Validate and normalize one TOOL-owned repair RECORD."
-  (let ((rule (plist-get record :rule))
-        (paths (plist-get record :paths))
-        (before (plist-get record :before))
-        (after (plist-get record :after))
-        (summary (plist-get record :summary)))
-    (unless (and rule (symbolp rule)
-                 (listp paths) paths
-                 (seq-every-p
-                  (lambda (path)
-                    (and (listp path)
-                         path
-                         (symbolp (car path))
-                         (car path)
-                         (seq-every-p
-                         (lambda (part)
-                            (or (and (symbolp part) part)
-                                (and (integerp part) (>= part 0))))
-                          path)
-                         (mevedel-tool-repair--declared-path-p tool path)))
-                  paths)
-                 (memq before mevedel-tool-repair--shape-identifiers)
-                 (memq after mevedel-tool-repair--shape-identifiers)
-                 (stringp summary)
-                 (<= (length summary) 160)
-                 (not (string-match-p "[\n\r]" summary)))
-      (error "Tool repair callback returned an invalid repair record"))
-    (plist-put (copy-sequence record) :source 'tool)))
-
-(defun mevedel-tool-repair--apply-callback (tool args issues)
-  "Apply and validate TOOL's semantic repair callback to ARGS and ISSUES."
-  (when-let* ((callback (mevedel-tool-repair-input tool))
-              (result (funcall callback
-                               (copy-tree args t)
-                               (copy-tree issues t))))
-    (unless (and (listp result) (plist-member result :args))
-      (error "Tool repair callback must return :args and :repairs"))
-    (let* ((updated (plist-get result :args))
-           (records
-            (mapcar
-             (lambda (record)
-               (mevedel-tool-repair--validate-callback-record tool record))
-             (plist-get result :repairs)))
-           (changed (mevedel-tool-repair--changed-keys args updated))
-           (covered
-            (delete-dups
-             (mapcan (lambda (record)
-                       (mapcar #'car (plist-get record :paths)))
-                     records))))
-      (unless (and (listp updated) changed
-                   (seq-every-p (lambda (key) (memq key covered)) changed))
-        (error "Tool repair callback did not describe every changed argument"))
-      (list :args (copy-tree updated t) :repairs records))))
 
 (defun mevedel-tool-repair-attempt (tool args)
   "Validate and atomically repair raw model-produced TOOL ARGS.
@@ -703,35 +618,16 @@ Invalid outcomes intentionally omit tentative args and repair records."
       (if-let* ((issues (mevedel-tool-repair--validate-raw tool args)))
           (list :status 'invalid :issues issues)
         (list :status 'valid :args args :repairs nil))
-    (let* ((first (mevedel-tool-repair--generic-pass
-                   tool (copy-tree args t)))
-           (candidate (plist-get first :args))
-           (records (plist-get first :repairs))
-           (seen (cons candidate (plist-get first :seen)))
-           (remaining (plist-get first :remaining))
-           (callback
-            (mevedel-tool-repair--apply-callback
-             tool candidate (plist-get first :issues))))
-      (when callback
-        (let ((updated (plist-get callback :args)))
-          (when (member updated seen)
-            (error "Tool input repair revisited a previous state"))
-          (when (= remaining 0)
-            (error "Tool input repair exceeded its progress bound"))
-          (setq candidate updated)
-          (push candidate seen)
-          (setq remaining (1- remaining)))
-        (setq records (append records (plist-get callback :repairs))))
-      (let* ((second (mevedel-tool-repair--generic-pass
-                      tool candidate seen remaining))
-             (issues (plist-get second :issues)))
-        (setq records (append records (plist-get second :repairs)))
-        (if issues
-            (append (list :status 'invalid :issues issues)
-                    (when records (list :abandoned-repairs records)))
-          (list :status (if records 'repaired 'valid)
-                :args (plist-get second :args)
-                :repairs records))))))
+    (let* ((result (mevedel-tool-repair--generic-pass
+                    tool (copy-tree args t)))
+           (issues (plist-get result :issues))
+           (records (plist-get result :repairs)))
+      (if issues
+          (append (list :status 'invalid :issues issues)
+                  (when records (list :abandoned-repairs records)))
+        (list :status (if records 'repaired 'valid)
+              :args (plist-get result :args)
+              :repairs records)))))
 
 
 ;;

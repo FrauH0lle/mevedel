@@ -60,7 +60,7 @@ Important tool metadata:
 - Permissions: `:check-permission`, `:check-permission-async`,
   `:get-path`, `:get-paths`, `:get-pattern`, `:get-domain`, `:get-name`
 - Loading/grouping: `:category`, `:groups`, `:wrap`, `:prompt-file`
-- Input contracts: `:args`, `:repair-input`
+- Input contracts: `:args`
 - Display/output: `:summary`, `:max-result-size`, `:render-transform`,
   `:renderer`
 
@@ -104,22 +104,17 @@ The generic repair catalogue is deliberately small and ordered:
 Repairs never invent required values and do not coerce arbitrary strings to
 numbers or booleans: the JSON parser must consume the exact input and the
 result must validate. Required `null` and required empty-object placeholders
-therefore remain invalid. Generic repairs run before and after, at most once,
-an optional tool-owned `:repair-input` callback. This deliberate extension
-handles relational or wrapped-tool invariants the generic schema visitor
-cannot express. The callback receives copies
-of `(args validation-issues)` and must return changed `:args` plus value-free
-`:repairs` records covering every changed top-level argument. The entire
-candidate is committed only when final validation succeeds; otherwise the
-model gets bounded, value-free retry guidance and no tentative arguments run.
+therefore remain invalid. Generic repairs run as one bounded, ordered pass.
+The entire candidate is committed only when final validation succeeds;
+otherwise the model gets bounded, value-free retry guidance and no tentative
+arguments run.
 
 `path` is an internal semantic argument type for filesystem-only contracts.
 Provider schemas lower it to an ordinary JSON string and append the guidance
 “Pass a raw filesystem path, not Markdown or a URL.” Tools that also accept
 resource addresses use a separate path-or-resource contract, so a recognized
 `scheme://` address is not rejected as a web URL and ordinary paths retain
-their current behavior. Wrapped tools can use `:repair-input` when their
-source schema cannot express either semantic type.
+their current behavior.
 
 Code-navigation tools keep filesystem access in Emacs buffers, so Imenu and
 Tree-sitter operate on remote files through the active file handler. Remote

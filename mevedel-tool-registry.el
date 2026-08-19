@@ -67,7 +67,6 @@ created as a side effect of registration and handles serialization."
   prompt            ; string or function: detailed instructions
   prompt-source     ; plist describing the prompt's registration provenance
   args              ; arg spec list in mevedel format
-  repair-input      ; function or nil: tool-owned semantic input repair
   category          ; string: "mevedel" (default)
   ;; Behavioral declarations
   read-only-p       ; t if tool never modifies state
@@ -627,8 +626,6 @@ Optional (both forms):
   :prompt-file      STRING       Load prompt from file (relative to mevedel
                                  source dir)
   :args             LIST         Arg specs: ((name type :required \"desc\") ...)
-  :repair-input     FN           Pure semantic repair callback receiving
-                                 (args-copy validation-issues)
   :category         STRING       Tool category (default \"mevedel\")
   :groups           LIST         Group symbols: (read edit util ...)
   :read-only-p      BOOL         Tool never modifies state
@@ -703,7 +700,6 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
            ((plist-member props :prompt) '(:kind inline))
            (t '(:kind description))))
          (args (plist-get props :args))
-         (repair-input (plist-get props :repair-input))
          (category (or (plist-get props :category) "mevedel"))
          (groups (plist-get props :groups))
          (read-only-p (plist-get props :read-only-p))
@@ -742,7 +738,6 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :prompt resolved-prompt
               :prompt-source ',prompt-source
               :args ',args
-              :repair-input ,repair-input
               :category ,category
               :read-only-p ,read-only-p
               :snapshot-p ,snapshot-p
@@ -797,7 +792,6 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
            ((plist-member props :description) '(:kind description))
            (t nil)))
          (groups (plist-get props :groups))
-         (repair-input (plist-get props :repair-input))
          (read-only-p (plist-get props :read-only-p))
          (snapshot-p (plist-get props :snapshot-p))
          (destructive-p (plist-get props :destructive-p))
@@ -832,7 +826,6 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       :prompt-override ,prompt-override
       :prompt-source ',prompt-source
       :groups ',groups
-      :repair-input ,repair-input
       :read-only-p ,read-only-p
       :snapshot-p ,snapshot-p
       :destructive-p ,destructive-p
@@ -849,7 +842,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
 
 (cl-defun mevedel-tool--register-wrap
     (&key source category-override description-override summary
-          prompt-override prompt-source groups repair-input read-only-p
+          prompt-override prompt-source groups read-only-p
           snapshot-p destructive-p
           check-permission check-permission-async
           get-path get-pattern get-domain get-name
@@ -858,7 +851,6 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
 
 SOURCE must be a `gptel-tool' struct.  CATEGORY-OVERRIDE,
 DESCRIPTION-OVERRIDE, SUMMARY, PROMPT-OVERRIDE, PROMPT-SOURCE, GROUPS,
-REPAIR-INPUT,
 READ-ONLY-P, SNAPSHOT-P, DESTRUCTIVE-P, CHECK-PERMISSION,
 CHECK-PERMISSION-ASYNC, GET-PATH,
 GET-PATTERN, GET-DOMAIN, GET-NAME, MAX-RESULT-SIZE, DISPLAY-ARG,
@@ -891,7 +883,6 @@ RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
                        :category source-category
                        :name source-name))
              :args mevedel-args
-             :repair-input repair-input
              :category target-category
              :read-only-p read-only-p
              :snapshot-p snapshot-p
