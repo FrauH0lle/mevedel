@@ -47,6 +47,13 @@
 (declare-function mevedel-reminders-make-full-auto-mode-exit
                   "mevedel-reminders" ())
 
+;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-make-directory
+                  "mevedel-session-control-fs" (path &optional parents))
+(declare-function mevedel-session-control-fs-write-file
+                  "mevedel-session-control-fs"
+                  (path content &optional coding-system))
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-assert-mutation-authority
                   "mevedel-session-persistence" (session &optional buffer))
@@ -1906,9 +1913,10 @@ TARGET restores portable target paths when non-nil."
           (require 'mevedel-session-persistence)
           (mevedel-session-persistence-publish-text
            session file content 'utf-8-unix))
-      (make-directory (file-name-directory file) t)
-      (with-temp-file file
-        (insert content)))))
+      (require 'mevedel-session-control-fs)
+      (mevedel-session-control-fs-make-directory
+       (directory-file-name (file-name-directory file)) t)
+      (mevedel-session-control-fs-write-file file content 'utf-8-unix))))
 
 (defun mevedel-permission--load-persistent-rules (workspace)
   "Load persistent permission rules for WORKSPACE.

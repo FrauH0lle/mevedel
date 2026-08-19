@@ -216,7 +216,9 @@ The current invocation always receives the complete approved request.
 target-native paths, so reopening the same workspace through an equivalent
 TRAMP alias reuses its authority. The user-global `permissions.el` remains in
 the client-local `mevedel-user-dir`; it is merged at runtime and is never copied
-to the target or into a portable session.
+to the target or into a portable session. Project-store replacement is atomic
+and descriptor-pinned; a symlink in the state path or at `permissions.el`
+fails closed before any linked target is changed.
 
 Global and project stores are validated when a fresh, resumed, or forked
 session initializes. Invalid files contribute no authority and produce one
