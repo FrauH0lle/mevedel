@@ -239,7 +239,10 @@ authority only for the validated target-local artifact.
 Acceptance is final even if preparation fails. The source session persists a
 bounded retry record, and `mevedel-retry-plan-implementation` resumes from the
 completed preparation step instead of recreating artifacts, summaries, or
-worktrees. Goal execution reserves and persists its Goal ID in that record.
+worktrees. A post-acceptance preparation failure settles the original approval;
+it never restores an action that could archive the same proposal again. Here
+retries also reapply the accepted Mode before dispatch. Goal execution reserves
+and persists its Goal ID in that record.
 A retry reuses a target Goal only when both the reserved ID and target-local
 accepted-plan reference match; a different unfinished Goal remains untouched
 and is reported as a conflict.

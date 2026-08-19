@@ -13,11 +13,13 @@
 (require 'mevedel-plan-mode)
 (require 'mevedel-goal)
 (require 'mevedel-interaction-prompt)
+(require 'mevedel-pending-inputs)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-render)
 (require 'mevedel-permissions)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-session-persistence)
+(require 'mevedel-skills-ui)
 (require 'mevedel-structs)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
@@ -214,7 +216,82 @@
     (setf (mevedel-session-pending-plan-approval session) entry)
     (mevedel-plan-approval-settle entry 'aborted)
     (should (eq entry (mevedel-session-pending-plan-approval session)))
-    (should rendered)))
+    (should rendered))
+
+  :doc "keeps acceptance settled after Goal-save or Mode-transition failure"
+  (dolist (failure '(goal-save mode-transition))
+    (let* ((session
+            (mevedel-session--create
+             :authority-mode 'pid-lock :name "test" :plan-mode t))
+           (chat-buffer (generate-new-buffer " *plan-committed-failure*"))
+           (selection
+            (list :location 'here :context 'current
+                  :execution (if (eq failure 'goal-save) 'goal 'direct)
+                  :mode 'edits :model-provider "Test:test-model"))
+           (outcome (list :accept t :selection selection))
+           (entry
+            (mevedel-plan-mode--approval-entry
+             "# Accepted" chat-buffer session selection))
+           (archives 0)
+           (saves 0)
+           (transitions 0)
+           (submissions 0)
+           (mode-fails (eq failure 'mode-transition)))
+      (unwind-protect
+          (progn
+            (with-current-buffer chat-buffer
+              (setq-local mevedel--session session))
+            (setf (mevedel-session-pending-plan-approval session) entry)
+            (cl-letf
+                (((symbol-function 'mevedel-plan-accept)
+                  (lambda (&rest _)
+                    (cl-incf archives)
+                    (setf (mevedel-session-plan-metadata session)
+                          '(:status accepted
+                            :accepted-path "local/plans/accepted.md"
+                            :accepted-hash "hash"))
+                    '(:accepted
+                      (:path "local/plans/accepted.md" :hash "hash"))))
+                 ((symbol-function 'mevedel-plan-handoff--persist)
+                  (lambda (&rest _)
+                    (cl-incf saves)
+                    (when (and (eq failure 'goal-save) (= saves 1))
+                      (error "Reservation save failed"))))
+                 ((symbol-function 'mevedel-permission-mode-transition)
+                  (lambda (mode)
+                    (cl-incf transitions)
+                    (if mode-fails
+                        (error "Mode transition failed")
+                      (setf (mevedel-session-permission-mode session)
+                            mode))))
+                 ((symbol-function 'mevedel-plan-handoff--submit)
+                  (lambda (&rest _)
+                    (cl-incf submissions))))
+              (mevedel-plan-approval-settle entry outcome)
+              (mevedel-plan-approval-settle entry outcome)
+            (let* ((metadata (mevedel-session-plan-metadata session))
+                   (retry (plist-get metadata :implementation-retry)))
+              (should (= 1 archives))
+              (should-not (mevedel-session-plan-mode session))
+              (should-not
+               (mevedel-session-pending-plan-approval session))
+              (should (eq 'accepted (plist-get metadata :status)))
+              (should (string-match-p "failed"
+                                      (plist-get retry :failure)))
+              (should (= (if (eq failure 'goal-save) 0 1)
+                         transitions))
+              (should (= 2 saves))
+              (should (= 0 submissions)))
+            (setq mode-fails nil)
+            (mevedel-retry-plan-implementation session chat-buffer)
+            (should (eq 'edits
+                        (mevedel-session-permission-mode session)))
+            (should (= (if (eq failure 'goal-save) 1 2)
+                       transitions))
+            (should (= 3 saves))
+            (should (= 1 submissions))
+            (should (= 1 archives))))
+        (when (buffer-live-p chat-buffer) (kill-buffer chat-buffer))))))
 
 (mevedel-deftest mevedel-plan-mode--render-approval
   (:doc "renders and toggles execution without applying Mode before acceptance")
@@ -1339,7 +1416,7 @@
            :name "main" :plan-mode t :permission-mode 'ask))
          (chat-buffer (generate-new-buffer " *mevedel-plan-accept-data*"))
          (view-buffer (generate-new-buffer " *mevedel-plan-accept-view*"))
-         status dispatched selected-mode)
+         status dispatched)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-plan-accept)
                    (lambda (&rest _)
@@ -1349,8 +1426,6 @@
                    (lambda (_) view-buffer))
                   ((symbol-function 'mevedel-view--update-spinner)
                    (lambda (text owner) (setq status (list text owner))))
-                  ((symbol-function 'mevedel-permission-mode-transition)
-                   (lambda (mode) (setq selected-mode mode)))
                   ((symbol-function 'mevedel-plan-handoff--dispatch-accepted)
                    (lambda (&rest _) (setq dispatched t))))
           (mevedel-plan-mode--accept
@@ -1358,7 +1433,6 @@
            '(:location here :context current :execution direct :mode edits))
           (should-not (mevedel-session-plan-mode session))
           (should dispatched)
-          (should (eq 'edits selected-mode))
           (should (equal '("Preparing implementation..." plan-preparation)
                          status)))
       (kill-buffer view-buffer)
