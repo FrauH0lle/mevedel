@@ -326,9 +326,10 @@
       (should-not (get-text-property start 'gptel))
       (should-not (get-text-property start 'read-only))))
 
-  :doc "keeps internal render-data blocks ignored inside user turns"
+  :doc "preserves generated render provenance but not literal marker text"
   (with-temp-buffer
-    (let (start block-start block-end)
+    (require 'mevedel-pipeline)
+    (let (start block-start block-end literal-start literal-end)
       (setq start (point))
       (insert (propertize "Expanded prompt\n"
                           'gptel 'response
@@ -336,22 +337,15 @@
                           'invisible t
                           'front-sticky '(gptel)))
       (setq block-start (point))
-      (insert (propertize "<!-- mevedel-render-data -->\n"
-                          'gptel 'response
-                          'response t
-                          'invisible t
-                          'front-sticky '(gptel)))
-      (insert (propertize "(:kind inline-skill :name \"demo\")\n"
-                          'gptel 'response
-                          'response t
-                          'invisible t
-                          'front-sticky '(gptel)))
-      (insert (propertize "<!-- /mevedel-render-data -->\n"
-                          'gptel 'response
-                          'response t
-                          'invisible t
-                          'front-sticky '(gptel)))
+      (insert (mevedel-pipeline--format-render-data-block
+               '(:kind inline-skill :name "demo")))
       (setq block-end (point))
+      (setq literal-start (point))
+      (insert (substring-no-properties
+               (mevedel-pipeline--format-render-data-block
+                '(:kind inline-skill :name "literal"))))
+      (setq literal-end (point))
+      (set-text-properties literal-start literal-end nil)
       (mevedel--clear-user-turn-gptel-properties start (point))
       (goto-char start)
       (while (< (point) block-start)
@@ -359,17 +353,25 @@
         (forward-char 1))
       (goto-char block-start)
       (while (< (point) block-end)
-        (should (eq 'ignore (get-text-property (point) 'gptel)))
+        (should (eq t (get-text-property (point) 'mevedel-render-data)))
+        (should-not (eq 'response (get-text-property (point) 'gptel)))
         (should-not (get-text-property (point) 'response))
         (should-not (get-text-property (point) 'invisible))
         (should-not (get-text-property (point) 'front-sticky))
-        (forward-char 1)))))
+        (forward-char 1))
+      (goto-char literal-start)
+      (search-forward "<!-- mevedel-render-data -->" literal-end)
+      (should-not (text-properties-at (match-beginning 0)))
+      (should (string-search
+               ":name \"literal\""
+               (mevedel-pipeline--strip-render-data-blocks
+                (buffer-string)))))))
 
 (mevedel-deftest mevedel--hook-audit-helpers ()
   ,test
   (test)
 
-  :doc "formats hook audit blocks as ignored hidden side channels"
+  :doc "formats hook audit blocks with producer-specific provenance"
   (let* ((record
           `(:type prompt-rewrite
                   :event "UserPromptSubmit"
@@ -379,7 +381,8 @@
                   :nested (:original ,(propertize "old" 'face 'italic))))
          (block (mevedel--format-hook-audit-record record))
          parsed)
-    (should (eq 'ignore (get-text-property 0 'gptel block)))
+    (should (eq 'mevedel-hook-audit (get-text-property 0 'gptel block)))
+    (should (eq t (get-text-property 0 'mevedel-hook-audit block)))
     (should (get-text-property 0 'invisible block))
     (with-temp-buffer
       (insert block)
@@ -406,7 +409,7 @@
                    (mevedel--strip-hook-audit-blocks
                     (concat "before" block "after")))))
 
-  :doc "restores ignored properties on copied hook audit blocks"
+  :doc "does not authorize property-free copied hook audit blocks"
   (with-temp-buffer
     (insert "before"
             (substring-no-properties
@@ -417,8 +420,7 @@
      (point-min) (point-max))
     (goto-char (point-min))
     (search-forward mevedel--hook-audit-open)
-    (should (eq 'ignore
-                (get-text-property (match-beginning 0) 'gptel))))
+    (should-not (get-text-property (match-beginning 0) 'gptel)))
 
   :doc "keeps trailing tool whitespace inside the ignored audit span"
   (with-temp-buffer
@@ -426,9 +428,8 @@
      (propertize
       (concat
        "(:name \"Read\" :args nil)\n\nresult"
-       (substring-no-properties
-        (mevedel--format-hook-audit-record
-         '(:type tool-input-repair :state committed)))
+       (mevedel--format-hook-audit-record
+        '(:type tool-input-repair :state committed))
        "\n")
       'gptel '(tool . "call-1")))
     (insert (propertize "#+end_tool\nThe next response."
@@ -438,7 +439,9 @@
     (goto-char (point-min))
     (search-forward mevedel--hook-audit-close)
     (while (looking-at-p "[ \t\r\n]")
-      (should (eq 'ignore (get-text-property (point) 'gptel)))
+      (should (eq 'mevedel-hook-audit
+                  (get-text-property (point) 'gptel)))
+      (should (eq t (get-text-property (point) 'mevedel-hook-audit)))
       (forward-char 1)))
 
   :doc "builds prompt rewrite audit records only when the prompt changed"

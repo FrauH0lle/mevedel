@@ -51,14 +51,15 @@
       (should (= prompt-start
                  (mevedel-transcript-prompt-transform-start)))))
 
-  :doc "skips trailing ignored render data when locating prompt start"
-  (with-temp-buffer
-    (let ((prompt-start (point)))
-      (insert (propertize "User prompt" 'gptel 'prompt))
-      (insert (propertize "\n<render-data />" 'gptel 'ignore))
-      (insert "\n\n")
-      (should (= prompt-start
-                 (mevedel-transcript-prompt-transform-start))))))
+  :doc "skips trailing hidden metadata when locating prompt start"
+  (dolist (property '(ignore mevedel-render-data mevedel-hook-audit))
+    (with-temp-buffer
+      (let ((prompt-start (point)))
+        (insert (propertize "User prompt" 'gptel 'prompt))
+        (insert (propertize "\n<hidden />" 'gptel property))
+        (insert "\n\n")
+        (should (= prompt-start
+                   (mevedel-transcript-prompt-transform-start)))))))
 
 ;;
 ;;; Segment extraction
