@@ -7,6 +7,8 @@
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-session-persistence)
+(require 'mevedel-view)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -91,10 +93,15 @@
   ,test
   (test)
   :doc "settles the caller with an error when the proposal is invalidated"
-  (let* ((record (mevedel-directive--create
+  (let* ((attempt (gensym "attempt-"))
+         (record (mevedel-directive--create
                   :id "directive" :request "Request"
-                  :plan '(:status proposed :action implement)))
-         (session (mevedel-session--create :name "main"))
+                  :plan (list :status 'proposed :action 'implement
+                              :attempt attempt)))
+         (session (mevedel-session--create
+                   :name "main"
+                   :directive-planning
+                   (list :directive-id "directive" :attempt attempt)))
          (directive (make-overlay (point-min) (point-min)))
          settled)
     (unwind-protect
@@ -108,9 +115,247 @@
           (mevedel-directive-plan--approval-outcome
            directive record session
            (lambda (err fsm) (setq settled (list :err err :fsm fsm)))
+           attempt
            'invalidated)
           (should (stringp (plist-get settled :err))))
+      (delete-overlay directive)))
+
+  :doc "rejects a captured Accept after a replacement attempt starts"
+  (let* ((old-attempt (gensym "old-attempt-"))
+         (new-attempt (gensym "new-attempt-"))
+         (new-owner (list :directive-id "directive" :phase 'approval
+                          :attempt new-attempt))
+         (record (mevedel-directive--create
+                  :id "directive" :request "Edited"
+                  :plan (list :status 'proposed :action 'implement
+                              :attempt new-attempt)))
+         (session (mevedel-session--create
+                   :name "main" :directive-planning new-owner))
+         (directive (make-overlay (point-min) (point-min)))
+         settled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-directive-plan--implement)
+                   (lambda (&rest _)
+                     (ert-fail "Invalidated plan reached implementation")))
+                  ((symbol-function 'mevedel-directive-plan--persist) #'ignore)
+                  ((symbol-function 'mevedel-directive-plan--refresh) #'ignore)
+                  ((symbol-function
+                    'mevedel-directive-plan--restore-chat-scope)
+                   #'ignore))
+          (mevedel-directive-plan--approval-outcome
+           directive record session
+           (lambda (err fsm) (setq settled (list :err err :fsm fsm)))
+           old-attempt
+           '(:accept t :selection (:mode edits)))
+          (should-not settled)
+          (should (eq new-owner
+                      (mevedel-session-directive-planning session))))
       (delete-overlay directive))))
+
+(mevedel-deftest mevedel-directive-plan--settle-planning
+  (:quiet t)
+  ,test
+  (test)
+
+  :doc "does not revive a proposal invalidated by an owner or child edit"
+  (dolist (edit '(owner child))
+    (mevedel-view-test--with-buffers
+      (let* ((draft ">first editable character\nsecond line")
+             (proposal "<proposed_plan>\n# Stale\n</proposed_plan>")
+             (attempt (gensym "attempt-"))
+             (session (mevedel-session--create :name "main"))
+             (record
+              (mevedel-directive--create
+               :id "directive" :request "Original"
+               :plan (list :status 'planning :action 'implement
+                           :attempt attempt)
+               :planning (list (list :result proposal))))
+             (directive (make-overlay (point-min) (point-min)))
+             (fsm (gptel-make-fsm :info (list :buffer data-buf)))
+             presented implemented settled (drains 0))
+        (unwind-protect
+            (progn
+              (with-current-buffer data-buf
+                (setq-local mevedel--session session))
+              (with-current-buffer view-buf
+                (setq-local mevedel--session session)
+                (goto-char (mevedel-view--input-start))
+                (insert draft)
+                (mevedel-view--switch-composer-scope
+                 (list :directive-id "directive" :action 'plan
+                       :record record)))
+              (setf (mevedel-session-directive-planning session)
+                    (list :directive-id "directive" :phase 'planning
+                          :attempt attempt))
+              (if (eq edit 'owner)
+                  (mevedel-directive-set-request record "Edited")
+                (mevedel-directive-add-subdirective
+                 record (mevedel-subdirective--create
+                         :id "child" :request "New detail")))
+              (cl-letf
+                  (((symbol-function 'mevedel-directive-plan--refresh) #'ignore)
+                   ((symbol-function 'mevedel-plan-approval-present)
+                    (lambda (&rest _) (setq presented t)))
+                   ((symbol-function 'mevedel-directive-plan--implement)
+                    (lambda (&rest _) (setq implemented t)))
+                   ((symbol-function
+                     'mevedel-view--schedule-late-follow-up-drain)
+                    (lambda () (cl-incf drains))))
+                (mevedel-directive-plan--settle-planning
+                 directive record
+                 (lambda (err terminal-fsm)
+                   (setq settled (list err terminal-fsm)))
+                 nil fsm attempt session))
+              (should-not presented)
+              (should-not implemented)
+              (should (string-match-p "invalidated" (car settled)))
+              (should (eq fsm (cadr settled)))
+              (should-not (mevedel-session-directive-planning session))
+              (should-not (mevedel-session-pending-plan-approval session))
+              (should (= 1 drains))
+              (with-current-buffer view-buf
+                (should-not mevedel-view--composer-scope)
+                (should
+                 (equal draft
+                        (buffer-substring-no-properties
+                         (mevedel-view--input-start) (point-max))))))
+          (delete-overlay directive)))))
+
+  :doc "releases failed, aborted, missing, and dead planning terminals"
+  (dolist (terminal '(error abort missing dead-buffer))
+    (mevedel-view-test--with-buffers
+      (let* ((draft ">first editable character\nsecond line")
+             (proposal "<proposed_plan>\n# Plan\n</proposed_plan>")
+             (attempt (gensym "attempt-"))
+             (record
+              (mevedel-directive--create
+               :id "directive" :session-id "session" :request "Original"
+               :plan (list :status 'planning :action 'implement
+                           :attempt attempt)
+               :planning
+               (list (list :result (if (eq terminal 'missing)
+                                       "No proposal"
+                                     proposal)))))
+             (workspace
+              (mevedel-workspace--create
+               :type 'file :id "terminal" :root "/tmp" :name "terminal"
+               :directives (list record)))
+             (session (mevedel-session--create
+                       :name "main" :session-id "session"
+                       :workspace workspace))
+             (directive (make-overlay (point-min) (point-min)))
+             (fsm (gptel-make-fsm :info (list :buffer data-buf)))
+             settled (drains 0))
+        (unwind-protect
+            (progn
+              (with-current-buffer data-buf
+                (setq-local mevedel--session session))
+              (with-current-buffer view-buf
+                (setq-local mevedel--session session)
+                (goto-char (mevedel-view--input-start))
+                (insert draft)
+                (mevedel-view--switch-composer-scope
+                 (list :directive-id "directive" :action 'plan
+                       :record record)))
+              (setf (mevedel-session-directive-planning session)
+                    (list :directive-id "directive" :phase 'planning
+                          :attempt attempt))
+              (when (eq terminal 'dead-buffer)
+                (kill-buffer data-buf))
+              (cl-letf
+                  (((symbol-function 'mevedel-directive-plan--refresh) #'ignore)
+                   ((symbol-function 'mevedel-plan-approval-present)
+                    (lambda (&rest _)
+                      (ert-fail "Non-presentable terminal reached approval")))
+                   ((symbol-function
+                     'mevedel-view--schedule-late-follow-up-drain)
+                    (lambda () (cl-incf drains))))
+                (mevedel-directive-plan--settle-planning
+                 directive record
+                 (lambda (err terminal-fsm)
+                   (setq settled (list err terminal-fsm)))
+                 (pcase terminal
+                   ('error "Provider failed")
+                   ('abort 'abort))
+                 fsm attempt session))
+              (should (car settled))
+              (should (eq fsm (cadr settled)))
+              (should-not (mevedel-session-directive-planning session))
+              (should-not (mevedel-session-pending-plan-approval session))
+              (should (plist-get (mevedel-directive-plan record) :cancelled))
+              (should-not
+               (mevedel-directive-plan-restore-pending
+                session (if (buffer-live-p data-buf)
+                            data-buf
+                          (current-buffer))))
+              (should-not (mevedel-session-directive-planning session))
+              (should (= (if (eq terminal 'dead-buffer) 0 1) drains))
+              (when (buffer-live-p view-buf)
+                (with-current-buffer view-buf
+                  (should-not mevedel-view--composer-scope)
+                  (should
+                   (equal draft
+                          (buffer-substring-no-properties
+                           (mevedel-view--input-start) (point-max)))))))
+          (delete-overlay directive)))))
+
+  :doc "leaves a replacement attempt owned when an old callback settles"
+  (mevedel-view-test--with-buffers
+    (let* ((draft ">first editable character\nsecond line")
+           (old-attempt (gensym "old-attempt-"))
+           (new-attempt (gensym "new-attempt-"))
+           (proposal "<proposed_plan>\n# Old\n</proposed_plan>")
+           (new-plan (list :status 'planning :action 'implement
+                           :attempt new-attempt))
+           (new-owner (list :directive-id "directive" :phase 'planning
+                            :attempt new-attempt))
+           (session (mevedel-session--create
+                     :name "main" :directive-planning new-owner))
+           (turn (list :result proposal))
+           (record (mevedel-directive--create
+                    :id "directive" :request "Replacement"
+                    :plan new-plan :planning (list turn)))
+           (directive (make-overlay (point-min) (point-min)))
+           (fsm (gptel-make-fsm :info (list :buffer data-buf)))
+           settled (drains 0))
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session)
+              (goto-char (mevedel-view--input-start))
+              (insert draft)
+              (mevedel-view--switch-composer-scope
+               (list :directive-id "directive" :action 'plan
+                     :record record)))
+            (cl-letf
+                (((symbol-function 'mevedel-directive-plan--refresh) #'ignore)
+                 ((symbol-function 'mevedel-plan-approval-present)
+                  (lambda (&rest _)
+                    (ert-fail "Old planning attempt reached approval")))
+                 ((symbol-function 'mevedel-view--schedule-late-follow-up-drain)
+                  (lambda () (cl-incf drains))))
+              (mevedel-directive-plan--settle-planning
+               directive record
+               (lambda (err terminal-fsm)
+                 (setq settled (list err terminal-fsm)))
+               nil fsm old-attempt session))
+            (should (string-match-p "no longer current" (car settled)))
+            (should (eq fsm (cadr settled)))
+            (should (eq new-plan (mevedel-directive-plan record)))
+            (should-not (plist-member turn :proposal))
+            (should (eq new-owner
+                        (mevedel-session-directive-planning session)))
+            (should (= 0 drains))
+            (with-current-buffer view-buf
+              (should mevedel-view--composer-scope)
+              (mevedel-view-back-to-chat)
+              (should
+               (equal draft
+                      (buffer-substring-no-properties
+                       (mevedel-view--input-start) (point-max))))))
+        (delete-overlay directive)))))
 
 (mevedel-deftest mevedel-directive-plan-continue ()
   ,test
@@ -305,7 +550,53 @@
                (aref mevedel-directive-plan-test-observations 4) nil fsm))
             (should final-callback-ran)))
       (delete-overlay directive)
-      (kill-buffer chat-buffer))))
+      (kill-buffer chat-buffer)))
+
+  :doc "releases the captured owner after the planning chat buffer dies"
+  (let* ((chat-buffer (generate-new-buffer " *directive-plan-dead-chat*"))
+         (session (mevedel-session--create :name "main"))
+         (record (mevedel-directive--create
+                  :id "directive" :request "Change it"))
+         (directive (make-overlay (point-min) (point-min)))
+         callback fsm settled)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buffer
+            (setq-local mevedel--session session))
+          (cl-letf
+              (((symbol-function 'mevedel--directive-record)
+                (lambda (_) record))
+               ((symbol-function 'mevedel-directive-plan--planning-model-policy)
+                #'ignore)
+               ((symbol-function 'mevedel-directive-plan--refresh) #'ignore)
+               ((symbol-function 'mevedel-plan-approval-present)
+                (lambda (&rest _)
+                  (ert-fail "Dead planning chat reached approval")))
+               ((symbol-function 'mevedel--process-directive)
+                (lambda (_directive _preset prompt-fn terminal
+                         &optional _options)
+                  (funcall prompt-fn "Source context")
+                  (setf (mevedel-directive-planning record)
+                        (list
+                         (list :result
+                               "<proposed_plan>\n# Plan\n</proposed_plan>"))
+                        (mevedel-session-directive-planning session)
+                        '(:directive-id "directive" :phase planning))
+                  (setq callback terminal
+                        fsm (gptel-make-fsm
+                             :info (list :buffer chat-buffer)))
+                  fsm)))
+            (mevedel-directive-plan-start
+             directive 'implement #'identity
+             (lambda (err terminal-fsm)
+               (setq settled (list err terminal-fsm))))
+            (kill-buffer chat-buffer)
+            (funcall callback nil fsm))
+          (should (car settled))
+          (should (eq fsm (cadr settled)))
+          (should-not (mevedel-session-directive-planning session)))
+      (delete-overlay directive)
+      (when (buffer-live-p chat-buffer) (kill-buffer chat-buffer)))))
 
 (provide 'test-mevedel-directive-plan)
 ;;; test-mevedel-directive-plan.el ends here

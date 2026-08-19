@@ -59,9 +59,14 @@ the current proposal, selection, and the exact accepted implementation prompt
 belong to the workspace directive record. Resume restores a pending proposal;
 cancel keeps the planning history as a draft; Continue Plan re-enters the
 directive composer scope. Editing the owner request or a nested detail
-invalidates an unstarted proposal. Rewind removes planning turns at and after
-the checkpoint and restores an accepted pre-attempt plan when it removes that
-plan's implementation attempt.
+invalidates an unstarted proposal; a late planning result cannot restore its
+approval. Each in-flight attempt has a transient identity shared by its record,
+session owner, and approval callbacks, so an old callback cannot publish,
+accept, or release a replacement attempt. Failed, aborted, malformed, and
+ownerless planning terminals remain cancelled drafts and release the session
+workflow before queued input resumes; resume does not recreate ownership for
+them. Rewind removes planning turns at and after the checkpoint and restores an
+accepted pre-attempt plan when it removes that plan's implementation attempt.
 
 Only one root workflow owns a session at a time. Ordinary Plan cannot start
 while directive planning is active, and a directive cannot begin planning while
