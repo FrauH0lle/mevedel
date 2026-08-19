@@ -771,13 +771,15 @@
                                       :selected t))))))))
 
 (mevedel-deftest mevedel-tool-patch--snapshot
-  (:doc "Snapshots file contents and modes") ,test (test)
-  (let ((path (make-temp-file "mevedel-patch-snapshot-")))
+  (:doc "Snapshots literal file bytes and modes") ,test (test)
+  (let ((path (make-temp-file "mevedel-patch-snapshot-"))
+        (bytes (unibyte-string #xff #x00 #x80)))
     (unwind-protect
-        (progn (with-temp-file path (insert "x"))
-               (should (equal "x" (plist-get
-                                    (mevedel-tool-patch--snapshot path)
-                                    :content))))
+        (progn
+          (mevedel-tool-patch--write-file path bytes nil t)
+          (should (equal bytes (plist-get
+                                (mevedel-tool-patch--snapshot path)
+                                :bytes))))
       (delete-file path))))
 
 (mevedel-deftest mevedel-tool-patch--write-file
@@ -787,18 +789,39 @@
     (unwind-protect
         (progn (mevedel-tool-patch--write-file path "x")
                (should (equal "x" (mevedel-tool-patch--read-file path))))
+      (when (file-exists-p path) (delete-file path))))
+  :doc "Writes literal bytes without recoding"
+  (let ((path (make-temp-name
+               (expand-file-name "mevedel-patch-bytes-"
+                                 temporary-file-directory)))
+        (bytes (unibyte-string #xff #x00 #x80)))
+    (unwind-protect
+        (progn
+          (mevedel-tool-patch--write-file path bytes nil t)
+          (should
+           (equal bytes
+                  (with-temp-buffer
+                    (set-buffer-multibyte nil)
+                    (insert-file-contents-literally path)
+                    (buffer-string)))))
       (when (file-exists-p path) (delete-file path)))))
 
 (mevedel-deftest mevedel-tool-patch--restore-snapshots
-  (:doc "Restores captured file content") ,test (test)
-  (let ((path (make-temp-file "mevedel-patch-restore-")))
+  (:doc "Restores captured literal file bytes") ,test (test)
+  (let ((path (make-temp-file "mevedel-patch-restore-"))
+        (bytes (unibyte-string #xff #x00 #x80)))
     (unwind-protect
         (progn
-          (with-temp-file path (insert "old"))
+          (mevedel-tool-patch--write-file path bytes nil t)
           (let ((snapshots (list (mevedel-tool-patch--snapshot path))))
-            (with-temp-file path (insert "new"))
+            (mevedel-tool-patch--write-file path "new")
             (mevedel-tool-patch--restore-snapshots snapshots)
-            (should (equal "old" (mevedel-tool-patch--read-file path)))))
+            (should
+             (equal bytes
+                    (with-temp-buffer
+                      (set-buffer-multibyte nil)
+                      (insert-file-contents-literally path)
+                      (buffer-string))))))
       (delete-file path))))
 
 (mevedel-deftest mevedel-tool-patch--missing-parent-directories

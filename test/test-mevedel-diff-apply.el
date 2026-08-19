@@ -1,4 +1,4 @@
-;;; tests/test-mevedel-diff-apply.el -- Overlay preservation tests -*- lexical-binding: t -*-
+;;; test-mevedel-diff-apply.el --- Transactional diff application tests -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
@@ -9,498 +9,90 @@
 (require 'helpers
          (file-name-concat
           (file-name-directory
-           (or buffer-file-name
-               load-file-name
-               byte-compile-current-file))
+           (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
-
-;; NOTE 2025-10-01: For better DEBUG output, use the following snippet in tests:
-;;
-;; (message "DEBUG TEST: ov-orig-start=%s ov-orig-end=%s" ov-orig-start ov-orig-end)
-;; (message "DEBUG TEST: buffer-text=%S (len=%s)" buffer-text (length buffer-text))
-;; (message "DEBUG TEST: ov-text=%S (len=%s)" ov-text (length ov-text))
-;; (with-current-buffer test-buffer
-;;   (message "DEBUG TEST: actual buffer content=%S" (buffer-substring-no-properties (point-min) (point-max)))
-;;   (message "DEBUG TEST: actual overlay content=%S" (buffer-substring-no-properties ov-orig-start ov-orig-end)))
-;; (with-current-buffer diff-buffer
-;;   (let ((default-directory (temporary-file-directory))
-;;         (inhibit-message t))
-;;     (mevedel-diff-apply-buffer)))
-;; (message "DEBUG TEST AFTER: ov-start=%s ov-end=%s" (overlay-start ov) (overlay-end ov))
-;; (with-current-buffer test-buffer
-;;   (message "DEBUG TEST AFTER: actual overlay content=%S" (buffer-substring-no-properties (overlay-start ov) (overlay-end ov))))
 
 
 ;;
 ;;; Helpers
 
-(defun mevedel-test--create-diff-buffer (modified &optional file-buffer original)
-  "Create a diff buffer comparing ORIGINAL to MODIFIED content.
-
-FILE-BUFFER is the buffer to diff against, or a temp file is created.
-Returns a read-only buffer in `diff-mode' containing the unified diff."
-  (let* ((orig-file (or (and file-buffer
-                             (buffer-file-name file-buffer))
-                        (make-temp-file "mevedel-test-" nil ".txt" original)))
-         (original (with-temp-buffer
-                     (insert-file-contents-literally orig-file)
-                     (buffer-substring-no-properties (point-min) (point-max))))
-         (modified-temp-file (make-temp-file "mevedel-test-" nil ".txt" modified))
-         (rel-path (file-relative-name orig-file (temporary-file-directory)))
-         (buffer (get-buffer-create "mevedel-test-diff")))
-
-    ;; Generate diff and append to result.
-    (with-current-buffer buffer
-      (read-only-mode -1)
-      (erase-buffer)
-      (goto-char (point-min))
-
-      ;; Add the standard git diff header, which allows diff-mode to create new
-      ;; files.
-      (insert (format "diff --git a/%s b/%s\n" rel-path rel-path))
-      ;; Add file mode lines for new or deleted files.
-      (cond
-       ;; New file
-       ((and (string-empty-p original) (not (string-empty-p modified)))
-        (insert "new file mode 100644\n"))
-       ;; Deleted file
-       ((and (not (string-empty-p original)) (string-empty-p modified))
-        (insert "deleted file mode 100644\n")))
-
-      ;; Use diff to generate a unified patch with the correct file path.
-      (when (or original modified)
-        (call-process "diff"
-                      nil t nil "-u" "--label"
-                      (if original
-                          (concat "a/" rel-path)
-                        ;; Use /dev/null to denote file creations.
-                        "/dev/null")
-                      "--label"
-                      (if modified
-                          (concat "b/" rel-path)
-                        ;; Use /dev/null to denote file deletions.
-                        "/dev/null")
-                      orig-file modified-temp-file))
-      (diff-mode)
-      (read-only-mode +1))
-
-    buffer))
-
-(defun mevedel-test--create-overlay (buffer &optional start end text type-of)
-  "Create a mevedel instruction overlay in BUFFER.
-
-Either provide START and END positions, or TEXT to search for.  TYPE-OF
-specifies \\='reference or \\='directive (default).  Return the overlay."
-  (when (and text (or start end))
-    (user-error "Only provide either start and end or text"))
-  (with-current-buffer buffer
-    (when text
-      (goto-char (point-min))
-      (if-let* ((bounds (when (re-search-forward (regexp-quote text) nil t)
-                          (set-mark (match-beginning 0))
-                          (goto-char (match-end 0))
-                          (car (region-bounds)))))
-          (progn
-            (deactivate-mark)
-            (setq start (car bounds))
-            (setq end (cdr bounds)))
-        (user-error "Could not find text in buffer")))
-    ;; TYPE-OF is either 'reference of 'directive
-    (if (eq type-of 'reference)
-        ;; Returns ov
-        (mevedel--create-reference-in buffer start end)
-      ;; Returns ov
-      (mevedel--create-directive-in buffer start end nil "foo"))))
-
-(defun mevedel-test--create-buffer-with-overlay (buf-text &optional ov-start ov-end ov-text type-of)
-  "Create a temporary file buffer with BUF-TEXT and an overlay.
-
-Overlay position is specified by OV-START/OV-END or OV-TEXT to search.
-TYPE-OF specifies \\='reference or \\='directive (default).
-Returns (buffer . overlay)."
-  (let* ((temp-file (make-temp-file "mevedel-test-" nil ".txt" buf-text))
-         (test-buffer (find-file-noselect temp-file))
-         ov)
-    (with-current-buffer test-buffer
-      ;; Ensure buffer is in fundamental mode and not modified
-      (fundamental-mode)
-      (set-buffer-modified-p nil)
-      (goto-char (point-min))
-      (setq ov (mevedel-test--create-overlay test-buffer ov-start ov-end ov-text type-of)))
-    (cons test-buffer ov)))
-
-(defun mevedel-test--get-ov-at-point ()
-  "Interactive helper to inspect directive overlay properties at point."
-  (interactive)
-  (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                      (mevedel--instructions-at (point) 'directive)
-                                                      t)
-                                                     'directive)))
-      (message "%s" (list
-                     (overlay-start directive)
-                     (overlay-end directive)
-                     (overlay-properties directive)))
-    (user-error "No directive found at point")))
-
-;; Helper to find recreated overlays
-(defun mevedel-test--find-overlays-in-buffer (buffer &optional type-of content-p)
-  "Find the mevedel instruction overlays in BUFFER.
-
-If TYPE-OF is specified (\\='reference or \\='directive), only return overlays
-of that type.
-
-If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
-...)."
-  (let ((overlays (alist-get buffer (mevedel--instruction-alist))))
-    (when type-of
-      (setq overlays (seq-filter
-                      (lambda (ov)
-                        (eq (overlay-get ov 'mevedel-instruction-type) type-of))
-                      overlays)))
-    (if content-p
-        (mapcar (lambda (ov)
-                  (list (overlay-start ov)
-                        (overlay-end ov)
-                        (with-current-buffer buffer
-                          (buffer-substring-no-properties
-                           (overlay-start ov) (overlay-end ov)))))
-                overlays)
-      overlays)))
-
-(defun mevedel-test--overlay-is-line-based-p (ov)
-  "Check if overlay OV spans full lines."
-  (with-current-buffer (overlay-buffer ov)
-    (save-excursion
-      (let ((start (overlay-start ov))
-            (end (overlay-end ov)))
-        (and (progn (goto-char start) (bolp))
-             (progn (goto-char end) (or (bolp) (eolp))))))))
-
-
-;;
-;;; mevedel--string-common-prefix
-
-(mevedel-deftest mevedel--string-common-prefix ()
-  ,test
-  (test)
-  :doc "`mevedel--string-common-prefix' returns empty string for empty input"
-  (progn
-    (should (string= "" (mevedel--string-common-prefix nil)))
-    (should (string= "" (mevedel--string-common-prefix '())))
-    (should (string= "" (mevedel--string-common-prefix '("")))))
-  :doc "`mevedel--string-common-prefix' returns the string itself for single element"
-  (should (string= "hello" (mevedel--string-common-prefix '("hello"))))
-  :doc "`mevedel--string-common-prefix' finds common prefix"
-  (progn
-    (should (string= "he" (mevedel--string-common-prefix '("hello" "help" "hero"))))
-    (should (string= "test" (mevedel--string-common-prefix '("test" "testing" "tester")))))
-  :doc "`mevedel--string-common-prefix' returns empty string when no common prefix"
-  (should (string= "" (mevedel--string-common-prefix '("abc" "def" "ghi")))))
-
-
-
-;;
-;;; mevedel--safe-string-diff-regions
-
-(mevedel-deftest mevedel--safe-string-diff-regions ()
-  ,test
-  (test)
-  :doc "`mevedel--safe-string-diff-regions' handles identical strings"
-  (let ((result (mevedel--safe-string-diff-regions "hello" "hello")))
-    ;; For identical strings, everything is common - no diff region
-    (should (equal "" (nth 2 result))) ; old-middle (no difference)
-    (should (equal "" (nth 3 result)))) ; new-middle (no difference)
-  :doc "`mevedel--safe-string-diff-regions' handles completely different strings"
-  (let ((result (mevedel--safe-string-diff-regions "abc" "xyz")))
-    (should (equal 0 (nth 0 result)))  ; prefix-len
-    (should (equal 0 (nth 1 result)))  ; suffix-len
-    (should (equal "abc" (nth 2 result))) ; old-middle
-    (should (equal "xyz" (nth 3 result)))) ; new-middle
-  :doc "`mevedel--safe-string-diff-regions' finds prefix and suffix correctly"
-  (let ((result (mevedel--safe-string-diff-regions "before OLD after" "before NEW after")))
-    (should (equal 7 (nth 0 result)))  ; "before "
-    (should (equal 6 (nth 1 result)))  ; " after"
-    (should (equal "OLD" (nth 2 result)))
-    (should (equal "NEW" (nth 3 result))))
-  :doc "`mevedel--safe-string-diff-regions' handles insertion"
-  (let ((result (mevedel--safe-string-diff-regions "text" "text INSERTED")))
-    (should (equal 4 (nth 0 result)))  ; "text"
-    (should (equal 0 (nth 1 result)))
-    (should (equal "" (nth 2 result)))
-    (should (equal " INSERTED" (nth 3 result))))
-  :doc "`mevedel--safe-string-diff-regions' handles deletion"
-  (let ((result (mevedel--safe-string-diff-regions "text DELETED" "text")))
-    (should (equal 4 (nth 0 result)))  ; "text"
-    (should (equal 0 (nth 1 result)))
-    (should (equal " DELETED" (nth 2 result)))
-    (should (equal "" (nth 3 result)))))
-
-
-;;
-;;; mevedel-diff-apply--change
-
-(mevedel-deftest mevedel-diff-apply--change ()
-  ,test
-  (test)
-  :doc "derives one minimal replacement from a diff edit"
-  (with-temp-buffer
-    (insert "abc old xyz")
-    (should
-     (equal '(:hunk-start 1 :hunk-end 12
-              :start 5 :end 8 :old "old" :new "new" :delta 0)
-            (mevedel-diff-apply--change
-             '(:pos (1 . 12)
-               :src ("abc old xyz")
-               :dst ("abc new xyz"))))))
-  :doc "aligns source text that contains leading diff context"
-  (with-temp-buffer
-    (insert "abc old xyz")
-    (should
-     (equal '(:hunk-start 1 :hunk-end 12
-              :start 5 :end 8 :old "old" :new "newer" :delta 2)
-            (mevedel-diff-apply--change
-             '(:pos (1 . 12)
-               :src ("headerabc old xyz")
-               :dst ("headerabc newer xyz")))))))
-
-(mevedel-deftest mevedel-diff-apply--analyze-overlays ()
-  ,test
-  (test)
-  :doc "returns overlay records and ordered deltas without mutating overlays"
-  (with-temp-buffer
-    (insert "old")
-    (let ((overlay (make-overlay 1 4)))
-      (overlay-put overlay 'mevedel-instruction t)
-      (cl-letf (((symbol-function 'mevedel--instruction-bufferlevel-p)
-                 (lambda (_) nil)))
-        (pcase-let ((`(,records ,deltas)
-                     (mevedel-diff-apply--analyze-overlays
-                      (current-buffer)
-                      '((:hunk-start 1 :hunk-end 4
-                         :start 1 :end 4 :old "old" :new "new"
-                         :delta 0)))))
-          (should (equal '((1 0)) deltas))
-          (should (= 1 (length records)))
-          (should (eq overlay (caar records)))
-          (should (= 1 (overlay-start overlay)))
-          (should (= 4 (overlay-end overlay))))))))
-
-(mevedel-deftest mevedel-diff-apply--apply-changes ()
-  ,test
-  (test)
-  :doc "applies canonical changes in their supplied order"
-  (with-temp-buffer
-    (insert "one two")
-    (mevedel-diff-apply--apply-changes
-     '((:start 5 :end 8 :new "three")
-       (:start 1 :end 4 :new "ONE")))
-    (should (equal "ONE three" (buffer-string)))))
-
-(mevedel-deftest mevedel-diff-apply--restore-overlays ()
-  ,test
-  (test)
-  :doc "reattaches one analyzed overlay at its final bounds"
-  (with-temp-buffer
-    (insert "new")
-    (let ((overlay (make-overlay 1 4)))
-      (delete-overlay overlay)
-      (let ((restored
-             (mevedel-diff-apply--restore-overlays
-              (current-buffer)
-              (list (list overlay 1 4 1 nil 1 4))
-              '((1 0)))))
-        (should (gethash overlay restored))
-        (should (eq (current-buffer) (overlay-buffer overlay)))
-        (should (= 1 (overlay-start overlay)))
-        (should (= 4 (overlay-end overlay)))))))
-
-(mevedel-deftest mevedel-diff-apply--apply-buffer ()
-  ,test
-  (test)
-  :doc "applies canonical edits, saves, then synchronizes instruction state"
-  (let* ((file (make-temp-file "mevedel-diff-apply-buffer-" nil ".txt"
-                               "old"))
-         (buffer (find-file-noselect file))
-         activated
-         synchronized)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel--instruction-activate-buffer)
-                   (lambda (value) (setq activated value)))
-                  ((symbol-function 'mevedel--instruction-alist-value)
-                   (lambda () nil))
-                  ((symbol-function 'mevedel--set-instruction-alist-value)
-                   (lambda (value) (setq synchronized value))))
-          (mevedel-diff-apply--apply-buffer
-           buffer
-           (list (list :pos '(1 . 4) :src '("old") :dst '("new"))))
-          (should (eq buffer activated))
-          (should (equal `((,buffer)) synchronized))
-          (should (equal "new\n"
-                         (with-current-buffer buffer (buffer-string))))
-          (should (equal "new\n"
-                         (with-temp-buffer
-                           (insert-file-contents file)
-                           (buffer-string)))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (delete-file file)))
-  :doc "removes a newly created file when a post-write hook fails"
-  (let* ((file (make-temp-name
-                (expand-file-name "mevedel-diff-created-"
-                                  temporary-file-directory)))
-         (buffer (find-file-noselect file)))
+(defun mevedel-test--create-diff-buffer (modified file-buffer)
+  "Return a unified diff buffer from FILE-BUFFER to MODIFIED."
+  (let* ((original-file (buffer-file-name file-buffer))
+         (original
+          (if (file-exists-p original-file)
+              (with-temp-buffer
+                (insert-file-contents-literally original-file)
+                (buffer-string))
+            ""))
+         (source-file
+          (if (file-exists-p original-file)
+              original-file
+            (make-temp-file "mevedel-test-original-" nil ".txt")))
+         (modified-file
+          (make-temp-file "mevedel-test-modified-" nil ".txt"))
+         (relative
+          (file-relative-name original-file temporary-file-directory))
+         (buffer (generate-new-buffer " *mevedel-test-diff*")))
     (unwind-protect
         (progn
+          (with-temp-buffer
+            (insert modified)
+            (let ((coding-system-for-write
+                   (buffer-local-value 'buffer-file-coding-system file-buffer)))
+              (write-region (point-min) (point-max) modified-file nil 'silent)))
           (with-current-buffer buffer
-            (add-hook 'after-save-hook
-                      (lambda () (error "Post-write failure")) nil t))
-          (should-error
-           (mevedel-diff-apply--apply-buffer
-            buffer
-            (list (list :pos '(1 . 1) :src nil :dst '("new")))
-            t))
-          (should-not (file-exists-p file))
-          (should (string-empty-p
-                   (with-current-buffer buffer (buffer-string)))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (when (file-exists-p file)
-        (delete-file file)))))
+            (insert (format "diff --git a/%s b/%s\n" relative relative))
+            (cond
+             ((and (string-empty-p original)
+                   (not (string-empty-p modified)))
+              (insert "new file mode 100644\n"))
+             ((and (not (string-empty-p original))
+                   (string-empty-p modified))
+              (insert "deleted file mode 100644\n")))
+            (let ((coding-system-for-read
+                   (buffer-local-value 'buffer-file-coding-system file-buffer)))
+              (call-process "diff" nil t nil "-u"
+                            "--label" (if (string-empty-p original)
+                                          "/dev/null"
+                                        (concat "a/" relative))
+                            "--label" (if (string-empty-p modified)
+                                          "/dev/null"
+                                        (concat "b/" relative))
+                            source-file modified-file))
+            (diff-mode)
+            (read-only-mode +1)))
+      (delete-file modified-file)
+      (unless (equal source-file original-file)
+        (delete-file source-file)))
+    buffer))
 
+(defun mevedel-test--create-multi-diff-buffer (entries)
+  "Return one diff buffer for ENTRIES of (MODIFIED FILE-BUFFER)."
+  (let ((result (generate-new-buffer " *mevedel-test-multi-diff*")))
+    (dolist (entry entries)
+      (let ((part (mevedel-test--create-diff-buffer (car entry) (cadr entry))))
+        (unwind-protect
+            (with-current-buffer result
+              (insert-buffer-substring part))
+          (kill-buffer part))))
+    (with-current-buffer result
+      (diff-mode)
+      (read-only-mode +1))
+    result))
 
-;;
-;;; mevedel--parse-hunk-lines
-
-(mevedel-deftest mevedel--parse-hunk-lines ()
-  ,test
-  (test)
-  :doc "`mevedel--parse-hunk-lines' parses single line change"
-  (let ((result (mevedel--parse-hunk-lines "old line\n" "new line\n" 10)))
-    (should (equal 1 (length result)))
-    (let ((line (car result)))
-      (should (equal "old line\n" (plist-get line :old)))
-      (should (equal "new line\n" (plist-get line :new)))
-      (should (equal 10 (plist-get line :start)))))
-  :doc "`mevedel--parse-hunk-lines' parses deletion (old line, no new line)"
-  (let ((result (mevedel--parse-hunk-lines "deleted\n" "" 5)))
-    (should (equal 1 (length result)))
-    (let ((line (car result)))
-      (should (equal "deleted\n" (plist-get line :old)))
-      (should (equal nil (plist-get line :new)))))
-  :doc "`mevedel--parse-hunk-lines' parses insertion (no old line, new line)"
-  (let ((result (mevedel--parse-hunk-lines "" "inserted\n" 5)))
-    (should (equal 1 (length result)))
-    (let ((line (car result)))
-      (should (equal nil (plist-get line :old)))
-      (should (equal "inserted\n" (plist-get line :new))))))
-
-
-;;
-;;; mevedel--overlay-is-line-based-p
-
-(mevedel-deftest mevedel--overlay-is-line-based-p ()
-  ,test
-  (test)
-  :doc "`mevedel--overlay-is-line-based-p' detects line-based overlay"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "line2\n"))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup)))
-    (with-current-buffer test-buffer
-      (should (mevedel--overlay-is-line-based-p (overlay-start ov) (overlay-end ov) test-buffer))))
-  :doc "`mevedel--overlay-is-line-based-p' detects non-line-based overlay"
-  (let* ((buffer-text "some text here\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "text"))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup)))
-    (with-current-buffer test-buffer
-      (should-not (mevedel--overlay-is-line-based-p (overlay-start ov) (overlay-end ov) test-buffer)))))
-
-
-;;
-;;; mevedel--snap-to-full-lines
-
-(mevedel-deftest mevedel--snap-to-full-lines ()
-  ,test
-  (test)
-  :doc "`mevedel--snap-to-full-lines' snaps partial positions to full lines"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "ine2"))  ; partial line
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup)))
-    (with-current-buffer test-buffer
-      (let* ((start (overlay-start ov))
-             (end (overlay-end ov))
-             (snapped (mevedel--snap-to-full-lines start end test-buffer))
-             (expected-start (save-excursion (goto-char start) (line-beginning-position)))
-             (expected-end (save-excursion (goto-char end) (if (bolp) end (line-beginning-position 2)))))
-        (should (equal expected-start (car snapped)))
-        (should (equal expected-end (cdr snapped))))))
-  :doc "`mevedel--snap-to-full-lines' leaves line-based positions unchanged"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "line2\n"))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup)))
-    (with-current-buffer test-buffer
-      (let* ((start (overlay-start ov))
-             (end (overlay-end ov))
-             (snapped (mevedel--snap-to-full-lines start end test-buffer)))
-        (should (equal start (car snapped)))
-        (should (equal end (cdr snapped)))))))
-
-
-;;
-;;; mevedel--classify-change-relationship
-
-(mevedel-deftest mevedel--classify-change-relationship ()
-  ,test
-  (test)
-  :doc "`mevedel--classify-change-relationship' detects 'before relationship"
-  (should (equal 'before (mevedel--classify-change-relationship 20 30 10 15)))
-  :doc "`mevedel--classify-change-relationship' detects 'after relationship"
-  (should (equal 'after (mevedel--classify-change-relationship 10 15 20 30)))
-  :doc "`mevedel--classify-change-relationship' detects 'within relationship"
-  (should (equal 'within (mevedel--classify-change-relationship 10 30 15 20)))
-  :doc "`mevedel--classify-change-relationship' detects 'encompasses relationship"
-  (should (equal 'encompasses (mevedel--classify-change-relationship 15 20 10 30)))
-  :doc "`mevedel--classify-change-relationship' detects 'complex relationship (overlapping)"
-  (progn
-    (should (equal 'complex (mevedel--classify-change-relationship 10 20 15 25)))
-    (should (equal 'complex (mevedel--classify-change-relationship 15 25 10 20)))))
-
-
-;;
-;;; mevedel--find-stub-line
-
-(mevedel-deftest mevedel--find-stub-line ()
-  ,test
-  (test)
-  :doc "`mevedel--find-stub-line' finds line above change position"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "line2\n"))
-         (test-buffer (car buf-setup)))
-    (with-current-buffer test-buffer
-      ;; Just verify it returns a valid cons cell with reasonable positions
-      (let ((stub-line (mevedel--find-stub-line test-buffer 7))) ; position in line2
-        (should (consp stub-line))
-        (should (> (car stub-line) 0))
-        (should (> (cdr stub-line) (car stub-line))))))
-  :doc "`mevedel--find-stub-line' returns first line when change is at beginning"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "line1\n"))
-         (test-buffer (car buf-setup)))
-    (with-current-buffer test-buffer
-      ;; Just verify it returns a valid cons cell
-      (let ((stub-line (mevedel--find-stub-line test-buffer 1)))
-        (should (consp stub-line))
-        (should (numberp (car stub-line)))
-        (should (numberp (cdr stub-line)))))))
+(defun mevedel-test--apply-diff (diff-buffer workspace-file)
+  "Apply DIFF-BUFFER in a temporary workspace identified by WORKSPACE-FILE."
+  (cl-letf (((symbol-function #'mevedel-workspace)
+             (lambda (&rest _)
+               (mevedel-workspace-get-or-create
+                'file workspace-file
+                temporary-file-directory
+                (file-name-nondirectory workspace-file)))))
+    (with-current-buffer diff-buffer
+      (let ((default-directory temporary-file-directory)
+            (inhibit-message t))
+        (mevedel-diff-apply-buffer)))))
 
 
 ;;
@@ -509,104 +101,36 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
 (mevedel-deftest mevedel--path-has-suffix-p ()
   ,test
   (test)
-  :doc "`mevedel--path-has-suffix-p' detects directory path suffix match"
-  (progn
-    (should (mevedel--path-has-suffix-p "/path/to/subdir" "to/subdir"))
-    (should (mevedel--path-has-suffix-p "/path/to/subdir" "subdir")))
-  :doc "`mevedel--path-has-suffix-p' detects no match for different suffix"
-  (should-not (mevedel--path-has-suffix-p "/path/to/subdir" "other/subdir"))
-  :doc "`mevedel--path-has-suffix-p' handles single directory component"
-  (should (mevedel--path-has-suffix-p "/path/to/file" "file"))
-  :doc "`mevedel--path-has-suffix-p' requires exact component match"
-  (should-not (mevedel--path-has-suffix-p "/path/to/subdir" "dir")))
+  :doc "matches a complete trailing path"
+  (should (mevedel--path-has-suffix-p "/tmp/dev/null" "dev/null"))
+  :doc "rejects a partial component match"
+  (should-not (mevedel--path-has-suffix-p "/tmp/notdev/null" "dev/null")))
 
 
 ;;
-;;; mevedel--replace-text
+;;; mevedel-diff-apply--stage-buffer
 
-(mevedel-deftest mevedel--replace-text ()
+(mevedel-deftest mevedel-diff-apply--stage-buffer ()
   ,test
   (test)
-  :doc "`mevedel--replace-text' replaces text in buffer"
-  (let ((test-buffer (generate-new-buffer " *test-replace*")))
-    (unwind-protect
-        (with-current-buffer test-buffer
-          (insert "before MIDDLE after")
-          (mevedel--replace-text 8 14 "NEW")
-          (should (equal "before NEW after" (buffer-string))))
-      (kill-buffer test-buffer)))
-  :doc "`mevedel--replace-text' handles insertion (empty old text)"
-  (let ((test-buffer (generate-new-buffer " *test-insert*")))
-    (unwind-protect
-        (with-current-buffer test-buffer
-          (insert "before after")
-          ;; Position 7 is the space between "before" and "after"
-          (mevedel--replace-text 8 8 "INSERTED ")
-          (should (equal "before INSERTED after" (buffer-string))))
-      (kill-buffer test-buffer)))
-  :doc "`mevedel--replace-text' handles deletion (empty new text)"
-  (let ((test-buffer (generate-new-buffer " *test-delete*")))
-    (unwind-protect
-        (with-current-buffer test-buffer
-          (insert "before DELETED after")
-          (mevedel--replace-text 8 15 "")
-          (should (equal "before  after" (buffer-string))))
-      (kill-buffer test-buffer))))
-
-
-;;
-;;; mevedel--calculate-overlay-adjustment-granular
-
-(mevedel-deftest mevedel--calculate-overlay-adjustment-granular ()
-  ,test
-  (test)
-  :doc "`mevedel--calculate-overlay-adjustment-granular' handles simple modification within overlay"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "line2\n"))
-         (ov (cdr buf-setup))
-         (line-changes (mevedel--parse-hunk-lines "line2\n" "modified2\n" 6)))
-    (let ((result (mevedel--calculate-overlay-adjustment-granular ov line-changes)))
-      (should result)
-      (should (numberp (car result)))
-      (should (numberp (cadr result)))))
-  :doc "`mevedel--calculate-overlay-adjustment-granular' returns valid positions or nil for overlay not affected by changes"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "line1\n"))
-         (ov (cdr buf-setup))
-         ;; Change affecting line3, not line1
-         (line-changes (mevedel--parse-hunk-lines "line3\n" "modified3\n" 12)))
-    (let ((result (mevedel--calculate-overlay-adjustment-granular ov line-changes)))
-      ;; Should return original positions or nil
-      (should (or (null result)
-                  (and (listp result)
-                       (numberp (car result))
-                       (numberp (cadr result))))))))
-
-
-;;
-;;; mevedel--find-overlay-lines
-
-(mevedel-deftest mevedel--find-overlay-lines ()
-  ,test
-  (test)
-  :doc "`mevedel--find-overlay-lines' finds lines affected by overlay"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "line2\n"))
-         (ov (cdr buf-setup))
-         (line-changes (list
-                        (list :old "line1\n" :new "line1\n" :start 1 :end 6)
-                        (list :old "line2\n" :new "modified2\n" :start 7 :end 12)
-                        (list :old "line3\n" :new "line3\n" :start 13 :end 18))))
-    (let ((result (mevedel--find-overlay-lines ov line-changes)))
-      (should (> (length result) 0))
-      ;; Should include the line containing "line2"
-      (let ((has-line2 (cl-some (lambda (line)
-                                  (string-match "line2" (or (plist-get line :old) "")))
-                                result)))
-        (should has-line2)))))
+  :doc "applies resolved edits from the end of a snapshot"
+  (with-temp-buffer
+    (insert "one\ntwo\nthree\n")
+    (should
+     (equal "one\nTWO\nTHREE\n"
+            (mevedel-diff-apply--stage-buffer
+             (current-buffer)
+             '((:pos (9 . 15) :dst ("THREE\n"))
+               (:pos (5 . 9) :dst ("TWO\n")))))))
+  :doc "stages the complete source despite narrowing"
+  (with-temp-buffer
+    (insert "before\ninside\nafter\n")
+    (narrow-to-region 8 15)
+    (should
+     (equal "before\nchanged\nafter\n"
+            (mevedel-diff-apply--stage-buffer
+             (current-buffer)
+             '((:pos (8 . 15) :dst ("changed\n"))))))))
 
 
 ;;
@@ -614,6 +138,7 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
 
 (mevedel-deftest mevedel-diff-apply-buffer
   (:before-each
+   (mevedel-workspace-clear-registry)
    (setf (mevedel--instruction-alist) nil)
    (setf (mevedel--instruction-id-counter) 0)
    (setf (mevedel--instruction-id-usage-map) (make-hash-table))
@@ -621,1301 +146,331 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
    (setq mevedel--instruction-states (make-hash-table :test #'equal))
    (setq mevedel--instruction-current-state-key :global)
    :after-each
-   (dolist (buf (buffer-list))
-     (when (string-match-p "mevedel-test" (buffer-name buf))
-       (when (buffer-file-name buf)
-         (let ((file (buffer-file-name buf)))
-           (when (file-exists-p file)
-             (delete-file file))))
-       (kill-buffer buf))))
+   (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "cleans created files and buffers when hunk collection signals"
-  (let ((file (make-temp-name
-               (expand-file-name "mevedel-diff-throwing-"
-                                 temporary-file-directory)))
-        opened-buffer)
-    (unwind-protect
-        (with-temp-buffer
-          (cl-letf (((symbol-function 'mevedel--diff-find-file-operations)
-                     (lambda () (list (list file) nil)))
-                    ((symbol-function 'diff-beginning-of-hunk) #'ignore)
-                    ((symbol-function 'diff-find-source-location)
-                     (lambda (&rest _)
-                       (setq opened-buffer (find-file-noselect file))
-                       (error "Resolution exploded"))))
-            (should-error (mevedel-diff-apply-buffer)
-                          :type 'error))
-          (should-not (file-exists-p file))
-          (should-not (buffer-live-p opened-buffer)))
-      (when (buffer-live-p opened-buffer)
-        (kill-buffer opened-buffer))
-      (when (file-exists-p file)
-        (delete-file file))))
-  :doc "removes files created before hunk resolution fails"
-  (let ((file (make-temp-name
-               (expand-file-name "mevedel-diff-unresolved-"
-                                 temporary-file-directory))))
-    (unwind-protect
-        (with-temp-buffer
-          (cl-letf (((symbol-function 'mevedel--diff-find-file-operations)
-                     (lambda () (list (list file) nil)))
-                    ((symbol-function 'diff-beginning-of-hunk) #'ignore)
-                    ((symbol-function 'diff-find-source-location)
-                     (lambda (&rest _) '(nil nil nil nil nil nil)))
-                    ((symbol-function 'diff-hunk-next) #'ignore)
-                    ((symbol-function 'message) #'ignore))
-            (mevedel-diff-apply-buffer))
-          (should-not (file-exists-p file)))
-      (when (file-exists-p file)
-        (delete-file file))))
-  :doc "`mevedel-diff-apply-buffer': noninteractive repair rejection is deterministic and side-effect free"
+  :doc "rejects ambiguous hunks without changing the diff or target"
   (let* ((original "alpha\nold\nomega\n")
-         (test-file (make-temp-file "mevedel-test-" nil ".txt" original))
-         (test-buffer (find-file-noselect test-file))
-         (diff-buffer (mevedel-test--create-diff-buffer
-                       "alpha\nnew\nomega\n" test-buffer))
-         first-error
-         patch-before)
-    (with-current-buffer diff-buffer
-      (let ((inhibit-read-only t))
-        (goto-char (point-min))
-        (re-search-forward "^ alpha$")
-        (beginning-of-line)
-        (delete-char 1)
-        (goto-char (point-max))
-        (dotimes (_ 1000)
-          (insert " \n"))
-        (goto-char (point-min))
-        (re-search-forward (regexp-quote "@@ -1,3 +1,3 @@"))
-        (replace-match "@@ -1,1003 +1,1003 @@" t t))
-      (setq patch-before (buffer-string)))
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file test-file (file-name-directory test-file)
-                  (file-name-nondirectory test-file))))
-              ((symbol-function 'y-or-n-p)
-               (lambda (&rest _) (error "Unexpected y-or-n-p")))
-              ((symbol-function 'yes-or-no-p)
-               (lambda (&rest _) (error "Unexpected yes-or-no-p"))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory)))
-          (setq first-error
-                (error-message-string
-                 (should-error (mevedel-diff-apply-buffer t))))
-          (should (equal first-error
-                         (error-message-string
-                          (should-error (mevedel-diff-apply-buffer t))))))))
-    (should (string-match-p "Rejected ambiguous diff hunk" first-error))
-    (should (string-match-p "Heuristic repair required" first-error))
-    (should (string-match-p (regexp-quote "@@ -1,1003 +1,1003 @@")
-                            first-error))
-    (should (< (length first-error) 700))
-    (should (string-match-p "\\.\\.\\." first-error))
-    (with-current-buffer diff-buffer
-      (should (equal patch-before (buffer-string))))
-    (with-current-buffer test-buffer
-      (should (equal original (buffer-string)))
-      (should-not (buffer-modified-p)))
-    (should (equal original
-                   (with-temp-buffer
-                     (insert-file-contents test-file)
-                     (buffer-string)))))
-  :doc "`mevedel-diff-apply-buffer':
-Regression: one directive overlay touched by multiple hunks is moved once and saved"
-  (let* ((buffer-text "header\nstart\nold-one\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nold-two\nend\nfooter\n")
-         (directive-text "start\nold-one\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nold-two\nend\n")
-         (new-text "header\nstart\nNEW-ONE-LONGER\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nX\nend\nfooter\n")
-         (expected-directive "start\nNEW-ONE-LONGER\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nX\nend\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil directive-text 'directive))
-         (test-buffer (car buf-setup))
-         (directive-ov (cdr buf-setup))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should (overlay-buffer directive-ov))
-    (with-current-buffer test-buffer
-      (should-not (buffer-modified-p))
-      (should (equal new-text
-                     (buffer-substring-no-properties
-                      (point-min) (point-max))))
-      (should (equal expected-directive
-                     (buffer-substring-no-properties
-                      (overlay-start directive-ov)
-                      (overlay-end directive-ov))))))
-  :doc "`mevedel-diff-apply-buffer':
-Regression: failed buffer save does not persist moved instruction state"
-  (let* ((buffer-text "header\nstart\nold-one\nend\nfooter\n")
-         (directive-text "start\nold-one\nend\n")
-         (new-text "header\nstart\nnew-one-much-longer\nend\nfooter\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil directive-text 'directive))
-         (test-buffer (car buf-setup))
-         (directive-ov (cdr buf-setup))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer))
-         (original-start (overlay-start directive-ov))
-         (original-end (overlay-end directive-ov))
-         (original-alist
-          (copy-tree (mevedel--instruction-alist-value)))
-         err)
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer test-buffer
-        (add-hook 'after-save-hook
-                  (lambda () (error "Post-write failure")) nil t))
-      (setq err
-            (condition-case error
-                (with-current-buffer diff-buffer
-                  (let ((default-directory (temporary-file-directory))
-                        (inhibit-message t))
-                    (mevedel-diff-apply-buffer)))
-              (error error))))
-
-    (should err)
-    (should (eq test-buffer (overlay-buffer directive-ov)))
-    (should (= original-start (overlay-start directive-ov)))
-    (should (= original-end (overlay-end directive-ov)))
-    (should (equal original-alist
-                   (mevedel--instruction-alist-value)))
-    (with-current-buffer test-buffer
-      (should (equal buffer-text
-                     (buffer-substring-no-properties
-                      (point-min) (point-max))))
-      (should-not (buffer-modified-p))
-      (should (equal directive-text
-                     (buffer-substring-no-properties
-                      (overlay-start directive-ov)
-                      (overlay-end directive-ov)))))
-    (should (equal buffer-text
-                   (with-temp-buffer
-                     (insert-file-contents (buffer-file-name test-buffer))
-                     (buffer-string)))))
-  :doc "`mevedel-diff-apply-buffer':
-Core Geometry Tests:
-Case 1: Change completely BEFORE overlay
-Addition before overlay shifts it right"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (ov-text "line2\n")
-         (new-text "INSERTED\nline1\nline2\nline3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (ov-orig-start (overlay-start ov))
-         (ov-orig-end (overlay-end ov))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    (should (equal (+ ov-orig-start (length "INSERTED\n")) (overlay-start ov)))
-    (should (equal (+ ov-orig-end (length "INSERTED\n")) (overlay-end ov))))
-  :doc "`mevedel-diff-apply-buffer':
-Core Geometry Tests:
-Case 1: Change completely BEFORE overlay
-Deletion before overlay shifts it left"
-  (let* ((buffer-text "REMOVE\nline1\nline2\n")
-         (ov-text "line2\n")
-         (new-text "line1\nline2\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (ov-orig-start (overlay-start ov))
-         (ov-orig-end (overlay-end ov))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-    (should ov)
-    (should (equal (- ov-orig-start (length "REMOVE\n")) (overlay-start ov)))
-    (should (equal (- ov-orig-end (length "REMOVE\n")) (overlay-end ov))))
-  :doc "`mevedel-diff-apply-buffer':
-Core Geometry Tests:
-Case 2: Change completely AFTER overlay
-Addition after overlay doesn't affect it"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (ov-text "line1\n")
-         (new-text "line1\nline2\nline3\nADDED\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (ov-orig-start (overlay-start ov))
-         (ov-orig-end (overlay-end ov))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    (should (equal ov-orig-start (overlay-start ov)))
-    (should (equal ov-orig-end (overlay-end ov))))
-  :doc "`mevedel-diff-apply-buffer':
-Core Geometry Tests:
-Case 2: Change completely AFTER overlay
-Deletion after overlay doesn't affect it"
-  (let* ((buffer-text "line1\nline2\nREMOVE\n")
-         (ov-text "line1\n")
-         (new-text "line1\nline2\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (ov-orig-start (overlay-start ov))
-         (ov-orig-end (overlay-end ov))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    (should (equal ov-orig-start (overlay-start ov)))
-    (should (equal ov-orig-end (overlay-end ov))))
-  :doc "`mevedel-diff-apply-buffer':
-Core Geometry Tests:
-Case 3: Change completely WITHIN overlay
-Addition within overlay expands it"
-  (let* ((buffer-text "function foo() {\n  old code\n}\n")
-         (ov-text "function foo() {\n  old code\n}\n")
-         (new-text "function foo() {\n  old code\n  NEW CODE ADDED\n}\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (ov-orig-start (overlay-start ov))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    (should (equal ov-orig-start (overlay-start ov)))
-    (should (equal (with-current-buffer test-buffer (point-max)) (overlay-end ov)))
-    (should (equal new-text
-                   (with-current-buffer test-buffer
-                     (buffer-substring-no-properties (overlay-start ov) (overlay-end ov))))))
-  :doc "`mevedel-diff-apply-buffer':
-Core Geometry Tests:
-Case 3: Change completely WITHIN overlay
-Deletion within overlay shrinks it"
-  (let* ((buffer-text "function foo() {\n  code to keep\n  code to remove\n}\n")
-         (ov-text "function foo() {\n  code to keep\n  code to remove\n}\n")
-         (new-text "function foo() {\n  code to keep\n}\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (ov-orig-start (overlay-start ov))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    (should (equal ov-orig-start (overlay-start ov)))
-    (should (equal (with-current-buffer test-buffer (point-max)) (overlay-end ov)))
-    (should (equal new-text
-                   (with-current-buffer test-buffer
-                     (buffer-substring-no-properties (overlay-start ov) (overlay-end ov))))))
-  :doc "`mevedel-diff-apply-buffer':
-Core Geometry Tests:
-Case 4: Change ENCOMPASSES overlay
-Deletion - creates stub at nearest line above (line-based)"
-  (let* ((buffer-text "before\nfunction foo() {\n  code to remove\n}\nafter\n")
-         (ov-text "function foo() {\n  code to remove\n}\n")
-         (new-text "before\nafter\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    ;; Should be stub on line "before"
-    (should (equal "before\n"
-                   (with-current-buffer test-buffer
-                     (goto-char (overlay-start ov))
-                     (thing-at-point 'line t)))))
-  :doc "`mevedel-diff-apply-buffer':
-Core Geometry Tests:
-Case 4: Change ENCOMPASSES overlay
-Deletion - creates single char stub (partial-line)"
-  (let* ((buffer-text "The old word here\n")
-         (ov-text "old")
-         (new-text "The here\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    ;; Should be single character stub
-    (should (< (- (overlay-end ov) (overlay-start ov)) 2)))
-  :doc "`mevedel-diff-apply-buffer':
-Core Geometry Tests:
-Case 4: Change ENCOMPASSES overlay
-Replacement - expands to cover replacement"
-  (let* ((buffer-text "before\nold content\nafter\n")
-         (ov-text "old")
-         (new-text "before\ncompletely new content here\nafter\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    ;; Should cover the replacement
-    (should (string-match-p "completely new content here"
-                            (with-current-buffer test-buffer
-                              (buffer-substring-no-properties (overlay-start ov) (overlay-end ov))))))
-  :doc "`mevedel-diff-apply-buffer':
-Core Geometry Tests:
-Buffer-level overlay (spanning whole buffer) is not adjusted"
-  (let* ((buffer-text "Line 1\nLine 2\nLine 3\n")
-         ;; Create overlay spanning entire buffer
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil buffer-text 'directive))
-         (test-buffer (car buf-setup))
-         (buffer-ov (cdr buf-setup))
-         (new-text "Line 1\nModified Line 2\nLine 3\n")
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    ;; Verify overlay initially spans whole buffer
-    (with-current-buffer test-buffer
-      (should (equal (point-min) (overlay-start buffer-ov)))
-      (should (equal (point-max) (overlay-end buffer-ov))))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; After applying diff, overlay should still span whole buffer
-    ;; (not adjusted/deleted/recreated - original overlay should remain)
-    (with-current-buffer test-buffer
-      ;; Should still be the same overlay object (not recreated)
-      (should buffer-ov)
-      ;; Should still span whole buffer
-      (should (equal (point-min) (overlay-start buffer-ov)))
-      (should (equal (point-max) (overlay-end buffer-ov)))
-      ;; Buffer content should be updated
-      (should (equal new-text (buffer-substring-no-properties (point-min) (point-max))))))
-  :doc "`mevedel-diff-apply-buffer':
-Multi-Overlay Geometry Tests:
-Multiple overlays: one before, one after change"
-  (let* ((buffer-text "overlay1\nmiddle content\noverlay2\n")
-         (ov1-text "overlay1\n")
-         (ov2-text "overlay2\n")
-         (new-text "overlay1\nCHANGED middle content\noverlay2\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov1-text))
-         (test-buffer (car buf-setup))
-         (ov1 (cdr buf-setup))
-         (ov1-orig-start (overlay-start ov1))
-         (ov1-orig-end (overlay-end ov1))
-         (ov2 (mevedel-test--create-overlay test-buffer nil nil ov2-text))
-         (ov2-orig-start (overlay-start ov2))
-         (ov2-orig-end (overlay-end ov2))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; ov1 should be unchanged (before change)
-    ;; ov2 should shift right (after change)
-    (should ov1)
-    (should ov2)
-    (should (equal ov1-orig-start (overlay-start ov1)))
-    (should (equal ov1-orig-end (overlay-end ov1)))
-    (should (equal (+ ov2-orig-start (length "CHANGED ")) (overlay-start ov2)))
-    (should (equal (+ ov2-orig-end (length "CHANGED ")) (overlay-end ov2))))
-  :doc "`mevedel-diff-apply-buffer':
-Multi-Overlay Geometry Tests:
-Multiple overlays: all shift together when change is before all"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (ov1-text "line1\n")
-         (ov2-text "line2\n")
-         (ov3-text "line3\n")
-         (new-text "INSERTED\nline1\nline2\nline3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov1-text))
-         (test-buffer (car buf-setup))
-         (ov1 (cdr buf-setup))
-         (ov1-orig-start (overlay-start ov1))
-         (ov2 (mevedel-test--create-overlay test-buffer nil nil ov2-text))
-         (ov2-orig-start (overlay-start ov2))
-         (ov3 (mevedel-test--create-overlay test-buffer nil nil ov3-text))
-         (ov3-orig-start (overlay-start ov3))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; All overlays should shift right by same delta
-    (let ((delta (length "INSERTED\n")))
-      (should ov1)
-      (should ov2)
-      (should ov3)
-      (should (equal (+ ov1-orig-start delta) (overlay-start ov1)))
-      (should (equal (+ ov2-orig-start delta) (overlay-start ov2)))
-      (should (equal (+ ov3-orig-start delta) (overlay-start ov3)))))
-  :doc "`mevedel-diff-apply-buffer':
-Multi-Overlay Geometry Tests:
-Multiple overlays: change within one, others unaffected"
-  (let* ((buffer-text "overlay1\noverlay2 with content\noverlay3\n")
-         (ov1-text "overlay1\n")
-         (ov2-text "overlay2 with content\n")
-         (ov3-text "overlay3\n")
-         (new-text "overlay1\noverlay2 with MODIFIED content\noverlay3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov1-text))
-         (test-buffer (car buf-setup))
-         (ov1 (cdr buf-setup))
-         (ov1-orig-start (overlay-start ov1))
-         (ov1-orig-end (overlay-end ov1))
-         (ov2 (mevedel-test--create-overlay test-buffer nil nil ov2-text))
-         (ov2-orig-start (overlay-start ov2))
-         (ov3 (mevedel-test--create-overlay test-buffer nil nil ov3-text))
-         (ov3-orig-start (overlay-start ov3))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; ov1 unchanged (before), ov2 expands (within), ov3 shifts (after)
-    (should ov1)
-    (should ov2)
-    (should ov3)
-    ;; ov1 unchanged
-    (should (equal ov1-orig-start (overlay-start ov1)))
-    (should (equal ov1-orig-end (overlay-end ov1)))
-    ;; ov2 expanded
-    (should (equal ov2-orig-start (overlay-start ov2)))
-    (should (> (overlay-end ov2) (+ ov2-orig-start (length ov2-text))))
-    ;; ov3 shifted
-    (should (> (overlay-start ov3) ov3-orig-start)))
-  :doc "`mevedel-diff-apply-buffer':
-Multi-Overlay Geometry Tests:
-Multiple overlays: some deleted, some preserved"
-  (let* ((buffer-text "keep1\ndelete me\nkeep2\n")
-         (ov-keep1-text "keep1\n")
-         (ov-delete-text "delete me\n")
-         (ov-keep2-text "keep2\n")
-         (new-text "keep1\nkeep2\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-keep1-text))
-         (test-buffer (car buf-setup))
-         (ov-keep1 (cdr buf-setup))
-         (ov-delete (mevedel-test--create-overlay test-buffer nil nil ov-delete-text))
-         (ov-keep2 (mevedel-test--create-overlay test-buffer nil nil ov-keep2-text))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; All 3 overlays should still exist: keep1 (unchanged), delete (stub), keep2 (shifted left)
-    (should ov-keep1)
-    (should ov-delete)
-    (should ov-keep2)
-    ;; Check that delete became a stub (very small overlay)
-    (should (< (- (overlay-end ov-delete) (overlay-start ov-delete)) 10)))
-  :doc "`mevedel-diff-apply-buffer':
-Multi-Overlay Geometry Tests:
-Multiple overlays: nested within one encompassing change"
-  (let* ((buffer-text "line1\nline2\nline3\n")
-         (ov1-text "line1\n")
-         (ov2-text "line2\n")
-         (ov3-text "line3\n")
-         (new-text "COMPLETE REPLACEMENT\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov1-text))
-         (test-buffer (car buf-setup))
-         (ov1 (cdr buf-setup))
-         (ov2 (mevedel-test--create-overlay test-buffer nil nil ov2-text))
-         (ov3 (mevedel-test--create-overlay test-buffer nil nil ov3-text))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; All 3 overlays should expand to cover the replacement
-    (should ov1)
-    (should ov2)
-    (should ov3)
-    (dolist (ov (list ov1 ov2 ov3))
-      (should (string-match-p "COMPLETE REPLACEMENT"
-                              (with-current-buffer test-buffer
-                                (buffer-substring-no-properties (overlay-start ov) (overlay-end ov)))))))
-  :doc "`mevedel-diff-apply-buffer':
-Multi-Overlay Geometry Tests:
-Multiple overlays with before/after context"
-  (let* ((buffer-text "before\ninner1\ninner2\ninner3\nafter\n")
-         (ov1-text "inner1\n")
-         (ov2-text "inner2\n")
-         (ov3-text "inner3\n")
-         (new-text "before\nCOMPLETE REPLACEMENT\nafter\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov1-text))
-         (test-buffer (car buf-setup))
-         (ov1 (cdr buf-setup))
-         (ov2 (mevedel-test--create-overlay test-buffer nil nil ov2-text))
-         (ov3 (mevedel-test--create-overlay test-buffer nil nil ov3-text))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; All overlays should still exist
-    (should ov1)
-    (should ov2)
-    (should ov3))
-  :doc "`mevedel-diff-apply-buffer':
-Line-Span Preservation Tests:
-Line-based overlay stays line-based after within-change"
-  (let* ((buffer-text "function foo() {\n  code\n}\n")
-         (ov-text "function foo() {\n  code\n}\n")
-         (new-text "function foo() {\n  code\n  more code\n}\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (was-line-based (mevedel-test--overlay-is-line-based-p ov))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (should was-line-based)
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    (should (mevedel-test--overlay-is-line-based-p ov)))
-  :doc "`mevedel-diff-apply-buffer':
-Line-Span Preservation Tests:
-Partial-line overlay stays partial after within-change"
-  (let* ((buffer-text "The old code here\n")
-         (ov-text "old")
-         (new-text "The old expanded code here\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (was-line-based (mevedel-test--overlay-is-line-based-p ov))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (should-not was-line-based)
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    ;; Should still be partial-line (not at BOL)
-    (should-not (with-current-buffer test-buffer
-                  (goto-char (overlay-start ov))
-                  (bolp))))
-  :doc "`mevedel-diff-apply-buffer':
-Line-Span Preservation Tests:
-Complex case (overlapping): line-based overlay stays line-based"
-  (let* ((buffer-text "prefix text\noverlay start\noverlay middle\noverlay end\nsuffix text\n")
-         (ov-text "overlay start\noverlay middle\noverlay end\n")
-         (new-text "prefix text changed\noverlay start\noverlay middle\noverlay end\nsuffix text\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay buffer-text nil nil ov-text))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (was-line-based (mevedel-test--overlay-is-line-based-p ov))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (should was-line-based)
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; Overlay should still be line-based after adjustment
-    (should ov)
-    (should (mevedel-test--overlay-is-line-based-p ov)))
-  :doc "`mevedel-diff-apply-buffer':
-Nested Overlays:
-Both parent and child adjust independently when change within both"
-  (let* ((buffer-text "directive start\n  reference content\ndirective end\n")
-         (directive-text "directive start\n  reference content\ndirective end\n")
-         (reference-text "reference content")
-         (new-text "directive start\n  reference MODIFIED content\ndirective end\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil directive-text 'directive))
-         (test-buffer (car buf-setup))
-         (directive-ov (cdr buf-setup))
-         (reference-ov (mevedel-test--create-overlay
-                        test-buffer nil nil reference-text 'reference))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should directive-ov)
-    (should reference-ov)
-    ;; Both should expand
-    (should (string-match-p "MODIFIED"
-                            (with-current-buffer test-buffer
-                              (buffer-substring-no-properties (overlay-start reference-ov) (overlay-end reference-ov))))))
-  :doc "`mevedel-diff-apply-buffer':
-Nested Overlays:
-Parent deleted causes child to be deleted"
-  (let* ((buffer-text "before\ndirective start\n  reference content\ndirective end\nafter\n")
-         (directive-text "directive start\n  reference content\ndirective end\n")
-         (reference-text "reference content")
-         (new-text "before\nafter\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil directive-text 'directive))
-         (test-buffer (car buf-setup))
-         (directive-ov (cdr buf-setup))
-         (reference-ov (mevedel-test--create-overlay
-                        test-buffer nil nil reference-text 'reference))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; Directive should exist as stub
-    (should directive-ov)
-    ;; Reference should also exist (currently we create stubs for all overlays)
-    (should reference-ov))
-  :doc "`mevedel-diff-apply-buffer':
-Edge Cases and Boundary Conditions:
-Adjacent overlays at exact same boundary"
-  (let* ((buffer-text "part1\npart2\npart3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "part1\n"))
-         (test-buffer (car buf-setup))
-         (ov1 (cdr buf-setup))
-         ;; Create second overlay starting exactly where first ends
-         (ov2 (mevedel-test--create-overlay test-buffer nil nil "part2\n"))
-         (new-text "part1\nREPLACED\npart3\n")
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov1)
-    (should ov2)
-    ;; First overlay should be unchanged (before the change)
-    (should (equal 1 (overlay-start ov1)))
-    (should (equal 7 (overlay-end ov1))) ; "part1\n"
-    ;; Second overlay should start exactly where first ends
-    (should (equal 7 (overlay-start ov2)))
-    ;; Second overlay should cover the replacement
-    (should (string-match-p "REPLACED"
-                            (with-current-buffer test-buffer
-                              (buffer-substring-no-properties (overlay-start ov2) (overlay-end ov2))))))
-  :doc "`mevedel-diff-apply-buffer':
-Edge Cases and Boundary Conditions:
-Change exactly matching overlay boundaries"
-  (let* ((buffer-text "before\nCHANGE_ME\nafter\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "CHANGE_ME\n"))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (new-text "before\nREPLACED\nafter\n")
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    ;; Overlay should expand to cover replacement
-    (should (equal "REPLACED\n"
-                   (with-current-buffer test-buffer
-                     (buffer-substring-no-properties (overlay-start ov) (overlay-end ov))))))
-  :doc "`mevedel-diff-apply-buffer':
-Edge Cases and Boundary Conditions:
-Partial-line overlay with mid-line deletion"
-  (let* ((buffer-text "The quick brown fox\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "quick"))
-         (test-buffer (car buf-setup))
-         (ov (cdr buf-setup))
-         (new-text "The qui\n")
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov)
-    ;; Overlay should shrink but remain
-    (should (equal "qui"
-                   (with-current-buffer test-buffer
-                     (buffer-substring-no-properties (overlay-start ov) (overlay-end ov))))))
-  :doc "`mevedel-diff-apply-buffer':
-Edge Cases and Boundary Conditions:
-Multiple overlays at same start position with different lengths"
-  (let* ((buffer-text "shared start\nmore content\neven more\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "shared start\n" 'directive))
-         (test-buffer (car buf-setup))
-         (ov1 (cdr buf-setup))
-         ;; Create ov2 and ov3 starting at same position as ov1 but with different lengths
-         (ov2 (mevedel-test--create-overlay test-buffer 1 27 nil 'reference)) ; covers first two lines
-         (ov3 (mevedel-test--create-overlay test-buffer 1 39 nil 'reference)) ; covers entire buffer
-         (new-text "PREFIX\nshared start\nmore content\neven more\n")
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should ov1)
-    (should ov2)
-    (should ov3)
-    ;; All should start at same position (after PREFIX\n)
-    (should (equal 8 (overlay-start ov1)))
-    (should (equal 8 (overlay-start ov2)))
-    (should (equal 8 (overlay-start ov3)))
-    ;; But maintain different lengths
-    (should (< (overlay-end ov1) (overlay-end ov2)))
-    (should (< (overlay-end ov2) (overlay-end ov3))))
-  :doc "`mevedel-diff-apply-buffer':
-Edge Cases and Boundary Conditions:
-Pure deletion affecting multiple overlays creates multiple stubs"
-  (let* ((buffer-text "keep\nov1\nov2\nov3\nkeep\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "ov1\n" 'directive))
-         (test-buffer (car buf-setup))
-         (ov1 (cdr buf-setup))
-         (ov2 (mevedel-test--create-overlay test-buffer nil nil "ov2\n" 'directive))
-         (ov3 (mevedel-test--create-overlay test-buffer nil nil "ov3\n" 'directive))
-         (new-text "keep\nkeep\n")
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; All three overlays should still exist as stubs
-    (should ov1)
-    (should ov2)
-    (should ov3)
-    ;; All should be small stubs
-    (should (< (- (overlay-end ov1) (overlay-start ov1)) 10))
-    (should (< (- (overlay-end ov2) (overlay-start ov2)) 10))
-    (should (< (- (overlay-end ov3) (overlay-start ov3)) 10)))
-  :doc "`mevedel-diff-apply-buffer':
-Edge Cases and Boundary Conditions:
-Cumulative delta with mixed insert/delete pattern"
-  (let* ((buffer-text "a\nb\nc\nd\ne\nTARGET\n")
-         (test-buffer (generate-new-buffer " *test-cumulative*"))
-         (target-ov nil)
-         ;; Single hunk with mixed operations: delete "a\n", insert "XXX\n", delete "c\n"
-         ;; These changes are consecutive so they form one hunk
-         ;; Net effect: -2 + 4 - 2 = 0 delta for TARGET position
-         (new-text "b\nXXX\nd\ne\nTARGET\n")
-         (diff-buffer nil))
+         (file (make-temp-file "mevedel-test-ambiguous-" nil ".txt" original))
+         (file-buffer (find-file-noselect file))
+         (diff-buffer
+          (mevedel-test--create-diff-buffer "alpha\nnew\nomega\n" file-buffer))
+         patch-before
+         first-error)
     (unwind-protect
         (progn
-          (with-current-buffer test-buffer
-            (insert buffer-text)
-            (set-visited-file-name (make-temp-file "test-cumulative" nil ".txt"))
-            ;; Create overlay at "TARGET\n"
-            (setq target-ov (make-overlay 11 18))
-            (overlay-put target-ov 'mevedel-instruction t)
-            (overlay-put target-ov 'mevedel-instruction-type 'directive)
-            (push target-ov (alist-get test-buffer (mevedel--instruction-alist))))
-
-          (setq diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer))
-
+          (with-current-buffer diff-buffer
+            (let ((inhibit-read-only t))
+              (goto-char (point-min))
+              (re-search-forward "^ alpha$")
+              (beginning-of-line)
+              (delete-char 1)
+              (goto-char (point-max))
+              (dotimes (_ 1000) (insert " \n"))
+              (goto-char (point-min))
+              (re-search-forward (regexp-quote "@@ -1,3 +1,3 @@"))
+              (replace-match "@@ -1,1003 +1,1003 @@" t t))
+            (setq patch-before (buffer-string)))
           (cl-letf (((symbol-function #'mevedel-workspace)
                      (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
+                       (mevedel-workspace-get-or-create
+                        'file file (file-name-directory file)
+                        (file-name-nondirectory file))))
+                    ((symbol-function 'y-or-n-p)
+                     (lambda (&rest _) (error "Unexpected prompt"))))
             (with-current-buffer diff-buffer
-              (let ((default-directory (temporary-file-directory))
+              (let ((default-directory temporary-file-directory))
+                (setq first-error
+                      (error-message-string
+                       (should-error (mevedel-diff-apply-buffer t)))))))
+          (should (string-match-p "Rejected ambiguous diff hunk" first-error))
+          (with-current-buffer diff-buffer
+            (should (equal patch-before (buffer-string))))
+          (with-current-buffer file-buffer
+            (should (equal original (buffer-string)))
+            (should-not (buffer-modified-p)))
+          (should (equal original
+                         (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string)))))
+      (kill-buffer diff-buffer)
+      (kill-buffer file-buffer)
+      (delete-file file)))
+  :doc "writes full final bytes from a narrowed source and retains a reference"
+  (let* ((original
+          "head\none\ntwo\nthree\nfour\nfive\ntarget\nsix\nseven\neight\nnine\nten\ntail\n")
+         (expected
+          "HEAD\none\ntwo\nthree\nfour\nfive\ntarget\nsix\nseven\neight\nnine\nten\nTAIL\n")
+         (file (make-temp-file "mevedel-test-reference-" nil ".txt" original))
+         (file-buffer (find-file-noselect file))
+         reference
+         diff-buffer)
+    (unwind-protect
+        (progn
+          (with-current-buffer file-buffer
+            (goto-char (point-min))
+            (re-search-forward "^target$")
+            (setq reference
+                  (mevedel--create-reference-in
+                   file-buffer (line-beginning-position) (line-beginning-position 2)))
+            (narrow-to-region (overlay-start reference) (overlay-end reference)))
+          (setq diff-buffer
+                (mevedel-test--create-diff-buffer expected file-buffer))
+          (with-current-buffer diff-buffer
+            (goto-char (point-min))
+            (should (= 2 (how-many "^@@"))))
+          (mevedel-test--apply-diff diff-buffer file)
+          (with-current-buffer file-buffer
+            (should (= (point-min) (overlay-start reference)))
+            (should (= (point-max) (overlay-end reference)))
+            (save-restriction
+              (widen)
+              (should (equal expected (buffer-string))))
+            (should (equal "target\n"
+                           (buffer-substring-no-properties
+                            (overlay-start reference) (overlay-end reference)))))
+          (should (equal expected
+                         (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string)))))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (kill-buffer file-buffer)
+      (delete-file file)))
+  :doc "whole-range deletion detaches the registered directive"
+  (let* ((original "before\nremove me\nafter\n")
+         (file (make-temp-file "mevedel-test-directive-" nil ".txt" original))
+         (file-buffer (find-file-noselect file))
+         directive
+         record
+         diff-buffer)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function #'mevedel-workspace)
+                     (lambda (&rest _)
+                       (mevedel-workspace-get-or-create
+                        'file file (file-name-directory file)
+                        (file-name-nondirectory file)))))
+            (with-current-buffer file-buffer
+              (setq directive
+                    (mevedel--create-directive-in file-buffer 8 18 nil "remove"))
+              (setq record (mevedel--directive-record directive)))
+            (setq diff-buffer
+                  (mevedel-test--create-diff-buffer "before\nafter\n" file-buffer))
+            (with-current-buffer diff-buffer
+              (let ((default-directory temporary-file-directory)
                     (inhibit-message t))
                 (mevedel-diff-apply-buffer))))
-
-          ;; Cumulative delta should be 0, so overlay position unchanged
-          (should target-ov)
-          (should (equal "TARGET\n"
-                         (with-current-buffer test-buffer
-                           (buffer-substring-no-properties (overlay-start target-ov) (overlay-end target-ov))))))
-      (when (buffer-live-p test-buffer)
-        (with-current-buffer test-buffer
-          (set-buffer-modified-p nil))
-        (kill-buffer test-buffer))))
-  :doc "`mevedel-diff-apply-buffer':
-Edge Cases and Boundary Conditions:
-Multiple hunks with cumulative delta"
-  (let* ((buffer-text "DELETE_ME\nheader1\nheader2\nheader3\nheader4\nheader5\n\nINSERT_HERE\ncontext1\ncontext2\ncontext3\ncontext4\ncontext5\n\nTARGET\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "TARGET\n" 'directive))
-         (test-buffer (car buf-setup))
-         (target-ov (cdr buf-setup))
-         ;; Delete first line, insert after INSERT_HERE, TARGET unchanged
-         (new-text "header1\nheader2\nheader3\nheader4\nheader5\n\nINSERT_HERE\nINSERTED\ncontext1\ncontext2\ncontext3\ncontext4\ncontext5\n\nTARGET\n")
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      ;; Verify that the diff contains multiple hunks
-      (with-current-buffer diff-buffer
-        (goto-char (point-min))
-        (let ((hunk-count 0))
-          (while (re-search-forward "^@@" nil t)
-            (setq hunk-count (1+ hunk-count)))
-          (should (> hunk-count 1))))
-
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; TARGET overlay should be preserved and shifted by cumulative delta
-    ;; -10 from deleting DELETE_ME\n, +9 from inserting INSERTED\n = -1 net delta
-    (should target-ov)
-    (should (equal "TARGET\n"
-                   (with-current-buffer test-buffer
-                     (buffer-substring-no-properties (overlay-start target-ov) (overlay-end target-ov))))))
-  :doc "`mevedel-diff-apply-buffer':
-Edge Cases and Boundary Conditions:
-Single large hunk encompassing overlay expands to cover entire replacement"
-  (let* ((buffer-text "section1\nsection2\nTARGET\nsection3\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "TARGET\n" 'directive))
-         (test-buffer (car buf-setup))
-         (target-ov (cdr buf-setup))
-         ;; This creates a single large hunk that encompasses the entire buffer
-         (new-text "BEFORE\nsection1\nsection2\nMODIFIED\nsection3\nAFTER\n")
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; Overlay should expand to cover the entire hunk replacement
-    ;; Since the overlay is encompassed by a single large change that replaces
-    ;; the entire buffer, the overlay expands to cover the complete new buffer
-    (should target-ov)
-    (should (equal "BEFORE\nsection1\nsection2\nMODIFIED\nsection3\nAFTER\n"
-                   (with-current-buffer test-buffer
-                     (buffer-substring-no-properties (overlay-start target-ov) (overlay-end target-ov))))))
-  :doc "`mevedel-diff-apply-buffer':
-Edge Cases and Boundary Conditions:
-Multiple hunks: only apply cumulative delta from hunks before overlay"
-  (let* ((buffer-text "header1\nheader2\nheader3\nheader4\nheader5\nheader6\nheader7\nheader8\nheader9\nheader10\n\nTARGET\n\nfooter1\nfooter2\nfooter3\nfooter4\nfooter5\nfooter6\nfooter7\nfooter8\nfooter9\nfooter10\n")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil "TARGET\n" 'directive))
-         (test-buffer (car buf-setup))
-         (target-ov (cdr buf-setup))
-         ;; Hunk 1: Insert at beginning (shifts TARGET position by 18 chars)
-         ;; Large unchanged context (10 lines)
-         ;; Hunk 2: Change TARGET to MODIFIED
-         ;; Large unchanged context (10 lines)
-         ;; Hunk 3: Insert at end (should NOT affect TARGET position)
-         (new-text "INSERTED_AT_START\nheader1\nheader2\nheader3\nheader4\nheader5\nheader6\nheader7\nheader8\nheader9\nheader10\n\nMODIFIED\n\nfooter1\nfooter2\nfooter3\nfooter4\nfooter5\nfooter6\nfooter7\nfooter8\nfooter9\nfooter10\nINSERTED_AT_END\n")
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      ;; First, verify that the diff actually contains multiple hunks (3 expected)
-      (with-current-buffer diff-buffer
-        (goto-char (point-min))
-        (let ((hunk-count 0))
-          (while (re-search-forward "^@@" nil t)
-            (setq hunk-count (1+ hunk-count)))
-          (should (> hunk-count 1))))
-
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    ;; Overlay should cover "MODIFIED\n"
-    ;; Position is shifted by hunk 1's insertion (+18), but hunk 3's insertion doesn't affect it
-    (should target-ov)
-    (should (equal "MODIFIED\n"
-                   (with-current-buffer test-buffer
-                     (buffer-substring-no-properties (overlay-start target-ov) (overlay-end target-ov))))))
-  :doc "`mevedel-diff-apply-buffer':
-Real World Examples:
-Example 1"
-  (let* ((buffer-text "
-      # plots is to high too display on one page and thus, it makes sense to
-      # have a division between multiple pages.
-      shiny$div(
-        # Dynamic layout - columns adjust based on which cards are visible
-        shiny$uiOutput(ns(\"dynamic_layout_ui\"))
-      ),
-      shiny$div(
-        style = \"margin-top: 3px;\",
-        shiny$uiOutput(ns(\"dynamic_layout_ui_pt2\"))
-      ),
-      shiny$div(
-        style = \"margin-top: 3px;\",
-        shiny$uiOutput(ns(\"dynamic_layout_ui_pt3\"))
-      )
-    )
-  )
-
-Lorem ipsum dolor sit amet, consetetur
-Lorem ipsum dolor sit amet, consetetur
-Lorem ipsum dolor sit amet, consetetur
-
-
-    # Create entire layout dynamically based on checkbox states
-    output$dynamic_layout_ui <- shiny$renderUI({
-      ns <- session$ns
-
-
-Lorem ipsum dolor sit amet, consetetur
-Lorem ipsum dolor sit amet, consetetur
-Lorem ipsum dolor sit amet, consetetur
-
-
-    ### Intervention costs -----------------------------------------------------
-
-    output$dynamic_layout_ui_pt2 <- shiny$renderUI({
-      ns <- session$ns
-
-      if (input$show_costs) {
-        costs$ui(id = ns(\"costs\"))
-      }
-    })
-
-    ### Impact maps ------------------------------------------------------------
-
-    output$dynamic_layout_ui_pt3 <- shiny$renderUI({
-      ns <- session$ns
-
-
-")
-         (directive-text "      shiny$div(\n        # Dynamic layout - columns adjust based on which cards are visible\n        shiny$uiOutput(ns(\"dynamic_layout_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"dynamic_layout_ui_pt2\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"dynamic_layout_ui_pt3\"))\n      )\n")
-         (reference-1-text "    output$dynamic_layout_ui <- shiny$renderUI({\n")
-         (reference-2-text "    output$dynamic_layout_ui_pt2 <- shiny$renderUI({\n")
-         (reference-3-text "    output$dynamic_layout_ui_pt3 <- shiny$renderUI({\n")
-         (new-text "
-      # plots is to high too display on one page and thus, it makes sense to
-      # have a division between multiple pages.
-      shiny$div(
-        # Main plots and maps layout
-        shiny$uiOutput(ns(\"main_plots_maps_ui\"))
-      ),
-      shiny$div(
-        style = \"margin-top: 3px;\",
-        shiny$uiOutput(ns(\"costs_analysis_ui\"))
-      ),
-      shiny$div(
-        style = \"margin-top: 3px;\",
-        shiny$uiOutput(ns(\"impact_maps_ui\"))
-      )
-    )
-  )
-
-Lorem ipsum dolor sit amet, consetetur
-Lorem ipsum dolor sit amet, consetetur
-Lorem ipsum dolor sit amet, consetetur
-
-
-    # Create main plots and maps layout dynamically based on checkbox states
-    output$main_plots_maps_ui <- shiny$renderUI({
-      ns <- session$ns
-
-
-Lorem ipsum dolor sit amet, consetetur
-Lorem ipsum dolor sit amet, consetetur
-Lorem ipsum dolor sit amet, consetetur
-
-
-    ### Intervention costs -----------------------------------------------------
-
-    output$costs_analysis_ui <- shiny$renderUI({
-      ns <- session$ns
-
-      if (input$show_costs) {
-        costs$ui(id = ns(\"costs\"))
-      }
-    })
-
-    ### Impact maps ------------------------------------------------------------
-
-    output$impact_maps_ui <- shiny$renderUI({
-      ns <- session$ns
-
-
-")
-         (buf-setup (mevedel-test--create-buffer-with-overlay
-                     buffer-text nil nil directive-text 'directive))
-         (test-buffer (car buf-setup))
-         (directive-ov (cdr buf-setup))
-         (reference-1-ov (mevedel-test--create-overlay
-                          test-buffer nil nil reference-1-text 'reference))
-         (reference-2-ov (mevedel-test--create-overlay
-                          test-buffer nil nil reference-2-text 'reference))
-         (reference-3-ov (mevedel-test--create-overlay
-                          test-buffer nil nil reference-3-text 'reference))
-         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
-
-    (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _)
-                 (mevedel-workspace-get-or-create
-                  'file (buffer-file-name test-buffer)
-                  (file-name-directory (buffer-file-name test-buffer))
-                  (file-name-nondirectory (buffer-file-name test-buffer))))))
-      (with-current-buffer diff-buffer
-        (let ((default-directory (temporary-file-directory))
-              (inhibit-message t))
-          (mevedel-diff-apply-buffer))))
-
-    (should directive-ov)
-    (should reference-1-ov)
-    (should reference-2-ov)
-    (should reference-3-ov)
-    ;; Verify overlay contents match expected values
-    (let ((expected-directive "      shiny$div(\n        # Main plots and maps layout\n        shiny$uiOutput(ns(\"main_plots_maps_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"costs_analysis_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"impact_maps_ui\"))\n      )\n")
-          (expected-ref1 "    output$main_plots_maps_ui <- shiny$renderUI({\n")
-          (expected-ref2 "    output$costs_analysis_ui <- shiny$renderUI({\n")
-          (expected-ref3 "    output$impact_maps_ui <- shiny$renderUI({\n"))
-      (should (equal expected-directive
-                     (with-current-buffer test-buffer
-                       (buffer-substring-no-properties (overlay-start directive-ov) (overlay-end directive-ov)))))
-      (should (equal expected-ref1
-                     (with-current-buffer test-buffer
-                       (buffer-substring-no-properties (overlay-start reference-1-ov) (overlay-end reference-1-ov)))))
-      (should (equal expected-ref2
-                     (with-current-buffer test-buffer
-                       (buffer-substring-no-properties (overlay-start reference-2-ov) (overlay-end reference-2-ov)))))
-      (should (equal expected-ref3
-                     (with-current-buffer test-buffer
-                       (buffer-substring-no-properties (overlay-start reference-3-ov) (overlay-end reference-3-ov))))))))
+          (should record)
+          (should (eq 'detached
+                      (plist-get (mevedel-directive-anchor record) :state))))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (kill-buffer file-buffer)
+      (delete-file file)))
+  :doc "preserves literal bytes for a non-default file coding system"
+  (let* ((original
+          ";; -*- coding: iso-latin-1 -*-\nold: \u00e4\nkeep: \u00f6\n")
+         (expected
+          ";; -*- coding: iso-latin-1 -*-\nnew: \u00e4\nkeep: \u00f6\n")
+         (file (make-temp-file "mevedel-test-coding-" nil ".el"))
+         file-buffer diff-buffer coding)
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'iso-latin-1))
+            (with-temp-file file (insert original)))
+          (setq file-buffer (find-file-noselect file)
+                coding (buffer-local-value 'buffer-file-coding-system
+                                           file-buffer)
+                diff-buffer
+                (mevedel-test--create-diff-buffer expected file-buffer))
+          (mevedel-test--apply-diff diff-buffer file)
+          (should
+           (equal (encode-coding-string expected coding)
+                  (with-temp-buffer
+                    (set-buffer-multibyte nil)
+                    (insert-file-contents-literally file)
+                    (buffer-string)))))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (when (buffer-live-p file-buffer) (kill-buffer file-buffer))
+      (delete-file file)))
+  :doc "creates a new file through the shared transaction"
+  (let* ((file (make-temp-name
+                (expand-file-name "mevedel-test-created-"
+                                  temporary-file-directory)))
+         (file-buffer (find-file-noselect file))
+         (diff-buffer
+          (mevedel-test--create-diff-buffer "created\n" file-buffer)))
+    (unwind-protect
+        (progn
+          (mevedel-test--apply-diff diff-buffer file)
+          (should (equal "created\n"
+                         (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string))))
+          (with-current-buffer file-buffer
+            (should (equal "created\n" (buffer-string)))))
+      (kill-buffer diff-buffer)
+      (kill-buffer file-buffer)
+      (when (file-exists-p file) (delete-file file))))
+  :doc "deleting a file marks its registered directive source missing"
+  (let* ((file (make-temp-file "mevedel-test-deleted-" nil ".txt" "old\n"))
+         (file-buffer (find-file-noselect file))
+         (diff-buffer (mevedel-test--create-diff-buffer "" file-buffer))
+         directive record)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function #'mevedel-workspace)
+                     (lambda (&rest _)
+                       (mevedel-workspace-get-or-create
+                        'file file (file-name-directory file)
+                        (file-name-nondirectory file)))))
+            (with-current-buffer file-buffer
+              (setq directive
+                    (mevedel--create-directive-in file-buffer 1 4 nil "delete"))
+              (setq record (mevedel--directive-record directive)))
+            (with-current-buffer diff-buffer
+              (let ((default-directory temporary-file-directory)
+                    (inhibit-message t))
+                (mevedel-diff-apply-buffer))))
+          (should-not (file-exists-p file))
+          (should (buffer-live-p file-buffer))
+          (should-not (overlay-buffer directive))
+          (should (eq 'source-missing
+                      (plist-get (mevedel-directive-anchor record) :state))))
+      (kill-buffer diff-buffer)
+      (kill-buffer file-buffer)
+      (when (file-exists-p file) (delete-file file))))
+  :doc "rolls back create placeholders when a later write fails"
+  (let* ((root (make-temp-file "mevedel-test-write-rollback-" t))
+         (first-dir (file-name-concat root "created" "first"))
+         (sibling-dir (file-name-concat root "created" "sibling"))
+         (second-dir (file-name-concat root "second"))
+         (first (file-name-concat first-dir "one.txt"))
+         (sibling (file-name-concat sibling-dir "sibling.txt"))
+         (second (file-name-concat second-dir "two.txt"))
+         first-buffer sibling-buffer second-buffer diff-buffer first-modtime)
+    (unwind-protect
+        (progn
+          (make-directory second-dir)
+          (write-region "two\n" nil second nil 'silent)
+          (setq first-buffer (find-file-noselect first)
+                sibling-buffer (find-file-noselect sibling)
+                second-buffer (find-file-noselect second)
+                first-modtime
+                (with-current-buffer first-buffer (visited-file-modtime))
+                diff-buffer
+                (mevedel-test--create-multi-diff-buffer
+                 `(("ONE\n" ,first-buffer)
+                   ("SIBLING\n" ,sibling-buffer)
+                   ("TWO\n" ,second-buffer))))
+          (set-file-modes second-dir #o500)
+          (should-error (mevedel-test--apply-diff diff-buffer first))
+          (should-not (file-exists-p first))
+          (should-not (file-exists-p sibling))
+          (should-not (file-exists-p (file-name-concat root "created")))
+          (should (equal "two\n"
+                         (with-temp-buffer
+                           (insert-file-contents second)
+                           (buffer-string))))
+          (with-current-buffer first-buffer
+            (should (equal "" (buffer-string)))
+            (should (equal first-modtime (visited-file-modtime)))
+            (should (verify-visited-file-modtime first-buffer)))
+          (with-current-buffer second-buffer
+            (should (equal "two\n" (buffer-string)))))
+      (when (file-directory-p second-dir) (set-file-modes second-dir #o700))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (when (buffer-live-p first-buffer) (kill-buffer first-buffer))
+      (when (buffer-live-p sibling-buffer) (kill-buffer sibling-buffer))
+      (when (buffer-live-p second-buffer) (kill-buffer second-buffer))
+      (when (file-directory-p root) (delete-directory root t))))
+  :doc "restores earlier deletions when a later deletion fails"
+  (let* ((root (make-temp-file "mevedel-test-delete-rollback-" t))
+         (first-dir (file-name-concat root "first"))
+         (second-dir (file-name-concat root "second"))
+         (first (file-name-concat first-dir "one.txt"))
+         (second (file-name-concat second-dir "two.txt"))
+         first-buffer second-buffer diff-buffer)
+    (unwind-protect
+        (progn
+          (make-directory first-dir)
+          (make-directory second-dir)
+          (write-region "one\n" nil first nil 'silent)
+          (write-region "two\n" nil second nil 'silent)
+          (setq first-buffer (find-file-noselect first)
+                second-buffer (find-file-noselect second)
+                diff-buffer
+                (mevedel-test--create-multi-diff-buffer
+                 `(("" ,first-buffer) ("" ,second-buffer))))
+          (set-file-modes second-dir #o500)
+          (should-error (mevedel-test--apply-diff diff-buffer first))
+          (should (equal "one\n"
+                         (with-temp-buffer
+                           (insert-file-contents first)
+                           (buffer-string))))
+          (should (equal "two\n"
+                         (with-temp-buffer
+                           (insert-file-contents second)
+                           (buffer-string)))))
+      (when (file-directory-p second-dir) (set-file-modes second-dir #o700))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (when (buffer-live-p first-buffer) (kill-buffer first-buffer))
+      (when (buffer-live-p second-buffer) (kill-buffer second-buffer))
+      (when (file-directory-p root) (delete-directory root t))))
+  :doc "rolls back files and directive state when a later buffer hook fails"
+  (let* ((root (make-temp-file "mevedel-test-sync-rollback-" t))
+         (first (file-name-concat root "one.txt"))
+         (second (file-name-concat root "two.txt"))
+         first-buffer second-buffer diff-buffer directive record)
+    (unwind-protect
+        (progn
+          (write-region "one\n" nil first nil 'silent)
+          (write-region "two\n" nil second nil 'silent)
+          (setq first-buffer (find-file-noselect first)
+                second-buffer (find-file-noselect second)
+                diff-buffer
+                (mevedel-test--create-multi-diff-buffer
+                 `(("" ,first-buffer) ("TWO\n" ,second-buffer))))
+          (cl-letf (((symbol-function #'mevedel-workspace)
+                     (lambda (&rest _)
+                       (mevedel-workspace-get-or-create
+                        'file first root (file-name-nondirectory first)))))
+            (with-current-buffer first-buffer
+              (setq directive
+                    (mevedel--create-directive-in first-buffer 1 4 nil "keep"))
+              (setq record (mevedel--directive-record directive)))
+            (with-current-buffer second-buffer
+              (add-hook 'before-change-functions
+                        (lambda (&rest _) (error "Sync failure")) nil t))
+            (with-current-buffer diff-buffer
+              (let ((default-directory temporary-file-directory)
+                    (inhibit-message t))
+                (should-error (mevedel-diff-apply-buffer))))
+            (with-current-buffer first-buffer
+              (should
+               (memq directive
+                     (alist-get first-buffer
+                                (mevedel--instruction-alist-value))))))
+          (should (equal "one\n"
+                         (with-temp-buffer
+                           (insert-file-contents first)
+                           (buffer-string))))
+          (should (equal "two\n"
+                         (with-temp-buffer
+                           (insert-file-contents second)
+                           (buffer-string))))
+          (with-current-buffer first-buffer
+            (should (equal "one\n" (buffer-string)))
+            (should (eq first-buffer (overlay-buffer directive)))
+            (should (= 1 (overlay-start directive)))
+            (should (= 4 (overlay-end directive))))
+          (should (eq 'attached
+                      (plist-get (mevedel-directive-anchor record) :state)))
+          (with-current-buffer second-buffer
+            (should (equal "two\n" (buffer-string)))))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (when (buffer-live-p first-buffer) (kill-buffer first-buffer))
+      (when (buffer-live-p second-buffer) (kill-buffer second-buffer))
+      (when (file-directory-p root) (delete-directory root t)))))
 
 (provide 'test-mevedel-diff-apply)
 

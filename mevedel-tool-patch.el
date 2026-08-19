@@ -26,6 +26,14 @@
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind &optional offset limit))
 
+;; `mevedel-overlays'
+(declare-function mevedel--directive-record "mevedel-overlays" (directive))
+(declare-function mevedel--instruction-alist-value "mevedel-overlays" ())
+(declare-function mevedel--mark-buffer-source-missing
+                  "mevedel-overlays" (buffer))
+(declare-function mevedel--set-instruction-alist-value
+                  "mevedel-overlays" (value))
+
 ;; `mevedel-patch-review'
 (declare-function mevedel-patch-review-start
                   "mevedel-patch-review" (proposal callback data-buffer))
@@ -57,6 +65,9 @@
                   "mevedel-session-persistence" (session buffer))
 
 ;; `mevedel-structs'
+(declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-set-anchor
+                  "mevedel-structs" (directive anchor))
 (declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-one-shot-mutations-p
                   "mevedel-structs" (cl-x) t)
@@ -764,19 +775,28 @@ hunk that previewed cleanly stays unambiguous after a deselection."
   "Return a rollback snapshot plist for PATH."
   (list :path path
         :exists (file-exists-p path)
-        :content (and (file-exists-p path)
-                      (mevedel-tool-patch--read-file path))
+        :bytes (and (file-exists-p path)
+                    (with-temp-buffer
+                      (set-buffer-multibyte nil)
+                      (insert-file-contents-literally path)
+                      (buffer-string)))
         :mode (and (file-exists-p path) (file-modes path))))
 
-(defun mevedel-tool-patch--write-file (path content &optional mode)
-  "Replace PATH with CONTENT and restore MODE when non-nil."
+(defun mevedel-tool-patch--write-file (path content &optional mode literal-p)
+  "Replace PATH with CONTENT and restore MODE when non-nil.
+When LITERAL-P is non-nil, write CONTENT as literal bytes."
   (let ((directory (file-name-directory path)))
     (make-directory directory t)
     (let ((temporary (make-temp-file
                       (file-name-concat directory ".mevedel-patch-") nil)))
       (unwind-protect
           (progn
-            (with-temp-file temporary (insert content))
+            (with-temp-buffer
+              (when literal-p (set-buffer-multibyte nil))
+              (insert content)
+              (let ((coding-system-for-write
+                     (and literal-p 'no-conversion)))
+                (write-region (point-min) (point-max) temporary nil 'silent)))
             (when mode (set-file-modes temporary mode))
             (rename-file temporary path t))
         (when (file-exists-p temporary)
@@ -789,7 +809,7 @@ hunk that previewed cleanly stays unambiguous after a deselection."
       (condition-case nil
           (if (plist-get snapshot :exists)
               (mevedel-tool-patch--write-file
-               path (plist-get snapshot :content) (plist-get snapshot :mode))
+               path (plist-get snapshot :bytes) (plist-get snapshot :mode) t)
             (when (file-exists-p path) (delete-file path)))
         (error nil)))))
 
@@ -803,59 +823,182 @@ hunk that previewed cleanly stays unambiguous after a deselection."
     missing))
 
 (defun mevedel-tool-patch--commit (changes)
-  "Commit CHANGES, restoring every touched file if a write fails."
-  (let ((snapshots (mapcar (lambda (change)
-                             (mevedel-tool-patch--snapshot
-                              (plist-get change :path)))
-                           changes))
-        (created-directories
-         (delete-dups
-          (cl-mapcan
-           (lambda (change)
-             (when (eq (plist-get change :action) 'write)
-               (mevedel-tool-patch--missing-parent-directories
-                (plist-get change :path))))
-           changes))))
-    (condition-case err
-        (dolist (change changes)
-          (pcase (plist-get change :action)
-            ('write
-             (let* ((path (plist-get change :path))
-                    (snapshot (seq-find
-                               (lambda (item)
-                                 (equal path (plist-get item :path)))
-                               snapshots)))
-               (mevedel-tool-patch--write-file
-                path (plist-get change :content)
-                (or (plist-get change :mode)
-                    (plist-get snapshot :mode)
-                    (default-file-modes)))))
-            ('delete
-             (delete-file (plist-get change :path)))))
-      (error
-       (mevedel-tool-patch--restore-snapshots snapshots)
-       (dolist (directory (reverse created-directories))
-         (when (and (file-directory-p directory)
-                    (null (directory-files directory nil
-                                           directory-files-no-dot-files-regexp)))
-           (delete-directory directory)))
-       (signal (car err) (cdr err))))
-    (dolist (change changes)
-      (when-let* ((buffer (find-buffer-visiting
-                           (plist-get change :path))))
+  "Commit CHANGES as one filesystem and visited-buffer transaction."
+  (require 'mevedel-overlays)
+  (dolist (change changes)
+    (when-let* (((eq (plist-get change :action) 'write))
+                (buffer (find-buffer-visiting (plist-get change :path)))
+                ((buffer-local-value 'buffer-read-only buffer)))
+      (error "Buffer is read-only: %s" (buffer-name buffer))))
+  (cl-labels
+      ((buffer-snapshot
+        (buffer)
         (with-current-buffer buffer
-          (if (eq (plist-get change :action) 'delete)
-              (set-visited-file-modtime 0)
-            (let ((source (generate-new-buffer " *mevedel patch sync*")))
-              (unwind-protect
-                  (progn
-                    (with-current-buffer source
-                      (insert (plist-get change :content)))
-                    (set-visited-file-modtime)
-                    (replace-buffer-contents source)
-                    (set-visited-file-modtime)
-                    (set-buffer-modified-p nil))
-                (kill-buffer source)))))))))
+          (let ((minimum (point-min))
+                (maximum (point-max))
+                (position (point)))
+            (save-restriction
+              (widen)
+              (let* ((overlays (append (car (overlay-lists))
+                                       (cdr (overlay-lists))))
+                     (entry (assq buffer
+                                  (mevedel--instruction-alist-value)))
+                     anchors)
+                (dolist (overlay overlays)
+                  (when (eq (overlay-get overlay 'mevedel-instruction-type)
+                            'directive)
+                    (when-let* ((record (mevedel--directive-record overlay)))
+                      (push (cons record
+                                  (copy-tree
+                                   (mevedel-directive-anchor record)))
+                            anchors))))
+                (list :buffer buffer
+                      :group (prepare-change-group)
+                      :minimum minimum
+                      :maximum maximum
+                      :point position
+                      :modified (buffer-modified-p)
+                      :modtime (visited-file-modtime)
+                      :content (buffer-substring (point-min) (point-max))
+                      :instruction-present (and entry t)
+                      :instructions (and entry (copy-sequence (cdr entry)))
+                      :anchors anchors
+                      :overlays
+                      (mapcar
+                       (lambda (overlay)
+                         (list overlay (overlay-start overlay)
+                               (overlay-end overlay)
+                               (copy-sequence (overlay-properties overlay))))
+                       overlays)))))))
+       (restore-buffer
+        (snapshot)
+        (when-let* ((buffer (plist-get snapshot :buffer))
+                    ((buffer-live-p buffer)))
+          (with-current-buffer buffer
+            (save-restriction
+              (widen)
+              (let ((inhibit-modification-hooks t)
+                    (inhibit-read-only t))
+                (unless (equal (buffer-string) (plist-get snapshot :content))
+                  (erase-buffer)
+                  (insert (plist-get snapshot :content))))
+              (let* ((saved-overlays (plist-get snapshot :overlays))
+                     (originals (mapcar #'car saved-overlays))
+                     (current (append (car (overlay-lists))
+                                      (cdr (overlay-lists)))))
+                (dolist (overlay current)
+                  (unless (memq overlay originals)
+                    (delete-overlay overlay)))
+                (dolist (saved saved-overlays)
+                  (let ((overlay (car saved))
+                        (properties (nth 3 saved)))
+                    (let ((current (overlay-properties overlay)))
+                      (while current
+                        (overlay-put overlay (pop current) nil)
+                        (pop current)))
+                    (move-overlay overlay (nth 1 saved) (nth 2 saved) buffer)
+                    (while properties
+                      (overlay-put overlay (pop properties) (pop properties)))))
+                (let ((alist (mevedel--instruction-alist-value)))
+                  (if (plist-get snapshot :instruction-present)
+                      (setf (alist-get buffer alist)
+                            (plist-get snapshot :instructions))
+                    (setq alist (assq-delete-all buffer alist)))
+                  (mevedel--set-instruction-alist-value alist))
+                (dolist (anchor (plist-get snapshot :anchors))
+                  (mevedel-directive-set-anchor (car anchor) (cdr anchor)))
+                (narrow-to-region (plist-get snapshot :minimum)
+                                  (plist-get snapshot :maximum))
+                (goto-char (plist-get snapshot :point))
+                (set-visited-file-modtime (plist-get snapshot :modtime))
+                (set-buffer-modified-p (plist-get snapshot :modified))))))))
+    (let* ((snapshots (mapcar (lambda (change)
+                                (mevedel-tool-patch--snapshot
+                                 (plist-get change :path)))
+                              changes))
+           (created-directories
+            (delete-dups
+             (cl-mapcan
+              (lambda (change)
+                (when (eq (plist-get change :action) 'write)
+                  (mevedel-tool-patch--missing-parent-directories
+                   (plist-get change :path))))
+              changes)))
+           (buffer-snapshots
+            (delq nil
+                  (mapcar
+                   (lambda (change)
+                     (when-let* ((buffer (find-buffer-visiting
+                                          (plist-get change :path))))
+                       (buffer-snapshot buffer)))
+                   changes))))
+      (dolist (snapshot buffer-snapshots)
+        (when-let* ((group (plist-get snapshot :group)))
+          (with-current-buffer (plist-get snapshot :buffer)
+            (activate-change-group group))))
+      (condition-case err
+          (progn
+            (dolist (change changes)
+              (pcase (plist-get change :action)
+                ('write
+                 (let* ((path (plist-get change :path))
+                        (snapshot (seq-find
+                                   (lambda (item)
+                                     (equal path (plist-get item :path)))
+                                   snapshots))
+                        (literal-p (plist-member change :bytes)))
+                   (mevedel-tool-patch--write-file
+                    path (if literal-p
+                             (plist-get change :bytes)
+                           (plist-get change :content))
+                    (or (plist-get change :mode)
+                        (plist-get snapshot :mode)
+                        (default-file-modes))
+                    literal-p)))
+                ('delete
+                 (delete-file (plist-get change :path)))))
+            (dolist (change changes)
+              (when-let* ((buffer (find-buffer-visiting
+                                   (plist-get change :path))))
+                (with-current-buffer buffer
+                  (if (eq (plist-get change :action) 'delete)
+                      (progn
+                        (mevedel--mark-buffer-source-missing buffer)
+                        (set-visited-file-modtime 0))
+                    (save-restriction
+                      (widen)
+                      (let ((source
+                             (generate-new-buffer " *mevedel patch sync*")))
+                        (unwind-protect
+                            (progn
+                              (with-current-buffer source
+                                (insert (plist-get change :content)))
+                              (set-visited-file-modtime)
+                              (replace-buffer-contents source)
+                              (set-visited-file-modtime)
+                              (set-buffer-modified-p nil))
+                          (kill-buffer source))))))))
+            (dolist (snapshot buffer-snapshots)
+              (when-let* ((group (plist-get snapshot :group)))
+                (with-current-buffer (plist-get snapshot :buffer)
+                  (accept-change-group group)))))
+        (error
+         (mevedel-tool-patch--restore-snapshots snapshots)
+         (dolist (snapshot (reverse buffer-snapshots))
+           (when-let* ((group (plist-get snapshot :group)))
+             (with-current-buffer (plist-get snapshot :buffer)
+               (let ((inhibit-modification-hooks t)
+                     (inhibit-read-only t))
+                 (cancel-change-group group)))))
+         (dolist (snapshot buffer-snapshots)
+           (restore-buffer snapshot))
+         (dolist (directory (reverse created-directories))
+           (when (and (file-directory-p directory)
+                      (null (directory-files
+                             directory nil
+                             directory-files-no-dot-files-regexp)))
+             (delete-directory directory)))
+         (signal (car err) (cdr err)))))))
 
 (defun mevedel-tool-patch--assert-buffers-unmodified (changes)
   "Signal when a visited file in CHANGES has unsaved edits."

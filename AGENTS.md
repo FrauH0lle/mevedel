@@ -222,7 +222,7 @@ Tools (each dispatches through mevedel-pipeline)
 
 Support
   mevedel-file-state.el       LRU file cache
-  mevedel-diff-apply.el       overlay-preserving diff application
+  mevedel-diff-apply.el       transactional unified diff staging/application
   mevedel-utilities.el        shared helpers (tinting, ediff glue, env info)
 ```
 
@@ -368,8 +368,7 @@ warnings.
   Focused `test/test-mevedel-{module}-{subject}.el` supplements are allowed
   when a single-function suite would make the primary file unwieldy.
 - **One deftest per function**: all cases in one macro call; label with
-  `:doc` strings. Rare exceptions (e.g. `test-mevedel-diff-apply.el`)
-  where setup differs drastically.
+  `:doc` strings. Rare exceptions are allowed where setup differs drastically.
 - **Real files**, not mocks. Clean up in teardown.
 - **Helpers require**:
   ```elisp
