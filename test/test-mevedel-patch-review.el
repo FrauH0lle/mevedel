@@ -612,6 +612,83 @@
                              (insert-file-contents path)
                              (buffer-string)))))
         (when (buffer-live-p parent-data) (kill-buffer parent-data))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "Sanitizes local paths and warns when review rollback is incomplete"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-review-rollback-" t)))
+           (workspace (mevedel-workspace--create
+                       :type 'test :id root :root root :name "rollback"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session--create
+                     :name "rollback" :workspace workspace
+                     :working-directory root :permission-mode 'ask))
+           (first-address "local://first/one.txt")
+           (second-address "local://second/two.txt")
+           (patch (string-join
+                   (list "*** Begin Patch"
+                         (concat "*** Update File: " first-address)
+                         "@@" "-old one" "+new one"
+                         (concat "*** Update File: " second-address)
+                         "@@" "-old two" "+new two"
+                         "*** End Patch")
+                   "\n"))
+           first-directory
+           first-path
+           second-path
+           first-buffer
+           second-buffer
+           result)
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-session-persistence--shallow-ensure-files
+               session data-buf)
+              (let ((local-root
+                     (file-name-concat (mevedel-session-save-path session)
+                                       "local")))
+                (setq first-path
+                      (file-name-concat local-root "first" "one.txt")
+                      second-path
+                      (file-name-concat local-root "second" "two.txt")
+                      first-directory (file-name-directory first-path)))
+              (make-directory (file-name-directory first-path) t)
+              (make-directory (file-name-directory second-path) t)
+              (with-temp-file first-path (insert "old one\n"))
+              (with-temp-file second-path (insert "old two\n"))
+              (setq first-buffer (find-file-noselect first-path)
+                    second-buffer (find-file-noselect second-path))
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            (with-current-buffer second-buffer
+              (add-hook 'before-change-functions
+                        (lambda (&rest _)
+                          (set-file-modes first-directory #o500)
+                          (error "Sync failure"))
+                        nil t))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "ApplyPatch ·")
+              (mevedel-patch-review-submit)
+              (let ((text (buffer-substring-no-properties
+                           (point-min) mevedel-view--input-marker)))
+                (should-not result)
+                (should (string-search first-address text))
+                (should-not (string-search first-path text))
+                (should (string-search "Sync failure" text))
+                (should (string-search "Rollback was incomplete" text))
+                (should-not (string-search "Deselect the stale file" text)))))
+        (when (file-directory-p first-directory)
+          (set-file-modes first-directory #o700))
+        (dolist (buffer (list first-buffer second-buffer))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer)))
         (when (file-directory-p root) (delete-directory root t))))))
 
 (mevedel-deftest mevedel-patch-review-reject

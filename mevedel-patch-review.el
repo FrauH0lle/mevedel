@@ -50,16 +50,18 @@
                   "mevedel-tool-patch" (operation))
 (declare-function mevedel-tool-patch--parse-update-lines
                   "mevedel-tool-patch" (lines first-line))
-(declare-function mevedel-tool-patch--planned-changes
-                  "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch--physical-path
                   "mevedel-tool-patch" (operation))
-(declare-function mevedel-tool-patch--resource-address-p
-                  "mevedel-tool-patch" (value))
+(declare-function mevedel-tool-patch--planned-changes
+                  "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch--proposal-stats
                   "mevedel-tool-patch" (proposal))
+(declare-function mevedel-tool-patch--resource-address-p
+                  "mevedel-tool-patch" (value))
 (declare-function mevedel-tool-patch--result
                   "mevedel-tool-patch" (proposal changes))
+(declare-function mevedel-tool-patch--sanitize-error
+                  "mevedel-tool-patch" (message proposal))
 (declare-function mevedel-tool-patch--status
                   "mevedel-tool-patch" (operation))
 
@@ -347,10 +349,14 @@ OPERATION owns TARGET and is retained as interaction metadata."
             (ins warning 'font-lock-face 'warning))
           (when-let* ((conflict (plist-get proposal :conflict)))
             (ins (format "Conflict: %s\n" conflict) 'font-lock-face 'error)
-            (ins (concat "Deselect the stale file with SPC to apply the"
-                         " rest, or C-c C-k to reject so the model"
-                         " re-reads it.\n")
-                 'font-lock-face 'shadow))
+            (if (plist-get proposal :rollback-incomplete)
+                (ins (concat "Rollback was incomplete. Inspect the listed"
+                             " paths before retrying.\n")
+                     'font-lock-face 'shadow)
+              (ins (concat "Deselect the stale file with SPC to apply the"
+                           " rest, or C-c C-k to reject so the model"
+                           " re-reads it.\n")
+                   'font-lock-face 'shadow)))
           (mevedel-patch-review--feedback-body
            proposal nil proposal "the whole patch")
           (ins "\n")
@@ -957,7 +963,11 @@ on Update files and patch-level feedback leave selection untouched."
               (mevedel--prompt--settle overlay 'approve)
               (funcall callback result))))
       (error
-       (plist-put proposal :conflict (error-message-string err))
+       (plist-put proposal :conflict
+                  (mevedel-tool-patch--sanitize-error
+                   (error-message-string err) proposal))
+       (plist-put proposal :rollback-incomplete
+                  (eq (car err) 'mevedel-tool-patch-partial-rollback))
        (mevedel-patch-review--render proposal)))))
 
 (defun mevedel-patch-review-submit ()

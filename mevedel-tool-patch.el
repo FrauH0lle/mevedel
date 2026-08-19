@@ -22,6 +22,9 @@
 
 (defvar mevedel-tool-patch--prepared-proposal nil)
 
+(define-error 'mevedel-tool-patch-partial-rollback
+  "Patch rollback incomplete")
+
 ;; `mevedel-file-state'
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind &optional offset limit))
@@ -803,15 +806,16 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
           (delete-file temporary))))))
 
 (defun mevedel-tool-patch--restore-snapshots (snapshots)
-  "Best-effort restore of filesystem SNAPSHOTS."
-  (dolist (snapshot snapshots)
-    (let ((path (plist-get snapshot :path)))
-      (condition-case nil
-          (if (plist-get snapshot :exists)
-              (mevedel-tool-patch--write-file
-               path (plist-get snapshot :bytes) (plist-get snapshot :mode) t)
-            (when (file-exists-p path) (delete-file path)))
-        (error nil)))))
+  "Restore filesystem SNAPSHOTS and return failed path/error pairs."
+  (let (failures)
+    (dolist (snapshot snapshots (nreverse failures))
+      (let ((path (plist-get snapshot :path)))
+        (condition-case err
+            (if (plist-get snapshot :exists)
+                (mevedel-tool-patch--write-file
+                 path (plist-get snapshot :bytes) (plist-get snapshot :mode) t)
+              (when (file-exists-p path) (delete-file path)))
+          (error (push (cons path err) failures)))))))
 
 (defun mevedel-tool-patch--missing-parent-directories (path)
   "Return missing parent directories for PATH, outermost first."
@@ -983,22 +987,26 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
                 (with-current-buffer (plist-get snapshot :buffer)
                   (accept-change-group group)))))
         (error
-         (mevedel-tool-patch--restore-snapshots snapshots)
-         (dolist (snapshot (reverse buffer-snapshots))
-           (when-let* ((group (plist-get snapshot :group)))
-             (with-current-buffer (plist-get snapshot :buffer)
-               (let ((inhibit-modification-hooks t)
-                     (inhibit-read-only t))
-                 (cancel-change-group group)))))
-         (dolist (snapshot buffer-snapshots)
-           (restore-buffer snapshot))
-         (dolist (directory (reverse created-directories))
-           (when (and (file-directory-p directory)
-                      (null (directory-files
-                             directory nil
-                             directory-files-no-dot-files-regexp)))
-             (delete-directory directory)))
-         (signal (car err) (cdr err)))))))
+         (let ((rollback-failures
+                (mevedel-tool-patch--restore-snapshots snapshots)))
+           (dolist (snapshot (reverse buffer-snapshots))
+             (when-let* ((group (plist-get snapshot :group)))
+               (with-current-buffer (plist-get snapshot :buffer)
+                 (let ((inhibit-modification-hooks t)
+                       (inhibit-read-only t))
+                   (cancel-change-group group)))))
+           (dolist (snapshot buffer-snapshots)
+             (restore-buffer snapshot))
+           (dolist (directory (reverse created-directories))
+             (when (and (file-directory-p directory)
+                        (null (directory-files
+                               directory nil
+                               directory-files-no-dot-files-regexp)))
+               (delete-directory directory)))
+           (if rollback-failures
+               (signal 'mevedel-tool-patch-partial-rollback
+                       (list err (mapcar #'car rollback-failures)))
+             (signal (car err) (cdr err)))))))))
 
 (defun mevedel-tool-patch--assert-buffers-unmodified (changes)
   "Signal when a visited file in CHANGES has unsaved edits."

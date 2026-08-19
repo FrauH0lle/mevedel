@@ -61,10 +61,14 @@ change with feedback asks before clearing that feedback. Selected changes
 are validated again against the captured baseline at submission; a stale
 path writes nothing and leaves the review open with a conflict message plus
 a recovery hint (deselect the stale file, or reject so the model re-reads).
+An incomplete rollback instead shows sanitized authored paths and tells the
+user to inspect them before retrying.
 
 No file changes before final submission. Application is one rollback-backed
 transaction across the selected changes, creates parent directories for added
-files, and refreshes visited unmodified buffers after success. `edits`,
+files, and refreshes visited unmodified buffers after success. If restoration
+itself fails, the tool reports a distinct incomplete-rollback error containing
+the original failure and every path it could not restore. `edits`,
 `full-auto`, and a direct allow rule covering every affected path skip the
 interactive review but use the same validation and transaction.
 
