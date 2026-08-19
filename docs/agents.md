@@ -176,7 +176,11 @@ not create another agent execution mode.
 Each retained registry record keeps the complete latest settled payload and
 its terminal outcome (`completed`, `errored`, or `interrupted`) separately from
 the bounded inline `RESULT` mailbox preview. The complete payload is recorded
-before the preview is published, including recovery settlements. A new or
+before the preview is published, including recovery settlements. Request and
+owned-execution teardown must both succeed before terminal state is published.
+Local settlement commits the idle record and queued result before delivery;
+portable settlement publishes transcript plus sidecar atomically before it
+wakes a waiter or invokes a workflow result handler. A new or
 follow-up turn clears the previous settled result before it becomes active;
 active agents therefore expose no streaming or stale result and are reported
 as not ready. A later idle turn replaces the retained result atomically.
@@ -220,6 +224,11 @@ sent message. Canonical `MAIL` payloads are retained in full without a mailbox
 body cap. Since this delivery is interim and may cross a root-turn boundary,
 an agent should put its final verdict in its terminal response rather than
 treating `SendMessage` as its completion channel.
+
+Mailbox append is an acknowledged durable mutation. Once the session has a
+storage path, mevedel rolls back a failed append and reports the send as
+failed; it releases a matching `WaitAgent` only after the root session snapshot
+has committed.
 
 Before a recipient's next model sample, its retained unread queue drains in
 FIFO order. Each record is injected as a separate user-role communication
@@ -319,7 +328,10 @@ path, so immutable publication filenames never reach tools, prompts, or views.
 `mevedel-agent-conversation.el` owns conversation creation and hydration,
 frozen request-local installation, activity snapshots, response extraction,
 and transcript saves. `mevedel-agent-exec.el` is the provider adapter: it owns
-the gptel request FSM, prompt dispatch, and streaming callback contract.
+the gptel request FSM, prompt dispatch, and streaming callback contract. It
+consumes its exactly-once terminal latch only after runtime settlement accepts
+the handoff; transformer or transcript-extraction failures become structured
+terminal errors, while a rejected runtime handoff remains pending for retry.
 Frozen request locals use one closed symbol schema owned by
 `mevedel-agents.el`. Durable configurations contain every schema entry exactly
 once, and hydration rejects unknown, duplicate, or missing keys before it

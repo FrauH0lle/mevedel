@@ -570,15 +570,17 @@ Terminal retained-agent state in an already-materialized portable project sessio
 the same seam: finalization first updates the in-memory transcript metadata and
 registry, then publishes the agent transcript followed by the session sidecar
 as one batch.  A mid-batch failure therefore leaves one retryable recovery and
-blocks later mutation.  The first root turn remains the deliberate exception:
-while the session is only shallowly materialized, an agent transcript may be
-saved but no early sidecar is created; the root turn's DONE publication remains
-the first authoritative sidecar boundary. A mutating process on the target may still
-arm the portable lease during that shallow interval. If the client disappears,
-the lease latch survives but the no-head session remains intentionally absent
-from resume listings; ordinary session close and Emacs exit therefore refuse to
-discard the live handle until the process settles or the reconnected user
-explicitly acknowledges its unknown outcome.
+blocks later mutation.  Transcript allocation may shallowly create the session
+directory before the first root turn settles, but the first acknowledged agent
+registry or mailbox mutation forces a full non-fork-point root snapshot.  The
+sidecar therefore exists before mevedel reports the child publication or wakes
+a mailbox consumer; the root turn's later DONE publication still establishes
+its first stable fork point.
+
+An acknowledged agent mutation refuses reentrant publication queueing: its
+caller returns only after that batch changes the immutable head.  Once the head
+has changed, later lease normalization or buffer save-hook failures are
+diagnostic cleanup failures rather than grounds to roll live agent state back.
 
 Local Fork and Rewind retain their same-filesystem directory transactions and
 rollback trees.  Portable project lifecycle commits use the immutable

@@ -19,8 +19,11 @@
                   "mevedel-session-durability" (session function))
 (declare-function mevedel-session-durability-forget-removed-session
                   "mevedel-session-durability" (session))
+
+;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-publish
-                  "mevedel-session-publication" (session artifacts))
+                  "mevedel-session-publication"
+                  (session artifacts &optional require-commit))
 (declare-function mevedel-session-publication-read
                   "mevedel-session-publication" (session-dir))
 

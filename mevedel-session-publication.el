@@ -866,18 +866,25 @@ component and retries once."
        (signal (car err) (cdr err))))
     (plist-get outcome :result)))
 
-(defun mevedel-session-publication-publish (session artifacts)
+(defun mevedel-session-publication-publish
+    (session artifacts &optional require-commit)
   "Serialize and publish SESSION's critical ARTIFACTS.
 
 Each artifact is `(:path TARGET-PATH :content STRING [:coding CODING])'.  One
 in-session `session.meta.el' may carry `:commit-marker t' and optional
 `:replace t' to commit an immutable logical snapshot.  The complete batch is
 staged locally before target I/O.  Pre-commit failure retains the staged batch
-  in SESSION and blocks later mutation."
+in SESSION and blocks later mutation.  When REQUIRE-COMMIT is non-nil, reject
+reentrant queueing so the caller returns only after its own batch commits, and
+treat a post-commit cleanup error as diagnostic.  Ordinary callers receive
+that error so their lifecycle owner can classify it."
   (require 'mevedel-session-recovery)
   (mevedel-session-recovery-refresh session)
   (when (mevedel-session-pending-publication session)
     (user-error "Session has pending publication; retry or abandon it first"))
+  (when (and require-commit
+             (mevedel-session-publication-active-p session))
+    (user-error "Required session publication cannot be queued"))
   (let ((batch (mevedel-session-publication--stage-artifacts
                 session artifacts))
         (publication-before (mevedel-session-publication session)))
@@ -898,13 +905,23 @@ staged locally before target I/O.  Pre-commit failure retains the staged batch
             (mevedel-session-publication--publish-critical-batches
              session (list batch))))
       (error
-       (unless (mevedel-session-pending-publication session)
-         (if (equal publication-before
-                    (mevedel-session-publication session))
-             (mevedel-session-publication--record-pending
-              session (list batch) err)
-           (mevedel-session-publication--delete-batch batch)))
-       (signal (car err) (cdr err))))))
+       (let ((committed-p
+              (not (equal publication-before
+                          (mevedel-session-publication session)))))
+         (unless (mevedel-session-pending-publication session)
+           (if (not committed-p)
+               (mevedel-session-publication--record-pending
+                session (list batch) err)
+             (mevedel-session-publication--delete-batch batch)))
+         (if (and committed-p require-commit)
+             (progn
+               (display-warning
+                'mevedel
+                (format "Session publication committed before cleanup failed: %s"
+                        (error-message-string err))
+                :warning)
+               (mevedel-session-publication session))
+           (signal (car err) (cdr err))))))))
 
 (defun mevedel-session-publication-retry (&optional session)
   "Retry SESSION's pending critical publication."

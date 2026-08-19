@@ -2552,6 +2552,7 @@
                        (file-name-concat local-root "session")))
          (first (file-name-concat session-dir "first.el"))
          (second (file-name-concat session-dir "second.el"))
+         (required (file-name-concat session-dir "required.el"))
          (sidecar (file-name-concat session-dir "session.meta.el"))
          (session (test-mevedel-session-durability--local-session local-root))
          (mevedel-session-durability--client-id (make-string 64 ?a))
@@ -2570,6 +2571,12 @@
                   (prog1 (funcall publish-artifact artifact)
                     (unless injected
                       (setq injected t)
+                      (should-error
+                       (mevedel-session-publication-publish
+                        session
+                        (list (list :path required :content "required"))
+                        t)
+                       :type 'user-error)
                       (should
                        (eq 'queued
                            (mevedel-session-publication-publish
@@ -2775,7 +2782,7 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t))))
 
-  :doc "post-CAS normalization loss stays committed without retry recovery"
+  :doc "required post-CAS cleanup failure succeeds; ordinary callers classify it"
   (let* ((local-root (file-name-as-directory
                       (make-temp-file "mevedel-publication-post-cas-" t)))
          (session-dir (file-name-as-directory
@@ -2799,12 +2806,13 @@
                   (setf (plist-get (mevedel-session-lease current) :state)
                         'lost)
                   nil)))
-            (should-error
-             (mevedel-session-publication-publish
-              session
-              (list (list :path sidecar :content "committed"
-                          :commit-marker t)))
-             :type 'user-error))
+            (mevedel-test--with-captured-diagnostics nil
+              (should
+               (mevedel-session-publication-publish
+                session
+                (list (list :path sidecar :content "committed"
+                            :commit-marker t))
+                t))))
           (let ((publication
                  (mevedel-session-publication-read session-dir)))
             (should publication)
@@ -2817,7 +2825,32 @@
                       (plist-get (mevedel-session-lease session) :state)))
           (should (equal before
                          (directory-files temporary-file-directory nil
-                                          "\\`mevedel-publication-"))))
+                                          "\\`mevedel-publication-")))
+          (setf (plist-get (mevedel-session-lease session) :state) 'active)
+          (cl-letf
+              (((symbol-function
+                 'mevedel-session-durability--finish-publication-lease)
+                (lambda (current)
+                  (setf (plist-get (mevedel-session-lease current) :state)
+                        'lost)
+                  nil)))
+            (mevedel-test--with-captured-diagnostics nil
+              (should-error
+               (mevedel-session-publication-publish
+                session
+                (list (list :path sidecar :content "classified"
+                            :commit-marker t)))
+               :type 'error)))
+          (should (equal "classified"
+                         (with-temp-buffer
+                           (insert-file-contents
+                            (plist-get
+                             (mevedel-session-publication-read session-dir)
+                             :sidecar))
+                           (buffer-string))))
+          (should-not (mevedel-session-pending-publication session))
+          (should-not
+           (mevedel-session-publication-uncommitted-batches session)))
       (mevedel-session-durability-lease-release session-dir session)
       (when (file-directory-p local-root)
         (delete-directory local-root t))))
@@ -3309,7 +3342,10 @@
         (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-session-persistence-publish-agent-terminal-state
-  (:doc "publishes transcript and final registry sidecar as one retryable batch")
+  ()
+  ,test
+  (test)
+  :doc "publishes transcript and final registry sidecar as one retryable batch"
   (let* ((host "agent-terminal-host")
          ;; The transcript buffer visits a mock-remote file; a lockfile
          ;; there survives into teardown and warns on removal.
@@ -3333,9 +3369,19 @@
           (mevedel-agent--create
            :name "explorer" :description "Explore" :tools nil
            :system-prompt nil :max-turns nil :hook-rules nil :frozen-p t))
+         (backend (gptel--make-backend :name "Agent Terminal"))
          (configuration
           (mevedel-agent-configuration--create
-           :agent agent :request-locals nil))
+           :agent agent
+           :request-locals
+           (mapcar
+            (lambda (symbol)
+              (cons symbol
+                    (pcase symbol
+                      ('gptel-backend backend)
+                      ((or 'gptel-context 'gptel-tools) nil)
+                      (_ nil))))
+            mevedel-agent-request-local-symbols)))
          invocation
          record
          (mevedel-session-durability--client-id (make-string 64 ?a)))
@@ -3446,7 +3492,73 @@
       (when (buffer-live-p child) (kill-buffer child))
       (when (buffer-live-p parent) (kill-buffer parent))
       (when (file-directory-p local-root)
-        (delete-directory local-root t)))))
+        (delete-directory local-root t))))
+
+  :doc "keeps a committed terminal head successful when post-save cleanup fails"
+  (let* ((root
+          (file-name-as-directory
+           (make-temp-file "mevedel-agent-terminal-state-" t)))
+         (parent (generate-new-buffer " *agent-terminal-parent*"))
+         (session
+          (test-mevedel-session-durability--local-session root))
+         (transcript (file-name-concat root "agents" "test.chat.org"))
+         child
+         published)
+    (unwind-protect
+        (progn
+          (mevedel-workspace-identity-ensure root)
+          (setf (mevedel-session-authority-mode session) 'portable
+                (mevedel-session-save-path session) root
+                (mevedel-session-root-buffer session) parent)
+          (make-directory (file-name-directory transcript) t)
+          (write-region "old\n" nil transcript nil 'silent)
+          (setq child (find-file-noselect transcript))
+          (with-current-buffer parent
+            (setq-local mevedel--session session))
+          (with-current-buffer child
+            (goto-char (point-max))
+            (insert "terminal\n")
+            (setq-local after-save-hook
+                        (list (lambda () (error "Post-save hook failed")))))
+          (let ((invocation
+                 (mevedel-agent-invocation--create
+                  :agent-id "test-agent"
+                  :parent-session session
+                  :parent-data-buffer parent
+                  :buffer child
+                  :transcript-relative-path "agents/test.chat.org"
+                  :sidecar-dirty t)))
+            (setf (mevedel-session-agent-transcripts session)
+                  '(("test-agent" :path "agents/test.chat.org")))
+            (cl-letf
+                (((symbol-function
+                   'mevedel-session-persistence--portable-authority-p)
+                  (lambda (_session) t))
+                 ((symbol-function
+                   'mevedel-session-persistence-artifact-present-p)
+                  (lambda (&rest _) t))
+                 ((symbol-function
+                   'mevedel-session-persistence-assert-mutation-authority)
+                  (lambda (&rest _) t))
+                 ((symbol-function 'mevedel-session-publication-publish)
+                  (lambda (_session artifacts &optional require-commit)
+                    (should require-commit)
+                    (setq published artifacts)
+                    t)))
+              (mevedel-test--with-captured-diagnostics nil
+                (should
+                 (mevedel-session-persistence-publish-agent-terminal-state
+                  invocation))))
+            (should (= 2 (length published)))
+            (should-not
+             (mevedel-agent-invocation-sidecar-dirty invocation))))
+      (dolist (buffer (list child parent))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-session-persistence-save/remote ()
   ,test

@@ -2158,6 +2158,10 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                       (lambda (_agent _description _message &rest keys)
                         (setq captured-buffer
                               (plist-get keys :retained-buffer))
+                        (funcall
+                         (plist-get keys :on-invocation)
+                         (buffer-local-value 'mevedel--agent-invocation
+                                             captured-buffer))
                         t)))
                   (mevedel-agent-control-followup
                    restored-session "/root/idle" "Continue after resume.")))
@@ -13313,7 +13317,7 @@ The result is a plist whose :tempdir owns every created file."
 (mevedel-deftest mevedel-session-persistence-save-agent-state ()
   ,test
   (test)
-  :doc "writes through the exact root segment buffer and ignores agent buffers"
+  :doc "forces a full save through the authoritative root buffer"
   (let* ((tempdir (file-name-as-directory
                    (make-temp-file "mevedel-agent-state-" t)))
          (workspace
@@ -13323,7 +13327,8 @@ The result is a plist whose :tempdir owns every created file."
          (session (mevedel-session-create "main" workspace))
          (root (generate-new-buffer " *agent-state-root*"))
          (agent (generate-new-buffer " *agent-state-child*"))
-         calls)
+         calls
+         required)
     (unwind-protect
         (progn
           (setf (mevedel-session-save-path session) tempdir)
@@ -13338,18 +13343,79 @@ The result is a plist whose :tempdir owns every created file."
                         (mevedel-agent-invocation--create)))
           (mevedel-session-control-transfer-register-root-buffer
            session root)
-          (cl-letf (((symbol-function
-                      'mevedel-session-persistence--write-sidecar-now)
-                     (lambda (seen-session seen-buffer)
-                       (setq calls (list seen-session seen-buffer))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                     (lambda (seen-session seen-buffer settled force)
+                       (setq calls
+                             (list seen-session seen-buffer settled force)
+                             required
+                             mevedel-session-persistence--require-agent-commit-p)
                        t)))
             (should
              (mevedel-session-persistence-save-agent-state session)))
           (should (eq session (car calls)))
-          (should (eq root (cadr calls))))
+          (should (eq root (cadr calls)))
+          (should-not (nth 2 calls))
+          (should (nth 3 calls))
+          (should required))
       (when (buffer-live-p root) (kill-buffer root))
       (when (buffer-live-p agent) (kill-buffer agent))
-      (delete-directory tempdir t))))
+      (delete-directory tempdir t)))
+
+  :doc "keeps a committed full agent save successful when its save hook fails"
+  (let* ((tempdir (file-name-as-directory
+                   (make-temp-file "mevedel-agent-post-save-" t)))
+         (workspace
+          (test-mevedel-session-persistence--make-workspace tempdir))
+         (session (mevedel-session-create "main" workspace))
+         (root (generate-new-buffer " *agent-post-save-root*"))
+         (segment (file-name-concat tempdir "segment-0001.chat.org"))
+         published)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) tempdir
+                (mevedel-session-authority-mode session) 'portable)
+          (with-current-buffer root
+            (setq-local mevedel--session session)
+            (setq-local buffer-file-name segment)
+            (insert "terminal root state\n")
+            (setq-local after-save-hook
+                        (list (lambda () (error "Post-save hook failed")))))
+          (mevedel-session-control-transfer-register-root-buffer session root)
+          (cl-letf
+              (((symbol-function
+                 'mevedel-session-persistence--portable-authority-p)
+                (lambda (_session) t))
+               ((symbol-function
+                 'mevedel-session-persistence-assert-mutation-authority)
+                (lambda (&rest _) t))
+               ((symbol-function 'mevedel-session-persistence-ensure-files)
+                (lambda (&rest _) tempdir))
+               ((symbol-function
+                 'mevedel-session-persistence--instruction-artifacts)
+                (lambda (&rest _) nil))
+               ((symbol-function 'mevedel-session-publication-committed-p)
+                (lambda (&rest _) nil))
+               ((symbol-function 'mevedel-session-publication-prune-committed)
+                (lambda (_session artifacts) artifacts))
+               ((symbol-function 'mevedel-session-publication-publish)
+                (lambda (_session _artifacts &optional require-commit)
+                  (should require-commit)
+                  (setq published t)))
+               ((symbol-function
+                 'mevedel-session-persistence--notify-session-event)
+                #'ignore))
+            (mevedel-test--with-captured-diagnostics nil
+              (should
+               (mevedel-session-persistence-save-agent-state session))))
+          (should published)
+          (with-current-buffer root
+            (should-not (buffer-modified-p))))
+      (when (buffer-live-p root)
+        (with-current-buffer root (set-buffer-modified-p nil))
+        (kill-buffer root))
+      (when (file-directory-p tempdir)
+        (delete-directory tempdir t))
+      (mevedel-workspace-clear-registry))))
 
 
 (mevedel-deftest mevedel-session-persistence-resume-id
