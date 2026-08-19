@@ -8587,6 +8587,57 @@ rotation never saves through a rebound temporary visited filename or prompts"
       (should (equal "v3" (plist-get latest :backup-name))))
     (mevedel-workspace-clear-registry)))
 
+(mevedel-deftest mevedel-session-persistence--plan-row-diff ()
+  ,test
+  (test)
+  :doc "materializes resolver-owned bytes instead of diffing a fixed cache"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-rewind-row-diff-" t)))
+         (current (file-name-concat root "current.el"))
+         (backup-name "current@v1")
+         (fixed-backup
+          (mevedel-file-history--backup-path root backup-name))
+         (session (mevedel-session--create :save-path root))
+         resolver-called
+         diff-current
+         diff-target
+         diff-target-content)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory fixed-backup) t)
+          (write-region "current" nil current nil 'silent)
+          (write-region "poison" nil fixed-backup nil 'silent)
+          (with-temp-buffer
+            (setq-local mevedel-session-persistence--plan-buffer-session
+                        session)
+            (insert "row\n")
+            (put-text-property
+             (point-min) (point-max) 'mevedel-plan-entry
+             (list :action 'restore :path current
+                   :backup-name backup-name))
+            (goto-char (point-min))
+            (cl-letf
+                (((symbol-function 'mevedel-session-persistence--read-backup)
+                  (lambda (seen-session seen-name)
+                    (should (eq session seen-session))
+                    (should (equal backup-name seen-name))
+                    (setq resolver-called t)
+                    "published"))
+                 ((symbol-function 'diff)
+                  (lambda (old new &optional _switches _no-async)
+                    (setq diff-current old
+                          diff-target new
+                          diff-target-content
+                          (mevedel-file-history--read-file-raw new)))))
+              (mevedel-session-persistence--plan-row-diff)))
+          (should resolver-called)
+          (should (equal current diff-current))
+          (should (equal "published" diff-target-content))
+          (should-not (file-exists-p diff-target))
+          (should (equal "poison"
+                         (mevedel-file-history--read-file-raw fixed-backup))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-persistence-restore-plan ()
   ,test
   (test)
@@ -10689,6 +10740,7 @@ The result is a plist whose :tempdir owns every created file."
          (bad-target (file-name-concat worktree-root "bad.el"))
          (source
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :save-path save-path
            :file-snapshots
            `((1 . ((,good-source . (:backup-name "good@v1"))
@@ -10753,6 +10805,7 @@ The result is a plist whose :tempdir owns every created file."
          (valid-target (file-name-concat worktree-root "valid.el"))
          (source
           (mevedel-session--create
+           :authority-mode 'pid-lock
            :save-path save-path
            :file-snapshots
            `((1 . ((,valid-source . (:backup-name "valid@v1"))
@@ -10800,7 +10853,70 @@ The result is a plist whose :tempdir owns every created file."
           source child 1))
       (delete-directory source-root t)
       (delete-directory worktree-root t)
-      (delete-directory save-path t))))
+      (delete-directory save-path t)))
+  :doc "portable restoration uses committed backups without a fixed cache"
+  (let* ((source-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-published-source-" t)))
+         (worktree-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-worktree-published-child-" t)))
+         (workspace
+          (mevedel-workspace-get-or-create
+           'project "worktree-published" source-root "worktree-published"))
+         (source (mevedel-session-create "source" workspace source-root))
+         (session-dir
+          (file-name-as-directory
+           (file-name-concat source-root ".mevedel" "sessions" "source")))
+         (source-file (file-name-concat source-root "tracked.el"))
+         (target-file (file-name-concat worktree-root "tracked.el"))
+         (backup-name "tracked@v1")
+         (backup-path
+          (file-name-concat session-dir "file-history" backup-name))
+         (sidecar (file-name-concat session-dir "session.meta.el"))
+         (child
+          (mevedel-session--create
+           :worktree-source-root source-root
+           :worktree-directory worktree-root))
+         (mevedel-session-durability--client-id (make-string 64 ?b)))
+    (setf (mevedel-session-session-id source) "source"
+          (mevedel-session-save-path source) session-dir
+          (mevedel-session-file-snapshots source)
+          `((1 . ((,source-file . (:backup-name ,backup-name
+                                  :version 1))))))
+    (make-directory session-dir t)
+    (unwind-protect
+        (progn
+          (should
+           (mevedel-session-durability-lease-acquire
+            session-dir "*worktree-published*" source))
+          (mevedel-session-publication-publish
+           source
+           (list (list :path backup-path :content "published backup")
+                 (list :path sidecar :content "sidecar" :commit-marker t)))
+          (mevedel-session-durability-lease-release session-dir source)
+          (write-region "poison" nil backup-path nil 'silent)
+          (let ((report
+                 (mevedel-session-persistence--restore-worktree-files
+                  source child 1)))
+            (should (= 1 (plist-get report :restored)))
+            (should-not (plist-get report :unrestored)))
+          (should (equal "published backup"
+                         (mevedel-file-history--read-file-raw target-file)))
+          (delete-directory (file-name-directory backup-path) t)
+          (write-region "reset" nil target-file nil 'silent)
+          (let ((report
+                 (mevedel-session-persistence--restore-worktree-files
+                  source child 1)))
+            (should (= 1 (plist-get report :restored)))
+            (should-not (plist-get report :unrestored)))
+          (should (equal "published backup"
+                         (mevedel-file-history--read-file-raw target-file))))
+      (when (mevedel-session-durability-lease-owned-p source)
+        (mevedel-session-durability-lease-release session-dir source))
+      (delete-directory source-root t)
+      (delete-directory worktree-root t)
+      (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-session-persistence--worktree-fork-disclosure ()
   ,test

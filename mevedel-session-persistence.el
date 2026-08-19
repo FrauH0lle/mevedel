@@ -5100,19 +5100,8 @@ nothing to do.  When BEFORE-TURN is non-nil, target the pre-turn checkpoint."
 		 :reason (cdr effect)))
 	 (mevedel-directive-attempt-untracked-effects attempt)))))))
 
-(defun mevedel-session-persistence--summarize-plan (plan)
-  "Return a human-readable one-line summary of restore PLAN."
-  (let ((counts (make-hash-table)))
-    (dolist (entry plan)
-      (cl-incf (gethash (plist-get entry :action) counts 0)))
-    (format "%d create, %d restore, %d overwrite, %d delete"
-            (gethash 'create counts 0)
-            (gethash 'restore counts 0)
-            (gethash 'overwrite counts 0)
-            (gethash 'delete counts 0))))
-
 (defvar-local mevedel-session-persistence--plan-buffer-session nil
-  "Buffer-local session for the `*mevedel-restore-plan*' buffer.
+  "Buffer-local session for the `*mevedel-rewind-impact*' buffer.
 Consumed by `mevedel-session-persistence--plan-row-diff' so `d' on a
 plan row can resolve the backup file.")
 
@@ -5122,12 +5111,12 @@ plan row can resolve the backup file.")
     (define-key map (kbd "d")
       #'mevedel-session-persistence--plan-row-diff)
     map)
-  "Keymap for the `*mevedel-restore-plan*' buffer.
+  "Keymap for the `*mevedel-rewind-impact*' buffer.
 Adds `d' -- show diff between current file and target snapshot.")
 
 (defun mevedel-session-persistence--plan-row-diff ()
   "Show a diff between the current file and the restore target backup.
-Invoked from `*mevedel-restore-plan*' via the `d' binding.  The row
+Invoked from `*mevedel-rewind-impact*' via the `d' binding.  The row
 at point identifies the path; its `mevedel-plan-entry' text property
 carries the plan-entry plist."
   (interactive)
@@ -5138,51 +5127,28 @@ carries the plan-entry plist."
       (user-error "No restore plan row at point"))
     (unless session
       (user-error "Plan buffer has no associated session"))
-    (let* ((path        (plist-get entry :path))
-           (action      (plist-get entry :action))
-           (backup-name (plist-get entry :backup-name))
-           (backup-path (and backup-name
-                             (mevedel-file-history--backup-path
-                              (mevedel-session-save-path session)
-                              backup-name))))
+    (let* ((path (plist-get entry :path))
+           (action (plist-get entry :action))
+           (backup-name (plist-get entry :backup-name)))
       (pcase action
         ('delete
          (user-error "Row is a delete action; nothing to diff against"))
         ('noop
          (user-error "Row is a noop; nothing to diff"))
         (_
-         (unless (and backup-path (file-exists-p backup-path))
-           (user-error "Backup file missing: %s" backup-path))
-         (diff (or (and (file-exists-p path) path) "/dev/null")
-               backup-path nil 'no-async))))))
-
-(defun mevedel-session-persistence--render-plan-buffer (plan &optional session)
-  "Render PLAN into `*mevedel-restore-plan*' for user inspection.
-When SESSION is non-nil, attach it so the `d' binding can resolve
-backup paths for per-row diffs."
-  (with-current-buffer (get-buffer-create "*mevedel-restore-plan*")
-    (let ((inhibit-read-only t))
-      (erase-buffer)
-      (insert (format "Restore plan: %s\n"
-                      (mevedel-session-persistence--summarize-plan plan)))
-      (insert "Press `d' on a row to diff current vs. snapshot.\n")
-      (insert "================================\n\n")
-      (dolist (entry plan)
-        (let ((row-start (point)))
-          (insert
-           (format "  %-9s  %s%s\n"
-                   (symbol-name (plist-get entry :action))
-                   (plist-get entry :path)
-                   (if (plist-get entry :diverged)
-                       "  (current != latest snapshot -- external edits)"
-                     "")))
-          (put-text-property row-start (point)
-                             'mevedel-plan-entry entry))))
-    (special-mode)
-    (use-local-map mevedel-session-persistence--plan-buffer-map)
-    (setq-local mevedel-session-persistence--plan-buffer-session session)
-    (goto-char (point-min))
-    (display-buffer (current-buffer))))
+         (let ((backup-path (make-temp-file "mevedel-rewind-backup-")))
+           (unwind-protect
+               (progn
+                 (with-temp-buffer
+                   (set-buffer-multibyte nil)
+                   (insert
+                    (mevedel-session-persistence--read-backup
+                     session backup-name))
+                   (let ((coding-system-for-write 'no-conversion))
+                     (write-region nil nil backup-path nil 'silent)))
+                 (diff (or (and (file-exists-p path) path) "/dev/null")
+                       backup-path nil 'no-async))
+             (delete-file backup-path))))))))
 
 (defun mevedel-session-persistence--apply-restore-action (session entry)
   "Apply one restore ENTRY (plan-entry plist) for SESSION."
@@ -7154,11 +7120,13 @@ Return descriptions of malformed grants and rules dropped from the child."
          (history-dir
           (file-name-concat
            (mevedel-session-save-path source) "file-history"))
+         (portable-p
+          (mevedel-session-persistence--portable-authority-p source))
          (restored 0)
          plan
          unrestored
          external)
-    (unless (file-readable-p history-dir)
+    (unless (or portable-p (file-readable-p history-dir))
       (error "Captured file-history store is unreadable: %s" history-dir))
     ;; Validate the complete plan before the first child-worktree write.
     (dolist (entry
@@ -7191,18 +7159,14 @@ Return descriptions of malformed grants and rules dropped from the child."
               (if (null backup-name)
                   (when (file-exists-p target)
                     (delete-file target))
-                (let ((backup
-                       (mevedel-file-history--backup-path
-                        (mevedel-session-save-path source) backup-name)))
-                  (unless (file-readable-p backup)
-                    (error "Captured backup is unavailable: %s" backup))
-                  (make-directory (file-name-directory target) t)
-                  (with-temp-buffer
-                    (set-buffer-multibyte nil)
-                    (insert
-                     (mevedel-file-history--read-file-raw backup))
-                    (mevedel-session-persistence--write-current-buffer-atomically
-                     target))))
+                (make-directory (file-name-directory target) t)
+                (with-temp-buffer
+                  (set-buffer-multibyte nil)
+                  (insert
+                   (mevedel-session-persistence--read-backup
+                    source backup-name))
+                  (mevedel-session-persistence--write-current-buffer-atomically
+                   target)))
               (cl-incf restored))
           (error
            (push (list :path target
