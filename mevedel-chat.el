@@ -167,9 +167,9 @@
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
-		  "mevedel-pipeline" (render-data))
+		  "mevedel-pipeline" (render-data &optional tool-use-id))
 (declare-function mevedel-pipeline--strip-render-data-blocks
-		  "mevedel-pipeline" (string))
+		  "mevedel-pipeline" (string &optional expected-tool-use-id))
 
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff--append-implementation-input
@@ -2176,10 +2176,8 @@ with NO-SPINNER forwarded when non-nil."
     (mevedel--clear-user-turn-gptel-properties user-turn-start (point))
     (when (and display-text (not (equal display-text prompt)))
       (require 'mevedel-pipeline)
-      (let ((start (point)))
-        (insert (mevedel-pipeline--format-render-data-block
-                 (list :kind 'user-display :text display-text)))
-        (add-text-properties start (point) '(gptel ignore)))))
+      (insert (mevedel-pipeline--format-render-data-block
+               (list :kind 'user-display :text display-text)))))
   (mevedel-collaboration--safe-accepted-prompt (current-buffer))
   (let ((data-turn-start (copy-marker (point) nil)))
     (when-let* ((view (and (boundp 'mevedel--view-buffer)

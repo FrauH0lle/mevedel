@@ -457,6 +457,10 @@ entry point, `mevedel-transcript-segments`, classifies data-buffer spans as
 It combines gptel text-property runs with generated
 control ranges, protects literal user examples from structural recognition,
 and repairs known org/gptel boundary damage.
+Hook audit delimiters are structural only when their complete encoded span
+carries live `mevedel-hook-audit` provenance or the persisted
+`gptel=mevedel-hook-audit` property; delimiter-shaped user, assistant,
+reasoning, and tool text remains ordinary content.
 
 The module also owns the small structural helpers needed to skip leading
 property drawers and compaction summaries, recover whole org tool

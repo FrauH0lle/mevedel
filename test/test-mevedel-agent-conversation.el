@@ -174,10 +174,10 @@
                     "</system-reminder>\n\n"
                     "<hook-context>\n"
                     "hidden hook\n"
-                    "</hook-context>\n\n"
-                    "<!-- mevedel-render-data -->\n"
-                    "(:secret \"hidden render data\")\n"
-                    "<!-- /mevedel-render-data -->\n")
+                    "</hook-context>\n\n")
+            (insert
+             (mevedel-pipeline--format-render-data-block
+              '(:secret "hidden render data")))
             (let ((response-start (point)))
               (insert "Final assistant answer.\n")
               (put-text-property response-start (point) 'gptel 'response))

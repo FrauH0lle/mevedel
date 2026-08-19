@@ -33,7 +33,8 @@
 (declare-function mevedel-view--add-display-region-properties
                   "mevedel-view-render" (start end &optional default-vtype))
 (declare-function mevedel-view--data-substring
-                  "mevedel-view-render" (data-buffer start end))
+                  "mevedel-view-render"
+                  (data-buffer start end &optional properties))
 (declare-function mevedel-view--record-source-collapse-state
                   "mevedel-view-render" (source type collapsed))
 (declare-function mevedel-view--section-bounds "mevedel-view-render" ())
@@ -157,7 +158,7 @@ When EXPANDED is non-nil, include ordered handler details."
           (let ((start (cadr seg)))
             (dolist (span
                      (mevedel-transcript-audit-spans
-                      (buffer-substring-no-properties start (caddr seg))))
+                      (buffer-substring start (caddr seg))))
               (push (append
                      (plist-get span :record)
                      (list :source

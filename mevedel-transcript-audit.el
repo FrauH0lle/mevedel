@@ -14,18 +14,17 @@
 ;; `subr'
 (defvar read-eval)
 
-(defun mevedel--hook-audit-regexp ()
-  "Return a regexp matching one hidden hook audit block."
-  (concat "\n?"
-          (regexp-quote mevedel--hook-audit-open)
-          "\\(?:.\\|\n\\)*?"
-          (regexp-quote mevedel--hook-audit-close)
-          "\n?"))
-
-(defun mevedel--strip-hook-audit-blocks (text)
-  "Return TEXT without generated hook audit blocks."
-  (replace-regexp-in-string
-   (mevedel--hook-audit-regexp) "" (or text "") t t))
+(defun mevedel-transcript-audit-trusted-range-p (start end &optional object)
+  "Return non-nil when START..END is trusted audit data in OBJECT.
+OBJECT is a string or buffer and defaults to the current buffer."
+  (and (< start end)
+       (or
+        (and (eq t (get-text-property start 'mevedel-hook-audit object))
+             (= end (next-single-property-change
+                     start 'mevedel-hook-audit object end)))
+        (and (eq 'mevedel-hook-audit
+                 (get-text-property start 'gptel object))
+             (= end (next-single-property-change start 'gptel object end))))))
 
 (defun mevedel--plain-hook-audit-data (value)
   "Return VALUE stripped of text properties in contained strings."
@@ -81,7 +80,7 @@
            (mevedel--hook-audit-record-payload record)
            "\n" mevedel--hook-audit-close "\n")
    'invisible t
-   'gptel 'ignore
+   'gptel 'mevedel-hook-audit
    'mevedel-hook-audit t))
 
 (defun mevedel-transcript-audit-guest-prompts ()
@@ -98,7 +97,9 @@ attributes is the nearest user turn ending at or before POSITION."
           (let ((start (match-beginning 0))
                 (record-start (point)))
             (when (search-forward mevedel--hook-audit-close nil t)
-              (when-let* ((record (mevedel--read-hook-audit-record
+              (when-let* (((mevedel-transcript-audit-trusted-range-p
+                            start (point)))
+                          (record (mevedel--read-hook-audit-record
                                    (buffer-substring-no-properties
                                     record-start (match-beginning 0))))
                           ((eq (plist-get record :type) 'guest-prompt))
@@ -119,7 +120,9 @@ Each span is a plist containing `:record', `:start', and `:end'."
           (let ((start (- (match-beginning 0) (point-min)))
                 (record-start (point)))
             (when (search-forward mevedel--hook-audit-close nil t)
-              (when-let* ((record
+              (when-let* (((mevedel-transcript-audit-trusted-range-p
+                            start (- (point) (point-min)) text))
+                          (record
                            (mevedel--read-hook-audit-record
                             (buffer-substring-no-properties
                              record-start (match-beginning 0))))
@@ -147,6 +150,21 @@ Each span is a plist containing `:record', `:start', and `:end'."
   (if (and (< end (length text)) (eq (aref text end) ?\n))
       (1+ end)
     end))
+
+(defun mevedel--strip-hook-audit-blocks (text)
+  "Return TEXT without trusted hook audit blocks."
+  (let ((text (or text ""))
+        (cursor 0)
+        parts)
+    (dolist (span (mevedel-transcript-audit-spans text))
+      (let ((start (mevedel-transcript--audit-block-start
+                    text (plist-get span :start)))
+            (end (mevedel-transcript--audit-block-end
+                  text (plist-get span :end))))
+        (push (substring text cursor start) parts)
+        (setq cursor end)))
+    (push (substring text cursor) parts)
+    (apply #'concat (nreverse parts))))
 
 (defun mevedel-transcript-directive-ranges (text &optional allow-open)
   "Return directive turn ranges parsed from TEXT.
@@ -228,12 +246,12 @@ ALLOW-OPEN is forwarded to `mevedel-transcript-directive-ranges'."
            (plist-put range key (+ base (plist-get range key))))
          range)
        (mevedel-transcript-directive-ranges
-        (buffer-substring-no-properties (point-min) (point-max))
+        (buffer-substring (point-min) (point-max))
         allow-open)))))
 
 (defun mevedel-transcript-exclude-directive-turns (&optional _fsm)
   "Mark directive bodies ignored in the current request-copy buffer."
-  (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+  (let ((text (buffer-substring (point-min) (point-max))))
     (dolist (range (mevedel-transcript-directive-ranges text))
       (add-text-properties
        (+ (point-min) (plist-get range :body-start))

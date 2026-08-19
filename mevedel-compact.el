@@ -504,7 +504,8 @@ excludes file-local variables block."
       (while (< pos (point-max))
         (let* ((next (next-single-property-change pos 'gptel nil (point-max)))
                (prop (get-text-property pos 'gptel)))
-          (unless (eq prop 'ignore)
+          (unless (memq prop
+                        '(ignore mevedel-render-data mevedel-hook-audit))
             ;; Only count if not in file-local-variables region
             (when (or (null flv-start) (< pos flv-start))
               (setq total (+ total (- (if (and flv-start (> next flv-start))
@@ -522,7 +523,9 @@ excludes file-local variables block."
     (while (< pos (point-max))
       (let* ((next (next-single-property-change pos 'gptel nil (point-max)))
              (end (if (and flv-start (> next flv-start)) flv-start next)))
-        (when (and (not (eq (get-text-property pos 'gptel) 'ignore))
+        (when (and (not (memq (get-text-property pos 'gptel)
+                              '(ignore mevedel-render-data
+                                       mevedel-hook-audit)))
                    (or (null flv-start) (< pos flv-start)))
           (cl-incf total (- end pos)))
         (setq pos next)))
@@ -1203,7 +1206,7 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
     (mevedel-session-persistence--strip-summary-handoff-prefix
      (string-trim
       (mevedel--strip-hook-audit-blocks
-       (buffer-substring-no-properties
+       (buffer-substring
         (plist-get bounds :body-begin)
         (plist-get bounds :body-end)))))))
 
@@ -1460,7 +1463,7 @@ current agent buffer's invocation."
                  (mevedel-session-persistence--strip-summary-handoff-prefix
                   (string-trim
                    (mevedel--strip-hook-audit-blocks
-                    (buffer-substring-no-properties
+                    (buffer-substring
                      (plist-get summary-bounds :body-begin)
                      (plist-get summary-bounds :body-end))))))))
           (list :buffer buffer
@@ -1528,7 +1531,7 @@ forward by an earlier compaction."
     (require 'mevedel-transcript-audit)
     (dolist (record
              (mevedel-transcript-audit-records
-              (buffer-substring-no-properties begin end)
+              (buffer-substring begin end)
               'execution-archive))
       (when-let* ((tool-use-id (plist-get record :tool-use-id)))
         (cl-pushnew tool-use-id ids :test #'equal)))

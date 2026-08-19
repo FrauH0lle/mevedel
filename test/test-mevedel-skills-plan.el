@@ -701,7 +701,7 @@
                 :text text))
          (block (mevedel-skills-plan-render-data plan expanded))
          (data (cdr (mevedel-pipeline-extract-render-data block))))
-    (should (eq 'ignore (get-text-property 0 'gptel block)))
+    (should (eq 'mevedel-render-data (get-text-property 0 'gptel block)))
     (should (eq 'inline-skill (plist-get data :kind)))
     (should (equal text (plist-get data :display-text)))
     (should (equal expanded (plist-get data :expanded-prompt)))))

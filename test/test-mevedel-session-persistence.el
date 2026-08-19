@@ -124,6 +124,17 @@ publication."
   "Return an explicit file-session authority profile for lock tests."
   (mevedel-session--create :authority-mode 'pid-lock))
 
+(defun test-mevedel-session-persistence--execution-tool-block
+    (tool-use-id render-data)
+  "Return a tool block owned by TOOL-USE-ID with RENDER-DATA."
+  (propertize
+   (concat "#+begin_tool (Bash :command \"true\")\n"
+           "(:name \"Bash\" :args (:command \"true\"))\n\n"
+           (mevedel-pipeline--format-render-data-block
+            render-data tool-use-id)
+           "#+end_tool\n")
+   'gptel (cons 'tool tool-use-id)))
+
 (defun test-mevedel-session-persistence--make-session (root)
   "Build a populated session for ROOT in round-trip cases."
   (let* ((workspace (test-mevedel-session-persistence--make-workspace root))
@@ -4630,23 +4641,28 @@ rotation never saves through a rebound temporary visited filename or prompts"
                   (org-mode)
                   (insert "First user prompt\n")
                   (insert
-                   (mevedel-pipeline--format-render-data-block
+                   (test-mevedel-session-persistence--execution-tool-block
+                    "stale-call"
                     '(:execution-id "exec-stale" :state running
                       :status success :live-execution-p t)))
                   (insert
-                   (mevedel-pipeline--format-render-data-block
+                   (test-mevedel-session-persistence--execution-tool-block
+                    "tail-call"
                     '(:execution-id "exec-tail" :state running
                       :status success :live-execution-p t)))
+                  (mevedel-session-persistence--stabilize-gptel-bounds)
                   (mevedel-session-persistence-save session buf)
                   (mevedel-session-persistence-rotate-segment
                    session buf "Earlier conversation")
                   (insert "Second user prompt\n")
                   (insert
-                   (mevedel-pipeline--format-render-data-block
+                   (test-mevedel-session-persistence--execution-tool-block
+                    "current-call"
                     '(:execution-id "exec-current" :state running
                       :status success :live-execution-p t)))
                   (insert
-                   (mevedel-pipeline--format-render-data-block
+                   (test-mevedel-session-persistence--execution-tool-block
+                    "tail-call"
                     '(:execution-id "exec-tail" :state completed
                       :status success :live-execution-p nil)))
                   (insert
@@ -4656,6 +4672,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
                       :render-data (:execution-id "exec-stale"
                                     :state completed
                                     :live-execution-p nil))))
+                  (mevedel-session-persistence--stabilize-gptel-bounds)
                   (mevedel-session-persistence-save session buf))
                 (setq session-dir (mevedel-session-save-path session))
                 ;; Release the lock + kill the buffer (the test buffer didn't
@@ -5211,15 +5228,22 @@ rotation never saves through a rebound temporary visited filename or prompts"
           (file-name-as-directory
            (make-temp-file "mevedel-remote-restore-" t)))
          (running
-          (mevedel-pipeline--format-render-data-block
-           '(:execution-id "remote-stale" :state running
-             :status success :live-execution-p t)))
+          (with-temp-buffer
+            (org-mode)
+            (insert "* Chat\n")
+            (insert
+             (test-mevedel-session-persistence--execution-tool-block
+              "remote-call"
+              '(:execution-id "remote-stale" :state running
+                :status success :live-execution-p t)))
+            (mevedel-session-persistence--stabilize-gptel-bounds)
+            (buffer-substring-no-properties (point-min) (point-max))))
          restored)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp (list host)
           (cl-destructuring-bind (workspace session session-dir segment)
-              (test-mevedel-session-persistence--make-remote-restore-fixture
-               host local-root (concat "* Chat\n" running))
+            (test-mevedel-session-persistence--make-remote-restore-fixture
+               host local-root running)
             (let ((mevedel-session-durability--client-id
                    (make-string 64 ?a))
                   (mevedel-session-durability--disclosed-targets
@@ -9295,12 +9319,16 @@ The result is a plist whose :tempdir owns every created file."
         (with-temp-buffer
           (insert-file-contents
            (mevedel-session-persistence--segment-path parent-path 2))
+          (org-mode)
+          (require 'mevedel-transcript-restore)
+          (mevedel-transcript-restore-properties)
           (goto-char (point-max))
           (insert
            (mevedel--format-hook-audit-record
             '(:type fork-point :fork-point-id "fixture-fork"
               :segment 2 :turn 1 :file-turn 1 :cum-turn 2
               :captured-file-turn 2)))
+          (mevedel-session-persistence--stabilize-gptel-bounds)
           (write-region nil nil
                         (mevedel-session-persistence--segment-path
                          parent-path 2)
@@ -12886,6 +12914,7 @@ The result is a plist whose :tempdir owns every created file."
                       :original "original prompt"
                       :submitted "rewritten prompt")))
                   (insert "\n")
+                  (mevedel-session-persistence--stabilize-gptel-bounds)
                   (mevedel-session-persistence-save session buf))
                 (setq session-dir (mevedel-session-save-path session))
                 (test-mevedel-session-persistence--release-and-kill

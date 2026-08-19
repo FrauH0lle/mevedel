@@ -18,7 +18,7 @@
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
-                  "mevedel-pipeline" (render-data))
+                  "mevedel-pipeline" (render-data &optional tool-use-id))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-context "mevedel-skills-core" (cl-x) t)
@@ -498,12 +498,10 @@ transaction fails or is cancelled, later callbacks have no effect."
   "Return hidden render data for PLAN and exact EXPANDED-PROMPT."
   (unless (fboundp 'mevedel-pipeline--format-render-data-block)
     (require 'mevedel-pipeline))
-  (propertize
-   (mevedel-pipeline--format-render-data-block
-    (list :kind 'inline-skill
-          :display-text (mevedel-skill-invocation-plan-text plan)
-          :expanded-prompt expanded-prompt))
-   'gptel 'ignore))
+  (mevedel-pipeline--format-render-data-block
+   (list :kind 'inline-skill
+         :display-text (mevedel-skill-invocation-plan-text plan)
+         :expanded-prompt expanded-prompt)))
 
 (provide 'mevedel-skills-plan)
 ;;; mevedel-skills-plan.el ends here

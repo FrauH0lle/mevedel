@@ -341,7 +341,7 @@
                                 (t 'discuss))
                        :turn turn :outcome outcome
                        :activity-kind kind :sequence sequence))))
-          (insert (propertize start 'gptel 'ignore))
+          (insert start)
           (insert (format "*** %s :%s:\n:PROMPT:\n%s\n:END:\n"
                           (or message "Directive activity")
                           (cond
@@ -355,7 +355,7 @@
             (insert (or result ""))
             (unless (bolp) (insert "\n"))
             (put-text-property response-start (point) 'gptel 'response))
-          (insert (propertize end 'gptel 'ignore)))))
+          (insert end))))
     (setq mevedel-directive-activity--transcript-buffer buffer)
     buffer))
 

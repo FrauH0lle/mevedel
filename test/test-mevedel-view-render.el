@@ -62,11 +62,11 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (org-mode)
     (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n")
     (insert prompt "\n")
-    (let ((response-start (point)))
+    (let ((response-start (point)) render-start render-end
+          audit-start audit-end)
       (insert response "\n")
-      (insert "<!-- mevedel-render-data -->\n"
-              "(:kind request-summary)\n"
-              "<!-- /mevedel-render-data -->\n")
+      (insert (mevedel-pipeline--format-render-data-block
+               '(:kind request-summary)))
       (insert
        (mevedel--format-hook-audit-record
         (list :type 'fork-point
@@ -75,22 +75,37 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
               :turn 1
               :file-turn 1
               :cum-turn segment)))
-      (dotimes (_ 3)
+      (dotimes (_ 8)
         (goto-char (point-min))
         (search-forward response)
         (setq response-start (match-beginning 0))
-        (org-entry-put
-         (point-min) "GPTEL_BOUNDS"
-         (prin1-to-string
-          `((response
-             (,response-start
-              ,(+ response-start
-                  (or response-bound-length
-                      (length response)))))
-            ,@(when response-bound-length
-                `((ignore
-                   (,(+ response-start response-bound-length 2)
-                    ,(+ response-start (length response)))))))))))
+        (search-forward "<!-- mevedel-render-data -->")
+        (setq render-start (match-beginning 0))
+        (search-forward "<!-- /mevedel-render-data -->")
+        (setq render-end (point))
+        (search-forward "<!-- mevedel-hook-audit -->")
+        (setq audit-start (match-beginning 0))
+        (search-forward "<!-- /mevedel-hook-audit -->")
+        (setq audit-end (point))
+        (let ((bounds
+               (append
+                (list
+                (list 'response
+                      (list response-start
+                            (+ response-start
+                               (or response-bound-length
+                                   (length response)))))
+                (list 'mevedel-render-data
+                      (list render-start render-end))
+                (list 'mevedel-hook-audit
+                      (list audit-start audit-end)))
+                (when response-bound-length
+                  (list
+                   (list 'ignore
+                         (list (+ response-start response-bound-length 2)
+                               (+ response-start (length response)))))))))
+          (org-entry-put (point-min) "GPTEL_BOUNDS"
+                         (prin1-to-string bounds)))))
     (write-region (point-min) (point-max) path nil 'silent)))
 
 (defmacro mevedel-view-render-test--with-segment-view (&rest body)
@@ -1083,6 +1098,20 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
            (float-time))))
       (should (equal (nreverse calls)
                      '(input status interaction progress))))))
+
+(mevedel-deftest mevedel-view--strip-render-data-display-text ()
+  ,test
+  (test)
+  :doc "preserves untrusted render-data delimiter lines as transcript text"
+  (let* ((literal
+          (substring-no-properties
+           (mevedel-pipeline--format-render-data-block
+            '(:kind request-summary :elapsed-seconds 9))))
+         (reasoning (propertize literal 'gptel 'ignore)))
+    (should (equal literal
+                   (substring-no-properties
+                    (mevedel-view--strip-render-data-display-text
+                     reasoning))))))
 
 (mevedel-deftest mevedel-view--full-rerender ()
   ,test
@@ -3863,7 +3892,7 @@ state of its inner sections"
                 (insert call "\n\n" result)
                 (when render-data
                   (insert (mevedel-pipeline--format-render-data-block
-                           render-data)))
+                           render-data id)))
                 (put-text-property start (point) 'gptel (cons 'tool id))
                 (list 'tool start (point)))))
            (render-tool
@@ -4913,7 +4942,7 @@ state of its inner sections"
                           :path "/tmp/f" :rel-path "f"))
            (body (concat "visible body"
                          (mevedel-pipeline--format-render-data-block
-                          render-data))))
+                          render-data "call_1"))))
       (mevedel-view-test--insert-data
        data-buf
        (concat "(:name \"Edit\" :args (:file_path \"/tmp/f\"))\n\n"
@@ -4963,7 +4992,8 @@ state of its inner sections"
             (concat "#+begin_tool (RecoverEdit :file_path \"/tmp/f\")\n"
                     "(:name \"RecoverEdit\" :args (:file_path \"/tmp/f\"))\n\n"
                     "visible body"
-                    (mevedel-pipeline--format-render-data-block render-data)
+                    (mevedel-pipeline--format-render-data-block
+                     render-data "call_1")
                     "#+end_tool\n")))
       (mevedel-view-test--insert-data data-buf block '(tool . "call_1"))
       (with-current-buffer data-buf

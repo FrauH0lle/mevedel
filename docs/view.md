@@ -857,8 +857,8 @@ model.
 Text inserted as a user turn must be plain transcript text. User send and
 queued-drain paths strip copied view,
 tool, read-only, and `gptel` text properties, then restore only internal
-render-data blocks as `'gptel 'ignore`; UI properties copied from the view
-must not become model-visible transcript state.
+render-data blocks as `'gptel 'mevedel-render-data`; UI properties copied
+from the view must not become model-visible transcript state.
 
 ## File Drag/Drop And Clipboard Images
 

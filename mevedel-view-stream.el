@@ -39,6 +39,8 @@
                   "mevedel-pipeline" (buffer tool-use-id updates))
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--stabilize-gptel-bounds
+                  "mevedel-session-persistence" ())
 (declare-function mevedel-session-persistence--write-current-buffer-atomically
                   "mevedel-session-persistence" (path))
 (declare-function mevedel-session-persistence-publish-transcript-state
@@ -47,14 +49,6 @@
 (declare-function mevedel-session-persistence-read-artifact
                   "mevedel-session-persistence"
                   (session logical &optional committed-only))
-
-;; `mevedel-transcript-audit'
-(declare-function mevedel--format-hook-audit-record
-                  "mevedel-transcript-audit" (record))
-(declare-function mevedel-transcript-audit-records
-                  "mevedel-transcript-audit" (text &optional type))
-(declare-function mevedel-transcript-audit-spans
-                  "mevedel-transcript-audit" (text &optional type))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-active-elapsed-seconds
@@ -77,6 +71,18 @@
 ;; `mevedel-tool-exec'
 (declare-function mevedel-tool-exec-format-execution-metadata
                   "mevedel-tool-exec" (facts))
+
+;; `mevedel-transcript-audit'
+(declare-function mevedel--format-hook-audit-record
+                  "mevedel-transcript-audit" (record))
+(declare-function mevedel-transcript-audit-records
+                  "mevedel-transcript-audit" (text &optional type))
+(declare-function mevedel-transcript-audit-spans
+                  "mevedel-transcript-audit" (text &optional type))
+
+;; `mevedel-transcript-restore'
+(declare-function mevedel-transcript-restore-properties
+                  "mevedel-transcript-restore" (&optional only-if-missing))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--cancel-scheduled-render "mevedel-view" ())
@@ -129,6 +135,9 @@
 (declare-function mevedel-view-zone-reconcile "mevedel-view-zone" (namespace start end fragments))
 (declare-function mevedel-view-zone-region "mevedel-view-zone" (namespace))
 (declare-function mevedel-view-zone-start "mevedel-view-zone" (namespace))
+
+;; `org'
+(defvar org-agenda-file-menu-enabled)
 
 (defvar-local mevedel-view--spinner-status nil
   "Current base status text shown by the request-progress row.")
@@ -1106,7 +1115,7 @@ POSITION may be an integer or marker."
                    (plist-get (plist-get candidate :record) :tool-use-id)
                    tool-use-id))
                 (mevedel-transcript-audit-spans
-                 (buffer-substring-no-properties (point-min) (point-max))
+                 (buffer-substring (point-min) (point-max))
                  'execution-archive))))
     (let ((begin (+ (point-min) (plist-get span :start)))
           (end (+ (point-min) (plist-get span :end))))
@@ -1125,7 +1134,7 @@ When EXPECTED is non-nil, require the durable record to equal it."
      (and (equal (plist-get record :tool-use-id) tool-use-id)
           (or (null expected) (equal record expected))))
    (mevedel-transcript-audit-records
-    (buffer-substring-no-properties (point-min) (point-max))
+    (buffer-substring (point-min) (point-max))
     'execution-completion)))
 
 (defun mevedel-view-stream--record-archived-execution-terminal
@@ -1166,6 +1175,10 @@ RENDER-DATA is retained in the hidden transcript audit record."
                       (mevedel-session-persistence-read-artifact
                        session logical)
                       coding))
+                    (let ((org-agenda-file-menu-enabled nil))
+                      (org-mode))
+                    (require 'mevedel-transcript-restore)
+                    (mevedel-transcript-restore-properties)
                     (unless
                         (or
                          (mevedel-view-stream--replace-archived-execution-record
@@ -1174,12 +1187,17 @@ RENDER-DATA is retained in the hidden transcript audit record."
                           tool-use-id replacement))
                       (error "Persisted execution record missing: %s"
                              tool-use-id))
+                    (mevedel-session-persistence--stabilize-gptel-bounds)
                     (mevedel-session-persistence-publish-transcript-state
                      session root-buffer path
                      (buffer-substring-no-properties (point-min) (point-max))
                      coding)))
               (with-temp-buffer
                 (insert-file-contents path)
+                (let ((org-agenda-file-menu-enabled nil))
+                  (org-mode))
+                (require 'mevedel-transcript-restore)
+                (mevedel-transcript-restore-properties)
                 (unless
                     (or
                      (mevedel-view-stream--replace-archived-execution-record
@@ -1188,6 +1206,7 @@ RENDER-DATA is retained in the hidden transcript audit record."
                       tool-use-id replacement))
                   (error "Persisted execution record missing: %s" tool-use-id))
                 (require 'mevedel-session-persistence)
+                (mevedel-session-persistence--stabilize-gptel-bounds)
                 (mevedel-session-persistence--write-current-buffer-atomically
                  path)))
             ;; The atomic rename changed the visited file.  Refresh the
@@ -1202,6 +1221,9 @@ RENDER-DATA is retained in the hidden transcript audit record."
                     (mevedel-view-stream--execution-completion-record-p
                      tool-use-id replacement))
               (error "Archived execution record missing: %s" tool-use-id)))
+          (when path
+            (require 'mevedel-session-persistence)
+            (mevedel-session-persistence--stabilize-gptel-bounds))
           (set-buffer-modified-p modified-p)
           (when (hash-table-p marker-table)
             (remhash tool-use-id marker-table)))))))
@@ -1220,7 +1242,7 @@ RENDER-DATA is retained in the hidden transcript audit record."
                         (equal (plist-get candidate :tool-use-id)
                                tool-use-id))
                       (mevedel-transcript-audit-records
-                       (buffer-substring-no-properties
+                       (buffer-substring
                         (point-min) (point-max))
                        'execution-archive))))
           (copy-tree (plist-get record :render-data)))))))
