@@ -557,11 +557,64 @@ captured instead of being written to the run log."
       (should (string-match-p "Enable plugin demo hooks\\?" prompt))
       (should (string-match-p "Version: 1.2.3" prompt))
       (should (string-match-p "Events: PreToolUse" prompt))
-      (should (string-match-p "Handlers: command echo hi" prompt))
+      (should (string-match-p
+               "Handlers: PreToolUse \\[Bash\\]: command echo hi"
+               prompt))
       (should (string-match-p
                (regexp-quote (mevedel-plugins-plugin-data-dir
                               "demo" workspace))
                prompt))))
+
+  :doc "binds hook consent to matcher scope while ignoring group order"
+  (let* ((root (mevedel-plugins-test--plugin-root user-dir "repo"))
+         (hooks-file (file-name-concat root "hooks" "hooks.json")))
+    (make-directory (file-name-directory hooks-file) t)
+    (mevedel-plugins-test--write-manifest
+     root "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
+    (with-temp-file hooks-file
+      (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Read\","
+              "\"hooks\":[{\"type\":\"command\","
+              "\"command\":\"echo demo\"}]}]}}"))
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
+      (should (mevedel-plugins-enable "demo" workspace)))
+    (let ((exact-fingerprint
+           (plist-get (mevedel-plugins-test--state-plist workspace "demo")
+                      :hooks-fingerprint)))
+      (dolist (matcher '("*" "B.*"))
+        (with-temp-file hooks-file
+          (insert (format
+                   (concat "{\"hooks\":{\"PreToolUse\":[{\"matcher\":%S,"
+                           "\"hooks\":[{\"type\":\"command\","
+                           "\"command\":\"echo demo\"}]}]}}")
+                   matcher)))
+        (let ((plugin (mevedel-plugins--find "demo" workspace)))
+          (should-not
+           (equal exact-fingerprint
+                  (mevedel-plugins--hook-fingerprint plugin workspace)))
+          (should-not (mevedel-plugins--hooks-enabled-p plugin workspace)))))
+    (with-temp-file hooks-file
+      (insert (concat
+               "{\"hooks\":{\"PreToolUse\":["
+               "{\"matcher\":\"Read\",\"hooks\":[{\"type\":\"command\","
+               "\"command\":\"echo read\"}]},"
+               "{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\","
+               "\"command\":\"echo bash\"}]}]}}")))
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
+      (should (mevedel-plugins-enable "demo" workspace)))
+    (let ((ordered-fingerprint
+           (plist-get (mevedel-plugins-test--state-plist workspace "demo")
+                      :hooks-fingerprint)))
+      (with-temp-file hooks-file
+        (insert (concat
+                 "{\"hooks\":{\"PreToolUse\":["
+                 "{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\","
+                 "\"command\":\"echo bash\"}]},"
+                 "{\"matcher\":\"Read\",\"hooks\":[{\"type\":\"command\","
+                 "\"command\":\"echo read\"}]}]}}")))
+      (let ((plugin (mevedel-plugins--find "demo" workspace)))
+        (should (equal ordered-fingerprint
+                       (mevedel-plugins--hook-fingerprint plugin workspace)))
+        (should (mevedel-plugins--hooks-enabled-p plugin workspace)))))
 
   :doc "persists enable and hook toggles"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
@@ -803,7 +856,9 @@ captured instead of being written to the run log."
         (should (string-match-p "Manifest:" details))
         (should (string-match-p "Shadowed sources:" details))
         (should (string-match-p "shadowed active:" details))
-        (should (string-match-p "Handlers: command echo row" details))
+        (should (string-match-p
+                 "Handlers: PreToolUse \\[Bash\\]: command echo row"
+                 details))
         (should (string-match-p
                  (regexp-quote (mevedel-plugins-plugin-data-dir
                                 "demo" workspace))

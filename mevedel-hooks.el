@@ -400,7 +400,13 @@ Returns a plist or nil when HANDLER is invalid."
 (defun mevedel-hooks--normalize-group (group)
   "Normalize one matcher GROUP plist."
   (when (and (listp group) (keywordp (car-safe group)))
-    (let* ((hooks (plist-get group :hooks))
+    (let* ((matcher (plist-get group :matcher))
+           (matcher (if (or (null matcher)
+                            (and (stringp matcher)
+                                 (string-empty-p matcher)))
+                        "*"
+                      matcher))
+           (hooks (plist-get group :hooks))
            (hooks-list (if (and (listp hooks)
                                 (or (null hooks)
                                     (listp (car-safe hooks))))
@@ -410,7 +416,7 @@ Returns a plist or nil when HANDLER is invalid."
             (delq nil (mapcar #'mevedel-hooks--normalize-handler
                               hooks-list))))
       (when normalized-hooks
-        (list :matcher (plist-get group :matcher)
+        (list :matcher matcher
               :hooks normalized-hooks)))))
 
 (defun mevedel-hooks-normalize-rules (rules &optional scope)

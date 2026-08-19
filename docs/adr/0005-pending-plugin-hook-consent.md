@@ -5,6 +5,10 @@ plugin metadata. When an enabled plugin's hook surface changes, mevedel keeps
 plugin skills active but withholds executable hooks until the user reviews the
 changed surface.
 
+Consent identifies each executable handler by its source, event, matcher,
+type, and command or function. Changing matcher scope therefore invalidates
+the prior consent even when the handler itself is unchanged.
+
 Interactive session startup or resume actively notifies the user when any
 enabled plugin has pending hook consent. Because withheld hooks can make an
 enabled plugin behave incorrectly, mevedel reports this as a warning/message

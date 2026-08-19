@@ -69,9 +69,9 @@ project until enabled, and the state is stored in that workspace's
 `.mevedel/plugins.el`. Activating a plugin enables all implemented plugin
 components for that workspace; plugins with executable hooks require a
 concise consent summary before those hooks are enabled. The summary shows
-the plugin identity/source, exposed skills, hook events, executable hook
-handlers, and workspace plugin data directory rather than dumping the full
-manifest.
+the plugin identity/source, exposed skills, each executable hook handler's
+event and matcher, and the workspace plugin data directory rather than dumping
+the full manifest.
 
 For a remote workspace, plugin-state mutations require the live session's
 lease and use the same disclosed, serialized publication path as other
@@ -90,8 +90,8 @@ consciously enable the winning source.
 
 Activation survives updates when the plugin name and source root stay the
 same. Executable hook consent is tied to a fingerprint of the hook surface;
-when an update changes hook files, events, commands, or functions, skills
-remain enabled but hooks require consent again before running.
+when an update changes hook files, events, matchers, commands, or functions,
+skills remain enabled but hooks require consent again before running.
 Plugin runtime data stays workspace-scoped and keyed by plugin name, so
 switching an activation between roots with the same manifest name reuses
 the same `<workspace>/.mevedel/plugin-data/<plugin-name>` directory.
