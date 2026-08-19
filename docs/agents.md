@@ -417,9 +417,9 @@ task is open. Group headers keep open/done counts visible, open tasks
 are listed, and completed task details are hidden. `TAB` or `RET`
 on the fragment toggles completed task details for inspection. The
 fragment caps itself against the live window height; when rows are
-omitted, it keeps open rows ahead of completed rows and shows short
-summary lines such as `... 4 completed`. Completed tasks are not pruned
-from the session task list.
+omitted, it keeps a stable prefix with open rows ahead of completed rows
+and reserves one final count row such as `... 4 completed`. Completed
+tasks are not pruned from the session task list.
 
 Each owner group can also carry a short status note through `TaskNote`
 or the top-level `note`/`noteOwner` arguments on `TaskCreate` and

@@ -598,6 +598,24 @@
         (should (< (string-match "#2 open B" text)
                    (string-match "#3 open C" text))))))
 
+  :doc "expanded completed rows retain their owner after active groups"
+  (test-mevedel-tool-task--with-session session
+    (setf (mevedel-session-tasks session)
+          (list (mevedel-task--create
+                 :id 1 :subject "main open" :status 'pending)
+                (mevedel-task--create
+                 :id 2 :subject "main done" :status 'completed)
+                (mevedel-task--create
+                 :id 3 :subject "worker open" :status 'pending
+                 :owner "worker")
+                (mevedel-task--create
+                 :id 4 :subject "worker done" :status 'completed
+                 :owner "worker")))
+    (let ((text (substring-no-properties
+                 (mevedel-tool-task--format-groups session t))))
+      (should (string-match-p "Main · ✔ #2 main done" text))
+      (should (string-match-p "worker · ✔ #4 worker done" text))))
+
   :doc "default display keeps open tasks visible"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-tasks session)
@@ -761,46 +779,7 @@
       (should-not (string-match-p "plain two" text))
       (should-not (string-match-p "plain three" text))))
 
-  :doc "line cap does not let completed-only summaries displace active groups"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "main done" :status 'completed)
-                (mevedel-task--create
-                 :id 2 :subject "agent active" :status 'pending
-                 :owner "worker")))
-    (let ((text (substring-no-properties
-                 (mevedel-tool-task--format-groups session nil nil 2))))
-      (should (string-match-p "worker · 1 open · 0 done" text))
-      (should (string-match-p "agent active" text))
-      (should-not (string-match-p "Main · 0 open · 1 done" text))
-      (should-not (string-match-p "main done" text))))
-
-  :doc "expanded line cap does not let completed rows displace later active groups"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "blocked active" :status 'pending
-                 :blocked-by '(9))
-                (mevedel-task--create
-                 :id 2 :subject "done one" :status 'completed)
-                (mevedel-task--create
-                 :id 3 :subject "running active" :status 'in-progress
-                 :owner "explorer"
-                 :metadata '(:activity "reading TaskListV2"))
-                (mevedel-task--create
-                 :id 4 :subject "plain active" :status 'pending)
-                (mevedel-task--create
-                 :id 5 :subject "done two" :status 'completed)))
-    (let ((text (substring-no-properties
-                 (mevedel-tool-task--format-groups session t nil 5))))
-      (should (string-match-p "running active" text))
-      (should (string-match-p "plain active" text))
-      (should (string-match-p "blocked active" text))
-      (should-not (string-match-p "done one" text))
-      (should-not (string-match-p "done two" text))))
-
-  :doc "line cap selects agent in-progress rows before earlier pending rows"
+  :doc "line cap takes a stable prefix and combines omitted counts"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-tasks session)
           (list (mevedel-task--create
@@ -811,236 +790,17 @@
                  :id 3 :subject "main pending three" :status 'pending)
                 (mevedel-task--create
                  :id 4 :subject "worker running" :status 'in-progress
-                 :owner "worker")))
+                 :owner "worker")
+                (mevedel-task--create
+                 :id 5 :subject "main done" :status 'completed)))
     (let ((text (substring-no-properties
-                 (mevedel-tool-task--format-groups session nil nil 4))))
-      (should (string-match-p "worker running" text))
+                 (mevedel-tool-task--format-groups session t nil 4))))
       (should (string-match-p "main pending one" text))
-      (should (string-match-p "… 2 more open" text))))
-
-  :doc "line cap preserves owner order when selected active statuses differ"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "main pending one" :status 'pending)
-                (mevedel-task--create
-                 :id 2 :subject "main pending two" :status 'pending)
-                (mevedel-task--create
-                 :id 3 :subject "worker running" :status 'in-progress
-                 :owner "worker")))
-    (let* ((text (substring-no-properties
-                  (mevedel-tool-task--format-groups session nil nil 4)))
-           (main-header (string-match "Main · 2 open · 0 done" text))
-           (main-row (string-match "main pending one" text))
-           (worker-header (string-match "worker · 1 open · 0 done" text))
-           (worker-row (string-match "worker running" text)))
-      (should main-header)
-      (should main-row)
-      (should worker-header)
-      (should worker-row)
-      (should (< main-header main-row))
-      (should (< main-row worker-header))
-      (should (< worker-header worker-row))))
-
-  :doc "expanded line cap keeps completed rows under owner-ordered groups"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "main pending" :status 'pending)
-                (mevedel-task--create
-                 :id 2 :subject "alpha done" :status 'completed
-                 :owner "alpha")
-                (mevedel-task--create
-                 :id 3 :subject "worker running" :status 'in-progress
-                 :owner "worker")
-                (mevedel-task--create
-                 :id 4 :subject "main done" :status 'completed)))
-    (let* ((text (substring-no-properties
-                  (mevedel-tool-task--format-groups session t nil 8)))
-           (main-header (string-match "Main · 1 open · 1 done" text))
-           (main-active (string-match "main pending" text))
-           (main-done (string-match "main done" text))
-           (alpha-header (string-match "alpha · 0 open · 1 done" text))
-           (alpha-done (string-match "alpha done" text))
-           (worker-header (string-match "worker · 1 open · 0 done" text))
-           (worker-active (string-match "worker running" text)))
-      (should main-header)
-      (should main-active)
-      (should main-done)
-      (should alpha-header)
-      (should alpha-done)
-      (should worker-header)
-      (should worker-active)
-      (should (< main-header main-active))
-      (should (< main-active main-done))
-      (should (< main-done alpha-header))
-      (should (< alpha-header alpha-done))
-      (should (< alpha-done worker-header))
-      (should (< worker-header worker-active))))
-
-  :doc "line cap prefers unblocked pending over later blocked rows"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "main running" :status 'in-progress)
-                (mevedel-task--create
-                 :id 2 :subject "main blocked one" :status 'pending
-                 :blocked-by '(1))
-                (mevedel-task--create
-                 :id 3 :subject "main blocked two" :status 'pending
-                 :blocked-by '(1))
-                (mevedel-task--create
-                 :id 4 :subject "worker unblocked" :status 'pending
-                 :owner "worker")))
-    (let ((text (substring-no-properties
-                 (mevedel-tool-task--format-groups session nil nil 4))))
-      (should (string-match-p "main running" text))
-      (should (string-match-p "worker unblocked" text))
-      (should (string-match-p "… 2 more open" text))
-      (should-not (string-match-p "main blocked one" text))
-      (should-not (string-match-p "main blocked two" text))))
-
-  :doc "line cap keeps later owner rows visible before same-owner extras"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "main running one" :status 'in-progress)
-                (mevedel-task--create
-                 :id 2 :subject "main running two" :status 'in-progress)
-                (mevedel-task--create
-                 :id 3 :subject "main running three" :status 'in-progress)
-                (mevedel-task--create
-                 :id 4 :subject "worker unblocked" :status 'pending
-                 :owner "worker")))
-    (let* ((text (substring-no-properties
-                  (mevedel-tool-task--format-groups session nil nil 4)))
-           (lines (split-string text "\n" t)))
-      (should (= 4 (length lines)))
-      (should (string-match-p "main running one" text))
-      (should (string-match-p "worker unblocked" text))
-      (should (string-match-p "… 2 more open" text))
-      (should-not (string-match-p "main running two" text))
-      (should-not (string-match-p "main running three" text))))
-
-  :doc "expanded line cap reserves space before showing completed summary"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "done one" :status 'completed
-                 :owner "worker")
-                (mevedel-task--create
-                 :id 2 :subject "done two" :status 'completed
-                 :owner "worker")))
-    (let* ((text (substring-no-properties
-                  (mevedel-tool-task--format-groups session t nil 2)))
-           (lines (split-string text "\n" t)))
-      (should (= 2 (length lines)))
-      (should (string-match-p "worker · 0 open · 2 done" text))
-      (should (string-match-p "done one" text))
-      (should (string-match-p "… 1 completed" text))))
-
-  :doc "expanded line cap summarizes completed-only owners omitted by cap"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "main done" :status 'completed)
-                (mevedel-task--create
-                 :id 2 :subject "worker done" :status 'completed
-                 :owner "worker")))
-    (let* ((text (substring-no-properties
-                  (mevedel-tool-task--format-groups session t nil 2)))
-           (lines (split-string text "\n" t)))
-      (should (= 2 (length lines)))
-      (should (string-match-p "Main · 0 open · 1 done" text))
-      (should (string-match-p "main done" text))
-      (should (string-match-p "… 1 completed" text))
-      (should-not (string-match-p "worker done" text))))
-
-  :doc "default line cap summarizes completed-only owners omitted by cap"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "main done" :status 'completed)
-                (mevedel-task--create
-                 :id 2 :subject "worker done" :status 'completed
-                 :owner "worker")))
-    (let* ((text (substring-no-properties
-                  (mevedel-tool-task--format-groups session nil nil 1)))
-           (lines (split-string text "\n" t)))
-      (should (= 1 (length lines)))
-      (should (string-match-p "Main · 0 open · 1 done" text))
-      (should (string-match-p "… 1 completed" text))
-      (should-not (string-match-p "worker · 0 open · 1 done" text))
-      (should-not (string-match-p "main done" text))
-      (should-not (string-match-p "worker done" text))))
-
-  :doc "line cap summarizes open rows hidden in wholly omitted groups"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "main running" :status 'in-progress)
-                (mevedel-task--create
-                 :id 2 :subject "worker unblocked" :status 'pending
-                 :owner "worker")
-                (mevedel-task--create
-                 :id 3 :subject "zeta blocked" :status 'pending
-                 :owner "zeta"
-                 :blocked-by '(1))))
-    (let* ((text (substring-no-properties
-                  (mevedel-tool-task--format-groups session nil nil 4)))
-           (lines (split-string text "\n" t)))
-      (should (= 4 (length lines)))
-      (should (string-match-p "main running" text))
-      (should (string-match-p "worker unblocked" text))
-      (should (string-match-p "… 1 more open" text))
-      (should-not (string-match-p "zeta blocked" text))))
-
-  :doc "expanded line cap uses a spare line for omitted completed summary"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "main running" :status 'in-progress)
-                (mevedel-task--create
-                 :id 2 :subject "worker unblocked" :status 'pending
-                 :owner "worker")
-                (mevedel-task--create
-                 :id 3 :subject "zeta done" :status 'completed
-                 :owner "zeta")))
-    (let* ((text (substring-no-properties
-                  (mevedel-tool-task--format-groups session t nil 5)))
-           (lines (split-string text "\n" t)))
-      (should (= 5 (length lines)))
-      (should (string-match-p "main running" text))
-      (should (string-match-p "worker unblocked" text))
-      (should (string-match-p "… 1 completed" text))
-      (should-not (string-match-p "zeta done" text))))
-
-  :doc "expanded line cap summarizes completed-only owners when active uses cap"
-  (test-mevedel-tool-task--with-session session
-    (setf (mevedel-session-tasks session)
-          (list (mevedel-task--create
-                 :id 1 :subject "main running" :status 'in-progress)
-                (mevedel-task--create
-                 :id 2 :subject "main pending extra" :status 'pending)
-                (mevedel-task--create
-                 :id 3 :subject "worker pending" :status 'pending
-                 :owner "worker")
-                (mevedel-task--create
-                 :id 4 :subject "zeta done" :status 'completed
-                 :owner "zeta")
-                (mevedel-task--create
-                 :id 5 :subject "omega done" :status 'completed
-                 :owner "omega")))
-    (let* ((text (substring-no-properties
-                  (mevedel-tool-task--format-groups session t nil 5)))
-           (lines (split-string text "\n" t)))
-      (should (= 5 (length lines)))
-      (should (string-match-p "main running" text))
-      (should (string-match-p "main pending extra" text))
-      (should (string-match-p "worker pending" text))
-      (should (string-match-p "… 2 completed" text))
-      (should-not (string-match-p "zeta done" text))
-      (should-not (string-match-p "omega done" text)))))
+      (should (string-match-p "main pending two" text))
+      (should (string-match-p "… 2 more open · 1 completed" text))
+      (should-not (string-match-p "main pending three" text))
+      (should-not (string-match-p "worker running" text))
+      (should-not (string-match-p "main done" text)))))
 
 
 ;;
