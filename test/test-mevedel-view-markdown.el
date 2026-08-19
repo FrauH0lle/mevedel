@@ -100,9 +100,7 @@
   (let ((text "```md\n| A | B |\n|---|---|\n| x | yy |\n```\n"))
     (with-temp-buffer
       (insert text)
-      (mevedel-view--decorate-code-blocks-in-range (point-min) (point-max))
-      (mevedel-view--prettify-markdown-tables-in-range
-       (point-min) (point-max))
+      (mevedel-view--decorate-markdown-in-range (point-min) (point-max))
       (let ((rendered (buffer-substring-no-properties
                        (point-min) (point-max))))
         (should-not (string-match-p "```" rendered))
@@ -167,109 +165,21 @@
             (should (equal (list 'image :file file) display))))
       (delete-file file))))
 
-(mevedel-deftest mevedel-view--prettify-markdown-tables-in-range
-  (:doc "`mevedel-view--prettify-markdown-tables-in-range' aligns pipe tables")
+(mevedel-deftest mevedel-view--decorate-markdown-in-range
+  (:doc "`mevedel-view--decorate-markdown-in-range' leaves raw pipe tables visible")
   ,test
   (test)
-  :doc "pads cells and separator rows"
-  (with-temp-buffer
-    (insert "| Name | Role |\n")
-    (insert "|------|------|\n")
-    (insert "| Alice | Engineer |\n")
-    (mevedel-view--prettify-markdown-tables-in-range
-     (point-min) (point-max))
-    (should (equal "| Name  | Role     |\n|-------|----------|\n| Alice | Engineer |\n"
-                   (buffer-string))))
-
-  :doc "uses visible Markdown text width for simple emphasis and links"
-  (with-temp-buffer
-    (insert "| Name | Role |\n")
-    (insert "|------|------|\n")
-    (insert "| **Alice** | [Engineer](http://x.com) |\n")
-    (mevedel-view--prettify-markdown-tables-in-range
-     (point-min) (point-max))
-    (should (equal "| Name  | Role     |\n|-------|----------|\n| **Alice** | [Engineer](http://x.com) |\n"
-                   (buffer-string))))
-
-  :doc "leaves linkify-exempt table text verbatim"
-  (with-temp-buffer
-    (insert (propertize "| Name | Role |\n|------|------|\n"
-                        'mevedel-view-no-linkify t))
-    (mevedel-view--prettify-markdown-tables-in-range
-     (point-min) (point-max))
-    (should (equal "| Name | Role |\n|------|------|\n"
-                   (buffer-substring-no-properties (point-min)
-                                                   (point-max)))))
-
-  :doc "keeps inline pipes and unmatched literal backticks from breaking table detection"
-  (let ((tick (make-string 1 ?`)))
-    (with-temp-buffer
-      (insert "| Item | Description | Example |\n")
-      (insert "|---|---|---|\n")
-      (insert (concat "| Markdown table | Uses pipes and dashes | "
-                      tick "| A | B |" tick " |\n"))
-      (insert (concat "| Code block | Uses triple backticks | "
-                      (make-string 3 ?`) "python |\n"))
-      (insert (concat "| Inline code | Uses single backticks | "
-                      tick "example" tick " |\n"))
-      (add-text-properties (point-min) (point-max)
-                           '(font-lock-face markdown-table-face))
-      (save-excursion
-        (goto-char (point-min))
-        (search-forward "```python")
-        (add-text-properties (match-beginning 0) (match-end 0)
-                             '(font-lock-face markdown-code-face
-                               invisible t
-                               display "``python")))
-      (mevedel-view--prettify-markdown-tables-in-range
-       (point-min) (point-max))
-      (should
-       (equal
-        (concat "| Item           | Description           | Example     |\n"
-                "|----------------|-----------------------|-------------|\n"
-                "| Markdown table | Uses pipes and dashes | `| A | B |` |\n"
-                "| Code block     | Uses triple backticks | ```python   |\n"
-                "| Inline code    | Uses single backticks | `example`   |\n")
-        (buffer-string)))
-      (goto-char (point-min))
-      (search-forward "```python")
-      (should-not
-       (text-property-any (match-beginning 0) (match-end 0) 'invisible t))
-      (should-not
-       (text-property-not-all
-        (match-beginning 0) (match-end 0)
-        'font-lock-face 'markdown-table-face))))
-
-  :doc "copies table face onto inserted padding"
-  (with-temp-buffer
-    (insert "| Name | Role |\n")
-    (insert "|------|------|\n")
-    (insert "| Ada | Developer |\n")
-    (add-text-properties (point-min) (point-max)
-                         '(font-lock-face markdown-table-face))
-    (mevedel-view--prettify-markdown-tables-in-range
-     (point-min) (point-max))
-    (should-not
-     (text-property-not-all
-      (point-min) (point-max) 'font-lock-face 'markdown-table-face)))
-
-  :doc "skips tables inside fenced code blocks"
-  (let ((text "```md\n| A | B |\n|---|---|\n| x | yy |\n```\n"))
+  (let ((text "| Name | Role |\n|---|---|\n| Ada | Developer |\n"))
     (with-temp-buffer
       (insert text)
-      (mevedel-view--prettify-markdown-tables-in-range
-       (point-min) (point-max))
-      (should (equal text (buffer-string)))))
-
-  :doc "preserves caller point"
-  (with-temp-buffer
-    (insert "| Name | Role |\n")
-    (insert "|------|------|\n")
-    (insert "| Alice | Engineer |\n")
-    (goto-char (point-max))
-    (mevedel-view--prettify-markdown-tables-in-range
-     (point-min) (point-max))
-    (should (= (point) (point-max)))))
+      (add-text-properties (point-min) (point-max)
+                           '(mevedel-view-source task-table))
+      (mevedel-view--decorate-markdown-in-range (point-min) (point-max))
+      (should (equal text (buffer-substring-no-properties
+                           (point-min) (point-max))))
+      (should-not
+       (text-property-not-all
+        (point-min) (point-max) 'mevedel-view-source 'task-table)))))
 
 
 (mevedel-deftest mevedel-view--linkify-paths-in-range ()

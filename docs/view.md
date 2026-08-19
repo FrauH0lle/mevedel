@@ -682,7 +682,6 @@ Markdown rendering adds small view-only affordances:
 - incomplete streaming fences stay raw until the closing fence arrives;
 - local Markdown image links and bare local image paths render inline
   when Emacs can display images;
-- simple Markdown pipe tables are padded so columns line up in the view;
 - rendered `@file` mentions, Markdown file links, and bare file paths
   are clickable open-file buttons, including `:LINE`, `:L<line>`,
   `:#L<line>`, comma-separated line lists, and `#L<line>` targets. A path
@@ -690,8 +689,9 @@ Markdown rendering adds small view-only affordances:
   its logical path; the disposable fixed-path cache is never used as evidence
   that the artifact exists.
 
-Markdown tables, links, local images, paths, and fenced source-panel
-projection are isolated in `mevedel-view-markdown.el`.
+Markdown links, local images, paths, and fenced source-panel projection are
+isolated in `mevedel-view-markdown.el`. Pipe tables remain raw fontified
+Markdown rather than undergoing a second parser and alignment pass.
 Audit disclosure formatting and toggling live in `mevedel-view-audit.el`;
 `mevedel-view-render.el` retains the surrounding turn orchestration.
 
