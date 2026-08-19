@@ -52,7 +52,8 @@
                   "mevedel-cockpit" (&optional no-error))
 
 ;; `mevedel-hooks'
-(declare-function mevedel-hooks--read-config-file "mevedel-hooks" (file))
+(declare-function mevedel-hooks--read-config-file
+                  "mevedel-hooks" (file &optional content))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())

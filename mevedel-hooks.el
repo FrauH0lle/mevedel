@@ -458,20 +458,24 @@ treated as `SubagentStop'."
 ;;
 ;;; Config file loading and trust
 
-(defun mevedel-hooks--read-lisp-file (file)
-  "Read hook rules from Lisp FILE."
-  (when (file-readable-p file)
+(defun mevedel-hooks--read-lisp-file (file &optional content)
+  "Read hook rules from Lisp FILE or snapshotted CONTENT."
+  (when (or content (file-readable-p file))
     (with-temp-buffer
-      (insert-file-contents file)
+      (if content
+          (insert content)
+        (insert-file-contents file))
       (goto-char (point-min))
       (let ((read-eval nil))
         (read (current-buffer))))))
 
-(defun mevedel-hooks--read-json-file (file)
-  "Read hook rules from JSON FILE."
-  (when (file-readable-p file)
+(defun mevedel-hooks--read-json-file (file &optional content)
+  "Read hook rules from JSON FILE or snapshotted CONTENT."
+  (when (or content (file-readable-p file))
     (with-temp-buffer
-      (insert-file-contents file)
+      (if content
+          (insert content)
+        (insert-file-contents file))
       (goto-char (point-min))
       (mevedel-hooks--json-rules-to-lisp
        (json-parse-buffer
@@ -480,14 +484,14 @@ treated as `SubagentStop'."
         :null-object nil
         :false-object :json-false)))))
 
-(defun mevedel-hooks--read-config-file (file)
-  "Read and normalize hook config FILE."
+(defun mevedel-hooks--read-config-file (file &optional content)
+  "Read and normalize hook config FILE or snapshotted CONTENT."
   (condition-case err
       (pcase (file-name-extension file)
         ("el" (mevedel-hooks-normalize-rules
-               (mevedel-hooks--read-lisp-file file)))
+               (mevedel-hooks--read-lisp-file file content)))
         ("json" (mevedel-hooks-normalize-rules
-                 (mevedel-hooks--read-json-file file)))
+                 (mevedel-hooks--read-json-file file content)))
         (_ nil))
     (error
      (display-warning
@@ -530,12 +534,17 @@ treated as `SubagentStop'."
             (print-quoted t))
         (prin1 db (current-buffer))))))
 
-(defun mevedel-hooks--file-hash (file)
-  "Return SHA256 hash for FILE contents."
+(defun mevedel-hooks--config-snapshot (file)
+  "Return FILE's path, SHA256 hash, and decoded content from one read."
   (with-temp-buffer
     (set-buffer-multibyte nil)
     (insert-file-contents-literally file)
-    (secure-hash 'sha256 (current-buffer))))
+    (let ((hash (secure-hash 'sha256 (current-buffer))))
+      (set-buffer-multibyte t)
+      (decode-coding-inserted-region (point-min) (point-max) file)
+      (list :path (expand-file-name file)
+            :hash hash
+            :content (buffer-string)))))
 
 (defun mevedel-hooks--workspace-id (workspace)
   "Return stable trust id for WORKSPACE."
@@ -544,20 +553,19 @@ treated as `SubagentStop'."
             (mevedel-workspace-type workspace)
             (mevedel-workspace-id workspace))))
 
-(defun mevedel-hooks--project-file-trusted-p (workspace file)
-  "Return non-nil when project hook FILE is trusted for WORKSPACE."
+(defun mevedel-hooks--project-snapshot-trusted-p (workspace snapshot)
+  "Return non-nil when project hook SNAPSHOT is trusted for WORKSPACE."
   (or (not mevedel-hooks-require-project-trust)
       (let ((workspace-id (mevedel-hooks--workspace-id workspace))
-            (hash (and (file-readable-p file)
-                       (mevedel-hooks--file-hash file)))
+            (path (plist-get snapshot :path))
+            (hash (plist-get snapshot :hash))
             (db (mevedel-hooks--read-trust-db))
             trusted)
         (dolist (entry db trusted)
           (when (and (listp entry)
                      (keywordp (car-safe entry))
                      (equal (plist-get entry :workspace-id) workspace-id)
-                     (equal (plist-get entry :path)
-                            (expand-file-name file))
+                     (equal (plist-get entry :path) path)
                      (equal (plist-get entry :hash) hash))
             (setq trusted t))))))
 
@@ -572,18 +580,22 @@ treated as `SubagentStop'."
         (dolist (file (mevedel-hooks--config-files-in-dir dir))
           (push file files))))))
 
-(defun mevedel-hooks--project-config-files (workspace)
-  "Return trusted project hook files for WORKSPACE."
+(defun mevedel-hooks--project-config-snapshots (workspace)
+  "Return trusted project hook snapshots for WORKSPACE."
   (when workspace
-    (let (files)
+    (let (snapshots)
       (dolist (file (mevedel-hooks--project-config-candidates workspace)
-                    (nreverse files))
-        (if (mevedel-hooks--project-file-trusted-p workspace file)
-            (push file files)
-          (display-warning
-           'mevedel
-           (format "Project hook config %s is not trusted; ignoring" file)
-           :warning))))))
+                    (nreverse snapshots))
+        (let ((snapshot (and (file-readable-p file)
+                             (mevedel-hooks--config-snapshot file))))
+          (if (and snapshot
+                   (mevedel-hooks--project-snapshot-trusted-p
+                    workspace snapshot))
+              (push snapshot snapshots)
+            (display-warning
+             'mevedel
+             (format "Project hook config %s is not trusted; ignoring" file)
+             :warning)))))))
 
 (defun mevedel-hooks--user-config-files ()
   "Return user hook config files."
@@ -721,14 +733,17 @@ memo."
          (setq rules
                (append rules
                        (mevedel-hooks--plugin-config-rules workspace)))
-         (dolist (file (mevedel-hooks--project-config-files workspace))
-           (setq rules
-                 (append rules
-                         (mevedel-hooks-annotate-rules-source
-                          (mevedel-hooks--read-config-file file)
-                          'project-file file
-                          (file-name-as-directory
-                           (mevedel-workspace-root workspace))))))
+         (dolist (snapshot
+                  (mevedel-hooks--project-config-snapshots workspace))
+           (let ((file (plist-get snapshot :path)))
+             (setq rules
+                   (append rules
+                           (mevedel-hooks-annotate-rules-source
+                            (mevedel-hooks--read-config-file
+                             file (plist-get snapshot :content))
+                            'project-file file
+                            (file-name-as-directory
+                             (mevedel-workspace-root workspace)))))))
          (puthash key rules mevedel-hooks--config-rules-cache))))))
 
 ;;;###autoload
@@ -790,9 +805,10 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                (mevedel-hooks--read-trust-db)))
           (count 0))
       (dolist (file (mevedel-hooks--project-config-candidates workspace))
-        (let ((entry (list :workspace-id workspace-id
-                           :path (expand-file-name file)
-                           :hash (mevedel-hooks--file-hash file))))
+        (let* ((snapshot (mevedel-hooks--config-snapshot file))
+               (entry (list :workspace-id workspace-id
+                            :path (plist-get snapshot :path)
+                            :hash (plist-get snapshot :hash))))
           (push entry db)
           (cl-incf count)))
       (mevedel-hooks--write-trust-db (nreverse db))

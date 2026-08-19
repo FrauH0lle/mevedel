@@ -544,7 +544,10 @@
 		     (delete-directory user-dir t))))
 
 (mevedel-deftest mevedel-hooks--config-rules
-  (:doc "memoizes the configured layers until an explicit invalidation")
+  ()
+  ,test
+  (test)
+  :doc "memoizes the configured layers until an explicit invalidation"
   (let* ((root (make-temp-file "mevedel-hooks-cache-ws" t))
          (user-dir (file-name-as-directory
                     (make-temp-file "mevedel-hooks-cache-user" t)))
@@ -552,8 +555,8 @@
          (mevedel-user-dir user-dir)
          (mevedel-hooks-require-project-trust t)
          (reads 0)
-         (project-files-function
-          (symbol-function 'mevedel-hooks--project-config-files)))
+         (project-snapshots-function
+          (symbol-function 'mevedel-hooks--project-config-snapshots)))
     (unwind-protect
         (progn
           (make-directory (file-name-concat root ".mevedel") t)
@@ -565,10 +568,11 @@
              (current-buffer)))
           (mevedel-test--with-captured-messages nil
             (mevedel-hooks-trust-project workspace))
-          (cl-letf (((symbol-function 'mevedel-hooks--project-config-files)
+          (cl-letf (((symbol-function
+                      'mevedel-hooks--project-config-snapshots)
                      (lambda (ws)
                        (cl-incf reads)
-                       (funcall project-files-function ws))))
+                       (funcall project-snapshots-function ws))))
             (should (= 1 (length (mevedel-hooks--matching-handlers
                                   'PreToolUse '(:tool-name "Bash")
                                   (mevedel-hooks-effective-rules
@@ -587,7 +591,57 @@
       (clrhash mevedel-hooks--config-rules-cache)
       (delete-directory root t)
       (when (file-directory-p user-dir)
-        (delete-directory user-dir t)))))
+        (delete-directory user-dir t))))
+
+  :doc "parses the exact project bytes whose hash was trusted"
+  (let* ((root (make-temp-file "mevedel-hooks-snapshot-ws" t))
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-hooks-snapshot-user" t)))
+         (workspace (mevedel-hooks-test--workspace root))
+         (mevedel-user-dir user-dir)
+         (mevedel-hooks-require-project-trust t)
+         (file (file-name-concat root ".mevedel" "hooks.el"))
+         (replacement (file-name-concat root ".mevedel" "replacement.el"))
+         (project-snapshots-function
+          (symbol-function 'mevedel-hooks--project-config-snapshots)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (insert ";;; -*- coding: utf-8 -*-\n")
+            (prin1
+             '((PreToolUse
+                ((:matcher "Bash"
+                  :hooks ((:type command :command "echo tr\u00fcsted"))))))
+             (current-buffer)))
+          (mevedel-test--with-captured-messages nil
+            (mevedel-hooks-trust-project workspace))
+          (cl-letf (((symbol-function
+                      'mevedel-hooks--project-config-snapshots)
+                     (lambda (ws)
+                       (let ((snapshots
+                              (funcall project-snapshots-function ws)))
+                         (with-temp-file replacement
+                           (prin1
+                            '((PreToolUse
+                               ((:matcher "Bash"
+                                 :hooks
+                                 ((:type command
+                                   :command "echo replacement"))))))
+                            (current-buffer)))
+                         (rename-file replacement file t)
+                         snapshots))))
+            (should
+             (equal
+              '("echo tr\u00fcsted")
+              (mapcar
+               (lambda (handler) (plist-get handler :command))
+               (mevedel-hooks--matching-handlers
+                'PreToolUse '(:tool-name "Bash")
+                (mevedel-hooks-effective-rules nil workspace)))))))
+      (clrhash mevedel-hooks--config-rules-cache)
+      (delete-directory root t)
+      (delete-directory user-dir t))))
 
 (mevedel-deftest mevedel-hooks-effective-rules/agents-hook-roots
   (:doc "loads standalone agents hook roots in precedence order and trusts project agents files")
