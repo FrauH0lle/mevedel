@@ -41,6 +41,18 @@
   ,test
   (test)
 
+  :doc "keeps the literal registration table aligned with the exact roster"
+  (progn
+    (should (equal test-mevedel-tool-introspect--expected-tools
+                   (mapcar #'car
+                           mevedel-tool-introspect--registrations)))
+    (should (eq 'mevedel-tool-introspect--library-source-check
+                (nth 3 (assoc "library_source"
+                              mevedel-tool-introspect--registrations))))
+    (should (eq 'mevedel-tool-introspect--variable-value-check
+                (nth 3 (assoc "variable_value"
+                              mevedel-tool-introspect--registrations)))))
+
   :doc "registers every introspection tool under mevedel-introspection"
   (progn
     (mevedel-tool-introspect--register)
