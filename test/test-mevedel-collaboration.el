@@ -16,11 +16,16 @@
 (require 'mevedel-collaboration-projection)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration)
+(require 'mevedel-pending-inputs)
+(require 'mevedel-prompt-submission)
+(require 'mevedel-session-persistence)
+(require 'mevedel-structs)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-chat)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-input-files)
 (require 'mevedel-view-render)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-ui)
@@ -742,8 +747,10 @@
           (should-not (mevedel-collaboration--save-guest-images nil)))
       (delete-directory dir t))))
 
-(mevedel-deftest mevedel-collaboration--handle-abort
-  (:doc "aborts for a writable guest and ignores read-only guests")
+(mevedel-deftest mevedel-collaboration--handle-abort ()
+  ,test
+  (test)
+  :doc "aborts for a writable guest and ignores read-only guests"
   (with-temp-buffer
     (let* ((guests (make-hash-table :test #'eql))
            (room (list :data-buffer (current-buffer) :guests guests))
@@ -755,7 +762,39 @@
         (mevedel-collaboration--handle-abort room 1)
         (should-not aborted)
         (mevedel-collaboration--handle-abort room 2)
-        (should (eq (current-buffer) aborted))))))
+        (should (eq (current-buffer) aborted)))))
+
+  :doc "guest abort cancels a slow prompt hook before request dispatch"
+  (mevedel-view-test--with-buffers
+    (let* ((guests (make-hash-table :test #'eql))
+           (session (mevedel-session--create :name "share"))
+           (room (list :data-buffer data-buf :guests guests))
+           late-callback submission send-called)
+      (puthash 1 (list :name "Writer" :writable t :ready t) guests)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace nil
+                    mevedel--view-buffer view-buf))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (setq late-callback callback)))
+                ((symbol-function 'mevedel-view--abort-data-buffer) #'ignore)
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq send-called t))))
+        (with-current-buffer view-buf
+          (mevedel-view--run-prompt-submit-hook
+           "guest prompt" "guest prompt"
+           (lambda (_accepted) (gptel-send)))
+          (setq submission mevedel-view--prompt-hook-pending))
+        (mevedel-collaboration--handle-abort room 1)
+        (funcall late-callback nil))
+      (should (eq 'cancelled
+                  (mevedel-prompt-submission-state submission)))
+      (should-not send-called)
+      (with-current-buffer data-buf
+        (should (string-empty-p (buffer-string)))))))
 
 (mevedel-deftest mevedel-collaboration--on-prompt-created
   (:doc "presents remote-capable prompts to writable guests only, gated by the defcustom")

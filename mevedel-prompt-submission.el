@@ -32,6 +32,26 @@
   outcome
   (state 'pending))
 
+(defun mevedel-prompt-submission-accept
+    (submission input context audits context-entries)
+  "Record accepted hook INPUT and its pending ownership on SUBMISSION."
+  (unless (eq (mevedel-prompt-submission-state submission) 'pending)
+    (error "Cannot accept inactive prompt submission"))
+  (setf (mevedel-prompt-submission-input submission) input
+        (mevedel-prompt-submission-context submission) context
+        (mevedel-prompt-submission-audits submission) audits
+        (mevedel-prompt-submission-context-entries submission) context-entries)
+  submission)
+
+(defun mevedel-prompt-submission-cancel (submission)
+  "Cancel pending SUBMISSION and return non-nil when it is inactive."
+  (pcase (mevedel-prompt-submission-state submission)
+    ('cancelled t)
+    ('pending
+     (setf (mevedel-prompt-submission-state submission) 'cancelled)
+     t)
+    (_ nil)))
+
 (defun mevedel-prompt-submission-commit (submission)
   "Commit SUBMISSION's pending context exactly once."
   (pcase (mevedel-prompt-submission-state submission)

@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Tests composer editing, submission, queueing, and send orchestration.
+;; Tests composer editing, prompt submission, root dispatch, and send flow.
 
 ;;; Code:
 
@@ -66,13 +66,22 @@
                     mevedel-view--run-prompt-submit-hook))
     (should (equal "mevedel-view-composer"
                    (mevedel-view-composer-test--owner symbol))))
-  :doc "owns pending-input and request-progress send orchestration"
+  :doc "delegates file input and pending-input lifecycle to focused owners"
+  (dolist (symbol '(mevedel-view--insert-dropped-file-mentions
+                    mevedel-view--install-dnd
+                    mevedel-view-yank-dwim))
+    (should (equal "mevedel-view-input-files"
+                   (mevedel-view-composer-test--owner symbol))))
   (dolist (symbol '(mevedel-view--queue-follow-up
                     mevedel-view-send-follow-up
-                    mevedel-view--schedule-follow-up-drain
-                    mevedel-view-abort))
-    (should (equal "mevedel-view-composer"
-                   (mevedel-view-composer-test--owner symbol)))))
+                    mevedel-view--schedule-follow-up-drain))
+    (should (equal "mevedel-pending-inputs"
+                   (mevedel-view-composer-test--owner symbol))))
+
+  :doc "retains root request cancellation"
+  (should (equal "mevedel-view-composer"
+                 (mevedel-view-composer-test--owner
+                  'mevedel-view-abort))))
 
 (mevedel-deftest mevedel-view-enter-directive-scope
   (:doc "selects Discuss result attempts and rejects unavailable actions")
@@ -433,36 +442,6 @@
                        (buffer-substring-no-properties
                         (mevedel-view--input-start) (point-max))))
         (should (= 7 (- (point) (mevedel-view--input-start))))))))
-
-(mevedel-deftest mevedel-view--queue-follow-up
-  (:quiet t)
-  ,test
-  (test)
-  :doc "stores directive scope on queued follow-ups"
-  (mevedel-view-test--with-buffers
-    (let* ((workspace (mevedel-workspace--create
-                       :type 'file :id "queue-scope" :root "/tmp"
-                       :name "queue-scope"))
-           (session (mevedel-session-create "main" workspace)))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session
-                    mevedel-view--composer-scope
-                    '(:directive-id "directive-1" :action discuss
-                      :attempt-index 2))
-        (cl-letf (((symbol-function 'mevedel-view--interaction-rebuild)
-                   #'ignore)
-                  ((symbol-function
-                    'mevedel-view--schedule-late-follow-up-drain)
-                   #'ignore))
-          (mevedel-view--queue-follow-up "follow up"))
-        (let ((scope
-               (plist-get (car (mevedel-session-pending-follow-ups session))
-                          :scope)))
-          (should (equal "directive-1" (plist-get scope :directive-id)))
-          (should (eq 'discuss (plist-get scope :action)))
-          (should (= 2 (plist-get scope :attempt-index))))))))
 
 (mevedel-deftest mevedel-view--next-permission-mode
   (:doc "cycles permission modes in view order")
@@ -1819,40 +1798,24 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 ;;
 ;;; Planned submission helpers
 
-(mevedel-deftest mevedel-view--pending-input-text ()
-  ,test
-  (test)
-  :doc "returns queued input and defaults a missing value to empty text"
-  (should (equal "queued" (mevedel-view--pending-input-text
-                            '(:input "queued"))))
-  (should (equal "" (mevedel-view--pending-input-text nil))))
-
-(mevedel-deftest mevedel-view--pending-input-category-body ()
-  ,test
-  (test)
-  :doc "shows three compact previews and a remaining count"
-  (let ((body
-         (mevedel-view--pending-input-category-body
-          "Steering"
-          (mapcar (lambda (n)
-                    (list :input
-                          (format "message %d\nwith extra whitespace" n)))
-                  '(1 2 3 4 5)))))
-    (dolist (n '(1 2 3))
-      (should (string-match-p (format "message %d with extra" n) body)))
-    (should-not (string-match-p "message 4" body))
-    (should (string-match-p "2 more" body))))
-
-(mevedel-deftest mevedel-view--cancel-pending-skill-submission ()
+(mevedel-deftest mevedel-view--cancel-pending-submission ()
   ,test
   (test)
   :doc "marks the active preparation token cancelled and clears ownership"
   (with-temp-buffer
     (let ((token (list :cancelled nil)))
       (setq-local mevedel-view--pending-skill-submission token)
-      (mevedel-view--cancel-pending-skill-submission)
+      (mevedel-view--cancel-pending-submission)
       (should (plist-get token :cancelled))
-      (should-not mevedel-view--pending-skill-submission))))
+      (should-not mevedel-view--pending-skill-submission)))
+  :doc "cancels and clears an active prompt-hook submission"
+  (with-temp-buffer
+    (let ((submission (mevedel-prompt-submission-create)))
+      (setq-local mevedel-view--prompt-hook-pending submission)
+      (mevedel-view--cancel-pending-submission)
+      (should (eq 'cancelled
+                  (mevedel-prompt-submission-state submission)))
+      (should-not mevedel-view--prompt-hook-pending))))
 
 (mevedel-deftest mevedel-view--skill-submission-active-p ()
   ,test
@@ -2039,23 +2002,6 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should (string-match-p "ALPHA BODY" sent))
       (should (string-match-p
                (regexp-quote "[skill:alpha -- attached]") sent)))))
-
-(mevedel-deftest mevedel-view--steering-request-context-supported-p ()
-  ,test
-  (test)
-  :doc "allows bookkeeping-only skill context and rejects request policy"
-  (should
-   (mevedel-view--steering-request-context-supported-p
-    '(:permission-rules nil :hook-rules nil :invoked-skills (alpha))))
-  (dolist (context '((:permission-rules (rule))
-                     (:hook-rules (rule))
-                     (:model model)
-                     (:effort high)))
-    (should-not
-     (mevedel-view--steering-request-context-supported-p context)))
-  (should-not
-   (mevedel-view--steering-request-context-supported-p
-    '(:future-policy nil))))
 
 (mevedel-deftest mevedel-view-send/skill-inline (:quiet t)
   ,test
@@ -3314,72 +3260,6 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (with-current-buffer chat-buffer
             (should-not mevedel--pending-model-input)))
       (kill-buffer chat-buffer))))
-
-(mevedel-deftest mevedel-view--follow-up-auto-drain-blocked-p ()
-  ,test
-  (test)
-  :doc "blocks fallback drainage for approval and Goal handoff ownership"
-  (let ((session (mevedel-session--create
-                  :authority-mode 'pid-lock
-                  :name "main" :pending-plan-approval 'plan)))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p session))
-    (setf (mevedel-session-pending-plan-approval session) nil)
-    (should-not
-     (mevedel-view--follow-up-auto-drain-blocked-p session)))
-  (let ((here
-         (mevedel-session--create
-          :authority-mode 'pid-lock
-          :name "here"
-          :plan-metadata
-          '(:implementation-retry
-            (:goal-id "here-goal"
-             :selection (:location here :execution goal)))))
-        (source
-         (mevedel-session--create
-          :authority-mode 'pid-lock
-          :name "source"
-          :plan-metadata
-          '(:implementation-retry
-            (:goal-id "target-goal"
-             :selection (:location worktree :execution goal)))))
-        (target
-         (mevedel-session--create
-          :authority-mode 'pid-lock
-          :name "target"
-          :plan-metadata '(:implementation-goal-id "target-goal"))))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p here))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p source))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p target)))
-  (let* ((goal (mevedel-goal--create :id "goal" :status 'paused))
-         (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "paused" :goal goal
-           :pending-follow-ups
-           '((:input "held" :queued-at-goal-id "goal")))))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p session))
-    (setf (mevedel-goal-status goal) 'active)
-    (should-not
-     (mevedel-view--follow-up-auto-drain-blocked-p session))
-    (dolist (status '(blocked budget-limited))
-      (setf (mevedel-goal-status goal) status)
-      (should (mevedel-view--follow-up-auto-drain-blocked-p session))))
-  (let ((session (mevedel-session--create
-                  :authority-mode 'pid-lock
-                  :name "failed" :pending-input-failure-paused t)))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p session)))
-  :doc "holds ordinary input but permits the owning directive Plan follow-up"
-  (let ((session
-         (mevedel-session--create
-          :authority-mode 'pid-lock
-          :name "directive-plan"
-          :directive-planning '(:directive-id "d1" :phase approval)
-          :pending-follow-ups '((:input "ordinary")))))
-    (should (mevedel-view--follow-up-auto-drain-blocked-p session))
-    (setf (mevedel-session-pending-follow-ups session)
-          '((:input "ordinary")
-            (:input "revise" :scope (:directive-id "d1" :action plan))))
-    (should-not (mevedel-view--follow-up-auto-drain-blocked-p session))))
 
 (mevedel-deftest mevedel-view-send/pending-input (:quiet t)
   ,test
@@ -5166,7 +5046,71 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                   (accept-process-output nil 0.05)))
               (should-not mevedel-view--prompt-hook-pending)
               (should (= send-count 1)))))
-      (delete-directory root t))))
+      (delete-directory root t)))
+
+  :doc "abort makes a late UserPromptSubmit callback inert"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'file :id "abort-prompt-hook" :root "/tmp"
+                       :name "abort-prompt-hook"))
+           (session (mevedel-session-create "main" workspace))
+           late-callback
+           send-called)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (setq late-callback callback)))
+                ((symbol-function 'mevedel-view--abort-data-buffer) #'ignore)
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq send-called t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "abort this prompt")
+          (mevedel-view-send)
+          (should mevedel-view--prompt-hook-pending)
+          (mevedel-view-abort)
+          (funcall late-callback nil)
+          (should-not mevedel-view--prompt-hook-pending)
+          (should (equal "abort this prompt" (mevedel-view--input-text))))
+      (should-not send-called)
+      (with-current-buffer data-buf
+        (should (string-empty-p (buffer-string)))))))
+
+  :doc "killing the view cancels a late UserPromptSubmit callback"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'file :id "kill-prompt-hook" :root "/tmp"
+                       :name "kill-prompt-hook"))
+           (session (mevedel-session-create "main" workspace))
+           late-callback
+           submission
+           send-called)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (setq late-callback callback)))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq send-called t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "kill this prompt")
+          (mevedel-view-send)
+          (setq submission mevedel-view--prompt-hook-pending))
+        (kill-buffer view-buf)
+        (funcall late-callback nil))
+      (should (eq 'cancelled
+                  (mevedel-prompt-submission-state submission)))
+      (should-not send-called))))
 
 (provide 'test-mevedel-view-composer)
 ;;; test-mevedel-view-composer.el ends here

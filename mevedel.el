@@ -88,6 +88,7 @@
 (require 'mevedel-view-interaction)
 (require 'mevedel-view-render)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-input-files)
 (require 'mevedel-view-stream)
 (require 'mevedel-view-zone)
 (require 'mevedel-directive-activity)

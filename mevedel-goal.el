@@ -27,6 +27,10 @@
                   "mevedel-chat" (prompt &optional display-text
                                           prompt-submission))
 
+;; `mevedel-pending-inputs'
+(declare-function mevedel-view--run-follow-up-drain
+                  "mevedel-pending-inputs" (data-buffer))
+
 ;; `mevedel-plan'
 (declare-function mevedel-plan-artifact-path-p "mevedel-plan" (path))
 (declare-function mevedel-plan-read-artifact "mevedel-plan"
@@ -66,10 +70,6 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (key path thunk))
-
-;; `mevedel-view-composer'
-(declare-function mevedel-view--run-follow-up-drain
-                  "mevedel-view-composer" (data-buffer))
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view-interaction-pending-p
@@ -329,6 +329,7 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
            (buffer-local-value 'mevedel--current-request buffer))
       'request)
      ((mevedel-session-pending-follow-ups session)
+      (require 'mevedel-pending-inputs)
       (run-at-time 0 nil #'mevedel-view--run-follow-up-drain buffer)
       'follow-up)
      ((mevedel-goal--pending-interaction-p session) 'interaction)

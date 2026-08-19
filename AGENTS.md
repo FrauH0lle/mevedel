@@ -159,8 +159,9 @@ Chat / view
   mevedel-context-summary.el  stateless validated continuation/handoff summary generation
   mevedel-view.el             view mode, zones, and session coordination
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
-  mevedel-view-composer.el    composer editing, submission, queueing, fork/send flow
-  mevedel-pending-inputs.el   Pending Inputs cockpit and queue management
+  mevedel-view-composer.el    composer geometry, submission, root dispatch, fork/send flow
+  mevedel-view-input-files.el local file drops and clipboard-image input
+  mevedel-pending-inputs.el   pending queue, steering, delivery, and cockpit
   mevedel-patch-review.el     staged ApplyPatch review UI
   mevedel-plan-mode.el        Plan conversations and proposal approval UI
   mevedel-view-interaction.el interaction registration, ordering, callback overlays, redraw

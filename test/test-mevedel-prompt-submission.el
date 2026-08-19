@@ -32,6 +32,32 @@
       (should (eq 'committed
                   (mevedel-prompt-submission-state reserved))))))
 
+(mevedel-deftest mevedel-prompt-submission-accept ()
+  ,test
+  (test)
+  :doc "records accepted hook data only while the submission is pending"
+  (let ((submission (mevedel-prompt-submission-create)))
+    (should
+     (eq submission
+         (mevedel-prompt-submission-accept
+          submission "input" "context" '((:type rewrite)) '((:event hook)))))
+    (should (equal "input" (mevedel-prompt-submission-input submission)))
+    (should (equal "context" (mevedel-prompt-submission-context submission)))
+    (mevedel-prompt-submission-cancel submission)
+    (should-error
+     (mevedel-prompt-submission-accept submission nil nil nil nil))))
+
+(mevedel-deftest mevedel-prompt-submission-cancel ()
+  ,test
+  (test)
+  :doc "cancels pending work idempotently but never cancels committed work"
+  (let ((pending (mevedel-prompt-submission-create))
+        (committed (mevedel-prompt-submission-create :state 'committed)))
+    (should (mevedel-prompt-submission-cancel pending))
+    (should (mevedel-prompt-submission-cancel pending))
+    (should (eq 'cancelled (mevedel-prompt-submission-state pending)))
+    (should-not (mevedel-prompt-submission-cancel committed))))
+
 (mevedel-deftest mevedel-prompt-submission-reserve ()
   ,test
   (test)

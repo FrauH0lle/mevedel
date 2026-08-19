@@ -21,6 +21,10 @@
 ;; `mevedel-interaction-prompt'
 (defvar mevedel--prompt-overlays)
 
+;; `mevedel-pending-inputs'
+(declare-function mevedel-view--pending-inputs-render
+                  "mevedel-pending-inputs" (&optional session))
+
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue--render-head
 		  "mevedel-permission-queue" (&optional session))
@@ -82,8 +86,6 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-marker-position
 		  "mevedel-view-composer" nil)
-(declare-function mevedel-view--pending-inputs-render
-                  "mevedel-view-composer" (&optional session))
 (declare-function mevedel-view--session "mevedel-view-composer" nil)
 (defvar mevedel-view--prompt-hook-pending)
 (defvar mevedel-session--read-only-mode)
@@ -1082,6 +1084,7 @@ This deletes only interaction UI overlays and never settles callbacks."
             (when (or (mevedel-session-pending-steering session)
                       (mevedel-session-pending-follow-ups session)
                       (mevedel-session-pending-input-failure-paused session))
+              (require 'mevedel-pending-inputs)
               (mevedel-view--pending-inputs-render session)))
           (when (hash-table-p mevedel-view--interaction-telemetry-opened)
             (let (closed)
