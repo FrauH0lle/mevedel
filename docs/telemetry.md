@@ -167,7 +167,7 @@ availability. Paths and file contents are not written to telemetry.
 ## Comparing session instrumentation modes
 
 The maintained
-[controlled session performance workload](../benchmark/session-performance-workload.md)
+[controlled session performance workload](https://github.com/FrauH0lle/mevedel/blob/master/benchmark/session-performance-workload.md)
 exercises the native ApplyPatch tool, a child-agent permission request, retained
 agent coordination, focused Bash tests, and an ignored-file-safe Elisp Xref
 search.  It defines normal, profiler-only, and full-debug runs from equivalent
