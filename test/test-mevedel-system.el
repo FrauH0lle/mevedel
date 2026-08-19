@@ -43,6 +43,7 @@
   (let ((prompt (mevedel-system-build-prompt 'buddy :session nil)))
     (should (string-match-p "reviewing edits" prompt))
     (should (string-match-p "still typing" prompt))
+    (should-not (string-match-p "read_buffer" prompt))
     (should (string-match-p "## Environment" prompt)))
 
   :doc "the guidance profile differs from the review profile in its role"

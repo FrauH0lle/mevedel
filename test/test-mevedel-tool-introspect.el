@@ -65,14 +65,6 @@
     (dolist (name test-mevedel-tool-introspect--expected-tools)
       (should (gptel-get-tool (list "introspection" name)))))
 
-  :doc "library_source check-permission returns allow unconditionally"
-  (progn
-    (mevedel-tool-introspect--register)
-    (let ((tool (mevedel-tool-get "library_source" "mevedel-introspection")))
-      (should (eq 'allow
-                  (funcall (mevedel-tool-check-permission tool)
-                           tool (list :library "subr"))))))
-
   :doc "variable_value check-permission returns ask unconditionally"
   (progn
     (mevedel-tool-introspect--register)
@@ -96,6 +88,44 @@
                (mevedel-tool-max-result-size
                 (mevedel-tool-get "manual_node_contents"
                                   "mevedel-introspection"))))))
+
+(mevedel-deftest mevedel-tool-introspect--library-source-check
+  (:doc "allows only simple library names resolved inside a local load path")
+  (let* ((root (make-temp-file "mevedel-introspection-" t))
+         (libraries (file-name-concat root "libraries"))
+         (outside (file-name-concat root "outside.el"))
+         (safe (file-name-concat libraries "safe.el"))
+         (escape (file-name-concat libraries "escape.el")))
+    (unwind-protect
+        (progn
+          (make-directory libraries)
+          (write-region ";;; safe.el\n" nil safe nil 'silent)
+          (write-region ";;; outside.el\n" nil outside nil 'silent)
+          (make-symbolic-link outside escape)
+          (let ((load-path (list libraries)))
+            (should
+             (eq 'allow
+                 (mevedel-tool-introspect--library-source-check
+                  nil '(:library "safe"))))
+            (dolist (library (list outside "../outside" "escape"
+                                   "/ssh:example.invalid:/etc/passwd"))
+              (should
+               (eq 'deny
+                   (car-safe
+                    (mevedel-tool-introspect--library-source-check
+                     nil (list :library library))))))))
+          (require 'tramp)
+          (require 'tramp-cache)
+          (let ((load-path (append
+                            (list "/ssh:example.invalid:/libraries"
+                                  libraries)
+                            load-path)))
+            (should
+             (eq 'deny
+                 (car-safe
+                  (mevedel-tool-introspect--library-source-check
+                   nil '(:library "safe"))))))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-tool-introspect)
 ;;; test-mevedel-tool-introspect.el ends here

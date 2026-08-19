@@ -348,14 +348,7 @@
     (let* ((mevedel-buddy-note--scope-buffers (list "scope-here"))
            (text (mevedel-buddy-note-serialize)))
       (should (string-match-p "mine" text))
-      (should-not (string-match-p "other project" text))))
-
-  :doc "`mevedel-buddy-note-read-buffer' refuses a buffer outside the scope"
-  (let ((buf (mevedel-test--note-buffer "scope-read" "one\n")))
-    (let ((mevedel-buddy-note--scope-buffers (list "elsewhere")))
-      (should (string-match-p
-               "not in the review scope"
-               (mevedel-buddy-note-read-buffer (buffer-name buf)))))))
+      (should-not (string-match-p "other project" text)))))
 
 
 ;;
@@ -408,7 +401,7 @@
   :doc "every tool is built and named"
   (let ((names (mapcar #'gptel-tool-name
                        (mevedel-buddy-note-tools (lambda () t)))))
-    (should (equal '("read_buffer" "add_note" "update_note" "remove_note")
+    (should (equal '("add_note" "update_note" "remove_note")
                    names)))
 
   :doc "no argument carries `:required'"
@@ -429,7 +422,7 @@
                      (seq-filter (lambda (arg) (plist-get arg :optional))
                                  (gptel-tool-args tool))))
            tools)))
-    (should (equal '("begin" "end") optional)))
+    (should-not optional))
 
   :doc "every argument declares a type and a description"
   (dolist (tool (mevedel-buddy-note-tools (lambda () t)))

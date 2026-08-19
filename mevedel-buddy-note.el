@@ -516,42 +516,6 @@ raising it again."
         "\n")))))
 
 ;;
-;;; Buffer reading
-
-(defun mevedel-buddy-note-read-buffer (buffer-name &optional begin end)
-  "Return lines BEGIN through END of BUFFER-NAME, numbered.
-
-BEGIN and END default to the whole buffer.  Reading is limited to
-buffers in the running review's scope, so a review cannot wander into
-unrelated buffers."
-  (cond
-   ((not (mevedel-buddy-note--in-scope-p buffer-name))
-    (format "Buffer %s is not in the review scope" buffer-name))
-   ((not (buffer-live-p (get-buffer buffer-name)))
-    (format "Unknown buffer: %s" buffer-name))
-   (t
-    (with-current-buffer (get-buffer buffer-name)
-      (save-excursion
-        (save-restriction
-          (widen)
-          (let* ((last (line-number-at-pos (point-max)))
-                 (from (max 1 (or begin 1)))
-                 (to (min last (or end last)))
-                 lines)
-            (goto-char (point-min))
-            (forward-line (1- from))
-            (cl-loop for line from from to to
-                     until (eobp)
-                     do (push (format "%6d  %s" line
-                                      (buffer-substring-no-properties
-                                       (line-beginning-position)
-                                       (line-end-position)))
-                              lines)
-                     (forward-line 1))
-            (string-join (nreverse lines) "\n"))))))))
-
-
-;;
 ;;; Model-facing tools
 
 (defun mevedel-buddy-note--live-tool (currentp function)
@@ -577,20 +541,6 @@ argument validation but no permission check, no snapshot, and no
 persistence, and nothing outside a Buddy review may call them."
   (require 'gptel)
   (list
-   (gptel-make-tool
-    :name "read_buffer"
-    :function (mevedel-buddy-note--live-tool currentp #'mevedel-buddy-note-read-buffer)
-    :description
-    (concat "Read numbered lines from a buffer in the current review. "
-            "Use it when the diff does not give you enough context to be "
-            "certain about a problem.")
-    :args '((:name "buffer_name" :type string
-             :description "Name of the buffer to read.")
-            (:name "begin" :type integer :optional t
-             :description "First line to read.  Omit to start at the top.")
-            (:name "end" :type integer :optional t
-             :description "Last line to read.  Omit to read to the end."))
-    :category "buddy")
    (gptel-make-tool
     :name "add_note"
     :function (mevedel-buddy-note--live-tool currentp #'mevedel-buddy-note-add)
