@@ -3491,8 +3491,6 @@ Empty string when the turn contains only whitespace or markers."
 (autoload 'mevedel-view--decorate-markdown-in-range
   "mevedel-view-markdown")
 (autoload 'mevedel-view--linkify-paths-in-range "mevedel-view-markdown")
-(autoload 'mevedel-view--prettify-markdown-tables-in-range
-  "mevedel-view-markdown")
 
 (defun mevedel-view--inline-skill-prompt-summary-body (text)
   "Return collapsed prompt body for inline-skill TEXT, or nil."

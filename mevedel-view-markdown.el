@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Owns Markdown tables, links, local images, paths, and fenced source panels
-;; in mevedel views.
+;; Owns Markdown links, local images, paths, and fenced source panels in
+;; mevedel views.
 
 ;;; Code:
 
@@ -290,226 +290,6 @@ True for linkify-exempt text and for positions inside RANGES."
   (or (mevedel-view--linkify-exempt-p position)
       (mevedel-view--position-in-ranges-p position ranges)))
 
-(defconst mevedel-view--markdown-table-line-regexp
-  "^[ \t]*|.*|[ \t]*$"
-  "Regexp matching one simple Markdown pipe table line.")
-
-(defun mevedel-view--markdown-table-row-cells (start end)
-  "Return Markdown table cells between START and END.
-Pipes inside simple backtick code spans or after backslash escapes are
-not treated as delimiters."
-  (let (cells)
-    (save-excursion
-      (goto-char start)
-      (skip-chars-forward " \t" end)
-      (when (and (< (point) end) (eq (char-after) ?|))
-        (forward-char 1)
-        (let ((cell-start (point)))
-          (while (< (point) end)
-            (let ((ch (char-after)))
-              (cond
-               ((eq ch ?\\)
-                (forward-char 1)
-                (when (< (point) end)
-                  (forward-char 1)))
-               ((eq ch ?`)
-                (let ((ticks-start (point)))
-                  (skip-chars-forward "`" end)
-                  (let* ((ticks (buffer-substring-no-properties
-                                 ticks-start (point)))
-                         (close (save-excursion
-                                  (search-forward ticks end t))))
-                    (when close
-                      (goto-char close)))))
-               ((eq ch ?|)
-                (push (list :start cell-start
-                            :end (point)
-                            :content (buffer-substring-no-properties
-                                      cell-start (point)))
-                      cells)
-                (forward-char 1)
-                (setq cell-start (point)))
-               (t
-                (forward-char 1))))))))
-    (nreverse cells)))
-
-(defun mevedel-view--markdown-table-separator-row-p (cells)
-  "Return non-nil when CELLS are a Markdown table separator row."
-  (let ((ok cells))
-    (dolist (cell cells ok)
-      (let ((content (string-trim (plist-get cell :content))))
-        (unless (and (string-match-p "-" content)
-                     (string-match-p "\\`[:-]+\\'" content))
-          (setq ok nil))))))
-
-(defun mevedel-view--markdown-table-unmatched-backtick-p (text)
-  "Return non-nil when TEXT contains an unmatched backtick run."
-  (let ((pos 0)
-        unmatched)
-    (while (and (not unmatched)
-                (string-match "`+" text pos))
-      (let* ((ticks (match-string 0 text))
-             (after (match-end 0))
-             (close (string-search ticks text after)))
-        (if close
-            (setq pos (+ close (length ticks)))
-          (setq unmatched t))))
-    unmatched))
-
-(defun mevedel-view--markdown-table-visible-width (text)
-  "Return a cheap visible width estimate for Markdown table cell TEXT."
-  (let ((text (string-trim (or text ""))))
-    (setq text
-          (replace-regexp-in-string
-           "\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))" "\\1" text))
-    (setq text
-          (replace-regexp-in-string
-           "\\(?:\\*\\*\\|__\\)" "" text))
-    (string-width text)))
-
-(defun mevedel-view--markdown-table-normalize-cell-face (cell)
-  "Render malformed Markdown table CELL as literal table text."
-  (when (mevedel-view--markdown-table-unmatched-backtick-p
-         (plist-get cell :content))
-    (let ((start (plist-get cell :start))
-          (end (plist-get cell :end)))
-      (remove-text-properties
-       start end
-       '(face nil font-lock-face nil display nil invisible nil composition nil))
-      (put-text-property start end 'font-lock-face 'markdown-table-face))))
-
-(defun mevedel-view--markdown-table-valid-p (rows)
-  "Return non-nil when ROWS form one simple Markdown table."
-  (let ((count (and rows (length (plist-get (car rows) :cells))))
-        (ok (and (>= (length rows) 2)
-                 (not (plist-get (car rows) :separator))
-                 (plist-get (nth 1 rows) :separator))))
-    (dolist (row rows ok)
-      (unless (= count (length (plist-get row :cells)))
-        (setq ok nil)))))
-
-(defun mevedel-view--markdown-table-collect (start end)
-  "Return simple Markdown tables between START and END."
-  (let ((code-ranges (mevedel-view--src-block-body-ranges start end))
-        tables)
-    (save-excursion
-      (goto-char start)
-      (beginning-of-line)
-      (while (< (point) end)
-        (let ((line-start (line-beginning-position)))
-          (if (or (mevedel-view--decoration-blocked-p line-start code-ranges)
-                  (not (looking-at mevedel-view--markdown-table-line-regexp)))
-              (forward-line 1)
-            (let ((table-start line-start)
-                  rows)
-              (while (and (< (point) end)
-                          (not (mevedel-view--decoration-blocked-p
-                                (line-beginning-position) code-ranges))
-                          (looking-at mevedel-view--markdown-table-line-regexp))
-                (let* ((row-start (line-beginning-position))
-                       (row-end (line-end-position))
-                       (cells (mevedel-view--markdown-table-row-cells
-                               row-start row-end)))
-                  (push (list :start row-start
-                              :end row-end
-                              :cells cells
-                              :separator
-                              (mevedel-view--markdown-table-separator-row-p
-                               cells))
-                        rows))
-                (forward-line 1))
-              (setq rows (nreverse rows))
-              (when (mevedel-view--markdown-table-valid-p rows)
-                (push (list :start table-start
-                            :end (plist-get (car (last rows)) :end)
-                            :rows rows)
-                      tables)))))))
-    (nreverse tables)))
-
-(defun mevedel-view--markdown-table-widths (rows)
-  "Return visible column widths for Markdown table ROWS."
-  (let* ((count (length (plist-get (car rows) :cells)))
-         (widths (make-vector count 0)))
-    (dolist (row rows)
-      (unless (plist-get row :separator)
-        (let ((i 0))
-          (dolist (cell (plist-get row :cells))
-            (aset widths i
-                  (max (aref widths i)
-                       (mevedel-view--markdown-table-visible-width
-                        (plist-get cell :content))))
-            (setq i (1+ i))))))
-    (append widths nil)))
-
-(defconst mevedel-view--markdown-table-pad-properties
-  '(face
-    font-lock-face
-    mevedel-view-source
-    mevedel-view-source-key
-    mevedel-view-type
-    mevedel-view-collapsed
-    mevedel-view-turn-id
-    read-only
-    keymap
-    front-sticky
-    rear-nonsticky)
-  "Text properties copied onto inserted Markdown table padding.")
-
-(defun mevedel-view--selected-text-properties (position properties)
-  "Return plist of PROPERTIES present at POSITION."
-  (let (props)
-    (dolist (prop properties)
-      (let ((value (get-text-property position prop)))
-        (when value
-          (setq props (plist-put props prop value)))))
-    props))
-
-(defun mevedel-view--markdown-table-pad-string (text position)
-  "Return TEXT with structural properties copied from POSITION."
-  (let ((props (mevedel-view--selected-text-properties
-                position
-                mevedel-view--markdown-table-pad-properties)))
-    (if props
-        (apply #'propertize text props)
-      text)))
-
-(defun mevedel-view--prettify-markdown-table (table)
-  "Pad one Markdown TABLE so columns line up in the view."
-  (let* ((rows (plist-get table :rows))
-         (widths (mevedel-view--markdown-table-widths rows)))
-    (dolist (row (reverse rows))
-      (let ((separator (plist-get row :separator))
-            indexed
-            (i 0))
-        (dolist (cell (plist-get row :cells))
-          (push (cons i cell) indexed)
-          (setq i (1+ i)))
-        (dolist (entry indexed)
-          (let* ((index (car entry))
-                 (cell (cdr entry))
-                 (content (plist-get cell :content))
-                 (target (if separator
-                             (+ 2 (nth index widths))
-                           (nth index widths)))
-                 (width (if separator
-                            (string-width (string-trim content))
-                          (mevedel-view--markdown-table-visible-width
-                           content)))
-                 (pad (- target width)))
-            (mevedel-view--markdown-table-normalize-cell-face cell)
-            (when (> pad 0)
-              (goto-char (plist-get cell :end))
-              (insert
-               (mevedel-view--markdown-table-pad-string
-                (make-string pad (if separator ?- ?\s))
-                (if (> (point) (point-min)) (1- (point)) (point)))))))))))
-
-(defun mevedel-view--prettify-markdown-tables-in-range (start end)
-  "Pad Markdown pipe tables between START and END."
-  (save-excursion
-    (dolist (table (reverse (mevedel-view--markdown-table-collect start end)))
-      (mevedel-view--prettify-markdown-table table))))
-
 (defconst mevedel-view--image-extensions
   '("png" "jpg" "jpeg" "gif" "webp")
   "Image filename extensions rendered inline in the view.")
@@ -746,7 +526,6 @@ file.el#L12."
     (unwind-protect
         (progn
           (mevedel-view--decorate-code-blocks-in-range start end-marker)
-          (mevedel-view--prettify-markdown-tables-in-range start end-marker)
           (mevedel-view--decorate-local-images-in-range start end-marker)
           (mevedel-view--render-markdown-url-links-in-range start end-marker)
           (mevedel-view--linkify-paths-in-range start end-marker))
@@ -759,6 +538,14 @@ file.el#L12."
     (when (and start end (<= start end))
       (kill-new (buffer-substring-no-properties start end))
       (message "Copied"))))
+
+(defun mevedel-view--selected-text-properties (position properties)
+  "Return plist of PROPERTIES present at POSITION."
+  (let (props)
+    (dolist (prop properties)
+      (when-let* ((value (get-text-property position prop)))
+        (setq props (plist-put props prop value))))
+    props))
 
 (defconst mevedel-view--source-block-carried-properties
   '(mevedel-view-source

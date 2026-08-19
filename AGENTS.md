@@ -172,7 +172,7 @@ Chat / view
   mevedel-collaboration.el    live browser room and lifecycle facade
   mevedel-collaboration-projection.el canonical browser transcript projection
   mevedel-collaboration-transport.el sealed relay WebSocket client
-  mevedel-view-markdown.el    Markdown tables, links, images, paths, source panels
+  mevedel-view-markdown.el    Markdown links, images, paths, source panels
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
   mevedel-permissions-list.el remembered authority cockpit and per-row revoke
   mevedel-overlays.el         instruction overlays (references/directives)
