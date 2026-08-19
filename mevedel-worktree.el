@@ -346,66 +346,6 @@
     ('not-ignored "not ignored")
     (_ "unknown")))
 
-(defun mevedel-worktree--format-worktree-entry (entry directory)
-  "Format one parsed Git worktree ENTRY for target DIRECTORY."
-  (format "- %s [%s]"
-          (or (and-let* ((path (plist-get entry :path)))
-                (mevedel-worktree--native-path path directory))
-              "unknown")
-          (or (plist-get entry :branch)
-              (and (plist-get entry :detached)
-                   (format "detached %s"
-                           (or (plist-get entry :head) "HEAD")))
-              (plist-get entry :head)
-              "unknown")))
-
-(defun mevedel-worktree--format-status (status)
-  "Format collected worktree STATUS for display."
-  (let* ((session (plist-get status :session))
-         (branch (plist-get status :branch))
-         (head (plist-get status :head))
-         (worktrees (plist-get status :worktrees)))
-    (string-join
-     (append
-      (list
-       "Worktree status"
-       (format "Repository: %s"
-               (or (and-let* ((root (plist-get status :repo-root)))
-                     (mevedel-worktree--native-path
-                      root (plist-get status :directory)))
-                   "not a Git repository"))
-       (format "Current session: %s"
-               (if session (mevedel-session-name session) "none"))
-       (format "Current directory: %s"
-               (mevedel-worktree--native-path
-                (plist-get status :directory)
-                (plist-get status :directory)))
-       (format "Isolation: %s"
-               (mevedel-worktree--isolation-label
-                (plist-get status :isolation)))
-       (format "Branch: %s"
-               (cond
-                (branch branch)
-                (head (format "detached at %s" head))
-                (t "unavailable")))
-       (format ".worktrees/: %s"
-               (mevedel-worktree--ignore-label
-                (plist-get status :ignore-state)))
-       (format "Dirty source checkout: %s"
-               (if (plist-get status :dirty-p) "yes" "no"))
-       "Existing worktrees:")
-      (if worktrees
-          (mapcar
-           (lambda (entry)
-             (mevedel-worktree--format-worktree-entry
-              entry (plist-get status :directory)))
-           worktrees)
-        '("- none"))
-      (list
-       "Usage: /worktree status | /worktree create [NAME] [--for \"purpose\"] [--clean]"))
-     "\n")))
-
-
 ;;
 ;;; Surface
 

@@ -618,118 +618,7 @@
 
 
 ;;
-;;; Status
-
-(mevedel-deftest mevedel-worktree--format-status ()
-  ,test
-  (test)
-
-  :doc "reports normal checkout status"
-  (let* ((root (file-name-as-directory
-                (make-temp-file "mevedel-worktree-status-" t)))
-         (responses nil))
-    (unwind-protect
-        (mevedel-worktree-test--with-session root
-          (cl-letf (((symbol-function 'mevedel-worktree--git-result)
-                     (lambda (_dir &rest args)
-                       (or (cdr (assoc args responses))
-                           (mevedel-worktree-test--base-response
-                            root args)))))
-            (let ((out (mevedel-worktree--format-status
-                        (mevedel-worktree--collect-status))))
-              (should (string-match-p "Isolation: normal checkout" out))
-              (should (string-match-p "Current session: main" out))
-              (should (string-match-p
-                       "Usage: /worktree status | /worktree create"
-                       out)))))
-      (delete-directory root t)))
-
-  :doc "reports linked worktree status"
-  (let* ((root (file-name-as-directory
-                (make-temp-file "mevedel-worktree-linked-" t)))
-         (responses
-          `((("rev-parse" "--git-dir")
-             . ,(mevedel-worktree-test--git-result
-                 (file-name-concat root ".git" "worktrees" "foo"))))))
-    (unwind-protect
-        (progn
-          (make-directory (file-name-concat root ".git" "worktrees" "foo") t)
-          (mevedel-worktree-test--with-session root
-            (cl-letf (((symbol-function 'mevedel-worktree--git-result)
-                       (lambda (_dir &rest args)
-                         (or (cdr (assoc args responses))
-                             (mevedel-worktree-test--base-response
-                              root args)))))
-              (should (string-match-p
-                       "Isolation: linked worktree"
-                       (mevedel-worktree--format-status
-                        (mevedel-worktree--collect-status)))))))
-      (delete-directory root t)))
-
-  :doc "reports submodule status"
-  (let* ((root (file-name-as-directory
-                (make-temp-file "mevedel-worktree-submodule-" t)))
-         (responses
-          `((("rev-parse" "--show-superproject-working-tree")
-             . ,(mevedel-worktree-test--git-result "/super/")))))
-    (unwind-protect
-        (mevedel-worktree-test--with-session root
-          (cl-letf (((symbol-function 'mevedel-worktree--git-result)
-                     (lambda (_dir &rest args)
-                       (or (cdr (assoc args responses))
-                           (mevedel-worktree-test--base-response
-                            root args)))))
-            (should (string-match-p
-                     "Isolation: submodule"
-                     (mevedel-worktree--format-status
-                      (mevedel-worktree--collect-status))))))
-      (delete-directory root t)))
-
-  :doc "reports non-Git status without blocking on active request"
-  (let* ((root (file-name-as-directory
-                (make-temp-file "mevedel-worktree-notgit-" t)))
-         (responses
-          `((("rev-parse" "--show-toplevel")
-             . ,(mevedel-worktree-test--git-result "fatal" 128)))))
-    (unwind-protect
-        (mevedel-worktree-test--with-session root
-          (setq-local mevedel--current-request t)
-          (cl-letf (((symbol-function 'mevedel-worktree--git-result)
-                     (lambda (_dir &rest args)
-                       (or (cdr (assoc args responses))
-                           (mevedel-worktree-test--base-response
-                            root args)))))
-            (should (string-match-p
-                     "Isolation: not a Git repository"
-                     (mevedel-worktree--format-status
-                      (mevedel-worktree--collect-status))))))
-      (delete-directory root t)))
-
-  :doc "renders remote worktree paths in the target-native domain"
-  (let* ((root (file-name-as-directory
-                (make-temp-file "mevedel-worktree-status-remote-" t)))
-         (remote-root (format "/mevedelmock:status:%s" root))
-         (remote-child (file-name-concat
-                        remote-root ".worktrees" "topic")))
-    (unwind-protect
-        (mevedel-test--with-local-shell-tramp '("status")
-          (let ((out
-                 (mevedel-worktree--format-status
-                  (list :directory remote-root
-                        :repo-root remote-root
-                        :isolation 'normal-checkout
-                        :branch "main"
-                        :ignore-state 'ignored
-                        :worktrees
-                        (list (list :path remote-child
-                                    :branch "topic"))))))
-            (should (string-match-p (regexp-quote root) out))
-            (should (string-match-p
-                     (regexp-quote
-                      (file-name-concat root ".worktrees" "topic"))
-                     out))
-            (should-not (string-match-p "/mevedelmock:" out))))
-      (delete-directory root t))))
+;;; Status collection
 
 (mevedel-deftest mevedel-worktree--collect-status ()
   ,test
@@ -1749,6 +1638,10 @@
 (mevedel-deftest mevedel-cmd--worktree/status-surface ()
   ,test
   (test)
+
+  :doc "keeps the superseded string renderer deleted"
+  (should-not (fboundp 'mevedel-worktree--format-worktree-entry))
+  (should-not (fboundp 'mevedel-worktree--format-status))
 
   :doc "routes blank and status commands to the worktree surface"
   (with-temp-buffer
