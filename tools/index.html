@@ -1,0 +1,5504 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Working documentation for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/tools/">
+      
+      
+        <link rel="prev" href="../telemetry/">
+      
+      
+        <link rel="next" href="../view/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Tools - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#tools" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Tools
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    mevedel documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Address-to-resource
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-agent system
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit Messages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation Compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompt design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Persistent Memory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    @-mention system
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permission system
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plan mode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Session Persistence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Session Telemetry and Profiler Runs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#tool-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool pipeline
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool pipeline">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tool-input-validation-and-repair" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool input validation and repair
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resource-addresses-in-filesystem-shaped-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource addresses in filesystem-shaped tools
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Resource addresses in filesystem-shaped tools">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#interaction-tool-ownership" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interaction tool ownership
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#native-tools-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Native Tools Surface
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Native Tools Surface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hook-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hook boundaries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hazard-post-handler-steps-must-read-from-context-not-buffer-local" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hazard: post-handler steps must read from context, not buffer-local
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-renderers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool renderers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool renderers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#render-transforms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Render transforms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#render-data-side-channel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Render-data side channel
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-result-persistence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool result persistence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#external-helper-confinement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        External helper confinement
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managed-bash-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Managed Bash execution
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Managed Bash execution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#real-transport-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Real transport acceptance
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eval-execution-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Eval execution scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    View Buffer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adr
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_23" id="__nav_23_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Adr
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001-worktree-command-and-skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worktree command and skill
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002-agents-resource-roots/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Resource Roots
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0003-plugin-activation-enables-components/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugin Activation Enables Implemented Components
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0004-session-cockpit-owns-view-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Session cockpit owns view status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0005-pending-plugin-hook-consent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pending Plugin Hook Consent Interrupts Interactive Startup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0006-tabulated-cockpit-surfaces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tabulated Cockpit Surfaces Share Table Plumbing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0007-worktree-has-status-menu-and-list-surface/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worktree Has A Status Menu And List Surface
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0008-skill-roster-is-prompt-context/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skill Roster Is Prompt Context
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0009-hook-audit-surfaces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hook Audit Surfaces
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0010-worktree-session-owns-plan-execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worktree session owns plan execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0011-repair-model-tool-input-before-pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Repair model tool input before pipeline execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0012-layer-bash-command-and-resource-authorization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layer Bash command and resource authorization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0013-full-auto-includes-unconfined-live-eval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Full-auto includes unconfined live Eval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0014-permission-guardian-never-grants-authority/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permission guardian never grants authority
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0015-best-effort-confinement-falls-back-only-before-execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Best-effort confinement falls back only before execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0016-deny-network-by-default-and-escalate-additively/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deny network by default and escalate additively
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0017-confine-protected-paths-by-default/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Confine protected paths by default
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0018-reuse-codex-execution-escalation-vocabulary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reuse Codex execution escalation vocabulary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0019-remove-model-visible-request-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Remove model-visible RequestAccess
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0020-run-bash-through-a-login-shell/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run Bash through a login shell
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0021-isolate-guardian-prompt-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Isolate guardian prompt boundaries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0022-bound-automatic-plan-revision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bound automatic plan revision
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0023-goal-outcomes-outrank-plan-details/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goal outcomes outrank plan details
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0024-yield-bash-through-session-owned-executions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Yield Bash through session-owned executions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0025-agents-execute-asynchronously/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents execute asynchronously
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0026-remove-the-privileged-coordinator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Remove the privileged coordinator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0027-restrict-agent-messaging-to-tree-edges/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restrict agent messaging to tree edges
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0028-support-nested-agent-delegation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Support nested agent delegation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0029-limit-active-agent-turns-per-session-tree/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limit active agent turns per session tree
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0030-agent-tool-grants-transitive-delegation-authority/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent tool grants transitive delegation authority
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0031-agent-roles-are-optional-overlays/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent roles are optional overlays
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0032-agent-follow-ups-retain-conversation-context/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent follow-ups retain conversation context
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0033-retain-settled-agents-for-the-session-lifetime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retain settled agents for the session lifetime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0034-address-agents-by-canonical-task-path/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Address agents by canonical task path
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0035-separate-agent-messages-from-follow-up-work/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Separate agent messages from follow-up work
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0036-wait-for-agents-explicitly/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wait for agents explicitly
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0037-allow-tree-wide-agent-communication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Allow tree-wide agent communication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0038-list-the-addressable-agent-roster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    List the addressable agent roster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0039-interrupt-agent-turns-without-removing-agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interrupt agent turns without removing agents
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0040-fork-an-explicit-parent-context-snapshot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fork an explicit parent context snapshot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0041-allow-explicit-agent-model-overrides/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Allow explicit agent model overrides
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0042-use-one-minimal-agent-spawn-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use one minimal agent spawn schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0043-split-agent-observation-from-control-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Split agent observation from control tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0044-bound-agent-waits-with-a-successful-timeout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bound agent waits with a successful timeout
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0045-address-agent-tools-only-by-path/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Address agent tools only by path
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0046-use-plain-text-agent-messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use plain-text agent messages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0047-keep-agent-command-acknowledgements-minimal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep agent command acknowledgements minimal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0048-deliver-agent-mail-separately-from-wait-results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deliver agent mail separately from wait results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0049-persist-unread-agent-mail/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Persist unread agent mail
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0050-return-every-agent-turn-result-to-the-spawn-parent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Return every agent turn result to the spawn parent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0051-use-one-agent-result-envelope/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use one agent result envelope
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0052-bound-inline-agent-results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bound inline agent results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0053-limit-automatic-agent-roster-context/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limit automatic agent roster context
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0054-render-agent-activity-from-canonical-events/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Render agent activity from canonical events
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0055-charge-capacity-only-for-new-follow-up-turns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Charge capacity only for new follow-up turns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0056-fork-effective-post-compaction-context/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fork effective post-compaction context
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0057-compact-agent-conversations-independently/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compact agent conversations independently
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0058-freeze-agent-role-configuration-at-spawn/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Freeze agent role configuration at spawn
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0059-centralize-agent-permissions-in-the-root-session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Centralize agent permissions in the root session
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0060-centralize-agent-interactions-in-the-root-session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Centralize agent interactions in the root session
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0061-recover-abandoned-agent-turns-as-interrupted/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recover abandoned agent turns as interrupted
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0062-do-not-clone-live-agents-into-session-forks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Do not clone live agents into session forks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0063-persist-the-agent-registry-explicitly/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Persist the agent registry explicitly
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0064-publish-agent-spawns-atomically/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Publish agent spawns atomically
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0065-give-worker-an-independent-implementation-toolset/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Give worker an independent implementation toolset
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0066-hooks-follow-lifecycle-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hooks Follow Lifecycle Boundaries, Not Model Requests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0067-separate-planning-from-goal-execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Separate planning from Goal execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0068-keep-goal-authority-outside-conversation-history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep Goal authority outside conversation history
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0069-drive-goals-with-idle-continuation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Drive Goals with idle continuation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0070-compose-system-prompts-from-ordered-profiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compose system prompts from ordered profiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0071-isolate-agent-tasks-by-default/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Isolate agent tasks by default
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0072-make-rewind-in-place-undo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Make rewind in-place undo
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0073-identify-fork-points-stably/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identify fork points independently of turn numbers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0074-keep-direct-user-authority-above-heuristics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep direct user authority above heuristics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0075-use-one-canonical-permission-mode-vocabulary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use one canonical permission-mode vocabulary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0076-name-fail-open-confinement-best-effort/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Name fail-open confinement best-effort
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0077-scope-sandbox-policy-to-the-session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scope sandbox policy to the session
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0078-default-to-best-effort-confinement/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Default to best-effort confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0079-require-an-explicit-escalation-retry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Require an explicit escalation retry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0080-do-not-depend-on-guardian-availability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Do not depend on guardian availability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0081-full-auto-authorizes-live-eval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Full-auto authorizes live Eval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0082-full-auto-authorizes-additive-network-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Full-auto authorizes additive network access
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0083-store-network-authority-in-qualified-tool-rules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Store network authority in qualified tool rules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0084-limit-reusable-full-escalation-to-literal-operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limit reusable full escalation to literal operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0085-full-auto-permits-destructive-workspace-writes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Full-auto permits destructive workspace writes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0086-reuse-approved-execution-permission-profiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reuse approved execution permission profiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0087-keep-directive-identity-outside-source-overlays/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep directive identity outside source overlays
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0088-keep-directive-activity-outside-main-chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep directive activity outside main chat
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0089-make-revision-state-dependent-implementation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Make revision state-dependent implementation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0090-enforce-discussion-as-a-read-only-capability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enforce discussion as a read-only capability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0091-render-directive-turns-in-the-shared-session-view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Render directive turns in the shared session view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0092-use-one-patch-oriented-file-mutation-tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use one patch-oriented file mutation tool
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0093-treat-btw-as-an-ephemeral-side-conversation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Treat /btw as an ephemeral side conversation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0094-centralize-context-summary-generation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Centralize context-summary generation without centralizing workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0095-select-child-agent-context-explicitly/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Select child-agent context explicitly
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0096-bind-each-session-to-one-execution-target/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bind each session to one execution target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0097-store-durable-sessions-with-their-execution-target/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Store durable sessions with their execution target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0098-store-unsettled-mutation-in-the-session-lease/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Store unsettled mutation in the session lease
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0099-project-live-collaboration-from-host-authoritative-state/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project live collaboration from host-authoritative state
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0100-portable-project-session-authority/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use one portable authority for project sessions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0101-carry-control-operations-as-one-pinned-program/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Carry control operations as one pinned program
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0102-settle-remote-stops-by-zombie-aware-probing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settle remote stops by zombie-aware probing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0103-spawn-remote-bash-on-a-private-channel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Spawn remote Bash on a private channel
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0104-keep-resource-addresses-closed-and-capability-neutral/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep resource addresses closed and capability-neutral
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0105-cockpit-surfaces-follow-three-archetypes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cockpit Surfaces Follow Three Archetypes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0106-directive-frame-is-a-child-frame/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Directive Frame Is A Child Frame, Not An Overlay
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0107-non-owner-buffers-follow-published-state/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Non-Owner Buffers Follow Published State
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0108-buddy-notes-are-not-instructions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes are not instructions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_24" >
+        
+          
+          <label class="md-nav__link" for="__nav_24" id="__nav_24_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_24_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_24">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Issue tracker: Local Markdown
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage Labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#tool-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool pipeline
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool pipeline">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tool-input-validation-and-repair" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool input validation and repair
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resource-addresses-in-filesystem-shaped-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource addresses in filesystem-shaped tools
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Resource addresses in filesystem-shaped tools">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#interaction-tool-ownership" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interaction tool ownership
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#native-tools-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Native Tools Surface
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Native Tools Surface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hook-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hook boundaries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hazard-post-handler-steps-must-read-from-context-not-buffer-local" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hazard: post-handler steps must read from context, not buffer-local
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-renderers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool renderers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool renderers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#render-transforms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Render transforms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#render-data-side-channel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Render-data side channel
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-result-persistence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool result persistence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#external-helper-confinement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        External helper confinement
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managed-bash-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Managed Bash execution
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Managed Bash execution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#real-transport-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Real transport acceptance
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#eval-execution-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Eval execution scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/tools.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="tools">Tools<a class="headerlink" href="#tools" title="Permanent link">&para;</a></h1>
+<h2 id="tool-pipeline">Tool pipeline<a class="headerlink" href="#tool-pipeline" title="Permanent link">&para;</a></h2>
+<p>All tools go through <code>mevedel-pipeline-run-tool</code>:</p>
+<pre class="mermaid"><code>flowchart TD
+    R[Raw model call] --&gt; S[Validate, then repair if needed]
+    S --&gt; A[Validate final args]
+    A --&gt; B[PreToolUse hooks]
+    B --&gt; C[Permission check]
+    C --&gt; D{Allowed?}
+    D -- No --&gt; E[PermissionDenied hooks]
+    D -- Ask --&gt; Q[PermissionRequest hooks]
+    Q -- Ask --&gt; F[Permission queue]
+    Q -- Deny --&gt; E
+    Q -- Allow --&gt; G
+    F --&gt; C
+    D -- Yes --&gt; G[Snapshot file when declared]
+    G --&gt; H[Handler]
+    H --&gt; I[Append repair reminder]
+    I --&gt; J[Render transform]
+    J --&gt; K[Persist oversized result]
+    K --&gt; L[Specialist nudges]
+    L --&gt; M[PostToolUse or failure hooks]
+    M --&gt; N[Re-persist capped result]
+    N --&gt; O[Append Goal budget warning when crossed]
+    O --&gt; P[Attach render-data]
+    P --&gt; Q[Attach media data]</code></pre>
+<p>Synchronous handlers receive <code>(args)</code> and asynchronous handlers receive
+<code>(callback args)</code>, where args is a keyword plist. The
+pipeline handles all cross-cutting concerns; handlers contain no
+boilerplate for validation, hooks, permissions, snapshots, or
+persistence.</p>
+<p>Request teardown cancels the currently active pipeline step. The tool callback
+then receives one canonical error result, <code>tool-finished</code> records one error,
+and the open step span records one cancelled terminal outcome. A late async
+continuation from the cancelled primitive is ignored.</p>
+<p>Tool-result media has one focused boundary in <code>mevedel-tool-media.el</code>.
+It validates and sanitizes captured media records, stores their bytes behind
+opaque transcript references, restores trusted records during replay, removes
+validated media from hook-visible text, preserves marker-shaped ordinary text,
+and converts restored records into each provider's native payload shape.
+<code>mevedel-pipeline.el</code> supplies the session's
+tool-results directory and calls that boundary from the attach, hook, render,
+and gptel parse steps; it does not construct provider-specific media blocks.
+The transcript reference contains only an opaque record id and its owning tool
+use id. Replay never rereads the original filesystem path. Remote records are
+published and replayed through the session artifact manifest; a fixed-path
+cache is never an authority fallback.</p>
+<p>Important tool metadata:</p>
+<ul>
+<li>Behavior: <code>:read-only-p</code>, <code>:snapshot-p</code>, <code>:destructive-p</code>, <code>:async-p</code></li>
+<li>Permissions: <code>:check-permission</code>, <code>:check-permission-async</code>,
+  <code>:get-path</code>, <code>:get-paths</code>, <code>:get-pattern</code>, <code>:get-domain</code>, <code>:get-name</code></li>
+<li>Loading/grouping: <code>:category</code>, <code>:groups</code>, <code>:wrap</code>, <code>:prompt-file</code></li>
+<li>Input contracts: <code>:args</code></li>
+<li>Display/output: <code>:summary</code>, <code>:max-result-size</code>, <code>:render-transform</code>,
+  <code>:renderer</code></li>
+</ul>
+<p><code>:snapshot-p</code> is an explicit declaration for file-mutating tools whose
+before-state participates in the final patch. <code>ApplyPatch</code> declares it and
+uses <code>:get-paths</code> so permission and snapshot steps cover every affected path.</p>
+<p>During directive implementation, the pipeline also records conservative
+untracked-effect markers for non-read-only execution tools and agent dispatch.
+Those markers do not attempt to infer changed paths; they prevent the final
+attempt capture from claiming completeness and become explicit Rewind gaps.</p>
+<h3 id="tool-input-validation-and-repair">Tool input validation and repair<a class="headerlink" href="#tool-input-validation-and-repair" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-tool-repair.el</code> mediates raw model calls before gptel dispatches
+them into the pipeline. The temporary provider bridge lives in
+<code>mevedel-tool-repair-gptel.el</code>; audit and telemetry live in
+<code>mevedel-tool-repair-diagnostics.el</code>. The core first validates the call unchanged. Valid input is
+never rewritten. Only invalid model-produced input gets one atomic repair
+attempt; the pipeline then validates the committed arguments again before
+hooks or permissions run. Direct programmatic calls and arguments rewritten
+by <code>PreToolUse</code> remain validation-only.</p>
+<p>While gptel decodes provider responses, mevedel preserves JSON <code>null</code> as a
+distinct sentinel. Before pre-tool hooks it restores decoded empty objects in
+the common tool-call representation. This temporary adapter covers gptel's
+tool-capable backends in one place and can be removed when gptel's shared JSON
+string decoder preserves nulls itself.</p>
+<p>The generic repair catalogue is deliberately small and ordered:</p>
+<ol>
+<li>omit explicit <code>null</code> from optional properties;</li>
+<li>parse exact JSON strings when the parsed value satisfies the expected
+   non-string contract;</li>
+<li>wrap a schema-valid singleton where an array is expected;</li>
+<li>replace an empty object placeholder with an empty array only for optional
+   arrays that permit zero items;</li>
+<li>unwrap an exact Markdown HTTP(S) auto-link in the final component of a
+   semantic filesystem path.</li>
+</ol>
+<p>Repairs never invent required values and do not coerce arbitrary strings to
+numbers or booleans: the JSON parser must consume the exact input and the
+result must validate. Required <code>null</code> and required empty-object placeholders
+therefore remain invalid. Generic repairs run as one bounded, ordered pass.
+The entire candidate is committed only when final validation succeeds;
+otherwise the model gets bounded, value-free retry guidance and no tentative
+arguments run.</p>
+<p><code>path</code> is an internal semantic argument type for filesystem-only contracts.
+Provider schemas lower it to an ordinary JSON string and append the guidance
+“Pass a raw filesystem path, not Markdown or a URL.” Tools that also accept
+resource addresses use a separate path-or-resource contract, so a recognized
+<code>scheme://</code> address is not rejected as a web URL and ordinary paths retain
+their current behavior.</p>
+<p>Code-navigation tools keep filesystem access in Emacs buffers, so Imenu and
+Tree-sitter operate on remote files through the active file handler. Remote
+Xref is capability-scoped: Emacs Lisp reference search is the currently
+tested TRAMP-aware path, while definition lookup and other backends return a
+direct unsupported-backend diagnostic instead of invoking client-side
+programs. Location results are rendered as target-native paths.</p>
+<p>Committed repairs proceed without a retry and add one corrective note to the
+final tool result, including error results. If a multi-step candidate still
+fails validation, its repair audit is marked abandoned and the handler is not
+called. Both audit states contain only rule IDs, schema paths, and before/after
+shape names.</p>
+<p>Every raw model call records a redacted event on its root session with
+the actual backend, model, tool, canonical origin (<code>/root</code> or an agent path), outcome
+(<code>valid</code>, <code>repaired</code>, <code>invalid</code>, or <code>abandoned</code>), rule IDs, schema paths,
+execution state, and result classification. Argument values, paths, commands,
+prompts, schemas, validation messages, and results are excluded. The in-memory
+<code>mevedel-session-repair-log</code> is bounded by
+<code>mevedel-tool-repair-log-limit</code> (default 200). When
+<code>mevedel-tool-repair-persist-log</code> is non-nil, materialized sessions also append
+events to <code>&lt;session&gt;/repair-log.el</code>; bounded events recorded before first
+materialization are backfilled when the session directory is created.
+Remote callback entries wait for session settlement and publish through an
+atomic replacement. Failed appends warn, remain queued, and retry after the
+next successful session save. Telemetry failures never block tool execution.
+<code>mevedel-tool-input-repair-enabled</code> disables mutation while retaining
+validation and telemetry.</p>
+<p><code>mevedel-define-tool :wrap SOURCE</code> adopts an existing <code>gptel-tool</code> via
+<code>gptel-get-tool</code> on every call (so upstream changes take effect without
+rewrapping). Re-registering the same wrapped <code>(category, name)</code> replaces
+the prior mevedel wrapper, matching native tool registration.
+Preset application also resolves its tool specs from the current registry.
+Reloading a native tool therefore updates the next request's schema and
+handler instead of leaving a stale <code>gptel-tool</code> captured by an older preset.</p>
+<h2 id="resource-addresses-in-filesystem-shaped-tools">Resource addresses in filesystem-shaped tools<a class="headerlink" href="#resource-addresses-in-filesystem-shaped-tools" title="Permanent link">&para;</a></h2>
+<p>The closed resource resolver accepts the seven documented <code>scheme://</code> families
+without adding a model-facing tool. The operation matrix is deliberately
+narrow: <code>Read</code> accepts every family; <code>Glob</code> and <code>Grep</code> accept <code>local://</code>,
+<code>artifact://</code>, <code>skill://</code>, and <code>memory://</code>; <code>ApplyPatch</code> accepts <code>local://</code> and
+ordinary filesystem paths. Unsupported combinations fail explicitly. Bare
+addresses list only when the family defines a discovery listing.</p>
+<p>Resource preparation runs after repair, final validation, <code>PreToolUse</code>, and
+hook-rewrite validation, but before permission, snapshots, helper execution,
+patch review, or handlers. It returns an opaque resolved attempt and logical
+authority facts without reading content. After permission, the handler
+executes that attempt without reparsing the authored address. Malformed or
+unsupported addresses therefore stop before permission and post-use hooks;
+valid but unavailable resources follow ordinary handler failure handling.</p>
+<p>Authored addresses remain in model-visible errors, headings, search results,
+truncation notices, and persisted tool arguments. Backing paths and helper
+roots stay private. Directory-backed resource searches use the existing
+confined helper boundary with exact read roots; virtual resources stay
+in-process. A mixed local/ordinary <code>ApplyPatch</code> remains one proposal and one
+atomic review transaction outside standalone/sticky Plan mode. Standalone/sticky
+Plan mode keeps all-local <code>ApplyPatch</code> available, including proposals from
+retained agents, but rejects any ordinary, non-local, or bare endpoint before
+local materialization. Mixed local/ordinary and ordinary-only proposals
+therefore fail before either side is touched. Directive Planning remains
+strictly read-only and does not allow <code>ApplyPatch</code>, including all-local
+proposals, or <code>Eval</code>. See
+<a href="../address-to-resource/"><code>address-to-resource.md</code></a> for canonical grammar,
+freshness, and lifecycle contracts.</p>
+<p>Tools carry <code>:groups</code>. <code>(:deferred GROUP)</code> in a preset's or agent's tool
+list pulls every tool tagged with GROUP into the session's deferred set.
+<code>mevedel-preset-extra-tool-specs</code> / <code>mevedel-agent-extra-tool-specs</code> add
+specs without redefining the preset/agent.</p>
+<p><code>ToolSearch(load=true)</code> queues matching deferred tools for the next tool
+payload update and reports them as available now so the model calls the
+newly loaded tool in its next tool call. Search terms can be exact tool
+names (<code>XrefReferences</code>, <code>Imenu</code>, <code>function_source</code>) or capability
+families (<code>xref</code>, <code>imenu</code>, <code>treesitter</code>, <code>elisp</code>, <code>web</code>).</p>
+<h3 id="interaction-tool-ownership">Interaction tool ownership<a class="headerlink" href="#interaction-tool-ownership" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-tool-ui.el</code> assembles the user-interaction tool surface and owns the
+Agent, FollowupAgent, InterruptAgent, ListAgents, ToolSearch, SendMessage, and
+WaitAgent adapters. Ask's questionnaire, handler, renderer, and schema live in
+<code>mevedel-tool-ask.el</code>. Exact external-path authority is part of the normal
+permission pipeline, not a model-visible tool.</p>
+<p>Agent's required inputs are <code>task_name</code> and <code>message</code>. Its optional <code>role</code>,
+<code>context</code>, <code>model</code>, and <code>effort</code> inputs are validated before reservation:
+context accepts <code>all</code>, <code>none</code>, <code>summary</code>, or positive decimal strings; model
+selectors use the shared tier/provider parser; and effort support is delegated
+to the resolved gptel model. <code>summary</code> freezes the realized parent evidence,
+omits the triggering Agent tool segment, and makes one handoff-summary request
+focused on the hook-accepted task. A valid request reserves path and capacity
+while its ordinary task hooks and optional summary prepare asynchronously. The
+path is not published until the labelled background, authoritative task,
+durable transcript, and provider dispatch succeed; cancellation or failure
+releases the reservation.
+The same shared resource-grant interface authorizes native filesystem tools and
+additive Bash/batch-Eval mounts; command authorization remains independent.
+When one Bash or batch-Eval invocation is missing both operation authority and
+additive network or exact-path authority, the pipeline presents one combined
+card. Checked capabilities are already granted; unchecked capabilities are the
+complete upgrade. Approval grants that complete request to the current
+invocation, while denial rejects it without replay or reduced execution. Full
+execution escalation uses a separate card because it disables confinement
+rather than adding a named capability.</p>
+<p>All direct user interactions share the settlement and cancellation primitive in
+<code>mevedel-interaction-prompt.el</code>. Domain owners supply their own text, keymaps,
+outcome translation, and persistence effects; the shared primitive owns only
+overlay identity, exactly-once settlement, request-local cancellation, and the
+standard frame. Ask and other child-originated interactions are attributed by
+canonical path and rendered only in the root session's interactive view; child
+transcript views remain inspection-only. Interrupting one agent request invokes
+that request's canceller and leaves sibling interactions queued.</p>
+<h2 id="native-tools-surface">Native Tools Surface<a class="headerlink" href="#native-tools-surface" title="Permanent link">&para;</a></h2>
+<p>The session cockpit <code>t Tools</code> row opens the native <code>*mevedel tools*</code> surface
+for the current main session. <code>/tools</code> and <code>/tools list</code> open the same
+surface. The buffer is read-only UI chrome, not transcript content.</p>
+<p>The tools surface shows active tools, deferred tools, temporarily loaded
+deferred tools, expired loaded tools, and the deferred-tool TTL. It also
+offers session-local lifecycle operations:</p>
+<ul>
+<li>defer an active tool for the current session;</li>
+<li>activate a deferred tool for the current session;</li>
+<li>load a deferred tool temporarily, matching <code>ToolSearch(load=true)</code> behavior;</li>
+<li>inspect loaded or expired deferred tools.</li>
+</ul>
+<p>Manual tool changes do not mutate presets or global configuration, and they
+do not rewrite already-running child agent tool state.</p>
+<p>Tool descriptions live in <code>tools/*.md</code> and are loaded via
+<code>mevedel-define-tool</code>'s <code>:prompt-file</code> keyword.</p>
+<h3 id="hook-boundaries">Hook boundaries<a class="headerlink" href="#hook-boundaries" title="Permanent link">&para;</a></h3>
+<p><code>PreToolUse</code> runs after validation so hooks see normalized args. It runs
+before permission so policy hooks can deny, force an ask, add context, or
+replace args before the permission resolver and handler see the call.</p>
+<p><code>PermissionRequest</code> runs whenever generic, Bash, Eval, or sandbox-authority
+resolution produces <code>ask</code>, immediately before shared queue admission. It can
+allow, deny, or leave the kind-specific card in place. Queue display,
+redraw, and rule-driven re-evaluation do not rerun it. <code>PermissionDenied</code>
+runs once after a final denial, carries its original provenance, and can add
+model-facing feedback or context without reopening the tool call.</p>
+<p>Post-tool hooks run after initial oversized-result persistence and specialist
+nudges, but before final render-data attachment. The specialist-nudge step is a
+thin pipeline delegation to <code>mevedel-specialist-nudges.el</code>, which owns all
+<code>Read</code>/<code>Grep</code> eligibility, family throttling, deferred <code>ToolSearch</code> guidance,
+and model-visible reminder text. Post-tool hooks receive both the raw
+handler output and the exact model-visible result. They can replace
+feedback or add context, but they cannot undo tool side effects that
+already happened. For capped tools, a second persistence/truncation pass
+runs after post-tool hooks so <code>updated_result</code> cannot reintroduce an
+oversized model-visible result.</p>
+<p>Post-use hooks imply handler execution. A successful handler emits only
+<code>PostToolUse</code>; an explicit error result, invalid return, or handler signal is
+normalized and emits only <code>PostToolUseFailure</code>. Validation failures,
+permission failures, and aborted permission interactions emit neither event.</p>
+<p>For an attributed root Goal turn, the final model-visible result receives one
+100% budget warning when cumulative provider-reported input plus output usage
+first reaches the Goal limit. This runs after final oversized-result
+persistence, so the warning remains visible even when the original result was
+capped. It is advisory: the current request and tool pipeline continue.</p>
+<h3 id="hazard-post-handler-steps-must-read-from-context-not-buffer-local">Hazard: post-handler steps must read from context, not buffer-local<a class="headerlink" href="#hazard-post-handler-steps-must-read-from-context-not-buffer-local" title="Permanent link">&para;</a></h3>
+<p>Pipeline steps that run <strong>after</strong> the handler must read session,
+workspace, and any other chat-buffer state from the pipeline context
+plist — not from <code>(current-buffer)</code> or buffer-local variables.</p>
+<p>Tool handlers may invoke the async callback from process sentinels,
+temporary buffers, or other non-chat-buffer contexts. Because steps are
+chained via callbacks, anything that runs after the handler executes in
+the callback's current buffer — often a process output or temp buffer —
+where <code>mevedel--session</code> and <code>mevedel--workspace</code> may have no
+buffer-local binding and silently fall back to <code>nil</code>. That has produced
+concrete bugs (e.g. result persistence skipped because
+<code>mevedel--workspace</code> came back <code>nil</code> inside a temp buffer).</p>
+<p>Rules of thumb:
+- Capture session/workspace once at <code>mevedel-pipeline-run-tool</code> entry
+  and thread them through the context plist.
+- Steps that run <strong>before</strong> the handler (validate, permission,
+  snapshot) are safe to use <code>current-buffer</code> — they run in the caller's
+  buffer.
+- When adding a step, check its position relative to the handler before
+  deciding whether buffer-local reads are safe.</p>
+<h2 id="tool-renderers">Tool renderers<a class="headerlink" href="#tool-renderers" title="Permanent link">&para;</a></h2>
+<p>Individual tools may ship a <code>:renderer FN-OR-ALIST</code> for rich collapsible
+views in the view buffer. Function contract:</p>
+<div class="highlight"><pre><span></span><code>(lambda (NAME ARGS RESULT RENDER-DATA) -&gt; rendering-plist-or-nil)
+</code></pre></div>
+<p>Pure function — no I/O, no mutation. Nil falls back to
+the generic renderer.</p>
+<p>Alist form dispatches on the visible result status:</p>
+<div class="highlight"><pre><span></span><code><span class="p">((</span><span class="nv">success</span><span class="w"> </span><span class="o">.</span><span class="w"> </span><span class="nv">FN</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="ne">error</span><span class="w"> </span><span class="o">.</span><span class="w"> </span><span class="nv">FN</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nv">default</span><span class="w"> </span><span class="o">.</span><span class="w"> </span><span class="nv">FN</span><span class="p">))</span>
+</code></pre></div>
+<p>The view first uses structured <code>:status</code> from render-data, then falls back to
+the visible result: <code>error</code> when <code>mevedel-view--tool-result-error-p</code> matches,
+otherwise <code>success</code>. Lookup tries the exact status first, then <code>default</code>, then
+the generic renderer. Explicit pipeline status also overrides a custom
+rendering plist's visual <code>:status</code>; without explicit status, the rendering
+plist controls only the visual marker and does not participate in dispatch.</p>
+<p>Rendering plist: <code>(:header STRING :body STRING :body-mode SYMBOL
+:status SYMBOL :expandable-p BOOL :hidden-p BOOL
+:coalesce-key STRING
+:initially-collapsed-p BOOL)</code>.
+<code>:status</code>, <code>:expandable-p</code>, <code>:hidden-p</code>, and <code>:coalesce-key</code> are optional. When
+<code>:expandable-p</code> is nil, the view inserts a compact non-toggleable event line
+and ignores <code>:body</code> and <code>:initially-collapsed-p</code>. When <code>:hidden-p</code> is
+non-nil, the view inserts nothing. Consecutive visible renderings with equal
+coalescing keys retain only the final row and append their call count; any
+other visible rendering ends the run. Validated by
+<code>mevedel-view--rendering-plist-p</code>.</p>
+<p>Well-formed tool segments always render through a registered renderer
+or the generic fallback. Malformed or unparseable tool segments keep the
+older safe fallback behavior.</p>
+<p>Renderers that remove appended specialist nudges or system reminders from
+their display body must strip only an explicit trailing appended block.
+Tool output may legitimately contain marker-shaped text, especially Read
+output with line prefixes, so renderer cleanup should first check for the
+marker and never treat arbitrary file content as hidden guidance.</p>
+<h3 id="render-transforms">Render transforms<a class="headerlink" href="#render-transforms" title="Permanent link">&para;</a></h3>
+<p>Wrapped tools may ship a <code>:render-transform FN</code> to synthesize bounded
+render metadata from string output:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span><span class="nb">lambda</span><span class="w"> </span><span class="p">(</span><span class="nv">NAME</span><span class="w"> </span><span class="nv">ARGS</span><span class="w"> </span><span class="nv">RESULT</span><span class="p">)</span><span class="w"> </span><span class="nv">-&gt;</span><span class="w"> </span><span class="nv">render-data-or-nil</span><span class="p">)</span>
+</code></pre></div>
+<p><code>RESULT</code> is the normalized string result before oversized-result
+persistence and before render/media side-channel attachment. The
+transform runs only when the handler did not already provide
+<code>:render-data</code>, only for string results whose pipeline status is not <code>error</code>,
+and never changes <code>:result</code> or <code>:raw-result</code>. Transform errors emit a warning
+and leave the tool result unchanged.</p>
+<p>Transforms must return small metadata, not copies of large result
+bodies. The pipeline rejects oversized transform metadata so a transform
+cannot bypass tool-result persistence by hiding the full output in
+render-data.</p>
+<h3 id="render-data-side-channel">Render-data side channel<a class="headerlink" href="#render-data-side-channel" title="Permanent link">&para;</a></h3>
+<p>Every handler returns a plist containing <code>:result</code> and may set <code>:status</code> to
+<code>success</code> or <code>error</code>. The handler boundary normalizes that optional status
+into canonical lifecycle state before post-use hooks run; legacy <code>Error:</code>
+results are classified only at that boundary. Invalid returns and handler
+signals become canonical errors there as well. When a handler
+includes <code>:render-data DATA</code> or
+explicit status, the pipeline writes <code>:result</code> to the data buffer and appends a
+hidden block wrapped in <code>&lt;!-- mevedel-render-data --&gt;</code> delimiters, propertized
+<code>'gptel 'mevedel-render-data</code> and <code>'invisible t</code>. Parser:
+<code>mevedel-pipeline-extract-render-data</code>.
+Tool-result blocks carry the owning tool-use ID. Provider scrubbing, view
+extraction, and live metadata updates accept only the block whose owner matches
+the surrounding tool call; other valid marker-shaped blocks remain literal
+result text. Non-tool render records are unbound and are parsed only by their
+dedicated non-tool paths when the complete source span carries live producer
+provenance or the persisted <code>gptel=mevedel-render-data</code> property;
+delimiter-shaped user, assistant, and reasoning text remains ordinary
+transcript content.
+The payload is exactly one proper keyword plist.  Marker-looking text with a
+non-plist payload, trailing Lisp data, or unreadable data is ordinary visible
+tool output and is preserved verbatim. Handler envelopes are validated at the
+pipeline boundary as well: a non-nil <code>:render-data</code> value must already be a
+proper, even keyword plist. Malformed renderer metadata becomes a canonical
+tool error instead of reaching transcript serialization.</p>
+<p>Child-process settlement may add a model-hidden <code>:sandbox-summary</code> to this
+same payload. It contains only logical attempt/start/refusal counts, boundary
+symbols, and aggregate additional read/write mount counts. Default confined
+execution and additional read-only mounts are omitted. Paths, commands, and
+raw launcher reasons are never copied into the summary.</p>
+<p>Tool renderer input is derived from the data buffer on each rerender; it
+must not depend on durable state stored only in view overlays or text
+properties. View-local fragment metadata, collapse state, and renderer caches
+are disposable UI state.
+<code>mevedel-view--invoke-renderer</code> <code>condition-case</code>s the call; malformed
+output emits a warning and falls through to the one-liner.</p>
+<p>Wrapped tools (gptel/MCP) have <code>render-data</code> = nil unless they declare a
+<code>:render-transform</code>; their renderer can use transform metadata when
+present or parse the result string directly.</p>
+<p>Agent tool calls and direct asynchronous workflows use <code>:kind
+collaboration-event</code> render-data. A <code>started</code> event renders the retained
+transcript handle; the registry-backed aggregate status uses distinct
+<code>Running</code>, <code>Waiting</code>, and <code>Blocked</code> rows. Canonical tool and lifecycle events
+are the only sources for <code>Started PATH</code>, <code>FollowupAgent: PATH</code>,
+<code>SendMessage: PATH</code>, <code>InterruptAgent: PATH</code>, and <code>Waiting for agents</code>.
+Settled <code>WaitAgent</code> calls render <code>WaitAgent: agents (OUTCOME)</code>; consecutive
+waits coalesce into the final row with a count. <code>FollowupAgent: PATH</code> and
+<code>SendMessage: PATH</code> start collapsed and expand to their exact follow-up or
+mail text.
+Render-data lookup/patching scans literal open/close delimiters rather
+than matching the whole hidden block with one regexp; live agent metadata
+and multiline payloads can be large enough to overflow Emacs regexp
+limits. ApplyPatch uses <code>:kind patch</code> render-data for one persisted aggregate
+whose body contains structured per-file diff blocks.</p>
+<h2 id="tool-result-persistence">Tool result persistence<a class="headerlink" href="#tool-result-persistence" title="Permanent link">&para;</a></h2>
+<p>When <code>:max-result-size</code> is set and result exceeds the effective limit
+(min of tool value and 50,000-char global cap), the full result is saved
+to <code>.mevedel/tool-results/</code> and replaced with a preview wrapped in
+<code>&lt;persisted-output&gt;</code> XML. The LLM can <code>Read</code> the file to see the full
+output, and the notice provides a followable <code>artifact://</code> address plus exact
+bounded <code>Read</code> continuation and <code>Grep</code> recovery calls. <code>Grep</code> accepts an
+explicit artifact address; absolute session-storage paths remain internal.
+When persistence is unavailable, the notice says the omitted text is
+unavailable and asks for a narrower rerun. Oversized error results are
+truncated but not persisted according to
+the canonical status produced at the handler boundary. Every
+oversized preview keeps equal head and tail budgets, prefers nearby newline
+boundaries, and reports the exact omitted character count. The persisted file
+remains complete. Bash and Eval do not apply an earlier prefix-only cap. No
+workspace → no persistence.</p>
+<p>Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
+Glob 30k, Ask 30k, Xref*/Imenu 20k, Treesitter 30k,
+WebFetch/YouTube 50k. Read/ApplyPatch: nil (self-bounded or short). Agent
+<code>RESULT</code> mailbox records inline at most a 32 KiB preview of the final response;
+the retained agent resource keeps the complete latest settled payload and
+terminal outcome.</p>
+<h2 id="external-helper-confinement">External helper confinement<a class="headerlink" href="#external-helper-confinement" title="Permanent link">&para;</a></h2>
+<p>Native tool implementations launch short-lived external helpers through
+<code>mevedel-execution.el</code>, the same process boundary used by Bash and batch Eval.
+The caller supplies a structured argv, authorized read paths, and explicit
+writable artifact directories. The module adds a private scratch working
+directory, applies <code>mevedel-sandbox-mode</code>, owns timeout/process-group cleanup,
+and removes the scratch directory after the callback. Output streams directly
+into a bounded temporary disk spool rather than an Emacs process buffer; the
+one-shot terminal result contains the captured output and structured exit,
+timeout, output-limit, byte, and wall-time facts. In <code>best-effort</code>, it may retry
+directly only after a pre-exec Bubblewrap failure; it never replays a helper
+that may have started. <code>required</code> fails the tool explicitly and <code>off</code> runs
+directly.</p>
+<p>Bubblewrap capability probes are cached independently per execution target.
+Local probes use the short <code>mevedel-sandbox-probe-timeout</code>; remote probes use
+<code>mevedel-sandbox-remote-probe-timeout</code> (10 seconds by default) so transport
+latency does not silently disable best-effort confinement.</p>
+<p>All operating-system children receive deterministic defaults for UTF-8 locale,
+no color, terminal mode, and pagers, plus <code>MEVEDEL_EXECUTION=1</code>. An invocation
+can still override these variables inside its own command. Ordinary one-shot
+stdin is closed immediately.</p>
+<p>The current external-helper inventory is <code>diff</code>; <code>rg</code> for Read directory
+listings, Glob, and Grep; <code>pdfinfo</code> and <code>pdftoppm</code>; and ImageMagick's <code>magick</code>
+or <code>convert</code>. Their sandbox facts stay out of successful model-visible results.
+Materially non-default facts are aggregated per owning tool invocation and
+persisted in its hidden render-data as a durable warning; additional read-only
+mounts stay silent.
+Helpers that consume target files stage scratch on that target.  Unified diff
+presentation is deliberately local because it compares two already-local
+content snapshots; an ambient remote session never sends its local temporary
+files to the target's <code>diff</code> process.
+Native filesystem permission checks remain the authorization boundary; helper
+confinement limits effects after that authorization.</p>
+<p>Glob and Grep keep the helper's private scratch working directory and pass
+absolute authorized search roots to ripgrep. Both narrow a
+directory-qualified pattern by its leading literal components.
+Absolute patterns, parent traversal, and existing symlink escapes are
+rejected. Missing qualified directories settle as ordinary no-match results.
+Both tools search hidden
+files and exclude <code>.git</code>, <code>.svn</code>, <code>.hg</code>, <code>.bzr</code>, <code>.jj</code>, and <code>.sl</code> metadata at
+any depth. Glob deliberately ignores ignore files. Grep respects ignore rules
+during ordinary traversal, while an explicit <code>path</code> or positive <code>glob</code> may
+select ignored content; explicit scope takes precedence. Neither sorts results
+or follows symlinks. Both share
+<code>mevedel-tool-fs-search-timeout</code> (20 seconds by default). Error, timeout, and
+output-limit facts are settled before exit codes, with captured timeout or
+output-limit text labeled partial and passed through the existing result
+bounds. Result ordering is unspecified. Incomplete and failed searches tell
+the model which path or expression fields to narrow before retrying.</p>
+<h2 id="managed-bash-execution">Managed Bash execution<a class="headerlink" href="#managed-bash-execution" title="Permanent link">&para;</a></h2>
+<p>Bash source runs through <code>bash -lc</code>, so login-shell initialization contributes
+to the requested command's output. Managed Bash has no automatic timeout; use
+the native <code>timeout</code> command when the command itself needs a deadline. On Unix,
+Emacs places each child in a dedicated process group, and mevedel sends TERM
+followed by KILL to the whole group. On Windows it terminates the direct child.
+The result includes partial combined stdout/stderr and structured termination
+facts.</p>
+<p>Bash waits up to <code>yield_time_ms</code> (10 seconds by default, clamped to
+250-30000ms; malformed values fall back to the default). A command
+that finishes first returns normally and discards its temporary spool when all
+output fits inline. A command still running at the boundary returns its unread
+output and an opaque owner-scoped execution ID. Local sessions retain a session
+artifact when output does not fit inline. Remote execution spools client-locally
+while live and never exposes that client path to the model. When an observation
+omits output, mevedel stages a complete session artifact at that tool-call
+boundary and returns its target-native logical path; terminal settlement
+updates it with the final bytes. If another session publication is already
+active, the session artifact resolver serves the queued local staging bytes
+until its manifest commit. The local remote spool is removed at terminal-record
+retirement or session teardown.
+The 64 MiB output cap continues running after yield. Pipe-mode stdin is closed
+from spawn. Explicit <code>tty=true</code> instead allocates a PTY and retains writable
+stdin without changing the captured owner, workdir, confinement, or resource
+grants. Native Windows Emacs exposes only pipe subprocesses, so mevedel rejects
+PTY and Interrupt requests there; Stop remains available for the direct child.
+Empty <code>WriteStdin</code> polls default to 5000ms and clamp positive shorter waits to
+5000ms; the maximum is 300000ms. <code>WriteStdin</code> sends ordinary input only to
+PTYs. Unconfined Ctrl-C is
+written through PTYs or signals pipe-mode process groups; confined Ctrl-C
+instead signals the foreground process group once across Bubblewrap's session
+boundary.
+Every observation returns only the newly unread output. <code>ListExecutions</code>
+exposes only the caller's yielded handles, and <code>StopExecution</code> terminates only
+a handle owned by that caller. Input and stop inherit that execution authority
+without another prompt, while explicit deny rules and permission hooks still
+apply. A successful empty <code>WriteStdin</code> poll while the execution remains
+running is model-visible but omitted as a separate view row; progress continues
+to update the original Bash row. Polls with output, input writes, terminal
+observations, and failures remain visible. Adjacent successful output-free
+poll rows for one execution coalesce into the final <code>WriteStdin: polled
+background process</code> row; input writes render <code>WriteStdin: sent input to
+background process</code>.
+Each <code>WriteStdin</code> attempt records
+its requested <code>yield_time_ms</code> and the
+effective wait, making omitted or stale tool arguments visible without storing
+stdin or process output. Terminal facts record PTY mode and preserve the raw
+process exit or signal status. Canonical lifecycle state distinguishes
+<code>queued</code>, <code>running</code>, <code>stopping</code>, and <code>completed</code>; Interrupt rejects queued work
+that has not started, while Stop cancels it. There is no chunk ID: each
+observation advances one private unread cursor and returns canonical execution
+facts separately from the raw output. Unread ranges beyond 2000 characters use
+the shared newline-aware,
+equal head-and-tail preview while the retained artifact remains complete.
+The initiating Bash disclosure remains force-expanded with a five-line tail
+while live and returns to its normal collapsed state when it settles. Its
+collapsed header truncates the first command line to 60 columns; expanding the
+disclosure shows the exact full command above its output.</p>
+<p>Managed executions publish transient progress after two seconds, at most four
+times per second. The existing Bash row shows the last five output lines, elapsed
+time, line and byte counts, and the execution ID once the command has yielded.
+These progress updates live only in bounded view state and never create
+transcript turns. Events carry the originating data buffer and durable tool-use
+ID, so the matching main or agent view is selected directly. A progress or
+terminal event replaces only that source-backed Bash row; a missing row
+schedules one coalesced incremental recovery render rather than rebuilding the
+whole transcript.
+Terminal settlement replaces the original row's hidden render-data side channel
+in the authoritative transcript with the bounded whole-artifact head-and-tail
+preview plus exit, outcome, duration, omitted-output facts, and any noteworthy
+sandbox summary. Polling, input, and stop tools never duplicate that disclosure
+on their own rows. The provider
+scrubber keeps that durable UI state model-hidden, while transcript persistence
+keeps it stable across cache turnover and resume. Parallel completion may beat
+gptel's insertion of the original row; a bounded data-buffer queue retains that
+terminal projection and retries it at tool and final-render boundaries.
+Agent data buffers run the final-boundary retry even when no transcript view is
+open.</p>
+<p>Terminal delivery has one publisher. The yield boundary first reconciles an
+already-exited child, so its initiating Bash call receives completion instead
+of a stale live handle. A yielded terminal result remains owner-pollable for 60
+seconds; repeated polls return the same observation without publishing another
+terminal event or mailbox message. If a yielded process exits independently,
+or the user stops it outside the model tool, root-owned output is queued
+synchronously in the root mailbox without starting a model request. Agent-owned
+completion is captured by the retained invocation instead: it does not wake
+<code>WaitAgent</code>, and once the provider has produced its terminal response the
+runtime appends every captured completion and settles the turn directly in
+either arrival order. This starts no model request. Passive progress/view
+subscribers cannot acknowledge delivery, and finished records never appear in
+live execution listings.</p>
+<p>The transcript view renders execution-only mailbox deliveries as compact Bash
+completion cards while retaining their full model-facing disclosure in the
+authoritative data buffer.</p>
+<p>Users have a separate session-wide control surface. <code>/ps</code>, the view's live
+execution status row, and the session cockpit's <code>Executions</code> row open a
+tabulated list containing foreground and yielded work from every model owner.
+It shows the opaque execution ID, canonical owner (<code>/root</code> or a retained agent
+path), command, PTY mode, elapsed
+time, output bytes, and sandbox state. Details include the bounded live tail
+and current spool path. The user may send a PTY line, signal Ctrl-C, stop the
+process group, or open the spool. <code>/stop EXECUTION_ID</code> stops directly; bare
+<code>/stop</code> stops every live execution in the session. These user controls do not
+widen model tool authority: <code>WriteStdin</code>, <code>ListExecutions</code>, and
+<code>StopExecution</code> remain scoped to the calling owner and yielded handles.
+Progress and completion refresh the table in place, and terminal rows
+disappear instead of becoming tombstones.</p>
+<p>Terminal facts preserve the raw exit code and derive a separate <code>outcome</code>.
+Zero is <code>success</code>. Exit one is <code>no-match</code> for one proven simple <code>grep</code> or <code>rg</code>
+command, <code>different</code> for <code>diff</code>, and <code>false</code> for <code>test</code> or <code>[</code>. These outcomes
+are successful tool observations rather than execution errors. Exit codes two
+and above, non-exit termination, path-qualified executables, and compound,
+dangerous, complex, or unsupported analysis fall back to <code>failure</code>. Command
+output is never prefixed or rewritten to encode the outcome. Model-visible XML
+and UI render data consume the same canonical fact snapshot; the XML also
+repeats the exact command so parallel same-name calls remain self-identifying.</p>
+<p>Analyzer-proven read-only Bash calls may overlap within one session. Unknown,
+unparsable, and mutating calls use the exclusive lane. Admission is FIFO: once
+an exclusive call is waiting, later readers wait behind it, preventing writer
+starvation. Main and sub-agent owners share their session's scheduler, while
+separate sessions remain independent. A command releases its scheduler lease
+when it finishes, aborts, or yields; a yielded operating-system process keeps
+running under its original owner and resource boundary without blocking later
+admission. Before starting queued work, admission rechecks that a retained agent
+owner is still active and settles rejected work without spawning a process.</p>
+<p>A remote mutating Bash command first acquires or verifies the session's portable
+mutation lease and durably arms its unsettled-mutation latch before process
+launch is attempted. Yield releases the scheduler lane, so more than one
+mutating process can remain armed; one clean settlement cannot clear the latch
+while another armed record remains. A post-attempt launch error, transport loss,
+or failed lease compare-and-set remains unknown. Reconnect plus explicit user
+acknowledgement clears the durable latch before mutation admission reopens.
+Non-read-only tools are rejected while the latch is armed without a live
+provable writer. Lifecycle teardown gives a final KILL one bounded proof
+interval before it decides whether the latch can clear. Process records,
+timers, and spools remain transient.</p>
+<p>At most 64 managed Bash processes may be live in one session. The sixty-fifth
+is refused before spawn without evicting existing work. Foreground work remains
+owned by its initiating request; yielding detaches it from later request aborts
+without changing its session, model owner, sandbox boundary, working directory,
+or resource grants. Shell-native background operators are rejected because
+they would bypass this lifecycle. Remaining descendants are terminated when
+the managed shell exits: the captured process group is signalled once and then
+force-killed after a single bounded cleanup interval, and the record settles
+only after that. Run a service that must outlive its command outside managed
+Bash.</p>
+<p>Execution lifetime follows ownership rather than transcript visibility. Agent
+termination synchronously discards only that canonical agent's Bash and native
+helper children; data-buffer teardown, package uninstall, and Emacs exit do the
+same for every child in the session, including queued scheduler work and
+process-group descendants. Record-owned teardown also releases helper scratch
+directories when normal callbacks are suppressed. Ordinary yielded completion
+still uses the captured owner context and never launches an unsolicited model
+request. Bash, Eval, and filesystem helpers all resolve that owner through the
+same request-first execution-context resolver.</p>
+<h3 id="real-transport-acceptance">Real transport acceptance<a class="headerlink" href="#real-transport-acceptance" title="Permanent link">&para;</a></h3>
+<p><code>test/test-mevedel-execution-remote.el</code> has opt-in cases for each supported
+transport. Set any combination of <code>MEVEDEL_TEST_SSH_ROOT</code>,
+<code>MEVEDEL_TEST_DOCKER_ROOT</code>, and <code>MEVEDEL_TEST_PODMAN_ROOT</code> to existing writable
+TRAMP directories; authentication and target/container startup remain external
+to the suite. Unset transports skip independently. Once configured, each
+transport must also pass <code>required</code> Bubblewrap readiness and its exact-grant
+case; unavailable confinement fails that release gate.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">MEVEDEL_TEST_SSH_ROOT</span><span class="o">=</span>/ssh:user@host:/srv/project/<span class="w"> </span><span class="se">\</span>
+<span class="nv">MEVEDEL_TEST_DOCKER_ROOT</span><span class="o">=</span>/docker:container:/workspace/<span class="w"> </span><span class="se">\</span>
+<span class="nv">MEVEDEL_TEST_PODMAN_ROOT</span><span class="o">=</span>/podman:container:/workspace/<span class="w"> </span><span class="se">\</span>
+npx<span class="w"> </span>@emacs-eask/cli<span class="w"> </span><span class="nb">test</span><span class="w"> </span>ert<span class="w"> </span>test/test-mevedel-execution-remote.el
+</code></pre></div>
+<p>The loss cases discard this client's transport and refuse reconnection while
+the execution settles, so the target keeps running and the outcome is
+genuinely unprovable. They require an unknown outcome plus the
+mutating-execution block, then reconnect, identity-check the bounded
+descendant that survived, and clean its process group.</p>
+<p>For a disposable local matrix, the repository provides one OCI target image
+used by Docker, Podman, and SSH.  The launcher builds it, starts one container
+per runtime, routes SSH through the Docker instance, temporarily installs the
+pinned Bash tree-sitter grammar when absent, runs the acceptance file, and
+removes its containers, grammar, and temporary credentials.  It deliberately
+supplies no <code>--privileged</code>, capability, or security-profile override; the same
+default-run core transport matrix is a CI gate:</p>
+<div class="highlight"><pre><span></span><code>test/run-remote-acceptance.sh
+</code></pre></div>
+<h2 id="eval-execution-scope">Eval execution scope<a class="headerlink" href="#eval-execution-scope" title="Permanent link">&para;</a></h2>
+<p>Eval has two execution modes.  <code>live</code> is the default and runs inside the
+current Emacs process so it can inspect live session state.  Live mode
+restores the selected frame's window configuration by default, preventing
+accidental calls like <code>delete-other-windows</code> from surprising the user;
+<code>preserve_ui: false</code> opts out for deliberate UI manipulation.  <code>batch</code>
+runs a child <code>emacs --batch -Q</code> process with the current <code>load-path</code> and
+the session working directory. Bash and batch Eval share child-process output,
+cleanup, process-group handling, and optional Bubblewrap confinement; live Eval
+does not use that child seam. Batch mode isolates interactive Emacs state and,
+when the platform sandbox is active, applies the same filesystem, protected
+path, process, and network boundaries as Bash.</p>
+<p>Bash and batch-Eval results record the boundary that applied to their
+invocation. The settled owning tool row retains a compact durable warning for
+materially non-default boundaries, additional writes, refusals, and children
+that never started. Additional read-only mounts stay silent. Agent rows
+aggregate warnings from their direct child executions, while the agent
+transcript identifies the affected tools.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
