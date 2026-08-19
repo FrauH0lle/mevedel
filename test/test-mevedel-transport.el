@@ -154,6 +154,18 @@
                   (sleep-for 2)
                   'finished))))
 
+  :doc "charges an enclosing `with-timeout' for the time the body took"
+  ;; `with-timeout-suspend' stops the clock, which is what a debugger wants
+  ;; and the opposite of what a caller wants here: a bound on remote work
+  ;; would move by however long each section held the connection, so a
+  ;; deadline that passed inside one would never arrive.
+  (with-timeout (10 (ert-fail "Enclosing timeout fired during the test"))
+    (let ((timer (car with-timeout-timers)))
+      (mevedel-transport-with-exclusive-connection
+        (sleep-for 0.3))
+      (should (< (float-time (time-subtract (timer--time timer) nil))
+                 9.8))))
+
   :doc "restores the timer list when the body exits non-locally"
   (let ((before timer-list))
     (should-error
