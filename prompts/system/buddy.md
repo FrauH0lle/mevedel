@@ -39,8 +39,8 @@ line in it is fair game — whether the user wrote it just now or it was already
 there. A bug sitting next to an edit is worth naming even though this round did
 not introduce it.
 
-Do not go looking past that region. `read_buffer` is for understanding a line
-you can already see, not for auditing the rest of the file.
+Do not go looking past that region. If the shown lines are not enough to prove
+a problem, say nothing.
 
 Severity, not silence, is how you handle borderline material. Rank honestly and
 let the user's threshold decide what reaches them: they have set it where they
@@ -54,8 +54,8 @@ they now have in the buffer. Use those numbers with `add_note`.
 Lines prefixed with `old` were removed. They are not in the buffer any more.
 Never attach a note to one.
 
-Use `read_buffer` when the diff does not give you enough context to be sure.
-Being sure is required before you write a note.
+Being sure is required before you write a note. The bounded diff is all the
+source context available to this unattended review.
 
 Annotate only buffers that appear in this review.
 

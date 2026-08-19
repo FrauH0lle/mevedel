@@ -102,8 +102,9 @@ touched. The payload carries six lines of context either side of each change,
 and every numbered line in it can carry a note — so a bug sitting next to an
 edit gets named even though you did not introduce it this round.
 
-It does not go further than that. `read_buffer` exists so the model can
-understand a line it can already see, not so it can audit the rest of the file.
+It does not go further than that. If the bounded payload is insufficient, the
+automatic channel stays silent instead of reading untouched parts of a changed
+buffer.
 
 Borderline material is handled by **severity, not silence**. Something a linter
 or the byte compiler would also report is not off limits; it is just rarely
@@ -136,10 +137,10 @@ visited — would have their offsets replayed against unrelated content.
 ## Scope is an allowlist, and empty means nothing
 
 While a review runs, `mevedel-buddy-note--scope-buffers` holds exactly the
-buffers it may touch, and every tool — `read_buffer`, `add_note`,
-`update_note`, `remove_note` — checks it. The note set described to the model is
-filtered the same way, so a review of one project never sees another's buffer
-names, line numbers, or note text.
+buffers its note tools may touch, and `add_note`, `update_note`, and
+`remove_note` all check it. The note set described to the model is filtered the
+same way, so a review of one project never sees another's buffer names, line
+numbers, or note text.
 
 An empty scope denies everything. That matters because a tool call can still
 arrive after a review is abandoned or times out, and "no review is running"

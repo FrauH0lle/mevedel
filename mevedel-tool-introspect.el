@@ -18,6 +18,9 @@
 (require 'gptel-agent-tools-introspection)
 (require 'subr-x)
 
+;; `find-func'
+(declare-function find-library-name "find-func" (library))
+
 ;; `gptel-request'
 (declare-function gptel-get-tool "ext:gptel-request" (path))
 
@@ -37,13 +40,43 @@ Variables can hold auth tokens and other sensitive state, so every
 call prompts the user regardless of permission mode."
   'ask)
 
-(defun mevedel-tool-introspect--library-source-check (_tool _input)
-  "Always-allow permission for `library_source'.
-
-`find-library-name' resolves paths only under `load-path', so the
-access surface is bounded to libraries Emacs knows about.  Mirrors
-the upstream no-permission behaviour."
-  'allow)
+(defun mevedel-tool-introspect--library-source-check (_tool input)
+  "Allow INPUT only when it names source inside a local `load-path'."
+  (let ((name (plist-get input :library))
+        source
+        unsafe-predecessor-p)
+    (if (and (stringp name)
+             (not (string-empty-p name))
+             (not (file-name-absolute-p name))
+             (null (file-name-directory name))
+             (progn
+               (catch 'resolved
+                 (dolist (directory load-path)
+                   (cond
+                    ((or (null directory)
+                         (not (stringp directory))
+                         (condition-case nil
+                             (file-remote-p directory)
+                           (error t)))
+                     (setq unsafe-predecessor-p t))
+                    ((file-directory-p directory)
+                     (let* ((load-path (list directory))
+                            (candidate
+                             (ignore-errors (find-library-name name))))
+                       (when candidate
+                         (let ((canonical-directory
+                                (ignore-errors (file-truename directory)))
+                               (canonical-source
+                                (ignore-errors (file-truename candidate))))
+                           (if (and canonical-directory canonical-source
+                                    (file-in-directory-p
+                                     canonical-source canonical-directory))
+                               (setq source canonical-source)
+                             (setq unsafe-predecessor-p t))
+                           (throw 'resolved nil))))))))
+               (and source (not unsafe-predecessor-p))))
+        'allow
+      '(deny . "Library must resolve inside a local load-path entry"))))
 
 
 ;;
@@ -256,7 +289,7 @@ safe."
     :render-transform #'mevedel-tool-introspect--render-transform
     :renderer #'mevedel-tool-introspect--render)
 
-  ;; Library source (bounded by load-path)
+  ;; Library source (bounded by local load-path)
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "library_source"))
     :summary "Read the source code for a library."

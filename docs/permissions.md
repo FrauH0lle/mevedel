@@ -586,6 +586,15 @@ and reason but does not reduce the command's risk rating.  Pending confinement
 facts probe the same execution target and working directory that the eventual
 command launch will use.
 
+## Introspection source reads
+
+`library_source` bypasses ordinary path arguments only for a simple library
+name whose resolved canonical file remains below a canonical local `load-path`
+entry. Absolute names, directory components, remote entries, and library
+symlinks that escape their load-path entry are denied before the upstream
+reader runs. Use the ordinary `Read` tool when source outside that closed set is
+needed; its path goes through the normal resource permission boundary.
+
 ## Eval
 
 Eval asks through the same session permission queue's Eval-specific
