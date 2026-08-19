@@ -438,6 +438,52 @@
       (when (buffer-live-p buffer)
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))
+      (when (file-directory-p root) (delete-directory root t))))
+
+  :doc "Reports an incomplete rollback with the original failure and path"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-patch-partial-rollback-" t)))
+         (first-directory (file-name-concat root "first"))
+         (second-directory (file-name-concat root "second"))
+         (first (file-name-concat first-directory "one.txt"))
+         (second (file-name-concat second-directory "two.txt"))
+         first-buffer
+         second-buffer)
+    (unwind-protect
+        (progn
+          (make-directory first-directory)
+          (make-directory second-directory)
+          (with-temp-file first (insert "old one\n"))
+          (with-temp-file second (insert "old two\n"))
+          (setq first-buffer (find-file-noselect first)
+                second-buffer (find-file-noselect second))
+          (with-current-buffer second-buffer
+            (add-hook 'before-change-functions
+                      (lambda (&rest _)
+                        (set-file-modes first-directory #o500)
+                        (error "Sync failure"))
+                      nil t))
+          (let* ((failure
+                  (should-error
+                   (mevedel-tool-patch--commit
+                    (list (list :action 'write :path first
+                                :content "new one\n")
+                          (list :action 'write :path second
+                                :content "new two\n")))
+                   :type 'mevedel-tool-patch-partial-rollback))
+                 (message (error-message-string failure)))
+            (should (string-match-p "Sync failure" message))
+            (should (string-match-p (regexp-quote first) message)))
+          (should (equal "new one\n"
+                         (mevedel-tool-patch--read-file first)))
+          (should (equal "old two\n"
+                         (mevedel-tool-patch--read-file second))))
+      (when (file-directory-p first-directory)
+        (set-file-modes first-directory #o700))
+      (dolist (buffer (list first-buffer second-buffer))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
       (when (file-directory-p root) (delete-directory root t)))))
 
 (mevedel-deftest mevedel-tool-patch-register
@@ -822,7 +868,37 @@
                       (set-buffer-multibyte nil)
                       (insert-file-contents-literally path)
                       (buffer-string))))))
-      (delete-file path))))
+      (delete-file path)))
+
+  :doc "Returns every failed restoration in snapshot order"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-patch-restore-errors-" t)))
+         (first-directory (file-name-concat root "first"))
+         (second-directory (file-name-concat root "second"))
+         (first (file-name-concat first-directory "one.txt"))
+         (second (file-name-concat second-directory "two.txt")))
+    (unwind-protect
+        (progn
+          (make-directory first-directory)
+          (make-directory second-directory)
+          (with-temp-file first (insert "old one\n"))
+          (with-temp-file second (insert "old two\n"))
+          (let ((snapshots (mapcar #'mevedel-tool-patch--snapshot
+                                   (list first second))))
+            (with-temp-file first (insert "new one\n"))
+            (with-temp-file second (insert "new two\n"))
+            (set-file-modes first-directory #o500)
+            (set-file-modes second-directory #o500)
+            (let ((failures
+                   (mevedel-tool-patch--restore-snapshots snapshots)))
+              (should (equal (list first second) (mapcar #'car failures)))
+              (dolist (failure failures)
+                (should (memq 'error
+                              (get (cadr failure) 'error-conditions)))))))
+      (dolist (directory (list first-directory second-directory))
+        (when (file-directory-p directory)
+          (set-file-modes directory #o700)))
+      (when (file-directory-p root) (delete-directory root t)))))
 
 (mevedel-deftest mevedel-tool-patch--missing-parent-directories
   (:doc "Lists absent parent directories below an existing root") ,test (test)
