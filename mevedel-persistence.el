@@ -5,14 +5,13 @@
 ;; Saves and restores source-bound references and workspace-owned directives
 ;; across Emacs sessions.  The save format records directive identity and
 ;; authored state separately from file-specific overlay presentations.  When a
-;; save file is loaded against a buffer whose contents have changed, ediff is
-;; used to reconcile overlay positions.  Save files must match the current
-;; mevedel version and directive schema.
+;; save file is loaded against a buffer whose contents have changed, native
+;; buffer replacement reconciles overlay positions.  Save files must match the
+;; current mevedel version and directive schema.
 
 ;;; Code:
 
 (require 'cl-lib)
-(require 'ediff)
 (require 'subr-x)
 
 (require 'mevedel-overlays)
@@ -699,11 +698,7 @@ restoring overlays."
             (if (and original-content
                      mevedel-patch-outdated-instructions
                      (mevedel--file-outdated-p file))
-                (if (not (executable-find "diff"))
-                    (progn
-                      (warn "Patching outdated instructions requires 'diff' to be installed.")
-                      (setq mevedel-patch-outdated-instructions nil)
-                      (restore-overlays buffer instructions t))
+                (progn
                   (when message
                     (message "Patching outdated instructions in buffer '%s'..."
                              (buffer-name buffer)))
@@ -713,8 +708,11 @@ restoring overlays."
                       (with-temp-buffer
                         (insert original-content)
                         (restore-overlays (current-buffer) instructions t)
-                        (mevedel--wordwise-diff-patch-buffers (current-buffer) new-buffer)
-                        (restore-overlays buffer (mevedel--instructions-in (point-min) (point-max)) t)))))
+                        (replace-buffer-contents new-buffer)
+                        (restore-overlays
+                         buffer
+                         (mevedel--instructions-in (point-min) (point-max))
+                         t)))))
               (restore-overlays
                buffer instructions
                (and content-hash
@@ -734,52 +732,6 @@ restoring overlays."
                :warning))))
         (setf (car (assoc file (mevedel--instruction-alist))) buffer)
         (cl-values buffer restored kia)))))
-
-(defun mevedel--wordwise-diff-patch-buffers (old new)
-  "Wordwise patch buffer OLD to be equivalent to buffer NEW via `ediff-buffers'.
-
-This is mostly a brittle hack meant to make Ediff be used noninteractively."
-  (cl-labels ((apply-all-diffs ()
-                (ediff-next-difference)
-                (while (ediff-valid-difference-p)
-                  (ediff-copy-B-to-A nil)
-                  (ediff-next-difference))))
-    (let ((orig-window-config (current-window-configuration)))
-      (unwind-protect
-          (progn
-            (let ((old-region (with-current-buffer old
-                                (cons (point-min) (point-max))))
-                  (new-region (with-current-buffer new
-                                (cons (point-min) (point-max)))))
-              ;; The following two bindings prevent Ediff from creating a new window.
-              (let ((ediff-window-setup-function 'ediff-setup-windows-plain)
-                    (ediff-split-window-function 'split-window-horizontally))
-                (let ((inhibit-message t))
-                  ;; Prevent Ediff from polluting the messages buffer.
-                  (cl-letf (((symbol-function 'message) (lambda (&rest _)) t))
-                    ;; Run wordwise diff first to replace with higher granularity.
-                    (ediff-regions-internal old
-                                            (car old-region)
-                                            (cdr old-region)
-                                            new
-                                            (car new-region)
-                                            (cdr new-region)
-                                            nil
-                                            (gensym "mevedel-ediff-")
-                                            t
-                                            nil)
-                    (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
-                      (let ((ediff-control-buffer-name "*Ediff Control Panel*"))
-                        ;; This is very brittle.
-                        (with-current-buffer (get-buffer ediff-control-buffer-name)
-                          (apply-all-diffs)
-                          (ediff-quit t))
-                        ;; Run regular diff to also replace empty newlines.
-                        (ediff-buffers old new)
-                        (with-current-buffer (get-buffer ediff-control-buffer-name)
-                          (apply-all-diffs)
-                          (ediff-quit t)))))))))
-        (set-window-configuration orig-window-config)))))
 
 (add-hook 'find-file-hook
           (lambda ()
