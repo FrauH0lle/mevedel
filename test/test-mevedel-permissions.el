@@ -1325,7 +1325,48 @@
                          (with-temp-buffer
                            (insert-file-contents file)
                            (buffer-string)))))
-      (delete-directory tmp-dir t))))
+      (delete-directory tmp-dir t)))
+  :doc "refuses a permission store symlink without changing its target"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+         (outside (file-name-concat tmp-dir "outside.el"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil))
+         (file (mevedel-permission--persistent-file ws)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (write-region "(:rules nil :resource-grants nil)\n"
+                        nil outside nil 'silent)
+          (make-symbolic-link outside file)
+          (should-error
+           (mevedel-permission--save-persistent-rule ws "Read" 'allow))
+          (should (file-symlink-p file))
+          (should (equal "(:rules nil :resource-grants nil)\n"
+                         (with-temp-buffer
+                           (insert-file-contents outside)
+                           (buffer-string)))))
+      (delete-directory tmp-dir t)))
+  :doc "refuses a symlinked workspace state directory"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (outside-dir (make-temp-file "mevedel-permissions-outside-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+         (state-dir (file-name-concat tmp-dir ".mevedel"))
+         (outside-file (file-name-concat outside-dir "permissions.el"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil)))
+    (unwind-protect
+        (progn
+          (make-symbolic-link outside-dir state-dir)
+          (should-error
+           (mevedel-permission--save-persistent-rule ws "Read" 'allow))
+          (should-not (file-exists-p outside-file)))
+      (when (file-symlink-p state-dir)
+        (delete-file state-dir))
+      (delete-directory tmp-dir t)
+      (delete-directory outside-dir t))))
 
 (mevedel-deftest mevedel-permission-remove-session-resource-grant ()
   ,test
