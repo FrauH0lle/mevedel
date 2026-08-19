@@ -147,6 +147,34 @@ call prompts the user regardless of permission mode."
 ;;
 ;;; Registration
 
+(defconst mevedel-tool-introspect--registrations
+  '(("symbol_exists" "Check if a symbol is interned in obarray." nil nil)
+    ("load_paths" "Return user load-path entries." 20000 nil)
+    ("features" "Check whether a feature is loaded or available." 20000 nil)
+    ("manual_names" "List available info manuals." 20000 nil)
+    ("manual_nodes" "List section nodes of an info manual." 20000 nil)
+    ("manual_node_contents" "Read the contents of an info manual node."
+     50000 nil)
+    ("symbol_manual_section" "Find which manual section documents a symbol."
+     50000 nil)
+    ("function_completions" "List function names matching a prefix."
+     20000 nil)
+    ("command_completions" "List interactive command names matching a prefix."
+     20000 nil)
+    ("variable_completions" "List variable names matching a prefix."
+     20000 nil)
+    ("function_source" "Read the source code for a function or macro."
+     30000 nil)
+    ("variable_source" "Read the source code for a variable." 30000 nil)
+    ("function_documentation" "Read the docstring for a function or macro."
+     20000 nil)
+    ("variable_documentation" "Read the docstring for a variable." 20000 nil)
+    ("library_source" "Read the source code for a library." 50000
+     mevedel-tool-introspect--library-source-check)
+    ("variable_value" "Return a variable's global value (always asks)." 20000
+     mevedel-tool-introspect--variable-value-check))
+  "Wrapped introspection tool name, summary, result cap, and permission check.")
+
 ;;;###autoload
 (defun mevedel-tool-introspect--register ()
   "Wrap the 16 `gptel-agent' introspection tools for mevedel.
@@ -159,157 +187,18 @@ safe."
      (when (equal (car key) "mevedel-introspection")
        (remhash key mevedel-tool--registry)))
    (copy-hash-table mevedel-tool--registry))
-
-  ;; Existence / enumeration
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "symbol_exists"))
-    :summary "Check if a symbol is interned in obarray."
-    :groups (elisp)
-    :read-only-p t
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "load_paths"))
-    :summary "Return user load-path entries."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 20000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "features"))
-    :summary "Check whether a feature is loaded or available."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 20000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  ;; Manuals
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "manual_names"))
-    :summary "List available info manuals."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 20000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "manual_nodes"))
-    :summary "List section nodes of an info manual."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 20000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "manual_node_contents"))
-    :summary "Read the contents of an info manual node."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 50000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "symbol_manual_section"))
-    :summary "Find which manual section documents a symbol."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 50000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  ;; Completions
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "function_completions"))
-    :summary "List function names matching a prefix."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 20000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "command_completions"))
-    :summary "List interactive command names matching a prefix."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 20000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "variable_completions"))
-    :summary "List variable names matching a prefix."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 20000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  ;; Source / documentation
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "function_source"))
-    :summary "Read the source code for a function or macro."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 30000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "variable_source"))
-    :summary "Read the source code for a variable."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 30000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "function_documentation"))
-    :summary "Read the docstring for a function or macro."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 20000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "variable_documentation"))
-    :summary "Read the docstring for a variable."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 20000
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  ;; Library source (bounded by local load-path)
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "library_source"))
-    :summary "Read the source code for a library."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 50000
-    :check-permission #'mevedel-tool-introspect--library-source-check
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render)
-
-  ;; Variable value (sensitive -- always-ask)
-  (mevedel-define-tool
-    :wrap (gptel-get-tool '("introspection" "variable_value"))
-    :summary "Return a variable's global value (always asks)."
-    :groups (elisp)
-    :read-only-p t
-    :max-result-size 20000
-    :check-permission #'mevedel-tool-introspect--variable-value-check
-    :render-transform #'mevedel-tool-introspect--render-transform
-    :renderer #'mevedel-tool-introspect--render))
+  (dolist (registration mevedel-tool-introspect--registrations)
+    (pcase-let ((`(,name ,summary ,max-result-size ,check-permission)
+                 registration))
+      (mevedel-tool--register-wrap
+       :source (gptel-get-tool (list "introspection" name))
+       :summary summary
+       :groups '(elisp)
+       :read-only-p t
+       :max-result-size max-result-size
+       :check-permission check-permission
+       :render-transform #'mevedel-tool-introspect--render-transform
+       :renderer #'mevedel-tool-introspect--render))))
 
 (provide 'mevedel-tool-introspect)
 ;;; mevedel-tool-introspect.el ends here
