@@ -254,11 +254,15 @@
           (mevedel-workspace--create
            :type 'project :id root :root root :name "keep"))
          (owner (mevedel-session-create "main" workspace))
+         (requester (mevedel-session-create "requester" workspace))
+         (buffer (generate-new-buffer " *mevedel-control-requester*"))
          (owner-id (make-string 64 ?a))
          (requester-id (make-string 64 ?b)))
     (make-directory session-dir t)
     (setf (mevedel-session-save-path owner) session-dir
-          (mevedel-session-session-id owner) "keep-session")
+          (mevedel-session-session-id owner) "keep-session"
+          (mevedel-session-save-path requester) session-dir
+          (mevedel-session-session-id requester) "keep-session")
     (unwind-protect
         (let ((mevedel-session-durability--client-id owner-id))
           (should
@@ -266,32 +270,61 @@
             session-dir "owner" owner))
           (let ((mevedel-session-durability--client-id requester-id))
             (should
-             (mevedel-session-transfer-request owner)))
+             (mevedel-session-control-transfer-request requester)))
           (should
            (eq 'requested
                (plist-get
                 (mevedel-session-transfer-poll owner)
                 :state)))
-          (let ((rejected
-                 (mevedel-session-transfer-decide
-                  owner 'reject)))
-            (should
-             (equal rejected
-                    (mevedel-session-transfer-decide
-                     owner 'reject))))
+          (let ((claim-next
+                 (symbol-function
+                  'mevedel-session-durability--claim-next))
+                block-rotation)
+            (setq block-rotation t)
+            (cl-letf
+                (((symbol-function 'mevedel-session-durability--claim-next)
+                  (lambda (&rest args)
+                    (unless block-rotation
+                      (apply claim-next args)))))
+              (should-error
+               (mevedel-session-transfer-decide owner 'reject))
+              (let ((mevedel-session-durability--client-id requester-id))
+                (should-not
+                 (mevedel-session-control-transfer-request requester)))
+              (setq block-rotation nil)
+              (let ((rejected
+                     (mevedel-session-transfer-decide owner 'reject)))
+                (should
+                 (equal rejected
+                        (mevedel-session-transfer-decide
+                         owner 'reject))))))
           (let ((generation
                  (plist-get (mevedel-session-lease owner) :generation)))
             (should (> generation 1))
             (let ((mevedel-session-durability--client-id requester-id))
+              (with-current-buffer buffer
+                (setq buffer-read-only t)
+                (should
+                 (mevedel-session-control-transfer--poll-requester
+                  requester buffer)))
+              (should
+               (eq 'rejected
+                   (plist-get
+                    (mevedel-session-control-transfer requester) :state)))
               (should
                (= generation
                   (plist-get
-                   (mevedel-session-transfer-request owner)
+                   (mevedel-session-control-transfer-request requester)
                    :generation))))))
       (let ((mevedel-session-durability--client-id owner-id))
         (mevedel-session-durability-lease-release session-dir owner))
+      (mevedel-session-control-transfer-unregister-root-buffer
+       requester buffer)
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
       (when (file-directory-p root)
-        (delete-directory root t))))
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry)))
   :doc "a pending request survives the owner's own generation rotation"
   (let* ((root (make-temp-file "mevedel-control-drift-" t))
          (session-dir (file-name-concat root "session"))
@@ -301,6 +334,7 @@
          (owner (mevedel-session-create "main" workspace))
          (owner-id (make-string 64 ?a))
          (requester-id (make-string 64 ?b))
+         (other-id (make-string 64 ?c))
          (now 0.0))
     (make-directory session-dir t)
     (setf (mevedel-session-save-path owner) session-dir
@@ -309,31 +343,131 @@
         (cl-letf (((symbol-function 'mevedel-session-durability--target-time)
                    (lambda (&rest _) now)))
           (let ((mevedel-session-durability--client-id owner-id)
-                (mevedel-session-transfer-prompt-timeout 1))
+                (mevedel-session-transfer-prompt-timeout 1)
+                request)
             (should
              (mevedel-session-durability-lease-acquire
               session-dir "owner" owner))
             (let ((mevedel-session-durability--client-id requester-id))
-              (should (mevedel-session-transfer-request owner)))
+              (setq request (mevedel-session-transfer-request owner))
+              (should request))
             ;; Settling the durable mutation latch rotates the owner's
             ;; lease generation past the pending request.
             (should
              (mevedel-session-durability-set-unsettled-mutation owner t))
             (should
              (mevedel-session-durability-set-unsettled-mutation owner nil))
+            (let ((mevedel-session-durability--client-id requester-id))
+              (should
+               (equal request (mevedel-session-transfer-request owner))))
+            (let ((mevedel-session-durability--client-id other-id))
+              (should-not (mevedel-session-transfer-request owner)))
             (should (eq 'requested
                         (plist-get (mevedel-session-transfer-poll owner)
                                    :state)))
+            (should
+             (equal (plist-get request :request-id)
+                    (plist-get
+                     (plist-get (mevedel-session-control-transfer owner)
+                                :request)
+                     :request-id)))
             (setq now 2.0)
             (should (eq 'quiescing
                         (plist-get (mevedel-session-transfer-poll owner)
-                                   :state)))))
+                                   :state)))
+            (let ((release
+                   (symbol-function 'mevedel-session-durability-lease-release))
+                  failed)
+              (cl-letf
+                  (((symbol-function
+                     'mevedel-session-durability-lease-release)
+                    (lambda (&rest args)
+                      (if failed
+                          (apply release args)
+                        (setq failed t)
+                        (error "Injected post-fence failure")))))
+                (should-error (mevedel-session-transfer-release owner))
+                (let ((release-generation
+                       (plist-get
+                        (mevedel-session-control-transfer owner)
+                        :release-generation)))
+                  (should (> release-generation
+                             (plist-get request :generation)))
+                  (let ((fence (mevedel-session-transfer-release owner)))
+                    (should (= release-generation
+                               (plist-get fence :generation)))
+                    (should
+                     (equal fence
+                            (mevedel-session-transfer-release owner)))))))))
       (mevedel-session-durability--cancel-renewal owner)
       (let ((mevedel-session-durability--client-id owner-id))
         (ignore-errors
           (mevedel-session-durability-lease-release session-dir owner)))
       (when (file-directory-p root)
         (delete-directory root t))))
+  :doc "one request wins when lease rotation splits two contenders"
+  (let* ((root (make-temp-file "mevedel-control-rotation-race-" t))
+         (session-dir (file-name-concat root "session"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id root :root root :name "rotation-race"))
+         (owner (mevedel-session-create "main" workspace))
+         (owner-id (make-string 64 ?a))
+         (first-id (make-string 64 ?b))
+         (second-id (make-string 64 ?c))
+         first-result second-result)
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path owner) session-dir
+          (mevedel-session-session-id owner) "rotation-race-session")
+    (unwind-protect
+        (let ((mevedel-session-durability--client-id owner-id))
+          (should
+           (mevedel-session-durability-lease-acquire
+            session-dir "owner" owner))
+          (let ((create
+                 (symbol-function
+                  'mevedel-session-durability--create-plist))
+                injected)
+            (cl-letf
+                (((symbol-function 'mevedel-session-durability--create-plist)
+                  (lambda (path record)
+                    (when (and (not injected)
+                               (string-match-p "/requests/request-" path))
+                      (setq injected t)
+                      (let ((mevedel-session-durability--client-id owner-id))
+                        (should
+                         (mevedel-session-durability-set-unsettled-mutation
+                          owner t)))
+                      (let ((mevedel-session-durability--client-id second-id))
+                        (setq second-result
+                              (mevedel-session-transfer-request owner))))
+                    (funcall create path record))))
+              (let ((mevedel-session-durability--client-id first-id))
+                (setq first-result
+                      (mevedel-session-transfer-request owner))))
+            (should injected)
+            (should-not first-result)
+            (should (equal second-id
+                           (plist-get second-result :requester-client-id)))
+            (should
+             (= (plist-get (mevedel-session-lease owner) :transfer-generation)
+                (plist-get second-result :generation)))
+            (should (eq 'requested
+                        (plist-get (mevedel-session-transfer-poll owner)
+                                   :state)))
+            (should
+             (equal (plist-get second-result :request-id)
+                    (plist-get
+                     (plist-get (mevedel-session-control-transfer owner)
+                                :request)
+                     :request-id)))))
+      (mevedel-session-durability--cancel-renewal owner)
+      (let ((mevedel-session-durability--client-id owner-id))
+        (ignore-errors
+          (mevedel-session-durability-lease-release session-dir owner)))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry)))
   :doc "rejects portable lease and transfer APIs for file sessions"
   (let* ((root (make-temp-file "mevedel-file-transfer-" t))
          (workspace
@@ -526,9 +660,22 @@
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-session-durability--lease-record
-  (:doc "refuses to build a lease record without target-authoritative time")
+  (:doc "requires target time and records the open transfer generation")
   (should-error (mevedel-session-durability--lease-record "*buffer*" 1)
-                :type 'error))
+                :type 'error)
+  (let ((mevedel-session-durability--client-id (make-string 64 ?a)))
+    (should
+     (= 3
+        (plist-get
+         (mevedel-session-durability--lease-record
+          "*buffer*" 3 'active nil nil 1.0)
+         :transfer-generation)))
+    (should
+     (= 1
+        (plist-get
+         (mevedel-session-durability--lease-record
+          "*buffer*" 3 'active nil nil 1.0 1)
+         :transfer-generation)))))
 
 (mevedel-deftest mevedel-session-durability--lease-head
   (:doc "keeps a live lease visible when a newer generation cannot be read")
