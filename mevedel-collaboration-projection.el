@@ -296,7 +296,7 @@ attributed to a collaboration guest carry that guest's name."
                           user-starts)))))
              ((eq (car segment) 'response)
               (let ((text (mevedel-collaboration--clean-response
-                           (buffer-substring-no-properties
+                           (buffer-substring
                             (cadr segment) (caddr segment)))))
                 (unless (string-empty-p text)
                   (let* ((key (list "assistant" text))

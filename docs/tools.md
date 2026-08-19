@@ -44,8 +44,9 @@ continuation from the cancelled primitive is ignored.
 Tool-result media has one focused boundary in `mevedel-tool-media.el`.
 It validates and sanitizes captured media records, stores their bytes behind
 opaque transcript references, restores trusted records during replay, removes
-media from hook-visible text, and converts restored records into each
-provider's native payload shape. `mevedel-pipeline.el` supplies the session's
+validated media from hook-visible text, preserves marker-shaped ordinary text,
+and converts restored records into each provider's native payload shape.
+`mevedel-pipeline.el` supplies the session's
 tool-results directory and calls that boundary from the attach, hook, render,
 and gptel parse steps; it does not construct provider-specific media blocks.
 The transcript reference contains only an opaque record id and its owning tool
@@ -396,8 +397,16 @@ signals become canonical errors there as well. When a handler
 includes `:render-data DATA` or
 explicit status, the pipeline writes `:result` to the data buffer and appends a
 hidden block wrapped in `<!-- mevedel-render-data -->` delimiters, propertized
-`'gptel 'ignore` and `'invisible t`. Parser:
+`'gptel 'mevedel-render-data` and `'invisible t`. Parser:
 `mevedel-pipeline-extract-render-data`.
+Tool-result blocks carry the owning tool-use ID. Provider scrubbing, view
+extraction, and live metadata updates accept only the block whose owner matches
+the surrounding tool call; other valid marker-shaped blocks remain literal
+result text. Non-tool render records are unbound and are parsed only by their
+dedicated non-tool paths when the complete source span carries live producer
+provenance or the persisted `gptel=mevedel-render-data` property;
+delimiter-shaped user, assistant, and reasoning text remains ordinary
+transcript content.
 The payload is exactly one proper keyword plist.  Marker-looking text with a
 non-plist payload, trailing Lisp data, or unreadable data is ordinary visible
 tool output and is preserved verbatim. Handler envelopes are validated at the

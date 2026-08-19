@@ -11,6 +11,10 @@
 (eval-when-compile (require 'cl-lib))
 (require 'subr-x)
 
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--render-data-trusted-range-p
+                  "mevedel-pipeline" (start end &optional object))
+
 ;; `mevedel-tool-media'
 (declare-function mevedel-tool-media-extract
                   "mevedel-tool-media"
@@ -21,6 +25,8 @@
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-audit-spans
                   "mevedel-transcript-audit" (text &optional type))
+(declare-function mevedel-transcript-audit-trusted-range-p
+                  "mevedel-transcript-audit" (start end &optional object))
 
 ;; `org'
 (declare-function org-entry-get
@@ -91,7 +97,7 @@ refresh).  Skip past it so the rendered view starts at real content."
   (pcase prop
     ('nil 'user)
     ('response 'response)
-    ('ignore 'ignored)
+    ((or 'ignore 'mevedel-render-data 'mevedel-hook-audit) 'ignored)
     (`(tool . ,_id) 'tool)
     (_ 'response)))
 
@@ -433,7 +439,29 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
                      start end base-segments tool-ranges))))
     (let (accepted)
       (dolist (range (sort ranges (lambda (a b) (< (cadr a) (cadr b)))))
-        (when (or (not (memq (car range) '(mailbox reminder)))
+        (let ((audit-p
+               (and (eq (car range) 'ignored)
+                    (save-excursion
+                      (goto-char (cadr range))
+                      (looking-at-p "<!-- mevedel-hook-audit -->"))))
+              (render-p (eq (car range) 'render-data)))
+          (when (or (and (not (memq (car range) '(mailbox reminder)))
+                         (not audit-p)
+                         (not render-p))
+                    (and audit-p
+                         (save-excursion
+                           (goto-char (cadr range))
+                           (when (search-forward
+                                  "<!-- /mevedel-hook-audit -->"
+                                  (caddr range) t)
+                             (require 'mevedel-transcript-audit)
+                             (mevedel-transcript-audit-trusted-range-p
+                              (cadr range) (point)))))
+                    (and render-p
+                         (progn
+                           (require 'mevedel-pipeline)
+                           (mevedel-pipeline--render-data-trusted-range-p
+                            (cadr range) (caddr range))))
                   (and (eq (car range) 'mailbox)
                        (mevedel-transcript--mailbox-control-context-p
                         range base-segments))
@@ -441,9 +469,11 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
                        (cl-find-if (lambda (prior)
                                      (eq (car prior) 'mailbox))
                                    accepted))
-                  (mevedel-transcript--control-prefix-p
-                   range base-segments accepted))
-          (push range accepted)))
+                  (and (not audit-p)
+                       (not render-p)
+                       (mevedel-transcript--control-prefix-p
+                        range base-segments accepted)))
+            (push range accepted))))
       (setq ranges (nreverse accepted)))
     (sort ranges
           (lambda (a b)
@@ -533,7 +563,7 @@ runs and incomplete control text remains ordinary transcript text."
     (require 'mevedel-transcript-audit)
     (dolist (span
              (mevedel-transcript-audit-spans
-              (buffer-substring-no-properties scan-start scan-end)
+              (buffer-substring scan-start scan-end)
               'fork-point))
       (let ((prompt-start (+ scan-start (plist-get span :end)))
             prompt-end)
@@ -655,7 +685,17 @@ runs and incomplete control text remains ordinary transcript text."
                 (plist-get parts :suffix-start)
                 (plist-get parts :suffix-end) 'gptel 'ignore))
            (put-text-property start end 'gptel 'ignore)))
-        ((or 'reasoning 'render-data 'prompt 'ignored)
+        ('render-data
+         (add-text-properties
+          start end '(gptel mevedel-render-data mevedel-render-data t)))
+        ('ignored
+         (if (save-excursion
+               (goto-char start)
+               (looking-at-p "<!-- mevedel-hook-audit -->"))
+             (add-text-properties
+              start end '(gptel mevedel-hook-audit mevedel-hook-audit t))
+           (put-text-property start end 'gptel 'ignore)))
+        ((or 'reasoning 'prompt)
          (put-text-property start end 'gptel 'ignore))))))
 
 (defconst mevedel-transcript--response-continuation-max-gap 160
@@ -668,8 +708,12 @@ runs and incomplete control text remains ordinary transcript text."
         ('tool
          (or (eq prop 'tool)
              (and (consp prop) (eq (car prop) 'tool))))
-        ((or 'reasoning 'render-data 'prompt 'ignored)
+        ((or 'reasoning 'prompt)
          (eq prop 'ignore))
+        ('render-data
+         (eq prop 'mevedel-render-data))
+        ('ignored
+         (memq prop '(ignore mevedel-hook-audit)))
         (_ nil))))
 
 (defun mevedel-transcript--first-nonblank-pos (start end)

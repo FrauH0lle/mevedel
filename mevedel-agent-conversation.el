@@ -98,7 +98,9 @@
 (declare-function mevedel-pipeline--patch-render-data-block
                   "mevedel-pipeline" (beg end new-plist))
 (declare-function mevedel-pipeline-extract-render-data
-                  "mevedel-pipeline" (result-string))
+                  "mevedel-pipeline"
+                  (result-string &optional session expected-tool-use-id
+                                 allow-payload-tool-use-id))
 (declare-function mevedel-pipeline-tool-render-data
                   "mevedel-pipeline" (buffer tool-use-id))
 (declare-function mevedel-pipeline-update-tool-render-data
@@ -467,8 +469,11 @@ payload remains authoritative."
                  (eq (marker-buffer end) parent-buffer)
                  (marker-position beg) (marker-position end)
                  (< (marker-position beg) (marker-position end)))
-        (let* ((raw (buffer-substring-no-properties beg end))
-               (parsed (mevedel-pipeline-extract-render-data raw)))
+        (let* ((raw (buffer-substring beg end))
+               (parsed
+                (mevedel-pipeline-extract-render-data
+                 raw nil
+                 (mevedel-agent-invocation-parent-tool-use-id invocation))))
           (if (and (stringp (car parsed))
                    (string-empty-p (string-trim (car parsed)))
                    (listp (cdr parsed))
@@ -646,7 +651,10 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                      (end (cdr bounds))
                      (parsed
                       (mevedel-pipeline-extract-render-data
-                       (buffer-substring-no-properties beg end)))
+                       (buffer-substring beg end)
+                       nil
+                       (mevedel-agent-invocation-parent-tool-use-id
+                        invocation)))
                      (updated (copy-sequence (cdr parsed)))
                      (started
                       (mevedel-agent-invocation-started-at invocation))

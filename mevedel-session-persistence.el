@@ -205,8 +205,12 @@
 			include-original-content))
 
 ;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-extract-render-data
-		  "mevedel-pipeline" (result))
+(declare-function mevedel-pipeline--render-data-blocks
+		  "mevedel-pipeline" (string))
+(declare-function mevedel-pipeline--render-data-call-range-p
+		  "mevedel-pipeline" (data beg end))
+(declare-function mevedel-pipeline--render-data-without-owner
+		  "mevedel-pipeline" (data))
 (declare-function mevedel-pipeline-reconcile-lost-executions
 		  "mevedel-pipeline"
 		  (buffer &optional successor-execution-ids))
@@ -1299,8 +1303,11 @@ Returns the raw plist.  Caller is responsible for passing it through
   (when (file-regular-p path)
     (with-temp-buffer
       (insert-file-contents path)
+      (delay-mode-hooks (org-mode))
       (require 'mevedel-pipeline)
       (require 'mevedel-transcript-audit)
+      (require 'mevedel-transcript-restore)
+      (mevedel-transcript-restore-properties)
       (let (ids)
         (dolist (record
                  (mevedel-transcript-audit-records
@@ -1310,16 +1317,18 @@ Returns the raw plist.  Caller is responsible for passing it through
             (when-let* ((id (plist-get (plist-get record :render-data)
                                        :execution-id)))
               (cl-pushnew id ids :test #'equal))))
-        (goto-char (point-min))
-        (while (search-forward mevedel-pipeline--render-data-open nil t)
-          (let ((begin (match-beginning 0)))
-            (when (search-forward mevedel-pipeline--render-data-close nil t)
-              (when-let* ((parsed
-                           (mevedel-pipeline-extract-render-data
-                            (buffer-substring-no-properties
-                             begin (match-end 0))))
-                          (id (plist-get (cdr parsed) :execution-id)))
-                (cl-pushnew id ids :test #'equal)))))
+        (dolist (block
+                 (mevedel-pipeline--render-data-blocks
+                  (buffer-substring-no-properties (point-min) (point-max))))
+          (when-let* ((stored (caddr block))
+                      (begin (+ (point-min) (car block)))
+                      (end (+ (point-min) (cadr block)))
+                      ((mevedel-pipeline--render-data-call-range-p
+                        stored begin end))
+                      (data
+                       (mevedel-pipeline--render-data-without-owner stored))
+                      (id (plist-get data :execution-id)))
+            (cl-pushnew id ids :test #'equal)))
         ids))))
 
 (defun mevedel-session-persistence--reconcile-lost-execution-file
@@ -1331,11 +1340,15 @@ of writing PATH directly."
   (when (file-regular-p path)
     (with-temp-buffer
       (insert-file-contents path)
+      (delay-mode-hooks (org-mode))
       (require 'mevedel-pipeline)
+      (require 'mevedel-transcript-restore)
+      (mevedel-transcript-restore-properties)
       (let ((count
               (mevedel-pipeline-reconcile-lost-executions
               (current-buffer) successor-execution-ids)))
         (when (> count 0)
+          (mevedel-session-persistence--stabilize-gptel-bounds)
           (if artifact-callback
               (funcall
                artifact-callback
@@ -3780,6 +3793,7 @@ nil if SESSION is not yet materialized."
                           (insert tail-text))
                         (when archive-text
                           (insert archive-text))
+                        (mevedel-session-persistence--stabilize-gptel-bounds)
                         (when pending-text
                           (unless (bolp) (insert "\n"))
                           (setq pending-position (point)))

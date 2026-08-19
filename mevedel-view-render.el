@@ -65,9 +65,9 @@
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
-		  "mevedel-pipeline" (render-data))
+		  "mevedel-pipeline" (render-data &optional tool-use-id))
 (declare-function mevedel-pipeline--strip-render-data-blocks
-		  "mevedel-pipeline" (string))
+		  "mevedel-pipeline" (string &optional expected-tool-use-id))
 (declare-function mevedel-pipeline--tool-segment-bounds
 		  "mevedel-pipeline" (tool-use-id))
 (declare-function mevedel-pipeline-extract-render-data
@@ -1258,7 +1258,7 @@ real user message."
        (with-current-buffer data-buf
          (require 'mevedel-transcript-audit)
          (mevedel-transcript-audit-records
-          (buffer-substring-no-properties
+          (buffer-substring
            (cadr segment) (caddr segment))
           'directive-turn-boundary))))
 
@@ -2070,7 +2070,7 @@ When COLLAPSED-ONLY is non-nil, cache a header rendering that omits large
 bodies for initially collapsed tools."
   (let* ((segment-text
           (with-current-buffer data-buf
-            (buffer-substring-no-properties seg-start seg-end)))
+            (buffer-substring seg-start seg-end)))
          (request-data
           (mevedel-view--request-summary-render-data-from-text segment-text))
          (failure-p (eq (plist-get request-data :outcome) 'error))
@@ -2242,12 +2242,7 @@ system reminder wrappers."
 (defun mevedel-view--strip-render-data-display-text (text)
   "Return TEXT without hidden render-data side-channel scaffolding."
   (require 'mevedel-pipeline)
-  (let ((cleaned (mevedel-pipeline--strip-render-data-blocks (or text ""))))
-    (setq cleaned
-          (replace-regexp-in-string
-           "^<!--[ \t]*/?mevedel-render-data[ \t]*-->[ \t]*\n?"
-           "" cleaned))
-    cleaned))
+  (mevedel-pipeline--strip-render-data-blocks (or text "")))
 
 (defun mevedel-view--render-data-only-text-p (text)
   "Return non-nil if TEXT is only render-data scaffolding."
@@ -2261,7 +2256,7 @@ system reminder wrappers."
   "Return non-nil when DATA-BUF's SEG-START..SEG-END is only hidden render-data."
   (with-current-buffer data-buf
     (mevedel-view--render-data-only-text-p
-     (buffer-substring-no-properties seg-start seg-end))))
+     (buffer-substring seg-start seg-end))))
 
 (defun mevedel-view--hook-audit-only-text-p (text)
   "Return non-nil if TEXT is only hook audit scaffolding."
@@ -2272,7 +2267,7 @@ system reminder wrappers."
   "Return non-nil when DATA-BUF's SEG-START..SEG-END is only hook audit data."
   (with-current-buffer data-buf
     (mevedel-view--hook-audit-only-text-p
-     (buffer-substring-no-properties seg-start seg-end))))
+     (buffer-substring seg-start seg-end))))
 
 (defun mevedel-view--system-reminder-body-from-text (text)
   "Return generated system reminder body from TEXT, or nil.
@@ -2387,21 +2382,21 @@ turn shows one bogus thinking summary per tool boundary."
   "Return non-nil when DATA-BUF's SEG-START..SEG-END carries inline skill data."
   (with-current-buffer data-buf
     (mevedel-view--inline-skill-render-data-from-text
-     (buffer-substring-no-properties seg-start seg-end))))
+     (buffer-substring seg-start seg-end))))
 
 (defun mevedel-view--collaboration-event-segment-p
     (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF's span carries a started collaboration event."
   (with-current-buffer data-buf
     (mevedel-view--collaboration-event-from-text
-     (buffer-substring-no-properties seg-start seg-end))))
+     (buffer-substring seg-start seg-end))))
 
 (defun mevedel-view--request-summary-render-segment-p
     (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF's SEG-START..SEG-END carries a request summary."
   (with-current-buffer data-buf
     (mevedel-view--request-summary-render-data-from-text
-     (buffer-substring-no-properties seg-start seg-end))))
+     (buffer-substring seg-start seg-end))))
 
 (defun mevedel-view--delete-request-summaries (data-buf start end)
   "Delete request-summary render-data blocks in DATA-BUF START..END."
@@ -2417,7 +2412,7 @@ turn shows one bogus thinking summary per tool boundary."
                                     "<!-- /mevedel-render-data -->"
                                     limit t)))
                   (when (mevedel-view--request-summary-render-data-from-text
-                         (buffer-substring-no-properties block-start close))
+                         (buffer-substring block-start close))
                     (let ((delete-start
                            (if (and (> block-start (point-min))
                                     (eq (char-before block-start) ?\n))
@@ -2455,14 +2450,12 @@ Return the new data-buffer end position."
         (save-excursion
           (goto-char (point-max))
           (unless (bolp) (insert "\n"))
-          (let ((start (point)))
-            (insert
-             (mevedel-pipeline--format-render-data-block
-              (append
-               (list :kind 'request-summary
-                     :elapsed-seconds elapsed)
-               extra)))
-            (add-text-properties start (point) '(gptel ignore))))))
+          (insert
+           (mevedel-pipeline--format-render-data-block
+            (append
+             (list :kind 'request-summary
+                   :elapsed-seconds elapsed)
+             extra))))))
     (with-current-buffer data-buf
       (point-max))))
 
@@ -3404,7 +3397,7 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
     (cl-loop for seg in segments
              when (eq (car seg) 'render-data)
              for data = (cdr (mevedel-pipeline-extract-render-data
-                              (buffer-substring-no-properties
+                              (buffer-substring
                                (cadr seg) (caddr seg))))
              when (and (eq (plist-get data :kind) 'user-display)
                        (stringp (plist-get data :text)))
@@ -3420,7 +3413,7 @@ Empty string when the turn contains only whitespace or markers."
           (dolist (seg segments)
             (let* ((seg-start (cadr seg))
                    (seg-end (caddr seg))
-                   (text (buffer-substring-no-properties seg-start seg-end)))
+                   (text (buffer-substring seg-start seg-end)))
               ;; Strip org heading prefix (e.g., "*** ")
               (when (string-match "\\`\\*+ " text)
                 (setq text (substring text (match-end 0))))
@@ -3737,8 +3730,7 @@ EXPANDED means insert the disclosure body expanded."
       (dolist (seg segments)
         (when (memq (car seg)
                     '(user hook-context prompt render-data ignored))
-          (let ((text (buffer-substring-no-properties
-                       (cadr seg) (caddr seg))))
+          (let ((text (buffer-substring (cadr seg) (caddr seg))))
             (unless info
               (when-let* ((data
                            (mevedel-view--inline-skill-render-data-from-text
@@ -4387,7 +4379,7 @@ Merges adjacent thinking/reasoning segments into a single summary."
          (render-data
           (with-current-buffer data-buf
             (mevedel-view--request-summary-render-data-from-text
-             (buffer-substring-no-properties seg-start seg-end))))
+             (buffer-substring seg-start seg-end))))
          (line (and render-data
                     (mevedel-view--request-summary-line render-data)))
          (failure-rendering
@@ -4553,7 +4545,7 @@ inserted beside the header."
              (let* ((source (mevedel-view--source-range
                              data-buf (cadr seg) (caddr seg)))
                     (text (with-current-buffer data-buf
-                            (buffer-substring-no-properties
+                            (buffer-substring
                              (cadr seg) (caddr seg)))))
                (dolist (record
                         (mevedel-view--hook-audit-records-from-text text))
@@ -4599,7 +4591,7 @@ inserted beside the header."
          (render-data
           (with-current-buffer data-buf
             (mevedel-view--collaboration-event-from-text
-             (buffer-substring-no-properties seg-start seg-end)))))
+             (buffer-substring seg-start seg-end)))))
     (when-let* ((rendering
                  (and render-data
                       (mevedel-tool-ui--render-agent
@@ -4811,7 +4803,7 @@ tool block before parsing the tool plist and render-data side channel."
 If the segment overlaps an org tool block, expand to the block bounds
 first so stale restored text properties do not hide the `(:name ...)'
 form or the render-data block from the parser."
-  (let ((raw (buffer-substring-no-properties seg-start seg-end)))
+  (let ((raw (buffer-substring seg-start seg-end)))
     (if (or (mevedel-view--complete-wrapped-tool-text-p raw)
             (and (not (mevedel-view--tool-wrapped-text-p raw))
                  (mevedel-view--direct-tool-readable-text-p raw)))
@@ -4819,7 +4811,7 @@ form or the render-data block from the parser."
       (pcase-let ((`(,start . ,end)
                    (or (mevedel-view--tool-block-bounds seg-start seg-end)
                        (cons seg-start seg-end))))
-        (buffer-substring-no-properties start end)))))
+        (buffer-substring start end)))))
 
 
 ;;
@@ -5045,7 +5037,7 @@ share a value with a nested section without being the same object."
                           (point))))
         (cons start end)))))
 
-(defun mevedel-view--data-substring (data-buf start end)
+(defun mevedel-view--data-substring (data-buf start end &optional properties)
   "Return text in DATA-BUF between START and END.
 Widens DATA-BUF so narrowing does not hide valid coordinates, then
 clamps START and END to the accessible range.  Returns the empty
@@ -5060,7 +5052,9 @@ from signalling `args-out-of-range' on stale source coordinates."
              (e (max pmin (min end pmax))))
         (if (>= s e)
             ""
-          (buffer-substring-no-properties s e))))))
+          (if properties
+              (buffer-substring s e)
+            (buffer-substring-no-properties s e)))))))
 
 (defun mevedel-view--expand-section (source vtype)
   "Expand a collapsed section with SOURCE coordinates and VTYPE.
@@ -5130,7 +5124,7 @@ Fallback disclosures retain their header; response summaries do not."
                     (when (eq vtype 'prompt-summary)
                       (let* ((source-text
                               (mevedel-view--data-substring
-                               data-buf data-start data-end))
+                               data-buf data-start data-end t))
                              (inline-body
                               (mevedel-view--inline-skill-prompt-summary-body
                                source-text))
@@ -6320,7 +6314,7 @@ SOURCE is the source range of the skipped summary in the data buffer."
   (when (and data-buf (buffer-live-p data-buf) (< start end))
     (with-current-buffer data-buf
       (mevedel-view--hook-audit-records-from-text
-       (buffer-substring-no-properties start end)))))
+       (buffer-substring start end)))))
 
 (defun mevedel-view--full-rerender-reset
     (data-buf session-data-buf historical-p agent-transcript-p)

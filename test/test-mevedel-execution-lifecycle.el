@@ -365,6 +365,29 @@
 ;;
 ;;; History reconciliation
 
+(defun test-mevedel-execution--persisted-audit-transcript (text)
+  "Return a persisted Org transcript containing trusted audit TEXT."
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n" text)
+    (mevedel-session-persistence--stabilize-gptel-bounds)
+    (buffer-substring-no-properties (point-min) (point-max))))
+
+(defun test-mevedel-execution--restored-audit-records (text type)
+  "Return trusted audit records of TYPE restored from persisted TEXT."
+  (with-temp-buffer
+    (insert text)
+    (delay-mode-hooks (org-mode))
+    (mevedel-transcript-restore-properties)
+    (mevedel-transcript-audit-records (buffer-string) type)))
+
+(defun test-mevedel-execution--audit-records-in-file (path type)
+  "Return trusted audit records of TYPE restored from PATH."
+  (with-temp-buffer
+    (insert-file-contents path)
+    (test-mevedel-execution--restored-audit-records
+     (buffer-string) type)))
+
 (mevedel-deftest mevedel-pipeline-tool-render-data ()
   ,test
   (test)
@@ -373,7 +396,8 @@
     (insert
      (propertize
       (mevedel-pipeline--format-render-data-block
-       '(:execution-id "exec-000001" :state running))
+       '(:execution-id "exec-000001" :state running)
+       "tool-call")
       'gptel '(tool . "tool-call")))
     (should
      (equal "exec-000001"
@@ -390,13 +414,15 @@
     (insert
      (propertize
       (mevedel-pipeline--format-render-data-block
-       '(:execution-id "exec-live" :state running :live-execution-p t))
+       '(:execution-id "exec-live" :state running :live-execution-p t)
+       "live-call")
       'gptel '(tool . "live-call")))
     (insert
      (propertize
       (mevedel-pipeline--format-render-data-block
        '(:execution-id "exec-done" :state completed
-         :live-execution-p nil))
+         :live-execution-p nil)
+       "done-call")
       'gptel '(tool . "done-call")))
     (let ((plan
            (mevedel-view-stream-prepare-execution-row-archive
@@ -437,12 +463,20 @@
   :doc "repairs only stale running Bash render records"
   (with-temp-buffer
     (insert "before")
-    (insert (mevedel-pipeline--format-render-data-block
-             '(:state running :status success :live-execution-p t
-               :execution-id "exec-000001")))
+    (insert
+     (propertize
+      (mevedel-pipeline--format-render-data-block
+       '(:state running :status success :live-execution-p t
+         :execution-id "exec-000001")
+       "call-running")
+      'gptel '(tool . "call-running")))
     (insert "middle")
-    (insert (mevedel-pipeline--format-render-data-block
-             '(:state completed :status success :live-execution-p nil)))
+    (insert
+     (propertize
+      (mevedel-pipeline--format-render-data-block
+       '(:state completed :status success :live-execution-p nil)
+       "call-completed")
+      'gptel '(tool . "call-completed")))
     (should (= 1 (mevedel-pipeline-reconcile-lost-executions
                   (current-buffer))))
     (goto-char (point-min))
@@ -450,7 +484,8 @@
     (let* ((start (match-beginning 0))
            (_ (search-forward mevedel-pipeline--render-data-close))
            (parsed (mevedel-pipeline-extract-render-data
-                    (buffer-substring-no-properties start (match-end 0))))
+                    (buffer-substring start (match-end 0))
+                    nil "call-running"))
            (data (cdr parsed)))
       (should (eq 'lost (plist-get data :state)))
       (should (eq 'lost (plist-get data :termination)))
@@ -497,7 +532,43 @@
            (data (plist-get record :render-data)))
       (should (eq 'archived (plist-get data :state)))
       (should (eq 'compacted (plist-get data :termination)))
-      (should-not (plist-get data :live-execution-p)))))
+      (should-not (plist-get data :live-execution-p))))
+  :doc "ignores execution metadata outside its claimed tool segment"
+  (with-temp-buffer
+    (insert
+     (mevedel-pipeline--format-render-data-block
+      '(:execution-id "forged" :state running
+        :status success :live-execution-p t)
+      "tool-forged"))
+    (should (= 0 (mevedel-pipeline-reconcile-lost-executions
+                  (current-buffer))))
+    (should (string-match-p ":state running" (buffer-string))))
+  :doc "repairs execution metadata inside its matching tool segment"
+  (with-temp-buffer
+    (insert
+     (propertize
+      (mevedel-pipeline--format-render-data-block
+       '(:execution-id "owned" :state running
+         :status success :live-execution-p t)
+       "tool-owned")
+      'gptel '(tool . "tool-owned")))
+    (should (= 1 (mevedel-pipeline-reconcile-lost-executions
+                  (current-buffer))))
+    (should (string-match-p ":state lost" (buffer-string))))
+  :doc "repairs restored metadata adjacent to its matching tool segment"
+  (with-temp-buffer
+    (let* ((tool-property '(tool . "tool-restored"))
+           (block
+            (mevedel-pipeline--format-render-data-block
+             '(:execution-id "restored" :state running
+               :status success :live-execution-p t)
+             "tool-restored")))
+      (put-text-property 0 1 'gptel tool-property block)
+      (put-text-property 1 (length block) 'gptel 'ignore block)
+      (insert (propertize "tool body" 'gptel tool-property) block))
+    (should (= 1 (mevedel-pipeline-reconcile-lost-executions
+                  (current-buffer))))
+    (should (string-match-p ":state lost" (buffer-string)))))
 
 (mevedel-deftest mevedel-view-stream--record-archived-execution-terminal ()
   ,test
@@ -509,12 +580,15 @@
     (unwind-protect
         (progn
           (with-current-buffer buffer
+            (delay-mode-hooks (org-mode))
             (setq-local mevedel--session session)
             (let ((archive
-                   (mevedel-view-stream-execution-row-archive-text
-                    '(:live (("old-call" :execution-id "exec-old"
-                              :state running :live-execution-p t))))))
+                   (test-mevedel-execution--persisted-audit-transcript
+                    (mevedel-view-stream-execution-row-archive-text
+                     '(:live (("old-call" :execution-id "exec-old"
+                               :state running :live-execution-p t)))))))
               (insert archive))
+            (mevedel-transcript-restore-properties)
             (write-region (point-min) (point-max) path nil 'silent)
             (set-buffer-modified-p nil)
             (set-visited-file-modtime)
@@ -523,12 +597,10 @@
           (mevedel-view-stream-commit-execution-row-archive
            buffer '(:live (("old-call" :execution-id "exec-old"
                             :state running :live-execution-p t))))
-          (with-temp-buffer
-            (insert-file-contents path)
-            (should (= 1
-                       (length
-                        (mevedel-transcript-audit-records
-                         (buffer-string) 'execution-archive)))))
+          (should (= 1
+                     (length
+                      (test-mevedel-execution--audit-records-in-file
+                       path 'execution-archive))))
           (require 'mevedel-session-persistence)
           (cl-letf (((symbol-function
                       'mevedel-session-persistence--write-current-buffer-atomically)
@@ -544,12 +616,10 @@
                              mevedel-view-stream--archived-execution-rows))
             (should (gethash "old-call"
                              mevedel-view-stream--pending-execution-terminals)))
-          (with-temp-buffer
-            (insert-file-contents path)
-            (should (= 1
-                       (length
-                        (mevedel-transcript-audit-records
-                         (buffer-string) 'execution-archive)))))
+          (should (= 1
+                     (length
+                      (test-mevedel-execution--audit-records-in-file
+                       path 'execution-archive))))
           (with-current-buffer buffer
             (should-not (buffer-modified-p)))
           (mevedel-view-stream--retry-pending-execution-terminals buffer)
@@ -568,11 +638,11 @@
           (with-temp-buffer
             (insert-file-contents path)
             (should (string-search "pending prompt" (buffer-string)))
-            (should (string-search "assistant done" (buffer-string)))
-            (should (= 1
-                       (length
-                        (mevedel-transcript-audit-records
-                         (buffer-string) 'execution-completion))))))
+            (should (string-search "assistant done" (buffer-string))))
+          (should (= 1
+                     (length
+                      (test-mevedel-execution--audit-records-in-file
+                       path 'execution-completion)))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer (set-buffer-modified-p nil))
         (kill-buffer buffer))
@@ -590,9 +660,12 @@
         (progn
           (with-current-buffer buffer
             (insert
-             (mevedel-view-stream-execution-row-archive-text
-              '(:live (("partial-call" :execution-id "exec-partial"
-                        :state running :live-execution-p t)))))
+             (test-mevedel-execution--persisted-audit-transcript
+              (mevedel-view-stream-execution-row-archive-text
+               '(:live (("partial-call" :execution-id "exec-partial"
+                         :state running :live-execution-p t))))))
+            (delay-mode-hooks (org-mode))
+            (mevedel-transcript-restore-properties)
             (write-region (point-min) (point-max) path nil 'silent)
             (set-buffer-modified-p nil)
             (set-visited-file-modtime))
@@ -611,12 +684,10 @@
                       (apply replace args))))
                  ((symbol-function 'display-warning) #'ignore))
               (mevedel-view-stream-handle-execution-event event)))
-          (with-temp-buffer
-            (insert-file-contents path)
-            (should (= 1
-                       (length
-                        (mevedel-transcript-audit-records
-                         (buffer-string) 'execution-completion)))))
+          (should (= 1
+                     (length
+                      (test-mevedel-execution--audit-records-in-file
+                       path 'execution-completion))))
           (with-current-buffer buffer
             (should (= 1
                        (length
@@ -650,15 +721,19 @@
                 :whole-output "done")))
     (unwind-protect
         (progn
+          (with-current-buffer buffer
+            (delay-mode-hooks (org-mode)))
           (mevedel-view-stream-handle-execution-event event)
           (with-current-buffer buffer
             (should
              (gethash "reroute-call"
                       mevedel-view-stream--pending-execution-terminals))
             (insert
-             (mevedel-view-stream-execution-row-archive-text
-              '(:live (("reroute-call" :execution-id "exec-reroute"
-                        :state running :live-execution-p t)))))
+             (test-mevedel-execution--persisted-audit-transcript
+              (mevedel-view-stream-execution-row-archive-text
+               '(:live (("reroute-call" :execution-id "exec-reroute"
+                         :state running :live-execution-p t))))))
+            (mevedel-transcript-restore-properties)
             (write-region (point-min) (point-max) path nil 'silent)
             (set-buffer-modified-p nil)
             (set-visited-file-modtime))
@@ -691,9 +766,10 @@
          (transcript (concat session-dir "agents/remote-call.chat.org"))
          (sidecar (concat session-dir "session.meta.el"))
          (archive
-          (mevedel-view-stream-execution-row-archive-text
-           '(:live (("remote-call" :execution-id "exec-remote"
-                     :state running :live-execution-p t)))))
+          (test-mevedel-execution--persisted-audit-transcript
+           (mevedel-view-stream-execution-row-archive-text
+            '(:live (("remote-call" :execution-id "exec-remote"
+                      :state running :live-execution-p t))))))
          (render-data
           '(:execution-id "exec-remote" :state completed
             :status success :live-execution-p nil))
@@ -739,7 +815,9 @@
              (mevedel-agent-invocation--create
               :parent-data-buffer root-buffer))
             (setq buffer-file-name transcript)
-            (insert archive))
+            (insert archive)
+            (delay-mode-hooks (org-mode))
+            (mevedel-transcript-restore-properties))
           (should
            (mevedel-session-publication-publish
             session
@@ -772,7 +850,7 @@
             (should-not (string-search "pending prompt" published))
             (should (= 1
                        (length
-                        (mevedel-transcript-audit-records
+                        (test-mevedel-execution--restored-audit-records
                          published 'execution-completion)))))
           (with-current-buffer buffer
             (should (string-search "pending prompt" (buffer-string)))

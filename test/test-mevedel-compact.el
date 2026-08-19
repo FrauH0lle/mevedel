@@ -3632,7 +3632,8 @@ missing or zero prompt-side usage cannot become the active baseline"
              (propertize
               (mevedel-pipeline--format-render-data-block
                '(:execution-id "exec-000001" :state running
-                 :live-execution-p t))
+                 :live-execution-p t)
+               "archived-call")
               'gptel '(tool . "archived-call")))
             (put-text-property begin (point) 'gptel
                                '(tool . "archived-call")))
@@ -3670,7 +3671,7 @@ missing or zero prompt-side usage cannot become the active baseline"
           (should (string-match-p "summary" (buffer-string)))
           (should (string-match "<!-- mevedel-hook-audit -->"
                                 (buffer-string)))
-          (should (eq 'ignore
+          (should (eq 'mevedel-hook-audit
                       (get-text-property (match-beginning 0)
                                          'gptel (buffer-string))))
           (should (string-match-p "tail" (buffer-string)))
@@ -3691,25 +3692,30 @@ missing or zero prompt-side usage cannot become the active baseline"
              target "summary again" "tail again" "pending\n"
              nil nil 0))
           (should (= 3 (mevedel-session-current-segment session)))
-          (should (= 1
-                     (length
-                      (mevedel-transcript-audit-records
-                       (buffer-string) 'execution-archive))))
+          (ert-info ("archive survives repeated compaction")
+            (should (= 1
+                       (length
+                        (mevedel-transcript-audit-records
+                         (buffer-string) 'execution-archive)))))
           (mevedel-view-stream-handle-execution-event
            (list :type 'terminal :session session :data-buffer buffer
                  :owner "/root" :tool-use-id "archived-call"
                  :facts '(:state completed :outcome success :exit-code 0)
                  :whole-output "done"))
-          (should (= 1
-                     (length
-                      (mevedel-transcript-audit-records
-                       (buffer-string) 'execution-completion))))
+          (ert-info ("terminal event replaces the live archive")
+            (should (= 1
+                       (length
+                        (mevedel-transcript-audit-records
+                         (buffer-string) 'execution-completion)))))
           (let ((segment-path
                  (mevedel-session-persistence--segment-path
                   (mevedel-session-save-path session) 3)))
             (should (file-exists-p segment-path))
             (with-temp-buffer
               (insert-file-contents segment-path)
+              (org-mode)
+              (require 'mevedel-transcript-restore)
+              (mevedel-transcript-restore-properties)
               (should (string-match-p "summary again" (buffer-string)))
               (should (string-match-p "tail again" (buffer-string)))
               (should (= 1

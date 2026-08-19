@@ -100,7 +100,7 @@
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
-                  "mevedel-pipeline" (render-data))
+                  "mevedel-pipeline" (render-data &optional tool-use-id))
 (declare-function mevedel-pipeline-extract-render-data
                   "mevedel-pipeline"
                   (result-string &optional session expected-tool-use-id
@@ -1186,11 +1186,9 @@ original `$skill' invocation compactly."
                      (mevedel-skills-inline-display-text
                       name arguments)
                      :expanded-prompt expanded-prompt))
-         (block (propertize
-                 (progn
-                   (require 'mevedel-pipeline)
-                   (mevedel-pipeline--format-render-data-block data))
-                 'gptel 'ignore)))
+         (block (progn
+                  (require 'mevedel-pipeline)
+                  (mevedel-pipeline--format-render-data-block data))))
     block))
 
 (defun mevedel-skills--insert-inline-user-skill-render-data
@@ -1206,11 +1204,8 @@ original `$skill' invocation compactly."
                              (lambda (attachment)
                                (list :name (plist-get attachment :name)))
                              attachments))))
-    (propertize
-     (progn
-       (require 'mevedel-pipeline)
-       (mevedel-pipeline--format-render-data-block data))
-     'gptel 'ignore)))
+    (require 'mevedel-pipeline)
+    (mevedel-pipeline--format-render-data-block data)))
 
 (defun mevedel-skills--inline-attachment-reminder (attachment)
   "Return system-reminder body for prepared inline skill ATTACHMENT."

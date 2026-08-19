@@ -799,7 +799,7 @@
         (pcase-let ((`(,start . ,end)
                      (mevedel-pipeline--find-render-data-block-by-agent-id
                       "reviewer--draft")))
-          (let* ((raw (buffer-substring-no-properties start end))
+          (let* ((raw (buffer-substring start end))
                  (render-data (cdr (mevedel-pipeline-extract-render-data raw))))
             (should (eq 'completed (plist-get render-data :status)))
             (should (= 2 (plist-get render-data :calls))))))

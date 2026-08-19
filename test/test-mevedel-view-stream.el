@@ -246,7 +246,8 @@
         (let ((start (point))
               (block
                (mevedel-pipeline--format-render-data-block
-                '(:status success :state running :live-execution-p t))))
+                '(:status success :state running :live-execution-p t)
+                "call-live")))
           (insert
            (concat "(:name \"Bash\" :args (:command \"printf run\"))\n\ninitial"
                    block))
@@ -336,7 +337,8 @@
                    (with-current-buffer data-buf
                      (mevedel-pipeline-extract-render-data
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))
+                       (point-min) (point-max))
+                      nil "call-live"))))
               (should (equal "whole head\nwhole tail"
                              (plist-get (cdr parsed) :execution-output)))
               (should
@@ -383,9 +385,10 @@
             (should (= point-offset
                        (- (point) (mevedel-view--input-start)))))))
       (with-current-buffer data-buf
-        (should (equal (mevedel-pipeline--strip-render-data-blocks data-before)
+        (should (equal (mevedel-pipeline--strip-render-data-blocks
+                        data-before "call-live")
                        (mevedel-pipeline--strip-render-data-blocks
-                        (buffer-string)))))))
+                        (buffer-string) "call-live"))))))
   :doc "retains a terminal event until its parallel tool row is inserted"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer data-buf
@@ -417,7 +420,8 @@
                    mevedel-view-stream--pending-execution-terminals))
       (let ((parsed
              (mevedel-pipeline-extract-render-data
-              (buffer-substring-no-properties (point-min) (point-max)))))
+              (buffer-substring-no-properties (point-min) (point-max))
+              nil "call-late")))
         (should (equal "late terminal output"
                        (plist-get (cdr parsed) :execution-output))))))
   :doc "finalizes a headless agent row at the data-buffer response boundary"
@@ -453,7 +457,8 @@
             (let ((parsed
                    (mevedel-pipeline-extract-render-data
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))
+                     (point-min) (point-max))
+                    nil "call-headless")))
               (should
                (equal "headless terminal output"
                       (plist-get (cdr parsed) :execution-output))))))

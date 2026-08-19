@@ -80,7 +80,7 @@
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
-                  "mevedel-pipeline" (render-data))
+                  "mevedel-pipeline" (render-data &optional tool-use-id))
 
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-commit
@@ -1037,13 +1037,10 @@ permission policy decides whether verifier validation commands may run."
     (require 'mevedel-pipeline)
     (let* ((render-data
             (mevedel-review--progress-render-data invocation hint command))
-           (block (mevedel-pipeline--format-render-data-block render-data))
-           (start nil))
+           (block (mevedel-pipeline--format-render-data-block render-data)))
       (goto-char (point-max))
       (unless (bolp) (insert "\n"))
-      (setq start (point))
       (insert block)
-      (add-text-properties start (point) '(gptel ignore))
       (when-let* ((view-buffer (and (boundp 'mevedel--view-buffer)
                                     mevedel--view-buffer))
                   ((buffer-live-p view-buffer)))

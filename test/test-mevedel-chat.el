@@ -658,13 +658,13 @@
 					 (point-min) (point-max))))
 			       (goto-char (point-min))
 			       (search-forward "<!-- mevedel-render-data -->")
-			       (should (eq 'ignore
+			       (should (eq 'mevedel-render-data
 					   (get-text-property (match-beginning 0) 'gptel)))
 			       (should
 				(equal
 				 '(:kind user-display :text "Show setup")
 				 (cdr (mevedel-pipeline-extract-render-data
-				       (buffer-substring-no-properties
+				       (buffer-substring
 					(point-min) (point-max)))))))))
 			 (should (equal "Show setup" displayed))
 			 (should (eq 'worktree kind))
@@ -1687,6 +1687,9 @@
 			       (let ((segment buffer-file-name))
 				 (with-temp-buffer
 				   (insert-file-contents segment)
+				   (org-mode)
+				   (require 'mevedel-transcript-restore)
+				   (mevedel-transcript-restore-properties)
 				   (should (= 2 (length
 						 (mevedel-transcript-audit-records
 						  (buffer-string)
@@ -2518,6 +2521,7 @@
 
 (mevedel-deftest mevedel--directive-discussion-transcript
   (:doc "renders only current-request local messages and replies in order")
+  (require 'mevedel-pipeline)
   (let ((record
          (mevedel-directive--create
           :id "directive" :request "Request" :anchor '(:state attached)
@@ -2532,9 +2536,8 @@
             :message "One" :request "Hidden request one"
             :result (concat
                      "Answer one\n\n"
-                     "<!-- mevedel-render-data -->\n"
-                     "(:kind request-summary :elapsed-seconds 1.0)\n"
-                     "<!-- /mevedel-render-data -->\n")
+                     (mevedel-pipeline-format-render-data
+                      '(:kind request-summary :elapsed-seconds 1.0)))
             :outcome 'success)
            (mevedel-directive-discussion-turn--create
             :directive-request "Request"

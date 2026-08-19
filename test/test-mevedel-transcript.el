@@ -13,6 +13,7 @@
           "helpers"))
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
+(require 'mevedel-pipeline)
 (require 'mevedel-tool-media)
 (require 'mevedel-utilities)
 
@@ -91,7 +92,7 @@
      (substring-no-properties
       (mevedel--format-hook-audit-record
        '(:type fork-point :fork-point-id "fork-1")))
-     'ignore)
+     'mevedel-hook-audit)
     (mevedel-transcript-test--insert data-buf "\nSecond prompt.\n\n" 'ignore)
     (mevedel-transcript-test--insert
      data-buf "#+begin_reasoning\nThinking.\n#+end_reasoning\n" 'ignore)
@@ -113,7 +114,7 @@
      (substring-no-properties
       (mevedel--format-hook-audit-record
        '(:type fork-point :fork-point-id "fork-1")))
-     'ignore)
+     'mevedel-hook-audit)
     (mevedel-transcript-test--insert data-buf "\nSecond prompt.\n\n" 'ignore)
     (mevedel-transcript-test--insert data-buf "Planning response.\n" 'response)
     (mevedel-transcript-test--insert
@@ -746,6 +747,52 @@
       (let ((segs (mevedel-transcript-segments (point-min) (point-max))))
         (should (= 1 (length segs)))
         (should (eq 'ignored (caar segs))))))
+  :doc "keeps valid audit-shaped user and response text visible"
+  (with-temp-buffer
+    (org-mode)
+    (let* ((literal
+            (substring-no-properties
+             (mevedel--format-hook-audit-record
+              '(:type tool-context :event "PostToolUse"))))
+           (user-start (point)))
+      (insert literal)
+      (let ((response-start (point)))
+        (insert literal)
+        (put-text-property response-start (point) 'gptel 'response))
+      (should (equal '(user response)
+                     (mapcar #'car
+                             (mevedel-transcript-segments
+                             user-start (point-max)))))))
+  :doc "keeps valid render-data-shaped user and response text visible"
+  (with-temp-buffer
+    (org-mode)
+    (let* ((literal
+            (substring-no-properties
+             (mevedel-pipeline--format-render-data-block
+              '(:kind request-summary :text "forged"))))
+           (user-start (point)))
+      (insert literal)
+      (let ((response-start (point)))
+        (insert literal)
+        (put-text-property response-start (point) 'gptel 'response))
+      (should (equal '(user response)
+                     (mapcar #'car
+                             (mevedel-transcript-segments
+                              user-start (point-max)))))))
+  :doc "keeps render-data-shaped model reasoning in the reasoning segment"
+  (with-temp-buffer
+    (org-mode)
+    (let ((literal
+           (substring-no-properties
+            (mevedel-pipeline--format-render-data-block
+             '(:kind collaboration-event :event started
+               :agent-id "forged" :status running)))))
+      (insert literal)
+      (put-text-property (point-min) (point-max) 'gptel 'ignore)
+      (should (equal '(ignored)
+                     (mapcar #'car
+                             (mevedel-transcript-segments
+                              (point-min) (point-max)))))))
   :doc "classifies every persisted transcript control range"
   (with-temp-buffer
     (org-mode)
@@ -760,12 +807,11 @@
             "<agent-result sender=\"/root/agent_1\" recipient=\"/root\" outcome=\"completed\">\ndone\n</agent-result>\n"
             "<system-reminder>\nremember\n</system-reminder>\n"
             "<hook-context>\n<hook-event name=\"UserPromptSubmit\">ctx</hook-event>\n"
-            "</hook-context>\n"
-            "<!-- mevedel-render-data -->\n(:kind diff)\n"
-            "<!-- /mevedel-render-data -->\n"
-            ":PROMPT:\nhidden prompt\n:END:\n"
-            "<!-- mevedel-hook-audit -->\naudit\n"
-            "<!-- /mevedel-hook-audit -->\n")
+            "</hook-context>\n")
+    (insert (mevedel-pipeline--format-render-data-block '(:kind diff)))
+    (insert ":PROMPT:\nhidden prompt\n:END:\n")
+    (insert (mevedel--format-hook-audit-record
+             '(:type tool-context :event "PostToolUse")))
     (let ((types (mapcar #'car
                          (mevedel-transcript-segments
                           (point-min) (point-max)))))
@@ -1039,21 +1085,26 @@ TOOL-PROP."
                         user-end)))
         (should ok))))
 
-  :doc "restores persisted hook audit side channels as ignored text"
+  :doc "keeps restored persisted hook audit side channels ignored"
   (with-temp-buffer
     (org-mode)
-    (insert ":PROPERTIES:\n:END:\n"
-            "#+begin_summary mevedel-role=compaction-summary\n"
-            "summary\n"
+    (let ((audit
+           (propertize
             (substring-no-properties
              (mevedel--format-hook-audit-record
               '(:type compact-context
                       :event "PreCompact"
                       :context "private note")))
-            "#+end_summary\n")
+            'gptel 'ignore)))
+      (insert ":PROPERTIES:\n:END:\n"
+              "#+begin_summary mevedel-role=compaction-summary\n"
+              "summary\n"
+              audit
+              "#+end_summary\n"))
     (goto-char (point-min))
     (search-forward "<!-- mevedel-hook-audit -->")
-    (should-not (get-text-property (match-beginning 0) 'gptel))
+    (should (eq (get-text-property (match-beginning 0) 'gptel)
+                'ignore))
     (mevedel-transcript-normalize-properties)
     (should (eq (get-text-property (match-beginning 0) 'gptel)
                 'ignore)))
@@ -1257,10 +1308,10 @@ TOOL-PROP."
       (setq tool-start (point))
       (insert "#+begin_tool (Bash :command \"date\")\n"
               "(:name \"Bash\" :args (:command \"date\"))\n\n"
-              "Execution completed.\n"
-              "<!-- mevedel-render-data -->\n"
-              "(:kind bash-result :exit-code 0)\n"
-              "<!-- /mevedel-render-data -->\n")
+              "Execution completed.\n")
+      (insert
+       (mevedel-pipeline--format-render-data-block
+        '(:kind bash-result :exit-code 0)))
       (setq separator-start (point))
       (insert "\n")
       (setq separator-end (point))
@@ -1273,7 +1324,7 @@ TOOL-PROP."
       (put-text-property response-start (point) 'gptel 'response)
       (mevedel-transcript-normalize-properties)
       (should (mevedel-transcript-test--all-gptel-prop-p
-               separator-start separator-end 'ignore))))
+               separator-start separator-end 'mevedel-render-data))))
   :doc "returns and leaves unclosed structural openers unclassified"
   (dolist (snippet `("#+begin_reasoning\npartial thought"
                      ,(concat "#+begin_tool (Bash :command \"date\")\n"

@@ -153,11 +153,13 @@
                   "mevedel-tool-media"
                   (result-string &optional tool-results-dir expected-tool-use-id
                                  allow-payload-tool-use-id session))
+(declare-function mevedel-tool-media-normalize-items
+                  "mevedel-tool-media" (items))
 (declare-function mevedel-tool-media-prepare-tool-result
                   "mevedel-tool-media"
                   (backend tool-call tool-results-dir &optional session))
 (declare-function mevedel-tool-media-result-for-hooks
-                  "mevedel-tool-media" (result))
+                  "mevedel-tool-media" (result media))
 (declare-function mevedel-tool-media-strip-blocks
                   "mevedel-tool-media" (string))
 
@@ -1829,8 +1831,10 @@ FAIL is unused; transform failures warn and leave CONTEXT unchanged."
           :warning)
          (funcall next context))))))
 
-(defun mevedel-pipeline--format-render-data-block (render-data)
-  "Return the serialized side-channel block string for RENDER-DATA.
+(defun mevedel-pipeline--format-render-data-block
+    (render-data &optional tool-use-id)
+  "Return the serialized side-channel block for RENDER-DATA.
+When TOOL-USE-ID is non-nil, bind the block to that tool call.
 The returned string is propertized `invisible' = t so the data buffer
 hides it as a best-effort display courtesy.
 
@@ -1841,15 +1845,22 @@ parser and persistence).  An `:around' advice on
 the single chokepoint where tool result strings become the LLM-bound
 API message, without touching the callback that drives chat-buffer
 display."
-  (propertize
-   (concat "\n" mevedel-pipeline--render-data-open "\n"
-           (let ((print-level nil)
-                 (print-length nil)
-                 (print-circle t))
-             (prin1-to-string
-              (mevedel-pipeline--plain-render-data render-data)))
-           "\n" mevedel-pipeline--render-data-close "\n")
-   'invisible t))
+  (let ((data (mevedel-pipeline--plain-render-data render-data)))
+    (setq data (copy-sequence data))
+    (if tool-use-id
+        (setq data
+              (plist-put data :mevedel-tool-use-id tool-use-id))
+      (cl-remf data :mevedel-tool-use-id))
+    (propertize
+     (concat "\n" mevedel-pipeline--render-data-open "\n"
+             (let ((print-level nil)
+                   (print-length nil)
+                   (print-circle t))
+               (prin1-to-string data))
+             "\n" mevedel-pipeline--render-data-close "\n")
+     'invisible t
+     'gptel 'mevedel-render-data
+     'mevedel-render-data t)))
 
 (defun mevedel-pipeline--read-render-data-payload (payload)
   "Read one render-data plist from PAYLOAD or return a failure sentinel."
@@ -1916,9 +1927,62 @@ BEGIN and END include the formatter's optional surrounding newlines."
                 (setq search-start close-end)))))))
       (nreverse blocks))))
 
-(defun mevedel-pipeline--strip-render-data-blocks (string)
-  "Return STRING with every valid render-data side-channel block removed."
-  (if-let* ((blocks (mevedel-pipeline--render-data-blocks string)))
+(defun mevedel-pipeline--render-data-trusted-range-p
+    (start end &optional object)
+  "Return non-nil when START..END is trusted render data in OBJECT.
+OBJECT is a string or buffer and defaults to the current buffer."
+  (let ((source (or object (current-buffer))))
+    (while (and (< start end)
+                (memq (if (stringp source)
+                          (aref source (1- end))
+                        (with-current-buffer source
+                          (char-after (1- end))))
+                      '(?\s ?\t ?\r ?\n)))
+      (setq end (1- end)))
+    (and (< start end)
+         (or
+          (and (eq t (get-text-property start 'mevedel-render-data source))
+               (= end (next-single-property-change
+                       start 'mevedel-render-data source end)))
+          (and (eq 'mevedel-render-data
+                   (get-text-property start 'gptel source))
+               (= end (next-single-property-change
+                       start 'gptel source end)))))))
+
+(defun mevedel-pipeline--render-data-owner-p (data expected-tool-use-id)
+  "Return non-nil when DATA belongs to EXPECTED-TOOL-USE-ID.
+Nil EXPECTED-TOOL-USE-ID selects only unbound render data."
+  (if expected-tool-use-id
+      (and (plist-member data :mevedel-tool-use-id)
+           (equal expected-tool-use-id
+                  (plist-get data :mevedel-tool-use-id)))
+    (not (plist-member data :mevedel-tool-use-id))))
+
+(defun mevedel-pipeline--render-data-block-authorized-p
+    (block string expected-tool-use-id)
+  "Return non-nil when BLOCK in STRING has the expected authority."
+  (and (mevedel-pipeline--render-data-owner-p
+        (caddr block) expected-tool-use-id)
+       (or expected-tool-use-id
+           (mevedel-pipeline--render-data-trusted-range-p
+            (car block) (cadr block) string))))
+
+(defun mevedel-pipeline--render-data-without-owner (data)
+  "Return a copy of DATA without its internal owner field."
+  (let ((plain (copy-sequence data)))
+    (cl-remf plain :mevedel-tool-use-id)
+    plain))
+
+(defun mevedel-pipeline--strip-render-data-blocks
+    (string &optional expected-tool-use-id)
+  "Remove render-data owned by EXPECTED-TOOL-USE-ID from STRING.
+Nil EXPECTED-TOOL-USE-ID removes only unbound blocks."
+  (if-let* ((blocks
+             (cl-remove-if-not
+              (lambda (block)
+                (mevedel-pipeline--render-data-block-authorized-p
+                 block string expected-tool-use-id))
+              (mevedel-pipeline--render-data-blocks string))))
       (let ((cursor 0)
             parts)
         (dolist (block blocks)
@@ -1934,10 +1998,13 @@ BEGIN and END include the formatter's optional surrounding newlines."
   (mevedel-tool-media-strip-blocks
    (mevedel-pipeline--strip-non-media-side-channel-blocks string)))
 
-(defun mevedel-pipeline--strip-non-media-side-channel-blocks (string)
-  "Return STRING with non-media mevedel side-channel blocks removed."
+(defun mevedel-pipeline--strip-non-media-side-channel-blocks
+    (string &optional expected-tool-use-id)
+  "Remove trusted non-media side channels from STRING.
+Render data must belong to EXPECTED-TOOL-USE-ID; nil selects unbound data."
   (mevedel--strip-hook-audit-blocks
-   (mevedel-pipeline--strip-render-data-blocks string)))
+   (mevedel-pipeline--strip-render-data-blocks
+    string expected-tool-use-id)))
 
 (defun mevedel-pipeline--find-render-data-block-by-agent-id (agent-id)
   "Return bounds of the first render-data block for AGENT-ID.
@@ -1967,9 +2034,16 @@ plist should be updated when a sub-agent's status changes."
                                     (1+ close-end)
                                   close-end))
                      (raw (buffer-substring-no-properties block-beg block-end))
-                     (parsed (mevedel-pipeline-extract-render-data raw))
-                     (plist (cdr parsed)))
-                (when (and (listp plist)
+                     (block (car (mevedel-pipeline--render-data-blocks raw)))
+                     (plist (and block (caddr block))))
+                (when (and (eq (plist-get plist :kind)
+                               'collaboration-event)
+                           (eq (plist-get plist :event) 'started)
+                           (if (plist-member plist :mevedel-tool-use-id)
+                               (mevedel-pipeline--render-data-call-range-p
+                                plist block-beg block-end)
+                             (mevedel-pipeline--render-data-trusted-range-p
+                              block-beg block-end))
                            (equal (plist-get plist :agent-id) agent-id))
                   (setq found (cons block-beg block-end)))))))
         found))))
@@ -1994,10 +2068,18 @@ result."
              (or (and (> beg (point-min))
                       (get-text-property (1- beg) 'gptel))
                  (and (< end (point-max))
-                      (get-text-property end 'gptel)))))
+                      (get-text-property end 'gptel))))
+            (tool-use-id
+             (when-let* ((block
+                          (car
+                           (mevedel-pipeline--render-data-blocks
+                            (buffer-substring-no-properties beg end)))))
+               (plist-get (caddr block) :mevedel-tool-use-id))))
         (goto-char beg)
         (delete-region beg end)
-        (let ((block (mevedel-pipeline--format-render-data-block new-plist)))
+        (let ((block
+               (mevedel-pipeline--format-render-data-block
+                new-plist tool-use-id)))
           (when surrounding-gptel
             (setq block (propertize block 'gptel surrounding-gptel)))
           (insert block))))))
@@ -2023,23 +2105,39 @@ result."
         (setq position next)))
     bounds))
 
-(defun mevedel-pipeline--render-data-block-bounds (beg end)
-  "Return render-data block bounds inside BEG..END, or nil."
-  (save-excursion
-    (goto-char beg)
-    (when (search-forward mevedel-pipeline--render-data-open end t)
-      (let* ((open-beg (match-beginning 0))
-             (block-beg (if (and (> open-beg beg)
-                                 (eq (char-before open-beg) ?\n))
-                            (1- open-beg)
-                          open-beg)))
-        (when (search-forward mevedel-pipeline--render-data-close end t)
-          (let ((close-end (match-end 0)))
-            (cons block-beg
-                  (if (and (< close-end end)
-                           (eq (char-after close-end) ?\n))
-                      (1+ close-end)
-                    close-end))))))))
+(defun mevedel-pipeline--render-data-call-range-p (data beg end)
+  "Return non-nil when DATA at BEG..END belongs to its tool segment."
+  (when-let* ((tool-use-id (plist-get data :mevedel-tool-use-id))
+              ((stringp tool-use-id)))
+    (let ((target (cons 'tool tool-use-id))
+          (positions (list beg (and (> beg (point-min)) (1- beg))))
+          authorized)
+      (while (and positions (not authorized))
+        (when-let* ((position (pop positions))
+                    ((< position (point-max)))
+                    ((equal target (get-text-property position 'gptel))))
+          (let ((next (or (next-single-property-change
+                           position 'gptel nil (point-max))
+                          (point-max))))
+            (setq authorized
+                  (or (and (= position beg) (<= end next))
+                      (and (memq next (list beg (1+ beg)))
+                           (mevedel-pipeline--render-data-trusted-range-p
+                            (max beg next) end)))))))
+      authorized)))
+
+(defun mevedel-pipeline--render-data-block-bounds
+    (beg end &optional expected-tool-use-id)
+  "Return matching render-data bounds inside BEG..END, or nil.
+The block must belong to EXPECTED-TOOL-USE-ID; nil selects unbound data."
+  (when-let* ((block
+               (cl-find-if
+                (lambda (candidate)
+                  (mevedel-pipeline--render-data-owner-p
+                   (caddr candidate) expected-tool-use-id))
+                (mevedel-pipeline--render-data-blocks
+                 (buffer-substring-no-properties beg end)))))
+    (cons (+ beg (car block)) (+ beg (cadr block)))))
 
 (defun mevedel-pipeline--next-tool-segment-start (position tool-use-id)
   "Return the first different tool segment after POSITION.
@@ -2089,13 +2187,14 @@ persisted with the transcript while the provider scrubber keeps it model-hidden.
                       (point-max)))
                  (block
                   (mevedel-pipeline--render-data-block-bounds
-                   beg search-end))
+                   beg search-end tool-use-id))
                  (existing
                   (and block
                        (cdr
                         (mevedel-pipeline-extract-render-data
                          (buffer-substring-no-properties
-                          (car block) (cdr block))))))
+                          (car block) (cdr block))
+                         nil tool-use-id))))
                  (render-data
                   (mevedel-pipeline--plist-merge existing updates))
                  (inhibit-modification-hooks t)
@@ -2106,7 +2205,8 @@ persisted with the transcript while the provider scrubber keeps it model-hidden.
               (goto-char end)
               (insert
                (propertize
-                (mevedel-pipeline--format-render-data-block render-data)
+                (mevedel-pipeline--format-render-data-block
+                 render-data tool-use-id)
                 'gptel (get-text-property beg 'gptel))))
             t))))))
 
@@ -2120,10 +2220,11 @@ persisted with the transcript while the provider scrubber keeps it model-hidden.
                      (mevedel-pipeline--tool-segment-bounds tool-use-id))
                     (block
                      (mevedel-pipeline--render-data-block-bounds
-                      (car segment) (cdr segment))))
+                      (car segment) (cdr segment) tool-use-id)))
           (cdr
            (mevedel-pipeline-extract-render-data
-            (buffer-substring-no-properties (car block) (cdr block)))))))))
+            (buffer-substring-no-properties (car block) (cdr block))
+            nil tool-use-id)))))))
 
 (defun mevedel-pipeline-reconcile-lost-executions
     (buffer &optional successor-execution-ids)
@@ -2154,10 +2255,16 @@ terminal truth.  Return the number of repaired records."
                                    (eq (char-after close-end) ?\n))
                               (1+ close-end)
                             close-end))
-                         (parsed
-                          (mevedel-pipeline-extract-render-data
-                           (buffer-substring-no-properties begin end)))
-                         (data (cdr-safe parsed)))
+                         (block
+                          (car
+                           (mevedel-pipeline--render-data-blocks
+                            (buffer-substring-no-properties begin end))))
+                         (stored (and block (caddr block)))
+                         (data
+                          (and (mevedel-pipeline--render-data-call-range-p
+                                stored begin end)
+                               (mevedel-pipeline--render-data-without-owner
+                                stored))))
                     (when (and data
                                (or (plist-get data :execution-id)
                                    (plist-get data :live-execution-p))
@@ -2186,7 +2293,7 @@ terminal truth.  Return the number of repaired records."
                               (plist-get data :live-execution-p))
                           data)))
                  (mevedel-transcript-audit-spans
-                  (buffer-substring-no-properties (point-min) (point-max))
+                  (buffer-substring (point-min) (point-max))
                   'execution-archive)))
           (dolist (span (reverse archived-records))
             (let* ((record (plist-get span :record))
@@ -2254,7 +2361,7 @@ the view parser, persistence) keeps seeing the full block."
                         (plist-put
                          clean-tc :result
                          (mevedel-pipeline--strip-non-media-side-channel-blocks
-                          orig)))
+                          orig (plist-get tc :id))))
                       (mevedel-tool-media-prepare-tool-result
                        backend clean-tc tool-results-dir session)))
                    (llm-result (car prepared))
@@ -2298,31 +2405,29 @@ control trusted side-channel lookup."
            (file-name-concat save-path "tool-results"))))
     (if (not (stringp result-string))
         (cons result-string nil)
-      (let ((blocks (mevedel-pipeline--render-data-blocks result-string)))
-        (if (null blocks)
-            (if (string-search mevedel-pipeline--render-data-open
-                               result-string)
-                (cons result-string nil)
-            (cons
-             (car (mevedel-tool-media-extract
-                   (mevedel-tool-media-strip-blocks result-string)
-                   tool-results-dir
-                   expected-tool-use-id
-                   allow-payload-tool-use-id
-                   session))
-             nil))
-          (let* ((block (car (last blocks)))
-                 (visible
+      (let* ((blocks
+              (cl-remove-if-not
+               (lambda (block)
+                 (mevedel-pipeline--render-data-block-authorized-p
+                  block result-string expected-tool-use-id))
+               (mevedel-pipeline--render-data-blocks result-string)))
+             (block (car (last blocks)))
+             (visible
+              (if block
                   (concat (substring result-string 0 (car block))
-                          (substring result-string (cadr block)))))
-            (cons (string-trim-right
-                   (car (mevedel-tool-media-extract
-                         (mevedel-tool-media-strip-blocks visible)
-                         tool-results-dir
-                         expected-tool-use-id
-                         allow-payload-tool-use-id
-                         session)))
-                  (caddr block))))))))
+                          (substring result-string (cadr block)))
+                result-string))
+             (media-visible
+              (car (mevedel-tool-media-extract
+                    (mevedel-tool-media-strip-blocks visible)
+                    tool-results-dir
+                    expected-tool-use-id
+                    allow-payload-tool-use-id
+                    session))))
+        (cons (if block (string-trim-right media-visible) media-visible)
+              (and block
+                   (mevedel-pipeline--render-data-without-owner
+                    (caddr block))))))))
 
 (defun mevedel-pipeline--step-attach-render-data (context next _fail)
   "Embed render-data from CONTEXT, then call NEXT.
@@ -2340,6 +2445,7 @@ FAIL is unused; render-data attachment never fails.
 When neither was produced, passes CONTEXT through unchanged."
   (let* ((result (plist-get context :result))
          (status (plist-get context :status))
+         (tool-use-id (plist-get context :tool-use-id))
          (render-data (plist-get context :render-data))
          (sandbox-summary
           (car (plist-get context :sandbox-summary-cell)))
@@ -2361,7 +2467,7 @@ When neither was produced, passes CONTEXT through unchanged."
                  (plist-put context :result
                             (concat result
                                     (mevedel-pipeline--format-render-data-block
-                                     render-data))))
+                                     render-data tool-use-id))))
       (funcall next context))))
 
 (defun mevedel-pipeline--step-attach-media-data (context next _fail)
@@ -2447,14 +2553,21 @@ possibly-updated context."
 Hooks receive both `:raw-result' and the final `:result'.  Only an
 explicit `:updated-result' changes the model-visible tool result."
   (require 'mevedel-tool-media)
-  (let* ((result (plist-get context :result))
+  (let* ((media (mevedel-tool-media-normalize-items
+                 (plist-get context :media)))
+         (context (plist-put context :media media))
+         (tool-use-id (plist-get context :tool-use-id))
+         (result (plist-get context :result))
          (model-result
           (mevedel-tool-media-result-for-hooks
-           (mevedel-pipeline--strip-non-media-side-channel-blocks result)))
+           (mevedel-pipeline--strip-non-media-side-channel-blocks
+            result tool-use-id)
+           media))
          (raw-result
           (mevedel-tool-media-result-for-hooks
            (mevedel-pipeline--strip-non-media-side-channel-blocks
-            (plist-get context :raw-result))))
+            (plist-get context :raw-result) tool-use-id)
+           media))
          (error-p (eq 'error (mevedel-pipeline--context-status context)))
          (event (if error-p
                     'PostToolUseFailure

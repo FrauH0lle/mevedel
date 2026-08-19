@@ -385,13 +385,15 @@ SESSION control trusted side-channel lookup."
         (mapconcat #'identity (nreverse (cons (substring text pos) chunks)) "")
       text)))
 
-(defun mevedel-tool-media-result-for-hooks (result)
-  "Return RESULT with media payloads and reference blocks hidden."
+(defun mevedel-tool-media-result-for-hooks (result media)
+  "Return RESULT with validated MEDIA payloads and reference blocks hidden."
   (if (not (stringp result))
       result
-    (mevedel-tool-media--envelope-summary
-     (mevedel-tool-media-strip-blocks result)
-     "<media omitted: media payload not exposed to hooks>")))
+    (let ((result (mevedel-tool-media-strip-blocks result)))
+      (if media
+          (mevedel-tool-media--envelope-summary
+           result "<media omitted: media payload not exposed to hooks>")
+        result))))
 
 (defun mevedel-tool-media--anthropic-media-block (item)
   "Return an Anthropic content block for media ITEM."
