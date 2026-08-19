@@ -160,6 +160,67 @@
         (kill-buffer source-buffer))
       (delete-directory root t)))
 
+  :doc "patches outdated content without an external diff program"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-outdated-persistence-" t)))
+         (source (file-name-concat root "source.el"))
+         (snapshot (file-name-concat root "instructions.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'file :id root :root root :name "test"))
+         (original "alpha\nreference\nmiddle\ndirective\nomega\n")
+         (current "prefix\nalpha\nreference\nmiddle inserted\ndirective\nomega\nsuffix\n")
+         (mevedel-patch-outdated-instructions t)
+         source-buffer reference-id directive-id diagnostics)
+    (unwind-protect
+        (progn
+          (with-temp-file source (insert original))
+          (setq source-buffer (find-file-noselect source))
+          (with-current-buffer source-buffer
+            (setq-local mevedel--workspace workspace)
+            (goto-char (point-min))
+            (search-forward "reference")
+            (setq reference-id
+                  (overlay-get
+                   (mevedel--create-reference-in
+                    source-buffer (match-beginning 0) (match-end 0))
+                   'mevedel-uuid))
+            (search-forward "directive")
+            (setq directive-id
+                  (overlay-get
+                   (mevedel--create-directive-in
+                    source-buffer (match-beginning 0) (match-end 0)
+                    nil "Keep this request")
+                   'mevedel-uuid))
+            (mevedel--write-instructions-file snapshot root t t t)
+            (mevedel--clear-instruction-state workspace)
+            (erase-buffer)
+            (insert current)
+            (save-buffer))
+          (cl-letf (((symbol-function 'executable-find) (lambda (_name) nil)))
+            (mevedel-test--with-captured-diagnostics diagnostics
+              (mevedel--load-instructions-file
+               snapshot root nil t workspace)))
+          (should mevedel-patch-outdated-instructions)
+          (should-not (string-match-p "requires.*diff" diagnostics))
+          (with-current-buffer source-buffer
+            (should (equal current (buffer-string)))
+            (dolist (pair `((,reference-id . "reference")
+                            (,directive-id . "directive")))
+              (let ((overlay (mevedel--instruction-with-uuid
+                              (car pair) workspace)))
+                (should (overlayp overlay))
+                (should (equal (cdr pair)
+                               (buffer-substring-no-properties
+                                (overlay-start overlay)
+                                (overlay-end overlay))))))))
+      (mevedel--clear-instruction-state workspace)
+      (when (buffer-live-p source-buffer)
+        (with-current-buffer source-buffer
+          (setq-local kill-buffer-hook nil)
+          (set-buffer-modified-p nil))
+        (kill-buffer source-buffer))
+      (delete-directory root t)))
+
   :doc "round-trips detached position, source order, activity, and actions"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-detached-persistence-" t)))
