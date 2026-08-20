@@ -806,78 +806,6 @@
       (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-execution--eask-command-p
-  (:doc "recognizes direct and npx Eask commands without broad false positives")
-  (progn
-    (should (mevedel-execution--eask-command-p "eask test ert"))
-    (should (mevedel-execution--eask-command-p
-             "npx @emacs-eask/cli test ert test/test-one.el"))
-    (should (mevedel-execution--eask-command-p
-             "EASK_DEBUG=1 npx @emacs-eask/cli test ert"))
-    (should-not
-     (mevedel-execution--eask-command-p "printf 'eask test ert'"))))
-
-(mevedel-deftest mevedel-execution--eask-targets
-  (:doc "retains only bounded repository-local Emacs Lisp test targets")
-  (progn
-    (should
-     (equal '("test/test-one.el" "test/nested/test-two.el")
-            (mevedel-execution--eask-targets
-             "eask test ert test/test-one.el test/nested/test-two.el")))
-    (should-not (mevedel-execution--eask-targets
-                 "eask test ert test/test-* --verbose"))))
-
-(mevedel-deftest mevedel-execution--cache-identity
-  (:doc "hashes cache roots deterministically without exposing their values")
-  (let ((process-environment (copy-sequence process-environment)))
-    (setenv "HOME" "/secret/one")
-    (let ((first (mevedel-execution--cache-identity)))
-      (should (= 64 (length first)))
-      (should-not (string-match-p "secret" first))
-      (should (equal first (mevedel-execution--cache-identity)))
-      (setenv "HOME" "/secret/two")
-      (should-not (equal first (mevedel-execution--cache-identity))))))
-
-(mevedel-deftest mevedel-execution--full-eask-command-p
-  (:doc "distinguishes a full ERT suite from focused Eask files")
-  (progn
-    (should (mevedel-execution--full-eask-command-p
-             "npx @emacs-eask/cli test ert test/test-*"))
-    (should-not (mevedel-execution--full-eask-command-p
-                 "npx @emacs-eask/cli test ert test/test-one.el"))
-    (should-not (mevedel-execution--full-eask-command-p "eask lint"))))
-
-(mevedel-deftest mevedel-execution--resource-capture
-  (:doc "wraps at most one profiled full suite with GNU time")
-  (let* ((root (make-temp-file "mevedel-resource-capture-" t))
-         (session (test-mevedel-execution--session root))
-         (mevedel-telemetry--profiler-session session)
-         (mevedel-telemetry--profiler-run-id "run-test"))
-    (unwind-protect
-        (cl-letf (((symbol-function 'executable-find)
-                   (lambda (program)
-                     (and (equal program "time") "/usr/bin/time")))
-                  ((symbol-function 'file-truename) #'identity))
-          (let* ((command-text "npx @emacs-eask/cli test ert test/test-*")
-                 (command (list "bash" "-lc" command-text))
-                 (capture
-                  (mevedel-execution--resource-capture
-                   session command-text command)))
-            (should capture)
-            (should
-             (equal
-              (list "/usr/bin/time" "-v" "-o"
-                    (plist-get capture :report) "--"
-                    "bash" "-lc" command-text)
-              (plist-get capture :command)))
-            (should (string-suffix-p
-                     "diagnostics/run-test/full-suite-time.txt"
-                     (plist-get capture :report)))
-            (should-not
-             (mevedel-execution--resource-capture
-              session command-text command))))
-      (delete-directory root t))))
-
 (mevedel-deftest mevedel-execution--process-ended ()
   ,test
   (test)
@@ -976,7 +904,8 @@
          captured result)
     (unwind-protect
         (cl-letf
-            (((symbol-function 'mevedel-execution--resource-capture)
+            (((symbol-function
+               'mevedel-execution-telemetry-prepare-resource-capture)
               (lambda (given-session command-text command)
                 (setq captured (list given-session command-text command))
                 nil)))
@@ -1156,138 +1085,6 @@
           (test-mevedel-execution--wait (lambda () pending-final)))
       (mevedel-execution-teardown-session session)
       (delete-directory root t))))
-
-(mevedel-deftest mevedel-execution--telemetry-facts
-  (:doc "keeps confinement dimensions while excluding human-readable reasons")
-  (let ((facts (mevedel-execution--telemetry-facts
-                '(:sandbox bubblewrap :filesystem workspace-write
-                  :network isolated :proc fresh :protected-paths 4
-                  :additional-filesystem-read 2
-                  :additional-filesystem-write 1
-                  :reason "private launcher output"))))
-    (should (eq 'bubblewrap (plist-get facts :sandbox)))
-    (should (= 4 (plist-get facts :protected-path-count)))
-    (should (= 2 (plist-get facts :additional-read-count)))
-    (should-not (plist-member facts :reason))))
-
-(mevedel-deftest mevedel-execution--telemetry
-  (:doc "side execution audit uses its target and drops path-bearing fields")
-  (let* ((parent (mevedel-session--create :name "parent"))
-         (side (mevedel-session--create
-                :name "side" :audit-session parent))
-         (origin (mevedel-execution--origin-create
-                  :session side :owner "/root" :tool-use-id "tool-1"))
-         (record (mevedel-execution--record-create
-                  :origin origin :execution-id "exec-1"))
-         captured)
-    (cl-letf (((symbol-function 'mevedel-telemetry-record)
-               (lambda (session event &rest props)
-                 (setq captured (list session event props)))))
-      (mevedel-execution--telemetry
-       record 'execution-enqueued
-       :lane 'read :command-hash "abc123"
-       :test-targets '("/private/test.el")
-       :resource-report-relative-path "private/report.txt"
-       :justification "private justification"))
-    (should (eq parent (car captured)))
-    (should (eq 'execution-enqueued (cadr captured)))
-    (let ((props (nth 2 captured)))
-      (should (eq 'btw (plist-get props :conversation-scope)))
-      (should (eq 'read (plist-get props :lane)))
-      (should (equal "abc123" (plist-get props :command-hash)))
-      (dolist (key '(:test-targets :resource-report-relative-path
-                     :justification))
-        (should-not (plist-member props key)))
-      (should-not
-       (string-match-p (regexp-opt '("/private/test.el" "private/report.txt"
-                                     "private justification"))
-                       (prin1-to-string props))))))
-
-(mevedel-deftest mevedel-execution--sandbox-summary-merge
-  (:doc "aggregates logical attempts and keeps the most permissive dimensions")
-  (let* ((first
-          (mevedel-execution--sandbox-summary-merge
-           nil
-           '(:sandbox bubblewrap :filesystem workspace-write
-             :network isolated :proc fresh
-             :additional-filesystem-read 2
-             :additional-filesystem-write 0)
-           t nil))
-         (merged
-          (mevedel-execution--sandbox-summary-merge
-           first
-           '(:sandbox escalated :filesystem unrestricted
-             :network unrestricted :proc host
-             :additional-filesystem-read 0
-             :additional-filesystem-write 1)
-           t nil)))
-    (should (= 2 (plist-get merged :attempt-count)))
-    (should (= 2 (plist-get merged :started-count)))
-    (should (eq 'escalated (plist-get merged :sandbox)))
-    (should (eq 'unrestricted (plist-get merged :filesystem)))
-    (should (eq 'host (plist-get merged :proc)))
-    (should (= 2 (plist-get merged :additional-read-count)))
-    (should (= 1 (plist-get merged :additional-write-count)))))
-
-(mevedel-deftest mevedel-execution--record-sandbox-attempt
-  (:doc "updates duplicate cells once per logical attempt")
-  (let ((cell (list nil)))
-    (mevedel-execution--record-sandbox-attempt
-     '(:sandbox refused :filesystem unavailable :network unavailable)
-     nil t cell cell)
-    (should (= 1 (plist-get (car cell) :attempt-count)))
-    (should (= 1 (plist-get (car cell) :refused-count)))))
-
-(mevedel-deftest mevedel-execution--mark-direct-fallback
-  (:doc "warns and marks only the first direct fallback in a live session")
-  (let ((session (mevedel-session--create :name "main"))
-        warnings first second)
-    (cl-letf (((symbol-function 'display-warning)
-               (lambda (_type message &optional _level _buffer-name)
-                 (push message warnings))))
-      (setq first
-            (mevedel-execution--mark-direct-fallback
-             session
-             '(:sandbox unavailable :filesystem unrestricted
-               :network unrestricted)))
-      (setq second
-            (mevedel-execution--mark-direct-fallback
-             session
-             '(:sandbox unavailable :filesystem unrestricted
-               :network unrestricted))))
-    (should (plist-get first :first-direct-fallback))
-    (should-not (plist-get second :first-direct-fallback))
-    (should (= 1 (length warnings)))
-    (should (string-match-p "direct execution" (car warnings)))))
-
-(mevedel-deftest mevedel-execution-sandbox-summary-class
-  (:doc "classifies only material sandbox deviations as warnings")
-  (let ((default
-         '(:attempt-count 1 :started-count 1 :refused-count 0
-           :sandbox bubblewrap :filesystem workspace-write
-           :network isolated :proc fresh
-           :additional-read-count 0 :additional-write-count 0)))
-    (should-not (mevedel-execution-sandbox-summary-class default))
-    (should-not
-     (mevedel-execution-sandbox-summary-class
-      (plist-put (copy-sequence default) :additional-read-count 1)))
-    (should
-     (eq 'warning
-         (mevedel-execution-sandbox-summary-class
-          (plist-put (copy-sequence default) :started-count 0))))
-    (should
-     (eq 'warning
-         (mevedel-execution-sandbox-summary-class
-          (plist-put (copy-sequence default) :additional-write-count 1))))))
-
-(mevedel-deftest mevedel-execution--agent-sandbox-summary-cell
-  (:doc "returns only an invocation's private direct-child aggregation cell")
-  (let* ((cell (list nil))
-         (invocation
-          (mevedel-agent-invocation--create :sandbox-summary-cell cell)))
-    (should (eq cell
-                (mevedel-execution--agent-sandbox-summary-cell invocation)))
-    (should-not (mevedel-execution--agent-sandbox-summary-cell nil))))
 
 (provide 'test-mevedel-execution)
 ;;; test-mevedel-execution.el ends here

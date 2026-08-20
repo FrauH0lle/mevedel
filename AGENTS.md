@@ -126,6 +126,7 @@ Data model
   mevedel-execution.el        bounded child-process lifecycle and session state
   mevedel-execution-transcript.el durable execution render data and archive reconciliation
   mevedel-execution-scheduler.el fair session-scoped Bash admission
+  mevedel-execution-telemetry.el safe execution facts and profiler adaptation
   mevedel-sandbox.el          optional Bubblewrap child-process confinement
   mevedel-sandbox-grants.el   exact FD-backed grants and symlink mount planning
   mevedel-telemetry.el        append-only lifecycle events and profiler capture

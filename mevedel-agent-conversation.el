@@ -87,9 +87,9 @@
 (declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
 (defvar mevedel-agent-request-local-symbols)
 
-;; `mevedel-execution'
-(declare-function mevedel-execution-sandbox-summary-class
-                  "mevedel-execution" (summary))
+;; `mevedel-execution-telemetry'
+(declare-function mevedel-execution-telemetry-sandbox-summary-class
+                  "mevedel-execution-telemetry" (summary))
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-remote-p
@@ -639,8 +639,8 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                           (mevedel-agent-invocation-sandbox-summary-cell
                            invocation)))
                         ((progn
-                           (require 'mevedel-execution)
-                           (mevedel-execution-sandbox-summary-class summary)))
+                           (require 'mevedel-execution-telemetry)
+                           (mevedel-execution-telemetry-sandbox-summary-class summary)))
                         ((not
                           (equal
                            summary
