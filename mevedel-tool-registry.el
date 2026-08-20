@@ -689,6 +689,16 @@ Optional (both forms):
 The macro creates a `mevedel-tool' struct, registers it, and calls
 `gptel-make-tool' to create the underlying gptel-tool."
   (declare (indent 0) (debug t))
+  (cl-loop for (key _value) on props by #'cddr
+           unless (memq key
+                        '(:args :async-p :category :check-permission
+                          :check-permission-async :description :destructive-p
+                          :display-arg :get-domain :get-name :get-path
+                          :get-paths :get-pattern :groups :handler
+                          :max-result-size :name :prompt :prompt-file
+                          :read-only-p :renderer :render-transform :snapshot-p
+                          :summary :wrap))
+           do (error "Unknown tool property: %S" key))
   (let* ((wrap (plist-get props :wrap)))
     (if wrap
         (mevedel-tool--expand-wrap props)
@@ -809,6 +819,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (check-permission (plist-get props :check-permission))
          (check-permission-async (plist-get props :check-permission-async))
          (get-path (plist-get props :get-path))
+         (get-paths (plist-get props :get-paths))
          (get-pattern (plist-get props :get-pattern))
          (get-domain (plist-get props :get-domain))
          (get-name (plist-get props :get-name))
@@ -843,6 +854,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       :check-permission ,check-permission
       :check-permission-async ,check-permission-async
       :get-path ,get-path
+      :get-paths ,get-paths
       :get-pattern ,get-pattern
       :get-domain ,get-domain
       :get-name ,get-name
@@ -856,7 +868,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
           prompt-override prompt-source groups read-only-p
           snapshot-p destructive-p
           check-permission check-permission-async
-          get-path get-pattern get-domain get-name
+          get-path get-paths get-pattern get-domain get-name
           max-result-size display-arg render-transform renderer)
   "Runtime helper: build and register a wrapped tool from SOURCE.
 
@@ -864,7 +876,7 @@ SOURCE must be a `gptel-tool' struct.  CATEGORY-OVERRIDE,
 DESCRIPTION-OVERRIDE, SUMMARY, PROMPT-OVERRIDE, PROMPT-SOURCE, GROUPS,
 READ-ONLY-P, SNAPSHOT-P, DESTRUCTIVE-P, CHECK-PERMISSION,
 CHECK-PERMISSION-ASYNC, GET-PATH,
-GET-PATTERN, GET-DOMAIN, GET-NAME, MAX-RESULT-SIZE, DISPLAY-ARG,
+GET-PATHS, GET-PATTERN, GET-DOMAIN, GET-NAME, MAX-RESULT-SIZE, DISPLAY-ARG,
 RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
   (unless (gptel-tool-p source)
     (error "`mevedel-define-tool :wrap' expects a gptel-tool, got %S" source))
@@ -901,6 +913,7 @@ RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
              :check-permission check-permission
              :check-permission-async check-permission-async
              :get-path get-path
+             :get-paths get-paths
              :get-pattern get-pattern
              :get-domain get-domain
              :get-name get-name

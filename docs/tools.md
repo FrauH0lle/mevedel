@@ -64,6 +64,9 @@ Important tool metadata:
 - Display/output: `:summary`, `:max-result-size`, `:render-transform`,
   `:renderer`
 
+Native and wrapped registrations preserve the same permission metadata.
+`mevedel-define-tool` rejects unrecognized keywords during macro expansion.
+
 `:snapshot-p` is an explicit declaration for file-mutating tools whose
 before-state participates in the final patch. `ApplyPatch` declares it and
 uses `:get-paths` so permission and snapshot steps cover every affected path.
