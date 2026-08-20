@@ -445,16 +445,55 @@ before a logical address is emitted."
          (split-string output "\n" nil)
          "\n")))))
 
+(defun mevedel-tool-fs--scrub-resource-search-output (output roots)
+  "Replace physical ROOTS anywhere in resource search OUTPUT.
+
+ROOTS are plists with `:path', `:address-prefix', or `:address'.  Longer
+physical roots are replaced first so nested roots retain their own logical
+addresses."
+  (let ((roots
+         (sort (copy-sequence roots)
+               (lambda (left right)
+                 (> (length (expand-file-name (plist-get left :path)))
+                    (length (expand-file-name (plist-get right :path))))))))
+    (dolist (root roots output)
+      (let* ((physical-root
+              (directory-file-name
+               (expand-file-name (plist-get root :path))))
+             (native-root
+              (when-let ((path
+                          (file-remote-p physical-root 'localname 'never)))
+                (directory-file-name path)))
+             (variants (delete-dups (delq nil (list physical-root native-root))))
+             (address (or (plist-get root :address-prefix)
+                          (plist-get root :address))))
+        (dolist (variant variants)
+          (setq output
+                (if (string= variant "/")
+                    (if (string-search variant output)
+                        "Error: Resource search returned an unsafe path"
+                      output)
+                  (string-replace variant address output))))
+        (when (cl-some (lambda (variant)
+                         (string-search variant output))
+                       variants)
+          (setq output "Error: Resource search returned an unsafe path"))))))
+
 (defun mevedel-tool-fs--rewrite-resource-handler-result
     (result root address &optional path-list-p)
-  "Return RESULT with private search paths rewritten for ADDRESS."
+  "Return RESULT with private search paths rewritten for ADDRESS.
+
+Scrub ROOT wherever helper diagnostics include it."
   (if (and (proper-list-p result)
            (plist-member result :result)
            (stringp (plist-get result :result)))
       (let ((copy (copy-sequence result)))
-        (plist-put copy :result
-                   (mevedel-tool-fs--rewrite-resource-search-output
-                    (plist-get result :result) root address path-list-p))
+        (plist-put
+         copy :result
+         (mevedel-tool-fs--scrub-resource-search-output
+          (mevedel-tool-fs--rewrite-resource-search-output
+           (plist-get result :result) root address path-list-p)
+          (list (list :path root :address address))))
         copy)
     result))
 
@@ -1998,10 +2037,12 @@ and optional :path."
                    (let ((settled (buffer-string)))
                    (erase-buffer)
                    (insert
-                    (mevedel-tool-fs--rewrite-resource-search-roots
-                     settled
-                     resource-roots
-                     t))
+                    (mevedel-tool-fs--scrub-resource-search-output
+                     (mevedel-tool-fs--rewrite-resource-search-roots
+                      settled
+                      resource-roots
+                      t)
+                     resource-roots))
                    (let ((result (mevedel-tool-fs--finalize-glob-buffer)))
                      (funcall callback
                               (mevedel-tool-fs--handler-result
@@ -2196,8 +2237,10 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                        (plist-get settlement :pageable-p)))
                  (when resource-roots
                    (let ((rewritten
-                          (mevedel-tool-fs--rewrite-resource-search-roots
-                           (buffer-string) resource-roots)))
+                          (mevedel-tool-fs--scrub-resource-search-output
+                           (mevedel-tool-fs--rewrite-resource-search-roots
+                            (buffer-string) resource-roots)
+                           resource-roots)))
                      (erase-buffer)
                      (insert rewritten)))
                  ;; Apply offset and head_limit.
