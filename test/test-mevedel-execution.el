@@ -531,7 +531,44 @@
           (should (mevedel-execution--record-output-limit-p record)))
       (setf (mevedel-execution--record-finished-p record) t)
       (mevedel-execution--release-runtime record)
-      (delete-file spool))))
+      (delete-file spool)))
+  :doc "stops after spool failure without retaining unwritten chunks"
+  (let* ((root (make-temp-file "mevedel-managed-write-failure-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-sandbox-mode 'off)
+         (mevedel-execution--child-kill-delay 0.05)
+         initial final process)
+    (unwind-protect
+        (progn
+          (setq initial
+                (test-mevedel-execution--start-managed
+                 session root
+                 '("sh" "-c" "printf ready; sleep 30")))
+          (let* ((id (plist-get (plist-get initial :facts) :execution-id))
+                 (state (mevedel-session-execution-state session))
+                 (record
+                  (gethash id (mevedel-execution--state-records state)))
+                 (spool (mevedel-execution--record-spool-path record))
+                 (retained (mevedel-execution--record-output-chars record)))
+            (setq process (mevedel-execution--record-process record))
+            (delete-directory (file-name-directory spool) t)
+            (mevedel-execution--write-managed-output record "lost-one\n")
+            (mevedel-execution--write-managed-output record "lost-two\n")
+            (should (eq 'output-write-failed
+                        (mevedel-execution--record-termination record)))
+            (should (consp (mevedel-execution--record-error-data record)))
+            (should (= retained
+                       (mevedel-execution--record-output-chars record)))
+            (should (= 0 (mevedel-execution--record-output-bytes record)))
+            (setq final (test-mevedel-execution--observe session id))
+            (should (eq 'output-write-failed
+                        (plist-get (plist-get final :facts) :termination)))
+            (should (plist-get final :error))
+            (should (= 0 (plist-get (plist-get final :facts)
+                                    :output-bytes)))
+            (should-not (process-live-p process))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution--unread-preview ()
   ,test
