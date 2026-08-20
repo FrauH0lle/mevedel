@@ -289,8 +289,10 @@ Binds `data-buf' and `view-buf'."
 ;;; Persistence
 
 (mevedel-deftest mevedel-view-history--persistence
-  (:doc "round-trips visible input and its exact mixed mention bindings"
-   :doc "a write failure retains the live bound entry and retries later saves")
+  (:doc "persists visible input and exact mention-binding state")
+  ,test
+  (test)
+  :doc "round-trips visible input and its exact mixed mention bindings"
   (mevedel-view-history-test--with-temp-dir workspace-dir
     (mevedel-view-history-test--with-temp-dir session-dir
       (let* ((session (mevedel-view-history-test--session
@@ -418,6 +420,7 @@ Binds `data-buf' and `view-buf'."
                           :path (file-name-concat workspace-dir "notes.txt"))
                     (get-text-property
                      file-start 'mevedel-mention-binding restored-file))))))))
+  :doc "a write failure retains the live bound entry and retries later saves"
   (mevedel-view-history-test--with-temp-dir workspace-dir
     (let* ((session (mevedel-view-history-test--session workspace-dir))
            (skill-file (file-name-concat workspace-dir "alpha/SKILL.md"))
@@ -431,16 +434,51 @@ Binds `data-buf' and `view-buf'."
       (with-temp-buffer
         (setq-local mevedel--session session)
         (mevedel-view-history-add bound-input)
-        (cl-letf (((symbol-function 'mevedel-session-codec-write)
-                   (lambda (&rest _) (error "Disk unavailable"))))
-          (should-not (mevedel-view-history-save (current-buffer))))
+        (let (diagnostics)
+          (cl-letf (((symbol-function 'mevedel-session-codec-write)
+                     (lambda (&rest _) (error "Disk unavailable"))))
+            (mevedel-test--with-captured-diagnostics diagnostics
+              (mevedel-view-history-save (current-buffer))))
+          (should (string-match-p "Disk unavailable" diagnostics)))
         (should mevedel-view-history--save-failed)
         (should (equal-including-properties
                  bound-input (car (mevedel-view-history--entries))))
         (mevedel-view-history-save (current-buffer))
         (should-not mevedel-view-history--save-failed)
         (should (file-exists-p
-                 (mevedel-view-history-test--path workspace-dir)))))))
+                 (mevedel-view-history-test--path workspace-dir))))))
+  :doc "same visible input persists its newest mention binding"
+  (mevedel-view-history-test--with-temp-dir workspace-dir
+    (let* ((session (mevedel-view-history-test--session workspace-dir))
+           (old-file (file-name-concat workspace-dir "old/SKILL.md"))
+           (new-file (file-name-concat workspace-dir "new/SKILL.md"))
+           (old-input (mevedel-view-history-test--bound-input
+                       "use $alpha" "alpha" old-file))
+           (new-input (mevedel-view-history-test--bound-input
+                       "use $alpha" "alpha" new-file)))
+      (dolist (file (list old-file new-file))
+        (make-directory (file-name-directory file) t)
+        (with-temp-file file
+          (insert "---\nname: alpha\ndescription: Alpha\n---\n")))
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (mevedel-view-history-add old-input)
+        (mevedel-view-history-save (current-buffer)))
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (mevedel-view-history-load session)
+        (mevedel-view-history-add new-input)
+        (mevedel-view-history-save (current-buffer)))
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (mevedel-view-history-load session)
+        (let* ((entry (car (mevedel-view-history--entries)))
+               (start (string-match "\\$alpha" entry)))
+          (should (equal new-file
+                         (plist-get
+                          (get-text-property
+                           start 'mevedel-mention-binding entry)
+                          :source-file))))))))
 
 (mevedel-deftest mevedel-view-history--persistence-merge
   (:doc "saving one view merges existing workspace history from other views"

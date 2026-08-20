@@ -311,8 +311,9 @@ files are renamed to `.bad', warned about once, and ignored."
                     ;; retry: the read-merge-write would reproduce what is
                     ;; already stored, at a held exclusive connection.
                     ((not (and (not mevedel-view-history--save-failed)
-                               (equal (mevedel-view-history--entries)
-                                      mevedel-view-history--loaded-entries))))
+                               (equal-including-properties
+                                (mevedel-view-history--entries)
+                                mevedel-view-history--loaded-entries))))
                     (session (mevedel-view-history--session))
                     (path (mevedel-view-history--path session)))
           (condition-case err
