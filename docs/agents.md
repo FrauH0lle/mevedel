@@ -284,7 +284,8 @@ finding shape: `findings`, `overall_correctness`, `overall_explanation`,
 and `overall_confidence_score`. mevedel renders a readable summary as the
 assistant reply and stores a synthetic review `<user_action>` in the
 parent transcript so later turns can refer to numbered findings. The view
-buffer strips that synthetic block from normal display.
+buffer strips that synthetic block from normal display. Schema-invalid JSON
+falls back to the raw reviewer output and still settles the parent turn.
 
 `/verify` dispatches the `verifier` agent with verifier-oriented wording:
 inspect adversarially, run or recommend relevant checks when allowed, and

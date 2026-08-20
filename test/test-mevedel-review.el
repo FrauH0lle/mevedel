@@ -306,7 +306,29 @@
                              (mevedel-review--write-package
                               cwd '(:type commit :sha "--") package-file)))
               (should-not (file-exists-p marker)))
-          (delete-directory root t))))))
+          (delete-directory root t)))))
+
+  :doc "allocates collision-free package paths and removes failed allocations"
+  (let ((root (file-name-as-directory
+               (make-temp-file "mevedel-review-unique-" t))))
+    (unwind-protect
+        (progn
+          (should (zerop (process-file "git" nil nil nil
+                                       "init" "-q" "-b" "main" root)))
+          (let ((first (mevedel-review--write-package
+                        root '(:type uncommitted)))
+                (second (mevedel-review--write-package
+                         root '(:type uncommitted))))
+            (should-not (equal first second))
+            (should (file-exists-p first))
+            (should (file-exists-p second)))
+          (should-error
+           (mevedel-review--write-package root '(:type unsupported))
+           :type 'user-error)
+          (should (= 2 (length (directory-files
+                                (mevedel-review--package-directory root)
+                                nil "\\.md\\'")))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-review--prompt-with-package
   (:doc "tells reviewers to read the package before broad git inspection")
@@ -335,7 +357,16 @@
   (let ((parsed (mevedel-review-parse-output "plain review text")))
     (should (equal "plain review text"
                    (plist-get parsed :overall_explanation)))
-    (should (null (plist-get parsed :findings)))))
+    (should (null (plist-get parsed :findings))))
+
+  :doc "falls back when valid JSON does not match the review schema"
+  (dolist (text '("[]"
+                  "{\"findings\":1,\"overall_correctness\":\"patch is incorrect\",\"overall_explanation\":\"bad\",\"overall_confidence_score\":0.5}"
+                  "{\"findings\":[{}],\"overall_correctness\":\"patch is incorrect\",\"overall_explanation\":\"bad\",\"overall_confidence_score\":0.5}"
+                  "{\"findings\":[{\"title\":\"bad\",\"body\":\"bad\",\"confidence_score\":0.5,\"code_location\":{\"absolute_file_path\":\"/tmp/a.el\",\"line_range\":{\"start\":0,\"end\":1}}}],\"overall_correctness\":\"patch is incorrect\",\"overall_explanation\":\"bad\",\"overall_confidence_score\":0.5}"))
+    (let ((parsed (mevedel-review-parse-output text)))
+      (should (equal text (plist-get parsed :overall_explanation)))
+      (should (null (plist-get parsed :findings))))))
 
 (mevedel-deftest mevedel-review-render-output-text ()
   ,test
@@ -760,7 +791,40 @@
                         (plist-get outcome :reason)))
             (should (equal "Dispatch exploded"
                            (plist-get outcome :message)))))
-      (kill-buffer data))))
+      (kill-buffer data)))
+
+  :doc "creates package evidence only when the accepted task starts"
+  (let ((data (generate-new-buffer " *mevedel-review-packaged-task*"))
+        (root (file-name-as-directory
+               (make-temp-file "mevedel-review-task-package-" t)))
+        captured-message)
+    (unwind-protect
+        (progn
+          (should (zerop (process-file "git" nil nil nil
+                                       "init" "-q" "-b" "main" root)))
+          (with-current-buffer data
+            (setq-local mevedel--session
+                        (mevedel-session--create :name "review")
+                        mevedel--current-request
+                        (mevedel-request--create :session mevedel--session))
+            (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                       (lambda (_session task-name message callback &rest _)
+                         (setq captured-message message)
+                         (funcall callback
+                                  (list :outcome 'success
+                                        :record
+                                        (mevedel-agent-record--create
+                                         :path (concat "/root/" task-name))))
+                         #'ignore)))
+              (mevedel-review--run-task
+               "prompt" "target" #'ignore nil nil 'review
+               root '(:type uncommitted))
+              (should (string-match
+                       "Review package file: \\([^\n]+\\)"
+                       captured-message))
+              (should (file-exists-p (match-string 1 captured-message))))))
+      (kill-buffer data)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-review--insert-progress-handle ()
   ,test
@@ -826,7 +890,24 @@
          view-buf data-buf 'verify))
       (with-current-buffer view-buf
         (should (string= draft (mevedel-view--input-text)))
-        (should (= (point) (+ (mevedel-view--input-start) 4)))))))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+
+  :doc "schema-invalid reviewer JSON still settles the view request"
+  (mevedel-view-test--with-buffers
+    (let ((raw "{\"findings\":{\"title\":\"bad\"}}"))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session
+                    (mevedel-session--create :name "review"))
+        (mevedel-request-begin mevedel--session))
+      (cl-letf (((symbol-function 'mevedel-skills--insert-fork-result)
+                 (lambda (outcome)
+                   (should (equal raw (plist-get outcome :result)))
+                   (mevedel-request-end))))
+        (mevedel-review--handle-view-outcome
+         `(:status ok :kind fork :result ,raw)
+         view-buf data-buf 'review))
+      (with-current-buffer data-buf
+        (should-not mevedel--current-request)))))
 
 (mevedel-deftest mevedel-review--current-data-buffer ()
   ,test
@@ -919,7 +1000,18 @@
         (should (string-match-p
                  "review startup context"
                  (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker)))))))
+                  (point-min) mevedel-view--input-marker))))))
+
+  :doc "does not prepare package evidence when the submit hook rejects"
+  (mevedel-view-test--with-buffers
+    (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
+               (lambda (&rest _args) nil))
+              ((symbol-function 'mevedel-review--write-target-package)
+               (lambda (&rest _args)
+                 (ert-fail "package preparation ran before acceptance"))))
+      (mevedel-review--send-from-view
+       "/review target" "prompt" "target" view-buf data-buf
+       'review "/tmp/" '(:type uncommitted)))))
 
 (mevedel-deftest mevedel-review--dispatch (:quiet t)
   ,test
@@ -943,7 +1035,7 @@
                      (lambda (_cwd) data))
                     ((symbol-function 'mevedel-review--run-task)
                      (lambda (prompt hint callback &optional _context
-                                     _progress _command)
+                                     _progress _command &rest _)
                        (setq invoke-buffer (current-buffer))
                        (setq task-agent "reviewer")
                        (setq task-description hint)
@@ -970,21 +1062,32 @@
       (kill-buffer source)
       (kill-buffer data)))
 
-  :doc "rejects direct dispatch while a request is active"
-  (let ((data (generate-new-buffer " *mevedel-review-busy-data*")))
+  :doc "rejects direct authority gates before creating package evidence"
+  (let ((data (generate-new-buffer " *mevedel-review-busy-data*"))
+        (root (file-name-as-directory
+               (make-temp-file "mevedel-review-rejected-" t))))
     (unwind-protect
-        (with-current-buffer data
-          (setq-local mevedel--session
-                      (mevedel-session--create :authority-mode 'pid-lock :name "review"))
-          (setq-local mevedel--current-request t)
-          (cl-letf (((symbol-function 'mevedel-review--ensure-dispatch-deps)
-                    #'ignore)
-                    ((symbol-function 'mevedel-review--current-data-buffer)
-                     (lambda () data)))
-            (should-error
-             (mevedel-review--dispatch "prompt" "target" "/tmp/")
-             :type 'user-error)))
-      (kill-buffer data))))
+        (dolist (state '(request compaction read-only))
+          (with-current-buffer data
+            (setq-local mevedel--session
+                        (mevedel-session--create
+                         :authority-mode 'pid-lock :name "review")
+                        mevedel--current-request (eq state 'request)
+                        mevedel-compact-run-in-flight (eq state 'compaction)
+                        mevedel-session--read-only-mode (eq state 'read-only))
+            (cl-letf (((symbol-function 'mevedel-review--ensure-dispatch-deps)
+                       #'ignore)
+                      ((symbol-function 'mevedel-review--current-data-buffer)
+                       (lambda () data)))
+              (should-error
+               (mevedel-review--dispatch
+                "prompt" "target" root 'review '(:type uncommitted))
+               :type 'user-error)
+              (should-not
+               (file-exists-p
+                (mevedel-review--package-directory root))))))
+      (kill-buffer data)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-review--handle-direct-outcome ()
   ,test
@@ -1018,6 +1121,23 @@
            data)
           (with-current-buffer data
             (should (string-search "plain review" (buffer-string)))))
+      (kill-buffer data)))
+
+  :doc "schema-invalid reviewer JSON still reaches terminal settlement"
+  (let ((data (generate-new-buffer " *mevedel-review-invalid-json*"))
+        (raw "{\"findings\":1,\"overall_explanation\":\"bad\"}"))
+    (unwind-protect
+        (with-current-buffer data
+          (setq-local mevedel--session
+                      (mevedel-session--create :name "review"))
+          (mevedel-request-begin mevedel--session)
+          (cl-letf (((symbol-function 'mevedel-skills--insert-fork-result)
+                     (lambda (outcome)
+                       (should (equal raw (plist-get outcome :result)))
+                       (mevedel-request-end))))
+            (mevedel-review--handle-direct-outcome
+             `(:status ok :kind fork :result ,raw) data)
+            (should-not mevedel--current-request)))
       (kill-buffer data))))
 
 (mevedel-deftest mevedel-review-strip-user-action-blocks ()

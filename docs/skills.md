@@ -425,6 +425,8 @@ reviewer prompt asks for strict JSON with prioritized findings. The parent turn
 stores a synthetic `<user_action>` block
 containing the rendered review results before the assistant summary, so
 follow-up prompts like "fix finding 2" have the findings in model context.
+Schema-invalid JSON remains visible as raw reviewer output instead of blocking
+terminal settlement.
 The normal view hides that synthetic block and shows only the readable
 review summary.
 
@@ -443,10 +445,11 @@ summary.
 
 At dispatch time, `mevedel-review.el` keeps target/result semantics local,
 creates a unique path such as `/root/review` or `/root/verify_2`, and attaches
-the workflow result consumer before provider dispatch. For concrete Git
-targets it writes a package under
-`.mevedel/review-packages/` and tells the reviewer or verifier to read
-that file before rerunning broad repository inspection. Package collection
+the workflow result consumer before provider dispatch. After the parent
+submission passes its mutation-authority checks, concrete Git targets receive
+a collision-free package under
+`.mevedel/review-packages/`; the command tells the reviewer or verifier to
+read that file before rerunning broad repository inspection. Package collection
 uses one fixed Git runner that disables pagers, replacement objects,
 filesystem monitors, external diffs, and text conversion. It supplies
 skill-scoped allow rules for read-only `git` Bash commands
