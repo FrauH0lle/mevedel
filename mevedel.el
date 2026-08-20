@@ -62,6 +62,7 @@
 (require 'mevedel-prompt-submission)
 (require 'mevedel-sandbox)
 (require 'mevedel-execution)
+(require 'mevedel-execution-transcript)
 (require 'mevedel-buddy)
 (require 'mevedel-buddy-note)
 (require 'mevedel-tools)
@@ -95,6 +96,7 @@
 (require 'mevedel-view-composer)
 (require 'mevedel-view-input-files)
 (require 'mevedel-view-stream)
+(require 'mevedel-gptel-stream-bridge)
 (require 'mevedel-view-zone)
 (require 'mevedel-directive-activity)
 (require 'mevedel-reminders)
@@ -166,6 +168,12 @@
 ;; `mevedel-directive'
 (declare-function mevedel-directive-actions "mevedel-directive" (directive))
 
+;; `mevedel-gptel-stream-bridge'
+(declare-function mevedel-gptel-stream-bridge-install
+                  "mevedel-gptel-stream-bridge" ())
+(declare-function mevedel-gptel-stream-bridge-uninstall
+                  "mevedel-gptel-stream-bridge" ())
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-install-tool-result-scrubber
                   "mevedel-pipeline" ())
@@ -209,10 +217,6 @@
                   "mevedel-tool-repair" ())
 (declare-function mevedel-tool-repair-uninstall-shape-adapter
                   "mevedel-tool-repair" ())
-
-;; `mevedel-view-stream'
-(declare-function mevedel-view-stream-install "mevedel-view-stream" ())
-(declare-function mevedel-view-stream-uninstall "mevedel-view-stream" ())
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-install-slash-command "mevedel-worktree" ())
@@ -725,8 +729,8 @@ always prompt for the session name."
   ;; Install skill hot-reload hooks/watchers for active strategies
   (mevedel-skills-install-hot-reload)
 
-  ;; Install view-specific gptel stream repair advice.
-  (mevedel-view-stream-install)
+  ;; Install the gptel stream compatibility bridge.
+  (mevedel-gptel-stream-bridge-install)
 
   ;; Best-effort save and cleanup of live sessions on Emacs exit.  The hook
   ;; itself is installed at `mevedel-session-persistence' file-load time so
@@ -793,9 +797,9 @@ always prompt for the session name."
   ;; Remove skill hot-reload hooks/watchers and registry state
   (mevedel-skills-uninstall-hot-reload)
 
-  ;; Remove view-specific gptel stream repair advice
-  (when (featurep 'mevedel-view-stream)
-    (mevedel-view-stream-uninstall))
+  ;; Remove the gptel stream compatibility bridge.
+  (when (featurep 'mevedel-gptel-stream-bridge)
+    (mevedel-gptel-stream-bridge-uninstall))
 
   (message "mevedel uninstalled successfully"))
 

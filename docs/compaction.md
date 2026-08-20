@@ -432,7 +432,8 @@ original Bash row when that row survives in the preserved tail. If rotation
 explicitly archives a completed row, the new segment receives a hidden durable
 `execution-completion` audit record. A running row is replaced before segment
 publication by a durable `execution-archive` record containing its structured
-render data; terminal settlement atomically changes that record to
+render data. `mevedel-execution-transcript.el` owns this protocol for both
+compaction and live terminal settlement; settlement atomically changes it to
 `execution-completion`, while resume changes a stale archive to `lost`. The
 captured owner mailbox continues to provide the model-visible notification.
 Archive intent comes from the concrete tool rows removed by compaction, not a

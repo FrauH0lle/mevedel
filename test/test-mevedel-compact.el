@@ -11,6 +11,7 @@
 (require 'mevedel-agent-exec)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-compact)
+(require 'mevedel-execution-transcript)
 (require 'mevedel-models)
 (require 'mevedel-hooks)
 (require 'mevedel-session-persistence)
@@ -3770,7 +3771,7 @@ missing or zero prompt-side usage cannot become the active baseline"
           (mevedel-session-set-pending-input-failure-paused session t)
           (mevedel-session-artifacts-ensure-files session buffer)
           (let* ((plan
-                  (mevedel-view-stream-prepare-execution-row-archive
+                  (mevedel-execution-transcript-prepare-archive
                    buffer '("archived-call")))
                  (target
                   (list :buffer buffer :session session
@@ -3804,7 +3805,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                   (mevedel--compact-archived-tool-use-ids
                    (point-min) (point-max)))
                  (plan
-                  (mevedel-view-stream-prepare-execution-row-archive
+                  (mevedel-execution-transcript-prepare-archive
                    buffer ids))
                  (target
                   (list :buffer buffer :session session

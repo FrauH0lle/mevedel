@@ -9,6 +9,7 @@
 (require 'gptel)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agents)
+(require 'mevedel-execution-transcript)
 (require 'mevedel-permissions)
 (require 'mevedel-pipeline)
 (require 'mevedel-sandbox)
@@ -18,7 +19,6 @@
 (require 'mevedel-tool-repair)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
-(require 'mevedel-view-stream)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -1079,16 +1079,16 @@
           (with-current-buffer parent
             (should
              (gethash "call_race"
-                      mevedel-view-stream--pending-execution-terminals))
+                      mevedel-execution-transcript--pending-terminals))
             (let ((start (point)))
               (insert
                "(:name \"Agent\" :args (:task_name \"race\"))\n\nstarted\n")
               (put-text-property start (point) 'gptel
                                  '(tool . "call_race")))
-            (mevedel-view-stream-retry-execution-terminals)
+            (mevedel-execution-transcript-retry-terminals)
             (should-not
              (gethash "call_race"
-                      mevedel-view-stream--pending-execution-terminals))
+                      mevedel-execution-transcript--pending-terminals))
             (should
              (equal
               summary

@@ -15,6 +15,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-exec)
+(require 'mevedel-gptel-stream-bridge)
 (require 'mevedel-session-persistence)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-transcript)
@@ -27,7 +28,6 @@
 (require 'mevedel-tool-introspect)
 (require 'mevedel-view)
 (require 'mevedel-view-render)
-(require 'mevedel-view-stream)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -301,7 +301,7 @@
     (org-mode)
     (setq-local mevedel--session 'test)
     (let* ((gptel-mode t)
-           (mevedel-view-stream-insert-batch-delay 60)
+           (mevedel-gptel-stream-bridge-insert-batch-delay 60)
            (info
             (list :buffer (current-buffer)
                   :position (point-marker)
@@ -309,7 +309,7 @@
                   :reasoning-block 'in
                   :reasoning-open t))
            (advice
-            #'mevedel-view-stream--gptel-stream-insert-response-advice)
+            #'mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice)
            (installed
             (advice-member-p advice 'gptel-curl--stream-insert-response)))
       (unwind-protect
@@ -318,13 +318,15 @@
               (advice-add 'gptel-curl--stream-insert-response
                           :around advice))
             (gptel--display-reasoning-stream "thinking" info)
-            (mevedel-view-stream--flush-gptel-stream-insert-batch info)
+            (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch
+             info)
             (plist-put info :reasoning-marker
                        (copy-marker (plist-get info :tracking-marker) nil))
             (mevedel-tools--split-open-reasoning-before-user-input info)
             (mevedel--insert-user-role-block-at-marker
              "batched steer" (plist-get info :tracking-marker))
-            (mevedel-view-stream--flush-gptel-stream-insert-batch info)
+            (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch
+             info)
             (mevedel-transcript-normalize-properties)
             (goto-char (point-min))
             (let ((reasoning-end
