@@ -86,19 +86,20 @@ recommends those elements while leaving Codex room to choose the next action.
 - Find a better folder for the tool description markdown files
 - Ensure all tools have the examples and their descriptions in markdown files
 
-- Report the batch file-notify defect upstream to Emacs: in a
-  noninteractive Emacs (30.2), the first filesystem notification on any
-  watched directory permanently stops process sentinel delivery for the
-  whole session. Twenty-line repro: `emacs -Q --batch`, add a
-  `file-notify-add-watch` on a temp directory, `make-directory` under it,
-  then spawn any process with a sentinel -- the sentinel never runs (the
-  notify callback never runs either; batch has no command loop to deliver
-  the event). mevedel works around it by refusing to install watchers when
-  `noninteractive` (`mevedel-skills--ensure-watcher`,
-  `mevedel-skills--filenotify-supported-p`); revisit if upstream fixes it.
+- Batch file-notify defect: already reported as Emacs bug#79777 and fixed on
+  `emacs-31` by commit 28f0658d8f5e. Emacs 30.x
+  still starves process sentinels after a notification. Emacs 31 restores
+  sentinel delivery, but ordinary batch execution still has no command loop
+  to dispatch file-notify callbacks, so keep the unconditional
+  `noninteractive` guards in `mevedel-skills--ensure-watcher` and
+  `mevedel-skills--filenotify-supported-p`. No Emacs-version branch is
+  useful; revisit only if batch Emacs gains callback delivery.
 - Cursor jumps on permission promtp back to composer, seems to follow a certain tick rate
 - ApplyPatch persisted diff not rendered nicely/highlighted
-  
+- investigate and test address to resources, preferably in mevedel itself
+  - are the hashes necessary? Don't prohibit the model from calling the correct address?
+  - The local:// scratchpad should be clearly promoted in the instructions
+  -
   
 ## Entry format
 
@@ -350,6 +351,115 @@ become implemented, obsolete, or unjustified.
   block explicit suspend after mevedel becomes idle.
 
 ## Tools
+
+### Explore programmatic tool calling
+
+- **Source:** `elij/macher-agent` at commit
+  [`f6ed4c3`](https://github.com/elij/macher-agent/tree/f6ed4c35296780f61b49316af95bea0c0f50f8c1),
+  especially `macher-agent-sandbox.el`, `macher-agent-tools.el`, and its
+  skill-scoped `ptc-primitives` metadata.
+- **Problem statement:** Data-dependent tool chains currently require a model
+  continuation between stages. A model may issue known independent calls in
+  parallel, but a workflow such as Glob -> inspect returned paths -> Read each
+  match -> aggregate the results pays for another inference at every decision
+  point. That adds latency and tokens and gives the model repeated chances to
+  drift from deterministic orchestration.
+- **Candidate:** Add programmatic tool calling (PTC) as one model tool whose
+  input is an Emacs Lisp orchestration script evaluated by an isolated,
+  yielding interpreter. Ordinary control flow and pure data transformations
+  run inside the interpreter. Calling an active primitive yields a structured
+  tool request; the driver suspends the script, executes that request through
+  `mevedel-pipeline-run-tool`, and resumes it with the canonical result. Async
+  tools therefore look synchronous to the script while every call still uses
+  mevedel's validation, hooks, permission, resource, snapshot, persistence,
+  cancellation, and telemetry path.
+- **Skill integration:** Investigate a `ptc-primitives` SKILL.md frontmatter
+  field. It selects which canonical tools may become Lisp primitives for the
+  skill-owned request; it grants no authority, must intersect the request's
+  effective tool set, and must not bypass per-call permission. In mevedel,
+  `allowed-tools` is permission augmentation rather than tool selection, so
+  exposing the PTC executor itself must use the existing request/agent tool
+  selection machinery rather than copying Macher's frontmatter semantics.
+  Start with command- or fork-owned skill requests; do not let an instruction
+  attachment silently expand the parent request's execution surface.
+
+  ```yaml
+  ---
+  name: orchestrator
+  description: Coordinate a data-dependent repository investigation.
+  ptc-primitives:
+    - Glob
+    - Grep
+    - Read
+    - Agent
+    - WaitAgent
+  ---
+  ```
+
+- **Interface sketch:** The model invokes one PTC tool with a `script` string.
+  The request-time prompt describes only the selected primitives, their
+  argument contracts, the supported Lisp subset, and the returned value
+  contract. The result should be the script's pure final value; nested calls
+  remain inspectable through one owned audit/render record rather than
+  pretending to be provider-origin tool calls.
+- **Required investigation:** Measure turns whose continuations only perform
+  deterministic tool orchestration; choose one real data-dependent workflow
+  as the acceptance case. Specify the safe Lisp subset, macro expansion,
+  limits on steps/results/nesting, async suspension inside non-local exits,
+  cancellation, permission-prompt reentrancy, synthetic nested-call identity,
+  transcript evidence, render-data ownership, failure propagation, and
+  retained-agent behavior. Consult current gptel dispatch before fixing the
+  design: gptel already runs multiple tool calls from one response in
+  parallel, so known fan-out alone does not justify PTC.
+- **Rejected shortcut:** Do not implement PTC as native `eval` plus a claimed
+  function whitelist. `Glob`, `Grep`, and the mevedel pipeline are
+  asynchronous, and safely constraining native Elisp requires an interpreter
+  or an equivalently complex validator. Do not bypass the pipeline to make a
+  read-only prototype appear smaller.
+- **Status check:** Mevedel has the async continuation pipeline and tool
+  registry needed by the driver, but `Eval` deliberately evaluates ordinary
+  Elisp and cannot call model tools. No nested tool-call identity or sandboxed
+  orchestration language exists. PTC is a strong adaptation candidate, not an
+  accepted design or implementation ticket yet.
+- **Blast radius:** Tool registry and pipeline reentrancy, permissions and
+  prompts, request cancellation, skills frontmatter and invocation ownership,
+  prompt assembly, transcripts and audit records, render-data, telemetry,
+  agents, compaction, and security. A porous interpreter or incorrectly
+  inherited primitive set would turn skill metadata into arbitrary Emacs
+  execution or an authority escalation.
+
+### Investigate other macher-agent ideas
+
+- **Source:** The same `macher-agent` review; these are investigation leads,
+  not commitments and do not justify porting its VFS or Zero-Mem/PageRank
+  implementation.
+- **Exact history recall:** Determine whether finalized root segments and
+  numbered agent compaction archives should form searchable `history://root`
+  and `history://root/PATH` corpora for the existing `Grep` tool. Prefer the
+  resource-address seam over a separate SearchHistory tool; use regex search,
+  not semantic/PageRank retrieval.
+- **Repeated tool-result cost:** Profile pre-compaction prompts for repeated
+  result bodies. If material, investigate request-time elision only when both
+  the normalized call and result are identical. A repeated call signature is
+  insufficient because repository state may have changed between calls.
+- **Verify unapplied patches:** Investigate running checks against a selected
+  ApplyPatch proposal in a disposable projected worktree. Reuse session fork,
+  patch, execution, and cleanup machinery where it actually fits, but account
+  for dirty user state, untracked files, selected hunks, dependencies, remote
+  targets, permissions, cancellation, and cleanup before treating this as a
+  patch-review action.
+- **Concurrent worker conflicts:** Measure stale ApplyPatch proposals and
+  overlapping untracked Bash/Eval mutations. The existing submission-time
+  baseline check is the preferred fail-fast seam; add isolation or locking
+  only if real incidents escape it.
+- **Large-workspace Xref:** Profile `XrefReferences` on a genuinely large
+  repository. Its output cap applies after the backend has returned a complete
+  list, so it cannot prevent a backend from allocating excessive results.
+  Prefer `Grep` for broad workspace search; pursue a backend-specific limit
+  only if profiling reproduces the failure.
+- **Status check:** Each idea has a plausible existing mevedel seam, but none
+  has usage or profiling evidence showing that another module should be
+  built.
 
 ### Bedrock backend support for deferred tool loading
 
