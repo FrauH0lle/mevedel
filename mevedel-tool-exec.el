@@ -3015,7 +3015,11 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                      (condition-case nil
                          (mevedel-tool-exec--eval-read-batch-result
                           result-file)
-                       (error nil))))
+                       (error nil)))
+                    (success-p
+                     (and (eq (plist-get payload :status) 'ok)
+                          (integerp exit-code)
+                          (zerop exit-code))))
                (unwind-protect
                    (funcall
                     callback
@@ -3038,10 +3042,8 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                              ""
                            (format ":\n%s" diagnostics)))))
                       child-result nil
-                      (not
-                       (and (eq (plist-get payload :status) 'ok)
-                            (integerp exit-code)
-                            (zerop exit-code))))))
+                      (not success-p))
+                     :status (if success-p 'success 'error)))
                  (funcall cleanup))))
            :name "mevedel-eval-batch"
            :command
@@ -3058,7 +3060,8 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
        (funcall cleanup)
        (funcall callback
                 (list :result
-                      (format "Failed to start Eval batch process: %s" err)))
+                      (format "Failed to start Eval batch process: %s" err)
+                      :status 'error))
        nil))))
 
 (defun mevedel-tool-exec--eval (callback args)

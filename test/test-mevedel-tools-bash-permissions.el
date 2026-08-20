@@ -4761,6 +4761,40 @@ the execution boundary owns the session's single unavailable warning"
      (string-search
       "retry with `with_additional_permissions`"
       result)))
+  :doc "pipeline settles both batch launch failure forms as errors"
+  (progn
+    (require 'mevedel-tools)
+    (let* ((workspace (mevedel-workspace--create :root default-directory))
+           (mevedel--session
+            (mevedel-session--create :name "main" :workspace workspace)))
+      (dolist (failure '(child-result start-signal))
+        (let ((tool (mevedel-tool--create
+                     :name "Eval"
+                     :handler #'mevedel-tool-exec--eval
+                     :args '((expression string :required "Expression")
+                             (mode string :optional "Mode"
+                                   :enum ["live" "batch"]))
+                     :async-p t
+                     :read-only-p t))
+              events result)
+          (cl-letf (((symbol-function 'mevedel-execution-start-one-shot)
+                     (lambda (callback &rest _)
+                       (if (eq failure 'child-result)
+                           (funcall callback
+                                    '(:exit-code nil :output ""
+                                      :error "launch failed"))
+                         (error "Launch failed"))))
+                    ((symbol-function 'mevedel-hooks-run-event)
+                     (lambda (event _payload callback &rest _)
+                       (push event events)
+                       (funcall callback nil))))
+            (mevedel-pipeline-run-tool
+             tool (lambda (value) (setq result value))
+             '(:expression "(+ 1 2)" :mode "batch")))
+          (should
+           (string-match-p "Failed to start Eval batch process" result))
+          (should
+           (equal '(PreToolUse PostToolUseFailure) (nreverse events)))))))
   :doc "live mode does not use the child-process seam"
   (let ((child-starts 0)
         result)
