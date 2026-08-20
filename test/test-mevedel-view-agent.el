@@ -469,7 +469,8 @@
   (:doc "hydrates saved transcript inspection through verified artifacts")
   ,test
   (test)
-  (let* ((session (mevedel-session--create :name "main"))
+  (let* ((session (mevedel-session--create
+                   :name "main" :session-id "session-historical"))
          (relative "agents/historical.chat.org")
          (data-buffer (generate-new-buffer " *agent-inspection-data*"))
          (view-buffer (generate-new-buffer " *agent-inspection-view*"))
@@ -502,6 +503,89 @@
             (should (equal "published transcript" (buffer-string)))
             (should buffer-read-only)))
       (dolist (buffer (list data-buffer view-buffer parent-view))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer)))))
+  :doc "keeps equal agent paths isolated across parent sessions"
+  (let* ((session-a-id (make-temp-name "session-a-"))
+         (session-a (mevedel-session--create
+                     :name "main" :session-id session-a-id))
+         (session-b (mevedel-session--create
+                     :name "main" :session-id "session-b"))
+         (data-a (generate-new-buffer " *agent-a-data*"))
+         (data-b (generate-new-buffer " *agent-b-data*"))
+         (parent-a (generate-new-buffer " *agent-a-parent*"))
+         (parent-b (generate-new-buffer " *agent-b-parent*"))
+         (collision
+          (get-buffer-create
+           (format "*mevedel-agent:%s:/root/reviewer*" session-a-id)))
+         views)
+    (unwind-protect
+        (save-window-excursion
+          (with-current-buffer collision
+            (insert "unrelated"))
+          (dolist (entry `((,data-a ,session-a "session A")
+                           (,data-b ,session-b "session B")))
+            (with-current-buffer (car entry)
+              (setq-local mevedel--session (cadr entry))
+              (org-mode)
+              (insert (caddr entry))))
+          (with-current-buffer parent-a
+            (setq-local mevedel--data-buffer data-a))
+          (with-current-buffer parent-b
+            (setq-local mevedel--data-buffer data-b))
+          (cl-letf (((symbol-function 'mevedel-view--full-rerender)
+                     (lambda ()
+                       (let ((inhibit-read-only t)
+                             (source mevedel--data-buffer))
+                         (erase-buffer)
+                         (insert (with-current-buffer source
+                                   (buffer-string)))))))
+            (let ((view-a
+                   (mevedel-view--ensure-agent-transcript-view
+                    "/root/reviewer"
+                    (list :session session-a :buffer data-a :live-buffer t)
+                    parent-a)))
+              (push view-a views)
+              (should-not (eq collision view-a))
+              (with-current-buffer collision
+                (should (equal "unrelated" (buffer-string))))
+              (set-window-buffer (selected-window) view-a)
+              (let ((view-b
+                     (mevedel-view--ensure-agent-transcript-view
+                      "/root/reviewer"
+                      (list :session session-b :buffer data-b :live-buffer t)
+                      parent-b)))
+                (push view-b views)
+                (should-not (eq view-a view-b))
+                (should (eq view-a (window-buffer (selected-window))))
+                (with-current-buffer view-a
+                  (should (equal "session A" (buffer-string)))
+                  (should (eq data-a mevedel--data-buffer)))
+                (with-current-buffer view-b
+                  (should (equal "session B" (buffer-string)))
+                  (should (eq data-b mevedel--data-buffer)))))))
+      (dolist (buffer (append views
+                              (list collision data-a data-b parent-a parent-b)))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer)))))
+  :doc "rejects missing session identity before opening saved data"
+  (let ((session (mevedel-session--create :name "main"))
+        (parent (generate-new-buffer " *agent-unowned-parent*"))
+        opened-buffer)
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-session-artifacts-find-artifact-noselect)
+                   (lambda (&rest _)
+                     (setq opened-buffer
+                           (generate-new-buffer " *agent-unowned-data*")))))
+          (should-error
+           (mevedel-view--ensure-agent-transcript-view
+            "/root/reviewer"
+            (list :session session :relative-path "agents/reviewer.chat.org")
+            parent)
+           :type 'error)
+          (should-not opened-buffer))
+      (dolist (buffer (list opened-buffer parent))
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 

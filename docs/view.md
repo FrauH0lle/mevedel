@@ -56,7 +56,9 @@ transcript view never duplicates interaction controls or owns their callbacks.
 
 Each parent view owns at most one agent transcript side window. Opening a
 different agent transcript replaces the current inspection view; live refresh
-does not add multi-view window management.
+does not add multi-view window management. Transcript buffer identities include
+the owning session, so equal canonical agent paths in different sessions never
+reuse or repurpose one another's inspection view.
 
 If the observed agent settles while its transcript view is open, the view
 renders the final content immediately and updates its header in place. It
