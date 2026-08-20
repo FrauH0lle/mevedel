@@ -506,7 +506,9 @@ stdin is closed immediately. For local Unix execution, a normal main-process
 exit drains any remaining process-group descendants through the same bounded
 TERM/KILL path before the one-shot callback runs. Local Windows execution
 remains limited to the direct child; remote execution retains the target-side
-wrapper behavior described below.
+wrapper behavior described below. Remote direct-async channel overrides are
+scoped to the individual spawn and never change the user's global TRAMP
+connection properties.
 
 The current external-helper inventory is `diff`; `rg` for Read directory
 listings, Glob, and Grep; `pdfinfo` and `pdftoppm`; and ImageMagick's `magick`
