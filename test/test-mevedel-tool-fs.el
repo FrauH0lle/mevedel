@@ -238,6 +238,42 @@
       (nth 3 (assq 'path
                    (mevedel-tool-args (mevedel-tool-get "Grep"))))))))
 
+(mevedel-deftest mevedel-tool-fs--scrub-resource-search-output ()
+  ,test
+  (test)
+  :doc "replaces nested physical roots anywhere in helper diagnostics"
+  (let* ((root (make-temp-file "mevedel-resource-scrub-" t))
+         (nested (file-name-concat root "nested")))
+    (unwind-protect
+        (progn
+          (make-directory nested)
+          (should
+           (equal
+            (format "rg: local://root/one: denied\nrg: artifact://nested/two: denied")
+            (mevedel-tool-fs--scrub-resource-search-output
+             (format "rg: %s/one: denied\nrg: %s/two: denied"
+                     root nested)
+             (list (list :path root :address "local://root")
+                   (list :path nested :address "artifact://nested"))))))
+      (delete-directory root t)))
+  :doc "scrubs the target-native spelling of remote roots"
+  (let ((root (make-temp-file "mevedel-resource-remote-scrub-" t)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("resource-scrub")
+          (let* ((remote-root
+                  (format "/mevedelmock:resource-scrub:%s/" root))
+                 (native-root
+                  (file-remote-p remote-root 'localname 'never)))
+            (should
+             (equal
+              "rg: artifact://remote/secret.txt: denied"
+              (mevedel-tool-fs--scrub-resource-search-output
+               (format "rg: %s: denied"
+                       (file-name-concat native-root "secret.txt"))
+               (list (list :path remote-root
+                           :address "artifact://remote")))))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-tool-fs--resource-dispatch ()
   ,test
   (test)
@@ -333,8 +369,11 @@
                               'mevedel-execution-start-helper)
                              (lambda (callback &rest _)
                                (funcall callback
-                                        (list :exit-code 0
-                                              :output (concat artifact-file "\n")
+                                        (list :exit-code 2
+                                              :output
+                                              (format "%s\nrg: %s: Permission denied\n"
+                                                      artifact-file
+                                                      artifact-file)
                                               :timed-out-p nil
                                               :output-limit-p nil)))))
                     (let ((result
@@ -422,12 +461,14 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
             (cl-letf (((symbol-function 'mevedel-execution-start-helper)
                        (lambda (callback &rest _)
                          (funcall callback
-                                  (list :exit-code 0
-                                        :output (format "%s\n%s\n"
+                                  (list :exit-code 2
+                                        :output (format "%s\n%s\nrg: %s: Permission denied\n"
                                                         (file-name-concat
                                                          first-root "topic.md")
                                                         (file-name-concat
-                                                         second-root "topic.md"))
+                                                         second-root "topic.md")
+                                                        (file-name-concat
+                                                         first-root "topic.md"))
                                         :timed-out-p nil
                                         :output-limit-p nil)))))
               (let ((result
