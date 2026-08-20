@@ -1693,6 +1693,26 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
             (should truncated)))
       (delete-directory tmp-dir t)))
 
+  :doc "does not traverse descendant symlinks outside the selected root"
+  (let* ((base (file-name-as-directory
+                (make-temp-file "mevedel-list-symlink-" t)))
+         (root (file-name-as-directory (file-name-concat base "root")))
+         (outside (file-name-as-directory
+                   (file-name-concat base "outside"))))
+    (unwind-protect
+        (progn
+          (make-directory root t)
+          (make-directory outside t)
+          (with-temp-file (file-name-concat root "inside.txt")
+            (insert "inside"))
+          (with-temp-file (file-name-concat outside "secret.txt")
+            (insert "secret"))
+          (make-symbolic-link outside (file-name-concat root "linked"))
+          (let ((entries (car (mevedel-tool-fs--list-directory root))))
+            (should (member "inside.txt" entries))
+            (should-not (member "linked/secret.txt" entries))))
+      (delete-directory base t)))
+
   :doc "returns empty list for empty directory"
   (let ((tmp-dir (make-temp-file "mevedel-list-" t)))
     (unwind-protect
