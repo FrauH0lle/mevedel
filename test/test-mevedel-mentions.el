@@ -627,14 +627,22 @@ Returns (buffer . overlay)."
   ,test
   (test)
   :doc "missing file yields graceful placeholder with explanatory reminder"
-  (let* ((path "/nonexistent/path/to/file.txt")
-         (result (mevedel--handle-file-mention
+  (let* ((directory (make-temp-file "mevedel-missing-file-" t))
+         (path (file-name-concat directory "missing.txt")))
+    (unwind-protect
+        (let ((result
+               (cl-letf (((symbol-function 'mevedel-check-permission)
+                          (lambda (&rest _) 'allow)))
+                 (mevedel--handle-file-mention
                   (list :match-text (concat "@file:" path)
-                        :capture path))))
-    (should (string-match-p "does not exist" (plist-get result :placeholder)))
-    (should (stringp (plist-get result :reminder)))
-    (should (string-match-p "system annotation" (plist-get result :reminder)))
-    (should (null (plist-get result :hash))))
+                        :capture path)))))
+          (should (string-match-p "does not exist"
+                                  (plist-get result :placeholder)))
+          (should (stringp (plist-get result :reminder)))
+          (should (string-match-p "system annotation"
+                                  (plist-get result :reminder)))
+          (should (null (plist-get result :hash))))
+      (delete-directory directory t)))
 
   :doc "directory yields listing placeholder and reminder with entries"
   (let* ((dir (make-temp-file "mevedel-dir-" t)))
@@ -688,6 +696,61 @@ Returns (buffer . overlay)."
                                   (plist-get result :placeholder))))
       (delete-directory outside-dir t)
       (delete-directory ws-root t)))
+
+  :doc "permission denial precedes local and remote availability probes"
+  (let* ((existing (make-temp-file "mevedel-denied-file-"))
+         (missing (concat existing ".missing"))
+         (remote-root "/mevedelmock:denied:/project/")
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id "denied-probes"
+           :root remote-root :name "denied-probes"))
+         (session (mevedel-session-create "main" workspace))
+         (remote (file-name-concat remote-root "session" "artifact.txt"))
+         (mevedel-permission--context-frozen-p t)
+         (mevedel-permission--frozen-persistent-rules nil))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session)
+                (file-name-concat remote-root "session"))
+          (setf (mevedel-execution-target-environment
+                 (mevedel-session-execution-target session))
+                '(("HOME" . "/home/test")))
+          (dolist (info
+                   (list
+                    (list :match-text (concat "@file:" existing)
+                          :capture existing)
+                    (list :match-text (concat "@file:" missing)
+                          :capture missing)
+                    (list :match-text (concat "@file:" remote)
+                          :capture remote :session session
+                          :workspace-root remote-root)))
+            (let ((target (plist-get info :capture))
+                  (file-exists (symbol-function 'file-exists-p))
+                  (file-readable (symbol-function 'file-readable-p))
+                  probes)
+              (mevedel-test--with-captured-diagnostics nil
+                (cl-letf (((symbol-function 'mevedel-check-permission)
+                           (lambda (&rest _) 'deny))
+                          ((symbol-function 'file-exists-p)
+                           (lambda (path)
+                             (if (equal path target)
+                                 (progn (push 'exists probes) nil)
+                               (funcall file-exists path))))
+                          ((symbol-function 'file-readable-p)
+                           (lambda (path)
+                             (if (equal path target)
+                                 (progn (push 'readable probes) nil)
+                               (funcall file-readable path))))
+                          ((symbol-function
+                            'mevedel-session-artifacts-artifact-present-p)
+                           (lambda (&rest _) (push 'artifact probes) nil)))
+                  (let ((result (mevedel--handle-file-mention info)))
+                    (should (string-match-p
+                             "permission denied"
+                             (plist-get result :placeholder))))))
+              (should-not probes))))
+      (delete-file existing)))
 
   :doc "readable file yields placeholder, reminder, and content hash"
   (let* ((tmp (make-temp-file "mevedel-file-" nil ".txt" "hello world\n"))
@@ -2128,6 +2191,26 @@ Returns (buffer . overlay)."
    (mevedel-workspace-clear-registry))
   ,test
   (test)
+  :doc "historical replacement length cannot move the latest reminder boundary"
+  (dolist (placeholder '("[replacement-much-longer]" "x"))
+    (let ((mevedel-mention-handlers
+           (list
+            (list "@old" nil
+                  (lambda (_info)
+                    (list :placeholder placeholder
+                          :reminder "historical reminder"))))))
+      (with-temp-buffer
+        (insert (propertize "Earlier @old\n" 'gptel 'prompt))
+        (insert (propertize "Assistant reply\n" 'gptel 'response))
+        (insert (propertize "Latest prompt" 'gptel 'prompt))
+        (mevedel--transform-expand-mentions nil)
+        (should
+         (equal
+          (concat "Earlier " placeholder "\nAssistant reply\n"
+                  "<system-reminder>\nhistorical reminder\n"
+                  "</system-reminder>\n\nLatest prompt")
+          (buffer-string))))))
+
   :doc "leaves quoted @ref untouched and emits no reminder"
   (let* ((cell (mevedel-test--make-ref-buffer "hello world\n" "hello"))
          (buf (car cell))

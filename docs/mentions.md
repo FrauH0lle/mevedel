@@ -6,7 +6,7 @@ Expansion runs as a gptel prompt transform (priority -90) via
 `mevedel--transform-expand-mentions`, dispatching through
 `mevedel-mention-handlers`. Each mention becomes a compact
 `[kind:KEY -- STATUS]` placeholder with full content injected as a
-`<system-reminder>` block above the user prompt.
+`<system-reminder>` block above the latest user prompt.
 
 Root `WaitAgent` steering has no new gptel request on which that transform can
 run. At its delivery boundary, `mevedel-mentions-expand-user-input` therefore
