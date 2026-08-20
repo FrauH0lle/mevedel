@@ -96,7 +96,10 @@ recommends those elements while leaving Codex room to choose the next action.
   the event). mevedel works around it by refusing to install watchers when
   `noninteractive` (`mevedel-skills--ensure-watcher`,
   `mevedel-skills--filenotify-supported-p`); revisit if upstream fixes it.
-
+- Cursor jumps on permission promtp back to composer, seems to follow a certain tick rate
+- ApplyPatch persisted diff not rendered nicely/highlighted
+  
+  
 ## Entry format
 
 Each entry records its source, owed change, reason for deferral, current
@@ -269,6 +272,62 @@ become implemented, obsolete, or unjustified.
   parser/security tests. A loose origin or generated-text rule could let a
   model or untrusted input bypass a user-only skill restriction.
 
+## View rendering
+
+### Restore responsive Markdown tables and inline images
+
+- **Source:** B12-3 and `8f83a25` removed mevedel's table padder and declared
+  raw fontified pipe tables sufficient. That deletion removed a weak
+  implementation, not an unwanted feature. The reference behavior is
+  agent-shell's table reflow from
+  [`ff688fc`](https://github.com/xenodium/agent-shell/commit/ff688fcf49e465631134e3a01f0120404121708b)
+  and its shared table/image realignment in 0.73.
+- **What's owed:** Restore beautified tables as a view guarantee by adapting
+  the current agent-shell table renderer into a focused mevedel projection:
+  render canonical pipe-table Markdown into styled box-drawing rows, retain
+  the raw table source and measured window width, proportionally shrink and
+  wrap columns to the usable width (including any `line-prefix` inset), and
+  re-render only stale tables after window size or displayed-buffer changes.
+  Extend `mevedel-view-inline-image-max-width` to accept a window-width ratio
+  as well as fixed pixels; retain each responsive image's sizing input and
+  measured width so the same realignment job recreates only stale images.
+  Use buffer-local hooks and one debounced idle timer, never mutate from a
+  redisplay hook, and keep re-layout off the undo list without changing the
+  modified flag.
+- **Why deferred:** The view currently remains correct and reconstructable:
+  raw tables are readable and inline images use a fixed 600-pixel maximum.
+  The desired presentation needs a deliberate port of agent-shell's measured
+  renderer, not resurrection of mevedel's source-padding parser or a dependency
+  on agent-shell/md-mode. md-mode lacks auto-resize and its whole-document
+  renderer conflicts with mevedel's source panels, links, mentions, images,
+  and source mapping.
+- **Status check:** `mevedel-view--decorate-markdown-in-range` decorates code
+  blocks, images, links, and paths but leaves tables raw. In-flight streaming
+  already rebuilds the disposable view turn from the canonical data buffer,
+  so omit agent-shell's rendered-table row-refolding machinery. Preserve only
+  mevedel-owned source/read-only/turn properties across table replacement,
+  and exclude fenced source panels.
+- **Acceptance:** Resizing a frame, splitting a window, or first displaying an
+  off-screen view reflows tables and ratio-sized images after a debounce while
+  leaving the data buffer, point, window position, and active composer draft
+  unchanged. Cover a multiline draft beginning with `>`, tool-body indentation,
+  escaped pipes and backticks, links and faces inside cells, narrow hard wraps,
+  emoji/CJK width, fenced code exclusion, multiple tables, off-screen render,
+  and image resize. A table remains aligned under variable-pitch display.
+  Audit every copy path, choose and document whether it yields rendered box
+  characters or canonical Markdown, and test that contract before landing.
+- **Initial boundary:** Do not add md-mode or agent-shell as dependencies. Skip
+  cell-navigation keys, agent-shell streaming row extension, interactive image
+  `+`/`-`/`0` controls, image attributes, and glyph-height normalization until
+  usage demonstrates they are needed. Accept and document that one mutable
+  view buffer can hold only one layout when shown simultaneously in windows of
+  different widths.
+- **Blast radius:** Tables are frequent model output and currently lose useful
+  structure; fixed-width images waste space or overflow narrow views. A careless
+  resize implementation can corrupt source mapping, spread keymaps/faces, move
+  point, or damage the composer, so these are must-work view cases rather than
+  optional cosmetic tests.
+
 ## Request lifecycle
 
 ### Prevent system sleep during active requests
@@ -303,6 +362,51 @@ become implemented, obsolete, or unjustified.
   path.
 - **Blast radius:** Bedrock sessions cannot use deferred-tool loading
   correctly.
+
+### Restore must-work real-world diff overlay tests
+
+- **Source:** The real-world Shiny/R overlay fixture removed by `907fc38` from
+  `test/test-mevedel-diff-apply.el` while replacing the custom geometry engine
+  with `replace-buffer-contents` and canonical edit hooks.
+- **What's owed:** Restore the real-world diff examples as public
+  `mevedel-diff-apply-buffer` acceptance tests using registered directives and
+  references. Add an explicit note beside them that these are must-work user
+  cases and must not be deleted when the implementation changes; change their
+  expected behavior only when the product requirement itself changes.
+- **Why deferred:** The original Shiny/R example still passes when replayed
+  against the native replacement path, but the broader behavior should be
+  observed before deciding which additional real-world fixtures belong in the
+  permanent set.
+- **Status check:** The focused suite has final-byte and lifecycle coverage,
+  but no retained real-world example; deleting the old fixture made the green
+  suite unable to prove this use case.
+- **Blast radius:** A later edit can regress semantic overlay tracking during
+  realistic multi-location changes while synthetic transaction tests remain
+  green.
+
+### Restore bounded Buddy context expansion
+
+- **Source:** B24-3 and `7745fe8` deleted Buddy's unrestricted `read_buffer`
+  tool because an unattended review could read an entire changed buffer beyond
+  its bounded diff payload. The broad authority was wrong, but removing all
+  context expansion also removed the intended inspect-then-annotate workflow.
+- **What's owed:** Add a bounded `read_around`-style Buddy tool anchored to a
+  live line marker already shown in the current review. Return only a fixed
+  local window, register markers for the newly exposed live lines so they may
+  receive notes, and retain generation and review-scope checks. Do not permit
+  arbitrary ranges, omitted bounds that mean the whole buffer, or reads from
+  buffers outside the running review. Restore prompt guidance and test both the
+  successful read-then-annotate flow and every authority boundary.
+- **Why deferred:** Real usage should determine the useful window and whether
+  one expansion per anchor is enough; those choices do not justify restoring
+  the old whole-buffer reader meanwhile.
+- **Status check:** Automatic Buddy currently receives six context lines on
+  either side of each change and must stay silent whenever that payload is
+  insufficient. It has no way to inspect a nearby definition or surrounding
+  block before deciding whether a note is justified.
+- **Blast radius:** Buddy can miss real defects that need slightly more local
+  context, while an over-broad replacement would again expand unattended
+  provider access beyond what the user was shown.
 
 ### Split the side-conversation test suite into per-function deftests
 
