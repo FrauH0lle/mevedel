@@ -17,9 +17,11 @@
 ;; buffer-local rather than window-local, so it applies only while the frame
 ;; is the sole window showing that view.
 ;;
-;; At most one directive frame exists at a time.  It is dismissed explicitly;
-;; teardown runs from `delete-frame-functions' so every deletion path leaves
-;; the directive composer scope and restores point.
+;; At most one directive frame exists at a time.  Reuse keeps the exact
+;; directive identity or retargets every source/filter field before display.
+;; The frame is dismissed explicitly; teardown runs from
+;; `delete-frame-functions' so every deletion path leaves the directive
+;; composer scope and restores point.
 
 ;;; Code:
 
@@ -29,6 +31,9 @@
 (declare-function mevedel--directive-session-buffer
                   "mevedel-chat" (directive workspace))
 
+;; `mevedel-models'
+(declare-function mevedel-model-current-label "mevedel-models" (&optional buffer))
+
 ;; `mevedel-overlays'
 (declare-function mevedel--directive-record "mevedel-overlays" (directive))
 (declare-function mevedel--instruction-buffer-workspace
@@ -36,15 +41,16 @@
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction type))
 
-;; `mevedel-models'
-(declare-function mevedel-model-current-label "mevedel-models" (&optional buffer))
-
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-state-label "mevedel-structs" (&optional buffer))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools-active-count "mevedel-tools" (&optional buffer))
+
+;; `mevedel-view'
+(defvar mevedel--data-buffer)
+(defvar mevedel--view-buffer)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-marker-position "mevedel-view-composer" ())
@@ -55,10 +61,6 @@
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--rendered-turn-starts "mevedel-view-render" ())
-
-;; `mevedel-view'
-(defvar mevedel--data-buffer)
-(defvar mevedel--view-buffer)
 
 
 ;;
@@ -564,12 +566,13 @@ an ordinary window when child frames are unavailable."
                       '(display-buffer-below-selected
                         (window-height . 0.4)))
       (when focus (select-window (get-buffer-window view-buffer t))))
-     ;; A frame already showing this view stays exactly where it is.  The
-     ;; discuss action displays twice -- once entering composer scope and
-     ;; once dispatching the request -- and repositioning on the second call
-     ;; would move the frame out from under whoever is reading it.
+     ;; A frame already showing this exact directive stays where it is.  The
+     ;; discuss action displays twice -- once entering composer scope and once
+     ;; dispatching the request -- and repositioning on the second call would
+     ;; move the frame out from under whoever is reading it.
      ((and (frame-live-p mevedel-directive-frame--frame)
-           (eq mevedel-directive-frame--view-buffer view-buffer))
+           (eq mevedel-directive-frame--view-buffer view-buffer)
+           (equal mevedel-directive-frame--directive-id directive-id))
       (make-frame-visible mevedel-directive-frame--frame)
       (when focus
         (select-frame-set-input-focus mevedel-directive-frame--frame))

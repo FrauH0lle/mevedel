@@ -210,7 +210,7 @@ directive turn.  BODY runs inside the view buffer."
        (mevedel-directive-frame--filter-elsewhere-p (current-buffer))))))
 
 (mevedel-deftest mevedel-directive-frame-display
-  (:doc "`mevedel-directive-frame-display' degrades without child frames")
+  (:doc "`mevedel-directive-frame-display' creates and reuses directive views")
   ,test
   (test)
   :doc "falls back to an ordinary window and creates no frame"
@@ -238,7 +238,104 @@ directive turn.  BODY runs inside the view buffer."
                    (error "Rebuilt a frame that was already showing the view"))))
         (should (eq (selected-frame)
                     (mevedel-directive-frame-display nil view))))
-      (should (= frames (length (frame-list)))))))
+      (should (= frames (length (frame-list))))))
+
+  :doc "same-view reuse replaces directive identity and preserves drafts"
+  (mevedel-directive-frame-test--with-view
+    (let* ((view (current-buffer))
+           (file (file-name-concat root "source.el"))
+           (source nil)
+           directive-a directive-b record-a record-b
+           scope-a scope-b
+           (ordinary-draft "> ordinary\nsecond line")
+           (directive-draft "> B draft\nsecond line")
+           (makes 0))
+      (unwind-protect
+          (progn
+            (write-region "alpha\nbeta\n" nil file nil 'silent)
+            (setq source (find-file-noselect file))
+            (with-current-buffer source
+              (setq-local mevedel--workspace workspace)
+              (setq directive-a (make-overlay 1 6)
+                    directive-b (make-overlay 7 11)
+                    record-a (mevedel-directive--create
+                              :id "directive-a" :request "A")
+                    record-b (mevedel-directive--create
+                              :id "directive-b" :request "B"))
+              (dolist (pair `((,directive-a . "directive-a")
+                              (,directive-b . "directive-b")))
+                (overlay-put (car pair) 'mevedel-instruction t)
+                (overlay-put (car pair) 'mevedel-instruction-type 'directive)
+                (overlay-put (car pair) 'mevedel-uuid (cdr pair)))
+              (mevedel-workspace-set-directives workspace
+                                                (list record-a record-b)))
+            (setq scope-a (list :directive-id (mevedel-directive-id record-a)
+                                :action 'discuss :record record-a
+                                :workspace workspace)
+                  scope-b (list :directive-id (mevedel-directive-id record-b)
+                                :action 'discuss :record record-b
+                                :workspace workspace))
+            (goto-char (mevedel-view--input-start))
+            (insert ordinary-draft)
+            (mevedel-view--switch-composer-scope scope-a)
+            (save-window-excursion
+              (set-window-buffer (selected-window) source)
+              (cl-letf (((symbol-function
+                          'mevedel-directive-frame--available-p)
+                         (lambda () t))
+                        ((symbol-function 'mevedel-directive-frame--anchor)
+                         (lambda (&rest _) '(10 . 20)))
+                        ((symbol-function 'mevedel-directive-frame--make)
+                         (lambda (&rest _)
+                           (cl-incf makes)
+                           (selected-frame)))
+                        ((symbol-function 'mevedel-directive-frame--size)
+                         (lambda (&rest _) '(100 . 50)))
+                        ((symbol-function 'make-frame-visible) #'ignore)
+                        ((symbol-function 'select-frame-set-input-focus)
+                         #'ignore)
+                        ((symbol-function 'set-frame-position) #'ignore)
+                        ((symbol-function 'set-frame-size) #'ignore))
+                (mevedel-directive-frame-display directive-a view)
+                (with-current-buffer view
+                  (mevedel-view--switch-composer-scope scope-b)
+                  (goto-char (mevedel-view--input-start))
+                  (insert directive-draft))
+                (mevedel-directive-frame-display directive-b view)
+                (should (= 2 makes))
+                (should (equal (mevedel-directive-id record-b)
+                               mevedel-directive-frame--directive-id))
+                (should (eq directive-b
+                            mevedel-directive-frame--directive))
+                (should (= (overlay-start directive-b)
+                           (marker-position
+                            mevedel-directive-frame--origin)))
+                (mevedel-test--with-captured-messages nil
+                  (mevedel-directive-frame--on-delete (selected-frame)))
+                (should
+                 (= (marker-position
+                     (plist-get mevedel-directive-frame--pending-restore
+                                :origin))
+                    (overlay-start directive-b)))
+                (with-current-buffer source
+                  (mevedel-directive-frame--after-delete))))
+            (with-current-buffer view
+              (should-not mevedel-view--composer-scope)
+              (should (equal ordinary-draft
+                             (buffer-substring-no-properties
+                              (mevedel-view--input-start) (point-max))))
+              (should
+               (equal directive-draft
+                      (plist-get
+                       (gethash (mevedel-view--composer-scope-key scope-b)
+                                mevedel-view--composer-drafts)
+                       :text)))))
+        (when (buffer-live-p source)
+          (with-current-buffer source
+            (setq-local kill-buffer-hook nil)
+            (set-buffer-modified-p nil))
+          (kill-buffer source))
+        (when (file-exists-p file) (delete-file file))))))
 
 (mevedel-deftest mevedel-directive-frame--source-window
   (:doc "`mevedel-directive-frame--source-window' never returns the frame itself")
