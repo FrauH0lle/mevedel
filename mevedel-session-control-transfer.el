@@ -19,9 +19,9 @@
 (declare-function mevedel-execution-unsettled-mutation-p
                   "mevedel-execution" (session))
 
-;; `mevedel-overlays'
+;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-state-rollback
-                  "mevedel-overlays" (workspace))
+                  "mevedel-instruction-registry" (workspace))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-check-target-incarnation

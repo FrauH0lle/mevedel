@@ -17,6 +17,12 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
+
 (defun mevedel-directive-activity-test--fixture ()
   "Return workspace, source buffer, overlay, and durable record."
   (let* ((workspace (mevedel-workspace--create
@@ -322,6 +328,113 @@
                  (lambda (patch) (setq captured patch))))
         (mevedel-directive-activity-view-patch))
       (should (string-match-p "diff --git" captured)))))
+
+(mevedel-deftest mevedel-list-directives
+  (:vars ())
+  ,test
+  (test)
+  :doc "keeps source-missing directives active while hiding archived records"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'file :id "list" :root "/tmp" :name "list"))
+         (missing (mevedel-directive--create
+                   :id "missing" :request "missing"
+                   :anchor '(:state source-missing) :state nil))
+         (archived (mevedel-directive--create
+                    :id "archived" :request "archived"
+                    :anchor '(:state archived) :state nil))
+         choices opened)
+    (mevedel-workspace-set-directives workspace (list missing archived))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt collection &rest _)
+                 (setq choices collection)
+                 (caar collection)))
+              ((symbol-function 'mevedel-open-directive-activity)
+               (lambda (directive owner)
+                 (setq opened (list directive owner)))))
+      (mevedel-list-directives workspace))
+    (should (= 1 (length choices)))
+    (should (string-match-p "missing" (caar choices)))
+    (should (equal (list missing workspace) opened))))
+
+(mevedel-deftest mevedel-list-archived-directives
+  (:vars ())
+  ,test
+  (test)
+  :doc "keeps archived activity inspectable outside the active list"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'file :id "archive-list" :root "/tmp"
+                     :name "archive-list"))
+         (active (mevedel-directive--create
+                  :id "active" :request "active"
+                  :anchor '(:state source-missing) :state nil))
+         (archived (mevedel-directive--create
+                    :id "archived" :request "history"
+                    :anchor '(:state archived) :state 'implemented))
+         choices opened)
+    (mevedel-workspace-set-directives workspace (list active archived))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt collection &rest _)
+                 (setq choices collection)
+                 (caar collection)))
+              ((symbol-function 'mevedel-open-directive-activity)
+               (lambda (directive owner)
+                 (setq opened (list directive owner)))))
+      (mevedel-list-archived-directives workspace))
+    (should (= 1 (length choices)))
+    (should (string-match-p "archived" (caar choices)))
+    (should (equal (list archived workspace) opened))))
+
+(mevedel-deftest mevedel-directive-activity-reattach
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global)))
+  ,test
+  (test)
+  :doc "reattaches the activity record through the explicit activity action"
+  (let* ((fixture (mevedel-instruction-test--source-fixture))
+         (workspace (nth 1 fixture))
+         (file (nth 2 fixture))
+         (source (nth 3 fixture))
+         (record (nth 5 fixture))
+         (activity (generate-new-buffer " *mevedel-reattach-activity*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer source
+            (mevedel--mark-buffer-source-missing source))
+          (with-current-buffer activity
+            (mevedel-directive-activity-mode)
+            (setq-local mevedel-directive-activity--workspace workspace
+                        mevedel-directive-activity--directive record)
+            (mevedel-directive-activity-reattach file 1 7))
+          (should (eq 'attached
+                      (plist-get (mevedel-directive-anchor record) :state))))
+      (when (buffer-live-p activity) (kill-buffer activity))
+      (mevedel-instruction-test--discard-source fixture))))
+
+(mevedel-deftest mevedel-directive-activity-archive
+  (:vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global)))
+  ,test
+  (test)
+  :doc "archives the current record through the activity action"
+  (let* ((fixture (mevedel-instruction-test--source-fixture))
+         (workspace (nth 1 fixture))
+         (record (nth 5 fixture))
+         (activity (generate-new-buffer " *mevedel-archive-activity*")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-directive-attempts record)
+                (list (mevedel-instruction-test--attempt)))
+          (with-current-buffer activity
+            (mevedel-directive-activity-mode)
+            (setq-local mevedel-directive-activity--workspace workspace
+                        mevedel-directive-activity--directive record)
+            (mevedel-directive-activity-archive))
+          (should (eq 'archived
+                      (plist-get (mevedel-directive-anchor record) :state))))
+      (when (buffer-live-p activity) (kill-buffer activity))
+      (mevedel-instruction-test--discard-source fixture))))
 
 (provide 'test-mevedel-directive-activity)
 

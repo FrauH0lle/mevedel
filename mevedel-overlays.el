@@ -1,4 +1,4 @@
-;;; mevedel-overlays.el -- Instruction overlays, tags, IDs, navigation -*- lexical-binding: t -*-
+;;; mevedel-overlays.el -- Instruction geometry, tags, and context -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -6,18 +6,15 @@
 ;; two flavours: references (provide context, tagged for query) and
 ;; directives (LLM prompts that may query references by tag).
 ;;
-;; Responsibilities: overlay CRUD (create/modify/delete), unique ID
-;; management for cross-instruction linking, tag storage and boolean
-;; query evaluation (and/or/not operators), visual styling via colour
-;; tinting, and buffer navigation between instructions.  The central
-;; `mevedel--update-instruction-overlay' helper renders every visible
-;; aspect of an overlay (colour, label, priority, linking) based on
-;; its current state.  Full source deletion turns directive overlays into
-;; zero-width detached presentations without discarding their workspace record;
-;; references retain ordinary evaporating overlay behavior.
+;; This core owns containment and tree queries, tag/context semantics,
+;; navigation, and prompt assembly.  `mevedel-instruction-registry' owns
+;; workspace buckets, IDs, and links; `mevedel-directive-source' owns durable
+;; record/presentation mutation; `mevedel-overlay-ui' owns actions and
+;; rendering.
 
 ;;; Code:
 
+(eval-when-compile (require 'mevedel-instruction-registry))
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -76,6 +73,64 @@
                   "mevedel-directive-plan"
                   (implementation-prompt &optional feedback proposal))
 
+;; `mevedel-directive-source'
+(declare-function mevedel--create-directive-in
+                  "mevedel-directive-source"
+                  (buffer start end &optional bodyless directive-text))
+(declare-function mevedel--create-reference-in
+                  "mevedel-directive-source" (buffer start end))
+(declare-function mevedel--delete-instruction
+                  "mevedel-directive-source"
+                  (instruction &optional buffer))
+(declare-function mevedel--detached-directive-p
+                  "mevedel-directive-source" (directive))
+(declare-function mevedel--directive-record
+                  "mevedel-directive-source" (directive))
+(declare-function mevedel--directive-status
+                  "mevedel-directive-source" (directive))
+(declare-function mevedel--directive-text
+                  "mevedel-directive-source" (directive))
+(declare-function mevedel--instruction-anchor-for-instruction
+                  "mevedel-directive-source" (instruction))
+(declare-function mevedel--instruction-persisted-properties
+                  "mevedel-directive-source" (instruction))
+(declare-function mevedel--reattach-directive-overlay
+                  "mevedel-directive-source"
+                  (id anchor workspace buffer start end))
+(declare-function mevedel--remove-directive-presentation
+                  "mevedel-directive-source" (directive &optional buffer))
+(declare-function mevedel--set-directive-request
+                  "mevedel-directive-source" (directive request))
+(declare-function mevedel--set-directive-status
+                  "mevedel-directive-source" (directive status))
+
+;; `mevedel-instruction-registry'
+(declare-function mevedel--clear-instruction-state
+                  "mevedel-instruction-registry" (&optional workspace))
+(declare-function mevedel--instruction-activate-buffer
+                  "mevedel-instruction-registry" (&optional buffer))
+(declare-function mevedel--instruction-activate-workspace
+                  "mevedel-instruction-registry" (&optional workspace))
+(declare-function mevedel--instruction-buffer-workspace
+                  "mevedel-instruction-registry" (buffer))
+(declare-function mevedel--instruction-id
+                  "mevedel-instruction-registry" (instruction))
+(declare-function mevedel--instruction-operation-state-key
+                  "mevedel-instruction-registry" ())
+(declare-function mevedel--instruction-outlinks
+                  "mevedel-instruction-registry" (instruction))
+(declare-function mevedel--instruction-state
+                  "mevedel-instruction-registry" (&optional key))
+(declare-function mevedel--instruction-with-id
+                  "mevedel-instruction-registry"
+                  (target-id &optional workspace))
+(declare-function mevedel--instruction-with-uuid
+                  "mevedel-instruction-registry"
+                  (uuid &optional workspace))
+(declare-function mevedel--instruction-workspace-key
+                  "mevedel-instruction-registry" (&optional workspace))
+(defvar mevedel--instruction-state-key-override)
+
 ;; `mevedel-menu'
 (declare-function mevedel-menu-open-model-selection
                   "mevedel-menu" (&rest options))
@@ -84,8 +139,14 @@
 (declare-function mevedel-model-current-provider-label
                   "mevedel-models" (&optional buffer))
 
+;; `mevedel-overlay-ui'
+(declare-function mevedel--update-instruction-overlay
+                  "mevedel-overlay-ui"
+                  (instruction &optional update-children))
+
 ;; `mevedel-persistence'
-(declare-function mevedel--restore-file-instructions "mevedel-persistence" (file &optional message))
+(declare-function mevedel--restore-file-instructions
+                  "mevedel-persistence" (file &optional message workspace))
 (declare-function mevedel--setup-buffer-hooks "mevedel-persistence" (buffer))
 
 ;; `mevedel-plan-handoff'
@@ -259,796 +320,10 @@ might yield better or worse results."
   :type 'boolean
   :group 'mevedel)
 
-(defcustom mevedel-instruction-anchor-context-chars 160
-  "Number of surrounding characters stored in instruction anchors."
-  :type 'integer
-  :group 'mevedel)
-
-(defcustom mevedel-instruction-anchor-text-max-chars 8192
-  "Maximum selected text size stored directly in instruction anchors.
-
-Selections larger than this are represented by hashes and boundary
-context only."
-  :type 'integer
-  :group 'mevedel)
 
 (defvar mevedel--default-instruction-priority -99)
 (defvar mevedel--highlighted-instruction nil)
 
-(defvar mevedel--instruction-states (make-hash-table :test #'equal)
-  "Workspace-keyed instruction state table.
-
-Each value is a plist with keys `:instructions', `:id-counter',
-`:id-usage-map', and `:retired-ids'.")
-
-(defvar-local mevedel--instruction-current-state-key nil
-  "Workspace key selected for this buffer's instruction operations.")
-
-(defvar-local mevedel--pending-directive-detachments nil
-  "Directives wholly covered by the current buffer edit.")
-
-(defvar mevedel--instruction-state-key-override nil
-  "Dynamically bound instruction state key for explicit operations.")
-
-(defun mevedel--instruction-operation-state-key ()
-  "Return the explicit or buffer-derived instruction state key."
-  (or mevedel--instruction-state-key-override
-      (and mevedel--instruction-current-state-key
-           (not (eq mevedel--instruction-current-state-key :global))
-           mevedel--instruction-current-state-key)
-      (when-let* ((workspace
-                   (mevedel--instruction-buffer-workspace (current-buffer))))
-        (mevedel--instruction-workspace-key workspace))
-      mevedel--instruction-current-state-key
-      :global))
-
-(defmacro mevedel--instruction-alist ()
-  "Return the active workspace's instruction alist as a settable place."
-  '(plist-get (mevedel--instruction-state
-               (mevedel--instruction-operation-state-key))
-              :instructions))
-
-(defmacro mevedel--instruction-id-counter ()
-  "Return the active workspace's instruction ID counter as a settable place."
-  '(plist-get (mevedel--instruction-state
-               (mevedel--instruction-operation-state-key))
-              :id-counter))
-
-(defmacro mevedel--instruction-id-usage-map ()
-  "Return the active workspace's used-ID table as a settable place."
-  '(plist-get (mevedel--instruction-state
-               (mevedel--instruction-operation-state-key))
-              :id-usage-map))
-
-(defmacro mevedel--instruction-retired-ids ()
-  "Return the active workspace's retired IDs as a settable place."
-  '(plist-get (mevedel--instruction-state
-               (mevedel--instruction-operation-state-key))
-              :retired-ids))
-
-(defun mevedel--instruction-alist-value ()
-  "Return the active workspace's instruction alist."
-  (mevedel--instruction-alist))
-
-(defun mevedel--set-instruction-alist-value (value)
-  "Set the active workspace's instruction alist to VALUE."
-  (setf (mevedel--instruction-alist) value))
-
-(defconst mevedel--persisted-instruction-properties
-  '(mevedel-instruction
-    mevedel-id
-    mevedel-uuid
-    mevedel-instruction-type
-    mevedel-instruction-collapse-p
-    mevedel-links
-    mevedel-reference-tags
-    mevedel-commentary
-    mevedel-commentary-truncated
-    mevedel-directive-fail-reason
-    mevedel-directive-action
-    mevedel-directive-model-provider
-    mevedel-directive-reasoning-effort
-    mevedel-directive-prefix-tag-query
-    mevedel-directive-infix-tag-query-string
-    mevedel-subdirective-typename
-    evaporate)
-  "Overlay properties that are part of the instruction data model.
-
-Visual and runtime properties such as faces, keymaps, display strings,
-markers, and buffers are rebuilt from these values when an instruction
-overlay is restored.")
-
-(defun mevedel--instruction-serializable-value (value)
-  "Return VALUE with transient text properties stripped from strings."
-  (cond
-   ((stringp value)
-    (substring-no-properties value))
-   ((consp value)
-    (cons (mevedel--instruction-serializable-value (car value))
-          (mevedel--instruction-serializable-value (cdr value))))
-   ((vectorp value)
-    (vconcat (mapcar #'mevedel--instruction-serializable-value value)))
-   (t value)))
-
-(defun mevedel--instruction-persisted-properties (instruction)
-  "Return serializable persisted properties for INSTRUCTION."
-  (let ((raw-properties (overlay-properties instruction))
-        properties)
-    (dolist (prop mevedel--persisted-instruction-properties)
-      (when (memq prop raw-properties)
-        (setq properties
-              (plist-put properties prop
-                         (mevedel--instruction-serializable-value
-                          (overlay-get instruction prop))))))
-    properties))
-
-(defun mevedel--instruction-anchor-substring (start end)
-  "Return buffer substring between START and END, without properties."
-  (buffer-substring-no-properties
-   (max (point-min) start)
-   (min (point-max) end)))
-
-(defun mevedel--instruction-anchor-for-instruction (instruction)
-  "Return a lightweight restore anchor for INSTRUCTION."
-  (when-let* ((buffer (overlay-buffer instruction)))
-    (with-current-buffer buffer
-      (let* ((start (overlay-start instruction))
-             (end (overlay-end instruction))
-             (bodyless (= start end))
-             (length (- end start))
-             (parent (mevedel--parent-instruction instruction))
-             (text (unless bodyless
-                     (mevedel--instruction-anchor-substring start end)))
-             (stored-text (and text
-                               (<= (length text)
-                                   mevedel-instruction-anchor-text-max-chars)
-                               text))
-             (context mevedel-instruction-anchor-context-chars))
-        (list :schema 1
-              :uuid (overlay-get instruction 'mevedel-uuid)
-              :parent-uuid (and parent
-                                (overlay-get parent 'mevedel-uuid))
-              :bodyless bodyless
-              :text-hash (and text (secure-hash 'sha256 text))
-              :text stored-text
-              :prefix (mevedel--instruction-anchor-substring
-                       (- start context) start)
-              :suffix (mevedel--instruction-anchor-substring
-                       end (+ end context))
-              :length length)))))
-
-(defun mevedel--directive-record (directive)
-  "Return the workspace record presented by DIRECTIVE."
-  (when-let* ((buffer (overlay-buffer directive))
-              (workspace (mevedel--instruction-buffer-workspace buffer))
-              (id (overlay-get directive 'mevedel-uuid)))
-    (cl-find id (mevedel-workspace-directives workspace)
-             :key #'mevedel-directive-id :test #'equal)))
-
-(defun mevedel--workspace-subdirective-owner (workspace id)
-  "Return the parent and nested record owning ID in WORKSPACE."
-  (cl-loop
-   for directive in (mevedel-workspace-directives workspace)
-   for subdirective =
-   (cl-find id (mevedel-directive-subdirectives directive)
-            :key #'mevedel-subdirective-id :test #'equal)
-   when subdirective return (cons directive subdirective)))
-
-(defun mevedel--subdirective-owner (directive &optional workspace)
-  "Return the parent and nested record presented by DIRECTIVE."
-  (when-let* ((id (overlay-get directive 'mevedel-uuid))
-              (workspace
-               (or workspace
-                   (when-let* ((buffer (overlay-buffer directive)))
-                     (mevedel--instruction-buffer-workspace buffer)))))
-    (mevedel--workspace-subdirective-owner workspace id)))
-
-(defun mevedel--subdirective-record (directive &optional workspace)
-  "Return the parent-owned nested record presented by DIRECTIVE."
-  (cdr (mevedel--subdirective-owner directive workspace)))
-
-(defun mevedel--directive-source-record (directive)
-  "Return the authored record directly presented by DIRECTIVE."
-  (or (mevedel--directive-record directive)
-      (mevedel--subdirective-record directive)))
-
-(defun mevedel--detached-directive-p (directive)
-  "Return non-nil when DIRECTIVE presents a detached durable record."
-  (when-let* ((record (mevedel--directive-record directive)))
-    (eq 'detached (plist-get (mevedel-directive-anchor record) :state))))
-
-(defun mevedel--directive-anchor (directive)
-  "Return DIRECTIVE's current attached anchor description."
-  (when-let* ((buffer (overlay-buffer directive)))
-    (list :state 'attached
-          :file (buffer-file-name buffer)
-          :start (overlay-start directive)
-          :end (overlay-end directive)
-          :evidence (mevedel--instruction-anchor-for-instruction directive))))
-
-(defun mevedel--refresh-directive-anchor (directive)
-  "Refresh the durable anchor presented by DIRECTIVE."
-  (when-let* (((not (overlay-get directive
-                                 'mevedel-transient-source-missing)))
-              (record (mevedel--directive-source-record directive)))
-    (let ((anchor (if (mevedel-directive-p record)
-                      (mevedel-directive-anchor record)
-                    (mevedel-subdirective-anchor record))))
-      (if (and (eq 'detached (plist-get anchor :state))
-               (= (overlay-start directive) (overlay-end directive)))
-          (progn
-            (setq anchor (copy-tree anchor))
-            (setq anchor (plist-put anchor :file
-                                    (buffer-file-name
-                                     (overlay-buffer directive))))
-            (setq anchor (plist-put anchor :position
-                                    (overlay-start directive)))
-            (if (mevedel-directive-p record)
-                (mevedel-directive-set-anchor record anchor)
-              (mevedel-subdirective-set-anchor record anchor)))
-        (let ((new-anchor (mevedel--directive-anchor directive)))
-          (if (mevedel-directive-p record)
-              (mevedel-directive-set-anchor record new-anchor)
-            (mevedel-subdirective-set-anchor
-             record
-             (append new-anchor
-                     (list :properties
-                           (mevedel--instruction-persisted-properties
-                            directive)))))))))
-  directive)
-
-(defun mevedel--remove-directive-presentation (directive &optional buffer)
-  "Remove DIRECTIVE's source presentation without deleting its record.
-BUFFER identifies the former owner when DIRECTIVE has already evaporated."
-  (when-let* ((buffer (or (overlay-buffer directive) buffer)))
-    (mevedel--instruction-activate-buffer buffer)
-    (setf (alist-get buffer (mevedel--instruction-alist))
-          (delq directive (alist-get buffer (mevedel--instruction-alist))))
-    (delete-overlay directive))
-  directive)
-
-(defun mevedel--mark-buffer-source-missing (buffer)
-  "Remove BUFFER's source presentations and retain directives as Source missing."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (mevedel--instruction-activate-buffer buffer)
-      (let ((file (buffer-file-name buffer))
-            (instructions
-             (copy-sequence
-              (alist-get buffer (mevedel--instruction-alist)))))
-        (dolist (instruction instructions)
-          (if (mevedel--directivep instruction)
-              (progn
-                (when-let* ((record (mevedel--directive-record instruction)))
-                  (let ((anchor (mevedel-directive-anchor record)))
-                    (mevedel-directive-set-anchor
-                     record
-                     (list :state 'source-missing
-                           :file file
-                           :start (overlay-start instruction)
-                           :end (overlay-end instruction)
-                           :evidence (or (plist-get anchor :evidence)
-                                         (mevedel--instruction-anchor-for-instruction
-                                          instruction))
-                           :properties
-                           (mevedel--instruction-persisted-properties
-                            instruction)))))
-                (mevedel--remove-directive-presentation instruction))
-            (mevedel--delete-instruction instruction buffer)))
-        (setf (mevedel--instruction-alist)
-              (assq-delete-all buffer (mevedel--instruction-alist))))))
-  buffer)
-
-(defun mevedel--reconcile-directive-sources (workspace)
-  "Mark live directive buffers in WORKSPACE Source missing when files vanish."
-  (when workspace
-    (mevedel--instruction-activate-workspace workspace)
-    (dolist (entry (copy-sequence (mevedel--instruction-alist)))
-      (when-let* (((bufferp (car entry)))
-                  (buffer (car entry))
-                  ((buffer-live-p buffer))
-                  (file (buffer-file-name buffer))
-                  ((not (file-exists-p file))))
-        (mevedel--mark-buffer-source-missing buffer))))
-  workspace)
-
-(defun mevedel--reattach-directive-overlay
-    (id anchor workspace buffer start end)
-  "Restore ID with ANCHOR in WORKSPACE and BUFFER from START to END."
-  (with-current-buffer buffer
-    (unless (and (integer-or-marker-p start)
-                 (integer-or-marker-p end)
-                 (<= (point-min) start end (point-max)))
-      (user-error "Invalid reattachment bounds"))
-    (setq-local mevedel--workspace workspace)
-    (let* ((properties (plist-get anchor :properties))
-           (overlay (mevedel--create-instruction-overlay-in buffer start end))
-           (generated-id (overlay-get overlay 'mevedel-id)))
-      (cl-loop for (property value) on properties by #'cddr
-               do (overlay-put overlay property value))
-      (unless (equal generated-id (overlay-get overlay 'mevedel-id))
-        (mevedel--retire-id generated-id))
-      (overlay-put overlay 'mevedel-instruction t)
-      (overlay-put overlay 'mevedel-instruction-type 'directive)
-      (overlay-put overlay 'mevedel-uuid id)
-      overlay)))
-
-(defun mevedel--reattach-directive (record workspace buffer start end)
-  "Reattach source-missing RECORD in WORKSPACE to BUFFER from START to END."
-  (unless (and (memq record (mevedel-workspace-directives workspace))
-               (eq 'source-missing
-                   (plist-get (mevedel-directive-anchor record) :state)))
-    (user-error "Directive is not Source missing in this workspace"))
-  (let ((overlay
-         (mevedel--reattach-directive-overlay
-          (mevedel-directive-id record)
-          (mevedel-directive-anchor record)
-          workspace buffer start end)))
-    (mevedel-directive-set-anchor record (mevedel--directive-anchor overlay))
-    (mevedel--update-instruction-overlay overlay t)
-    overlay))
-
-(defun mevedel--reattach-subdirective
-    (record owner workspace buffer start end)
-  "Reattach nested RECORD owned by OWNER in WORKSPACE from START to END."
-  (unless (and (memq owner (mevedel-workspace-directives workspace))
-               (memq record (mevedel-directive-subdirectives owner)))
-    (user-error "Nested directive does not belong to this workspace"))
-  (let ((parent
-         (with-current-buffer buffer
-           (mevedel--instruction-activate-buffer buffer)
-           (cl-find (mevedel-directive-id owner)
-                    (cdr (assq buffer (mevedel--instruction-alist)))
-                    :key (lambda (instruction)
-                           (overlay-get instruction 'mevedel-uuid))
-                    :test #'equal))))
-    (unless (and parent
-                 (< (overlay-start parent) start)
-                 (<= start end)
-                 (< end (overlay-end parent)))
-      (user-error "Nested directive is outside its parent"))
-    (let ((overlay
-           (mevedel--reattach-directive-overlay
-            (mevedel-subdirective-id record)
-            (mevedel-subdirective-anchor record)
-            workspace buffer start end)))
-      (mevedel-subdirective-set-anchor
-       record
-       (append (mevedel--directive-anchor overlay)
-               (list :properties
-                     (mevedel--instruction-persisted-properties overlay))))
-      (mevedel--update-instruction-overlay overlay t)
-      overlay)))
-
-(defun mevedel-archive-directive (record workspace)
-  "Archive activity-owning RECORD in WORKSPACE and hide its source presentation."
-  (unless (memq record (mevedel-workspace-directives workspace))
-    (user-error "Directive does not belong to this workspace"))
-  (unless (mevedel-directive-has-activity-p record)
-    (user-error "Directive has no activity to archive"))
-  (let ((properties nil))
-    (when-let* ((overlay
-                 (mevedel--instruction-with-uuid
-                  (mevedel-directive-id record) workspace)))
-      (setq properties (mevedel--instruction-persisted-properties overlay))
-      (dolist (nested (mevedel--nested-directives overlay))
-        (mevedel--remove-directive-presentation nested))
-      (mevedel--remove-directive-presentation overlay))
-    ;; Normalize every prior anchor shape (attached, detached,
-    ;; source-missing) into the one archived shape the codec accepts; a
-    ;; detached anchor carries only a zero-width :position.
-    (let* ((anchor (mevedel-directive-anchor record))
-           (position (plist-get anchor :position)))
-      (mevedel-directive-set-anchor
-       record
-       (list :state 'archived
-             :file (plist-get anchor :file)
-             :start (or (plist-get anchor :start) position)
-             :end (or (plist-get anchor :end) position)
-             :evidence (plist-get anchor :evidence)
-             :properties (or (plist-get anchor :properties) properties)))))
-  record)
-
-(defun mevedel--detach-directive (entry)
-  "Replace the evaporated directive described by ENTRY at a zero-width anchor."
-  (let* ((old (plist-get entry :overlay))
-         (record (plist-get entry :record))
-         (marker (plist-get entry :marker))
-         (position (marker-position marker))
-         (properties (plist-get entry :properties))
-         (old-anchor (mevedel-directive-anchor record))
-         (new (make-overlay position position (current-buffer))))
-    (cl-loop for (property value) on properties by #'cddr
-             unless (eq property 'evaporate)
-             do (overlay-put new property value))
-    (overlay-put new 'mevedel-instruction-collapse-p nil)
-    (delete-overlay old)
-    (setf (alist-get (current-buffer) (mevedel--instruction-alist))
-          (cons new
-                (delq old
-                      (alist-get (current-buffer)
-                                 (mevedel--instruction-alist)))))
-    (mevedel-directive-set-anchor
-     record
-     (list :state 'detached
-           :file (buffer-file-name)
-           :position position
-           :source-order (list (plist-get entry :start)
-                               (plist-get entry :end))
-           :evidence (plist-get old-anchor :evidence)))
-    (set-marker marker nil)
-    new))
-
-(defun mevedel--instruction-before-change (beg end)
-  "Capture attached directive trees wholly deleted between BEG and END."
-  (setq mevedel--pending-directive-detachments nil)
-  (when (< beg end)
-    (dolist (directive (mevedel--instructions-in beg end 'directive))
-      (let ((start (overlay-start directive))
-            (finish (overlay-end directive))
-            (owner (mevedel--topmost-instruction directive 'directive)))
-        (when (and (< start finish)
-                   (<= beg start)
-                   (<= finish end)
-                   (not (mevedel--detached-directive-p directive)))
-          (if-let* ((record (mevedel--directive-record directive)))
-              (push (list :overlay directive
-                          :record record
-                          :marker (copy-marker start)
-                          :start start
-                          :end finish
-                          :properties
-                          (mevedel--instruction-persisted-properties directive))
-                    mevedel--pending-directive-detachments)
-            (when (and owner
-                       (<= beg (overlay-start owner))
-                       (<= (overlay-end owner) end))
-              (push (list :overlay directive :buffer (current-buffer))
-                    mevedel--pending-directive-detachments))))))))
-
-(defun mevedel--order-detached-directives-at (position)
-  "Give detached directives at POSITION stable source-order priorities."
-  (let* ((directives
-          (sort
-           (cl-remove-if-not #'mevedel--detached-directive-p
-                             (mevedel--instructions-at position 'directive))
-           (lambda (a b)
-             (let* ((a-record (mevedel--directive-record a))
-                    (b-record (mevedel--directive-record b))
-                    (a-order
-                     (plist-get (mevedel-directive-anchor a-record)
-                                :source-order))
-                    (b-order
-                     (plist-get (mevedel-directive-anchor b-record)
-                                :source-order)))
-               (or (< (car a-order) (car b-order))
-                   (and (= (car a-order) (car b-order))
-                        (or (< (cadr a-order) (cadr b-order))
-                            (and (= (cadr a-order) (cadr b-order))
-                                 (string-lessp
-                                  (mevedel-directive-id a-record)
-                                  (mevedel-directive-id b-record))))))))))
-         (priority (+ mevedel--default-instruction-priority
-                      (length directives))))
-    (dolist (directive directives)
-      (overlay-put directive 'priority priority)
-      (setq priority (1- priority)))))
-
-(defun mevedel--instruction-after-change (beg end _old-length)
-  "Detach captured directives, then redraw instructions affected by BEG and END."
-  (let ((pending (prog1 mevedel--pending-directive-detachments
-                   (setq mevedel--pending-directive-detachments nil))))
-    (dolist (entry pending)
-      (if (plist-get entry :record)
-          (mevedel--detach-directive entry)
-        (mevedel--remove-directive-presentation
-         (plist-get entry :overlay)
-         (plist-get entry :buffer)))))
-  (let ((beg (max (point-min) (1- beg)))
-        (end (min (point-max) (1+ end))))
-    (dolist (instruction (mevedel--instructions-in beg end))
-      (mevedel--update-instruction-overlay instruction))))
-
-(defun mevedel--register-directive (directive request)
-  "Register DIRECTIVE and REQUEST under their top-level workspace owner."
-  (let* ((buffer (overlay-buffer directive))
-         (workspace (mevedel--instruction-buffer-workspace buffer)))
-    (unless workspace
-      (error "Directive has no workspace"))
-    (let ((owner (mevedel--topmost-instruction directive 'directive)))
-      (if (eq owner directive)
-          (let ((record (mevedel-directive--create
-                         :id (overlay-get directive 'mevedel-uuid)
-                         :request request
-                         :anchor (mevedel--directive-anchor directive)
-                         :state nil)))
-            (mevedel-workspace-add-directive workspace record)
-            record)
-        (let ((record
-               (mevedel-subdirective--create
-                :id (overlay-get directive 'mevedel-uuid)
-                :request request
-                :anchor
-                (append
-                 (mevedel--directive-anchor directive)
-                 (list :properties
-                       (mevedel--instruction-persisted-properties
-                        directive))))))
-          (mevedel-directive-add-subdirective
-           (or (mevedel--directive-record owner)
-               (error "Parent directive record not found"))
-           record)
-          record)))))
-
-(defun mevedel--directive-state (directive)
-  "Return DIRECTIVE's lifecycle state."
-  (or (when-let* ((owner
-                   (mevedel--topmost-instruction directive 'directive))
-                  (record (mevedel--directive-record owner)))
-        (mevedel-directive-state record))
-      'ready))
-
-(defun mevedel--directive-status (directive)
-  "Return DIRECTIVE's presentation status, or nil when Ready."
-  (let* ((owner (mevedel--topmost-instruction directive 'directive))
-         (record (and owner (mevedel--directive-record owner)))
-         (planning-status (and record
-                               (plist-get (mevedel-directive-plan record)
-                                          :status)))
-         (state (mevedel--directive-state directive)))
-    (or (pcase planning-status
-          ('planning 'planning)
-          ('proposed 'plan-ready)
-          ('accepted 'plan-accepted)
-          ('implementing 'implementing))
-        (unless (eq state 'ready) state))))
-
-(defun mevedel--set-directive-status (directive status)
-  "Set DIRECTIVE's workspace-owned transient STATUS."
-  (when-let* ((owner (mevedel--topmost-instruction directive 'directive))
-              (record (mevedel--directive-record owner)))
-    (mevedel-directive-set-state record status))
-  status)
-
-(defun mevedel--instruction-workspace-key (&optional workspace)
-  "Return the instruction-state key for WORKSPACE."
-  (if workspace
-      (cons (mevedel-workspace-type workspace)
-            (mevedel-workspace-id workspace))
-    :global))
-
-(defun mevedel--instruction-buffer-workspace (buffer)
-  "Return BUFFER's workspace, or nil when it cannot be resolved."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (or (and (boundp 'mevedel--workspace)
-               (bound-and-true-p mevedel--workspace))
-          (ignore-errors (mevedel-workspace buffer))))))
-
-(defun mevedel--instruction-state (&optional key)
-  "Return instruction state plist for KEY, creating it if needed."
-  (let ((key (or key :global)))
-    (or (gethash key mevedel--instruction-states)
-        (puthash key
-                 (list :instructions nil
-                       :id-counter 0
-                       :id-usage-map (make-hash-table)
-                       :retired-ids nil)
-                 mevedel--instruction-states))))
-
-(gv-define-setter mevedel--instruction-state (value &optional key)
-  `(puthash (or ,key :global) ,value mevedel--instruction-states))
-
-(defun mevedel--instruction-activate-workspace (&optional workspace)
-  "Make WORKSPACE's instruction state current."
-  (let ((key (mevedel--instruction-workspace-key workspace)))
-    (mevedel--instruction-state key)
-    (setq mevedel--instruction-current-state-key key))
-  mevedel--instruction-current-state-key)
-
-(defun mevedel--instruction-activate-buffer (&optional buffer)
-  "Make BUFFER's workspace instruction state current."
-  (mevedel--instruction-activate-workspace
-   (mevedel--instruction-buffer-workspace (or buffer (current-buffer)))))
-
-(defun mevedel--instruction-state-rollback (workspace)
-  "Return a function that restores WORKSPACE's exact instruction state."
-  (let* ((key (mevedel--instruction-workspace-key workspace))
-         (state (copy-tree (mevedel--instruction-state key)))
-         (current-key mevedel--instruction-current-state-key)
-         (highlighted mevedel--highlighted-instruction)
-         (directives (copy-sequence (mevedel-workspace-directives workspace)))
-         overlays)
-    (dolist (entry (plist-get state :instructions))
-      (when (bufferp (car entry))
-        (dolist (instruction (cdr entry))
-          (when (overlayp instruction)
-            (push (list instruction
-                        (overlay-buffer instruction)
-                        (overlay-start instruction)
-                        (overlay-end instruction))
-                  overlays)))))
-    (lambda ()
-      (mevedel--clear-instruction-state workspace)
-      (puthash key state mevedel--instruction-states)
-      (setq mevedel--instruction-current-state-key current-key
-            mevedel--highlighted-instruction highlighted)
-      (mevedel-workspace-set-directives workspace directives)
-      (dolist (snapshot overlays)
-        (when (buffer-live-p (nth 1 snapshot))
-          (move-overlay (nth 0 snapshot)
-                        (nth 2 snapshot) (nth 3 snapshot)
-                        (nth 1 snapshot)))))))
-
-(defun mevedel--clear-instruction-state (&optional workspace)
-  "Delete all visible instruction overlays in WORKSPACE and clear its state."
-  (let ((mevedel--instruction-state-key-override
-         (mevedel--instruction-workspace-key workspace)))
-    (dolist (entry (mevedel--instruction-alist))
-      (when (bufferp (car entry))
-        (dolist (instr (cdr entry))
-          (when (overlayp instr)
-            (delete-overlay instr)))))
-    (setf (mevedel--instruction-alist) nil)
-    (setq mevedel--highlighted-instruction nil)
-    (setf (mevedel--instruction-id-counter) 0)
-    (setf (mevedel--instruction-id-usage-map) (make-hash-table))
-    (setf (mevedel--instruction-retired-ids) nil)
-    (when workspace
-      (mevedel-workspace-set-directives workspace nil))))
-
-(defmacro mevedel--foreach-instruction (binding &rest body)
-  "Iterate over `(mevedel--instruction-alist)' with BINDING as the binding.
-
-Executes BODY inside an existing `cl-loop' form, which means that the
-macro is expecting for BODY to be written in the `cl-loop' DSL.
-
-BINDING can either be a symbol to bind the instruction to, or a list
-where the `car' is the symbol binding and the `cadr' is a buffer.
-
-If the buffer inside BINDING is non-nil, only iterate over the
-instructions that are located inside that buffer.
-
-The purpose of this macro is to be able to iterate over instructions
-while also making sure that the iterated instructions are valid, i.e.
-have an associated buffer to the overlay.
-
-This macro is the preferred way to iterate over instructions, as it
-handles all the internal bookkeeping and cleanup."
-  (declare (indent 1))
-  ;; "bof" stands for "buffer or file".
-  (cl-with-gensyms (cons bof specific-buffer)
-    (let ((instr (if (listp binding) (car binding) binding)))
-      `(cl-labels ((trashp (instr)
-                     (and (null (overlay-buffer instr))
-                          (not (overlay-get instr 'mevedel-marked-for-deletion))))
-                   (clean-alist-entry (cons)
-                     (mapc (lambda (instr)
-                             (mevedel--delete-instruction instr (car cons)))
-                           (cl-remove-if-not #'trashp (cdr cons)))
-                     (let ((instrs (cl-remove-if #'trashp (cdr cons))))
-                       (setf (cdr cons) instrs))))
-         (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
-           (mevedel--instruction-activate-workspace
-            (if (bufferp ,specific-buffer)
-                (mevedel--instruction-buffer-workspace ,specific-buffer)
-              (mevedel--instruction-buffer-workspace (current-buffer))))
-           (if (null ,specific-buffer)
-               (cl-loop for ,cons in (mevedel--instruction-alist)
-                        do (let ((,bof (car ,cons)))
-                             (if (stringp ,bof) ; bof is a file, restore it.
-                                 (mevedel--restore-file-instructions ,bof)
-                               (clean-alist-entry ,cons)))) ; bof is a buffer, clean it.
-             (when (stringp ,specific-buffer)
-               (cl-destructuring-bind (buffer _ _) (mevedel--restore-file-instructions ,specific-buffer)
-                 (setq ,specific-buffer buffer)))
-             (when-let* ((cons (assoc ,specific-buffer (mevedel--instruction-alist))))
-               (clean-alist-entry cons)))
-           ;; Remove empty cons cells from the alist.
-           (setf (mevedel--instruction-alist) (cl-remove-if (lambda (cons)
-                                                       (null (cdr cons)))
-                                                     (mevedel--instruction-alist)))
-           ;; The instructions alist should now be cleaned of deleted
-           ;; instructions.
-           (cl-loop for ,instr
-                    in (if ,specific-buffer
-                           (alist-get ,specific-buffer (mevedel--instruction-alist))
-                         (flatten-tree
-                          (cl-remove nil
-                                     (mapcar (lambda (plist-or-instrs)
-                                               (if (plist-get plist-or-instrs :instructions)
-                                                   nil ; Plist
-                                                 plist-or-instrs))
-                                             (mapcar #'cdr (mevedel--instruction-alist))))))
-                    ,@body))))))
-
-(defun mevedel-link-instructions (from-list to-list)
-  "Link instructions with ids in FROM-LIST to those in TO-LIST.
-
-When invoked interactively, prompts user for two lists of instruction
-ids."
-  (interactive
-   (progn
-     (mevedel--instruction-activate-buffer)
-     (let ((completion-table (mapcar #'number-to-string (hash-table-keys (mevedel--instruction-id-usage-map)))))
-     (list (mapcar #'string-to-number
-                   (completing-read-multiple "Select instruction ids to link: "
-                                             completion-table nil t))
-           (mapcar #'string-to-number
-                   (completing-read-multiple "Select instruction ids to link to: "
-                                             completion-table nil t))))))
-  (mevedel--instruction-activate-buffer)
-  (cl-labels
-      ((update-links (instr-id num-key update-id)
-         (let* ((instr (mevedel--instruction-with-id instr-id))
-                (links (overlay-get instr 'mevedel-links))
-                (ids (plist-get links num-key)))
-           (unless (member update-id ids)
-             (setq ids (cons update-id ids))
-             (overlay-put instr 'mevedel-links (plist-put links num-key ids))
-             t))))
-    (let ((new-link-count 0)
-          (involved-instrs (make-hash-table)))
-      (dolist (from-id from-list)
-        (when-let* ((from-instr (mevedel--instruction-with-id from-id)))
-          (dolist (to-id to-list)
-            (when (/= from-id to-id)
-              (when-let* ((to-instr (mevedel--instruction-with-id to-id)))
-                (when (and (update-links from-id :to to-id)
-                           (update-links to-id :from from-id))
-                  (puthash from-instr t involved-instrs)
-                  (puthash to-instr t involved-instrs)
-                  (cl-incf new-link-count)))))))
-      (cl-loop for instr being the hash-keys of involved-instrs
-               do (mevedel--update-instruction-overlay instr))
-      (when (called-interactively-p 'interactive)
-        (message "Created %d instruction link%s"
-                 new-link-count
-                 (if (= new-link-count 1) "" "s"))))))
-
-(defun mevedel-unlink-instructions (from-list to-list)
-  "Unlink instructions with ids in FROM-LIST from those in TO-LIST.
-
-When invoked interactively, prompts user for two lists of instruction
-ids."
-  (interactive
-   (progn
-     (mevedel--instruction-activate-buffer)
-     (let ((completion-table (mapcar #'number-to-string (hash-table-keys (mevedel--instruction-id-usage-map)))))
-     (list (mapcar #'string-to-number
-                   (completing-read-multiple "Select instruction ids to unlink: "
-                                             completion-table nil t))
-           (mapcar #'string-to-number
-                   (completing-read-multiple "Select instruction ids to unlink from: "
-                                             completion-table nil t))))))
-  (mevedel--instruction-activate-buffer)
-  (cl-labels
-      ((remove-links (instr-id num-key remove-id)
-         (let* ((instr (mevedel--instruction-with-id instr-id))
-                (links (overlay-get instr 'mevedel-links))
-                (ids (plist-get links num-key)))
-           (when (member remove-id ids)
-             (setq ids (remove remove-id ids))
-             (overlay-put instr 'mevedel-links (plist-put links num-key ids))
-             t))))
-    (let ((removed-link-count 0)
-          (involved-instrs (make-hash-table)))
-      (dolist (from-id from-list)
-        (when-let* ((from-instr (mevedel--instruction-with-id from-id)))
-          (dolist (to-id to-list)
-            (when-let* ((to-instr (mevedel--instruction-with-id to-id)))
-              (when (and (remove-links from-id :to to-id)
-                         (remove-links to-id :from from-id))
-                (puthash from-instr t involved-instrs)
-                (puthash to-instr t involved-instrs)
-                (cl-incf removed-link-count))))))
-      (cl-loop for instr being the hash-keys of involved-instrs
-               do (when (buffer-live-p (overlay-buffer instr))
-                    (mevedel--update-instruction-overlay instr)))
-      (when (called-interactively-p 'interactive)
-        (message "Removed %d instruction link%s"
-                 removed-link-count
-                 (if (= removed-link-count 1) "" "s"))))))
 
 (defun mevedel-cycle-instructions-at-point (point)
   "Cycle through instructions at POINT, highlighting them.
@@ -1058,6 +333,7 @@ point in the buffer and allows one to have better accuracy when
 instructions overlap to the point where no other reasonable option is
 available."
   (interactive "d")
+  (require 'mevedel-overlay-ui)
   (let ((instructions-at-point (mevedel--instructions-at point))
         (original-highlighted-instruction mevedel--highlighted-instruction))
     (cond
@@ -1082,6 +358,8 @@ available."
 (defun mevedel-modify-directive ()
   "Modify the directive under the point."
   (interactive)
+  (require 'mevedel-directive-source)
+  (require 'mevedel-overlay-ui)
   (when-let* ((directive (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'directive)
                                                                 t)))
     (when (memq (mevedel--directive-status directive)
@@ -1096,6 +374,7 @@ available."
 (defun mevedel-modify-reference-commentary ()
   "Modify the reference commentary under the point."
   (interactive)
+  (require 'mevedel-overlay-ui)
   (when-let* ((reference (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'reference)
                                                                 t)))
     (mevedel--read-commentary reference)))
@@ -1106,6 +385,7 @@ available."
 Display a message to the user showing how many instructions were
 deleted.  Throw a user error if no instructions to delete were found."
   (interactive)
+  (require 'mevedel-directive-source)
   (let ((deleted-count 0))
     (if (use-region-p)
         (let ((start (region-beginning))
@@ -1129,6 +409,8 @@ deleted.  Throw a user error if no instructions to delete were found."
 (defun mevedel-delete-all-instructions ()
   "Delete all mevedel instructions across all buffers."
   (interactive)
+  (require 'mevedel-directive-source)
+  (require 'mevedel-instruction-registry)
   (mevedel--instruction-activate-buffer)
   (let ((instr-count (length (mevedel--all-instructions))))
     (when (and (called-interactively-p 'any)
@@ -1199,6 +481,7 @@ deleted.  Throw a user error if no instructions to delete were found."
 
 This command is useful to see what is actually being sent to the model."
   (interactive)
+  (require 'mevedel-directive-source)
   (let ((directive (mevedel--topmost-instruction (car (mevedel--instructions-at (point) 'directive))
                                                  'directive)))
     (require 'mevedel-chat)
@@ -1267,6 +550,8 @@ Examples:
   (cat or dog or (sheep and black))
   ((cat and dog) or (dog and goose))"
   (interactive)
+  (require 'mevedel-directive-source)
+  (require 'mevedel-overlay-ui)
   (if-let* ((directive (mevedel--topmost-instruction
                         (mevedel--highest-priority-instruction (mevedel--instructions-at (point)) t)
                         'directive)))
@@ -1283,6 +568,8 @@ Examples:
 
 Adds specificly to REFERENCE if it is non-nil."
   (interactive)
+  (require 'mevedel-instruction-registry)
+  (require 'mevedel-overlay-ui)
   (let* ((instructions (mevedel--instructions-at (point) 'reference))
          (instr (or reference (mevedel--highest-priority-instruction instructions t))))
     (if instr
@@ -1297,6 +584,7 @@ Adds specificly to REFERENCE if it is non-nil."
 (defun mevedel-remove-tags ()
   "Remove tags from the reference under the point."
   (interactive)
+  (require 'mevedel-overlay-ui)
   (let* ((instructions (mevedel--instructions-at (point) 'reference))
          (instr (mevedel--highest-priority-instruction instructions t)))
     (if instr
@@ -1310,87 +598,6 @@ Adds specificly to REFERENCE if it is non-nil."
                 (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
       (user-error "No reference at point"))))
 
-(defun mevedel--instruction-find-unique-live (predicate)
-  "Return the unique live instruction satisfying PREDICATE.
-Return nil when no instruction matches or when more than one does."
-  (let (found ambiguous)
-    (maphash
-     (lambda (_key state)
-       (dolist (entry (plist-get state :instructions))
-         (when (bufferp (car entry))
-           (dolist (instruction (cdr entry))
-             (when (and (overlayp instruction)
-                        (buffer-live-p (overlay-buffer instruction))
-                        (funcall predicate instruction))
-               (if found
-                   (setq ambiguous t)
-                 (setq found instruction)))))))
-     mevedel--instruction-states)
-    (and (not ambiguous) found)))
-
-(declare-function mevedel--instruction-with-id
-                  "mevedel" (target-id &optional workspace))
-(let ((map (make-hash-table))
-      (map-key nil))
-  (cl-defun mevedel--instruction-with-id (target-id &optional workspace)
-    "Return the instruction with integer TARGET-ID in WORKSPACE.
-
-When WORKSPACE is nil, use the current buffer's workspace and fall back
-to a unique live match across workspaces only when that local state is
-empty.  Return nil when no unambiguous instruction is found."
-    (cl-labels ((entry-live-p (entry)
-                  (and (bufferp (car entry))
-                       (cl-some (lambda (instr)
-                                  (and (overlayp instr)
-                                       (buffer-live-p
-                                        (overlay-buffer instr))))
-                                (cdr entry))))
-                (current-state-live-p ()
-                  (cl-some #'entry-live-p (mevedel--instruction-alist))))
-      (let* ((lookup-workspace
-              (or workspace
-                  (mevedel--instruction-buffer-workspace (current-buffer))))
-             (lookup-key (mevedel--instruction-workspace-key lookup-workspace))
-             (mevedel--instruction-state-key-override lookup-key))
-        (unless (equal map-key lookup-key)
-          (setq map (make-hash-table)
-                map-key lookup-key))
-        (when-let* ((instr (gethash target-id map)))
-          (when (buffer-live-p (overlay-buffer instr))
-            (cl-return-from mevedel--instruction-with-id instr)))
-        (setq map (make-hash-table))
-        (mevedel--foreach-instruction instr
-          do (puthash (mevedel--instruction-id instr) instr map))
-        (or (gethash target-id map)
-            ;; Prompt-copy and test buffers can have a workspace that is
-            ;; unrelated to the source buffers holding references.  If the
-            ;; current bucket is empty, fall back to a unique match anywhere.
-            (and (null workspace)
-                 (not (current-state-live-p))
-                 (mevedel--instruction-find-unique-live
-                  (lambda (instruction)
-                    (= target-id
-                       (mevedel--instruction-id instruction))))))))))
-
-(defun mevedel--instruction-with-uuid (uuid &optional workspace)
-  "Return the instruction carrying UUID in WORKSPACE.
-Stashed instructions are restored before lookup.  When WORKSPACE is nil,
-fall back to a unique live match across workspaces for prompt-copy callers
-that have no workspace context."
-  (or
-   (let ((mevedel--instruction-state-key-override
-          (and workspace (mevedel--instruction-workspace-key workspace))))
-     (mevedel--foreach-instruction instr
-       when (equal uuid (overlay-get instr 'mevedel-uuid))
-       return instr))
-   (unless workspace
-     (mevedel--instruction-find-unique-live
-      (lambda (instruction)
-        (equal uuid (overlay-get instruction 'mevedel-uuid)))))))
-
-(defun mevedel--instruction-id (instruction)
-  "Return unique identifier for INSTRUCTION overlay."
-  (overlay-get instruction 'mevedel-id))
 
 (defun mevedel--stashed-buffer-instructions (buffer)
   "Return stashed instruction data for all instructions in BUFFER.
@@ -1399,6 +606,7 @@ Each instruction is represented as a plist with :overlay-start,
 :overlay-end, :anchor, and :properties keys, capturing the overlay's
 position, lightweight re-anchoring context, and semantic properties for
 later restoration."
+  (require 'mevedel-instruction-registry)
   (mevedel--foreach-instruction (instr buffer)
     collect (list :overlay-start (overlay-start instr)
                   :overlay-end (overlay-end instr)
@@ -1414,6 +622,7 @@ Save the buffer's instructions and original content to
 `(mevedel--instruction-alist)', then remove the instruction overlays from the
 buffer.  The content is either the current buffer content or
 FILE-CONTENTS."
+  (require 'mevedel-instruction-registry)
   (mevedel--instruction-activate-buffer buffer)
   (let ((instrs (mevedel--stashed-buffer-instructions buffer)))
     (when instrs
@@ -1595,6 +804,7 @@ Returns the validated query string."
   "Return references in WORKSPACE filtered by tag QUERY.
 
 See `mevedel--tag-query-prefix-from-infix' for QUERY format."
+  (require 'mevedel-instruction-registry)
   (let ((mevedel--instruction-state-key-override
          (or (and workspace (mevedel--instruction-workspace-key workspace))
              mevedel--instruction-state-key-override))
@@ -1613,6 +823,7 @@ See `mevedel--tag-query-prefix-from-infix' for QUERY format."
 
 (defun mevedel--available-tags ()
   "Return a list of all the tags in the loaded references."
+  (require 'mevedel-instruction-registry)
   (let ((tags-hash (make-hash-table)))
     (mevedel--foreach-instruction (ref)
       do (when (mevedel--referencep ref)
@@ -1628,6 +839,7 @@ If no instruction found in the buffer, checks the next buffers in the
 `(mevedel--instruction-alist)' alist.
 
 Returns the found instruction, if any."
+  (require 'mevedel-instruction-registry)
   ;; We want the buffers to be a cyclic list, based on the current buffer.
   (mevedel--instruction-activate-buffer)
   (let* ((buffers (let ((bufs (mapcar #'car (mevedel--instruction-alist))))
@@ -1737,6 +949,8 @@ A directive is empty if it does not have a body or secondary directives."
 If a region is selected but partially covers an existing instruction,
 then the function will resize it.  See either `mevedel-create-reference'
 or `mevedel-create-directive' for details on how the resizing works."
+  (require 'mevedel-directive-source)
+  (require 'mevedel-overlay-ui)
   (if (use-region-p)
       (let ((intersecting-instructions
              (cl-remove-if (lambda (instr)
@@ -1835,63 +1049,11 @@ Instruction type can either be `reference' or `directive'."
       type
     (error "%s is not an instruction overlay" instruction)))
 
-(defun mevedel--create-instruction-overlay-in (buffer start end)
-  "Create an overlay in BUFFER from START to END of the lines."
-  (make-local-variable 'mevedel--after-change-functions-hooked)
-  (mevedel--instruction-activate-buffer buffer)
-  (with-current-buffer buffer
-    (let ((is-bufferlevel
-           ;; Check if the overlay spans the start and end of the buffer. If it
-           ;; does, make it sticky so that additions to edges of the buffer will
-           ;; cause it to expand there. This is useful for when we want to
-           ;; append new text to the end of the buffer but don't want to
-           ;; "invalidate" the buffer-level status of the instruction.
-           (and (= start (point-min)) (= end (point-max)))))
-      (let ((overlay (make-overlay start end (current-buffer) (not is-bufferlevel) is-bufferlevel)))
-        (overlay-put overlay 'mevedel-instruction t)
-        (overlay-put overlay 'mevedel-id (mevedel--create-id))
-        (unless (overlay-get overlay 'mevedel-uuid)
-          (overlay-put overlay 'mevedel-uuid (mevedel--create-uuid)))
-        (push overlay (alist-get buffer (mevedel--instruction-alist)))
-        (unless (bound-and-true-p mevedel--after-change-functions-hooked)
-          (setq-local mevedel--after-change-functions-hooked t)
-          (add-hook 'before-change-functions
-                    #'mevedel--instruction-before-change nil t)
-          (add-hook 'after-change-functions
-                    #'mevedel--instruction-after-change nil t))
-        (mevedel--setup-buffer-hooks buffer)
-        overlay))))
-
-(defun mevedel--create-uuid ()
-  "Generate a random UUID."
-  (let ((s (md5 (format "%s%s%s%s%s%s%s"
-                        (user-uid)
-                        (emacs-pid)
-                        (system-name)
-                        (user-full-name)
-                        (current-time)
-                        (emacs-uptime)
-                        (random)))))
-    (format "%s-%s-4%s-%s%s-%s"
-            (substring s 0 8)
-            (substring s 8 12)
-            (substring s 13 16)
-            (format "%x" (+ 8 (random 4)))
-            (substring s 17 20)
-            (substring s 20 32))))
-
-(defun mevedel--find-directive-by-uuid (uuid)
-  "Find directive overlay with UUID.
-Returns the overlay, or nil if not found."
-  (when uuid
-    (mevedel--foreach-instruction instr
-      when (and (mevedel--directivep instr)
-                (equal (overlay-get instr 'mevedel-uuid) uuid))
-      return instr)))
 
 (defun mevedel-get-directive-patch (directive)
   "Get the stored patch for DIRECTIVE, if any.
 Returns the unified diff string, or nil if no patch is stored."
+  (require 'mevedel-directive-source)
   (when-let* ((record (mevedel--directive-record directive))
               (attempt (car (last (mevedel-directive-attempts record))))
               (patch (mevedel-directive-attempt-patch attempt))
@@ -1902,6 +1064,7 @@ Returns the unified diff string, or nil if no patch is stored."
   "Return the parent of the given INSTRUCTION overlay.
 
 If OF-TYPE is non-nil, returns the parent with the given type."
+  (require 'mevedel-directive-source)
   (with-current-buffer (overlay-buffer instruction)
     (let ((beg (overlay-start instruction))
           (end (overlay-end instruction)))
@@ -1969,97 +1132,6 @@ itself."
                        (string-lessp (overlay-get a 'mevedel-uuid)
                                      (overlay-get b 'mevedel-uuid)))))))))
 
-(defun mevedel--submitted-subdirectives (directive)
-  "Return immutable snapshots of DIRECTIVE's currently submitted details."
-  (mapcar #'mevedel-subdirective-copy
-          (mevedel-directive-subdirectives
-           (or (mevedel--directive-record directive)
-               (error "Directive record not found")))))
-
-(defun mevedel--create-reference-in (buffer start end)
-  "Create a region reference from START to END in BUFFER."
-  (let ((ov (mevedel--create-instruction-overlay-in buffer start end)))
-    (overlay-put ov 'mevedel-instruction-type 'reference)
-    (overlay-put ov 'evaporate t)
-    (mevedel--update-instruction-overlay ov t)
-    ov))
-
-(defun mevedel--create-directive-in (buffer start end &optional bodyless directive-text)
-  "Create a region directive from START to END in BUFFER.
-
-This function switches to another buffer midway of execution.  BODYLESS
-controls special formatting if non-nil.
-
-DIRECTIVE-TEXT is used as the default directive.  Having DIRECTIVE-TEXT
-be non-nil prevents the opening of a prompt buffer."
-  (let ((ov (mevedel--create-instruction-overlay-in buffer start end)))
-    (unless bodyless
-      (overlay-put ov 'evaporate t))
-    (overlay-put ov 'mevedel-instruction-type 'directive)
-    (mevedel--register-directive ov (or directive-text ""))
-    (mevedel--update-instruction-overlay ov (not bodyless))
-    (unless directive-text
-      (deactivate-mark)
-      (mevedel--read-directive ov))
-    ov))
-
-(defun mevedel--delete-instruction (instruction &optional buffer)
-  "Delete the INSTRUCTION overlay and return it.
-
-If the overlay is already dead, just perform the cleanup.
-BUFFER is required in order to perform cleanup on a dead instruction."
-  ;; We want to handle this function in two different ways. The first way
-  ;; handles regular deletion, i.e. when the function was invoked on an existing
-  ;; instruction. The second way is for when the instruction was deleted
-  ;; uncanonically through text manipulation. In the latter case, the function
-  ;; will be called during a cleanup routine and the instruction will not be
-  ;; alive.
-  (when (overlay-get instruction 'mevedel-marked-for-deletion)
-    (error "Instruction %s already marked for deletion" instruction))
-  (let* ((instruction-buffer
-          (or (overlay-buffer instruction) buffer (current-buffer)))
-         (workspace
-          (mevedel--instruction-buffer-workspace instruction-buffer))
-         (record
-          (and (mevedel--directivep instruction)
-               (mevedel--directive-record instruction)))
-         (subdirective-owner
-          (and (mevedel--directivep instruction)
-               (mevedel--subdirective-owner instruction workspace))))
-    (when (and record (mevedel-directive-has-activity-p record))
-      (user-error "Archive directives with activity"))
-    (mevedel--instruction-activate-workspace workspace)
-    (when (and record (overlay-buffer instruction))
-      (dolist (nested (reverse (mevedel--nested-directives instruction)))
-        (mevedel--delete-instruction nested instruction-buffer)))
-    (cond
-     (record
-      (mevedel-workspace-remove-directive workspace record))
-     (subdirective-owner
-      (mevedel-directive-remove-subdirective
-       (car subdirective-owner) (cdr subdirective-owner))))
-    (overlay-put instruction 'mevedel-marked-for-deletion t)
-    (cl-labels ((cleanup (instr cleanup-buffer)
-                  (let ((id (mevedel--instruction-id instr)))
-                    (mevedel--retire-id id)
-                    (with-current-buffer cleanup-buffer
-                      (mevedel-unlink-instructions
-                       `(,id) (mevedel--instruction-outlinks instr))
-                      (mevedel-unlink-instructions
-                       (mevedel--instruction-inlinks instr) `(,id))))
-                  (setf (cdr (assoc cleanup-buffer
-                                    (mevedel--instruction-alist)))
-                        (delq instr
-                              (cdr (assoc cleanup-buffer
-                                          (mevedel--instruction-alist)))))))
-      (let ((ov-buffer (overlay-buffer instruction)))
-        (when (buffer-live-p ov-buffer)
-          (let ((children (mevedel--child-instructions instruction)))
-            (delete-overlay instruction)
-            (dolist (child children)
-              (mevedel--update-instruction-overlay child t))))
-        (cleanup instruction instruction-buffer))))
-  instruction)
 
 (defun mevedel--instructions-congruent-p (a b)
   "Return t if instruction overlays A and B are congruent.
@@ -2084,937 +1156,10 @@ Returns: t if A and B are congruent, nil otherwise."
           (and (= (overlay-start instruction) (point-min))
                (= (overlay-end instruction) (point-max))))))))
 
-;; Overlay actions adapted from `gptel-rewrite'
-
-(defun mevedel--ov-actions-getov ()
-  "Return an instruction overlay at point for action dispatch.
-
-If multiple instruction overlays exist at point, prompt the user to
-select one via `completing-read'.  If only one overlay exists, return it
-directly.  Return nil if no overlays exist at point."
-  (let* ((ovs (mevedel--instructions-at (point)))
-         (ov-strings (cl-loop for ov in ovs
-                              collect (string-trim (overlay-get ov 'before-string))))
-         (ov-map (cl-loop for i below (length ovs)
-                          collect (cons (nth i ov-strings) (nth i ovs))))
-         selection)
-    (if (length> ovs 1)
-        (setq selection (completing-read "Choose instruction overlay: " ov-strings))
-      (setq selection (car ov-strings)))
-    (alist-get selection ov-map nil nil #'equal)))
-
-(defun mevedel--directive-model-values (directive)
-  "Return DIRECTIVE's effective model provider, effort, and inheritance."
-  (if-let* ((provider
-             (overlay-get directive 'mevedel-directive-model-provider)))
-      (list provider
-            (overlay-get directive 'mevedel-directive-reasoning-effort)
-            nil)
-    (require 'mevedel-chat)
-    (require 'mevedel-models)
-    (require 'mevedel-workspace)
-    (let ((buffer
-           (mevedel--chat-buffer
-            "main" t (mevedel-workspace (overlay-buffer directive)))))
-      (list
-       (mevedel-model-current-provider-label buffer)
-       (with-current-buffer buffer
-         (and (boundp 'gptel-reasoning-effort)
-              gptel-reasoning-effort))
-       t))))
-
-(defun mevedel--ov-actions-model (&optional instruction)
-  "Select a request-local model for owning directive INSTRUCTION."
-  (interactive (list (mevedel--ov-actions-getov)))
-  (let ((directive
-         (mevedel--topmost-instruction instruction 'directive)))
-    (when (memq (mevedel--directive-status directive)
-                '(implementing discussing))
-      (user-error "Cannot change the model while the directive is processing"))
-    (pcase-let ((`(,provider ,effort ,inherited)
-                 (mevedel--directive-model-values directive)))
-      (require 'mevedel-menu)
-      (mevedel-menu-open-model-selection
-       :title "Directive model"
-       :provider provider
-       :effort effort
-       :inherited inherited
-       :update
-       (lambda (new-provider new-effort)
-         (overlay-put directive 'mevedel-directive-model-provider
-                      new-provider)
-         (overlay-put directive 'mevedel-directive-reasoning-effort
-                      new-effort)
-         (mevedel--update-instruction-overlay directive t))
-       :reset
-       (lambda ()
-         (overlay-put directive 'mevedel-directive-model-provider nil)
-         (overlay-put directive 'mevedel-directive-reasoning-effort nil)
-         (mevedel--update-instruction-overlay directive t)
-         (let ((values (mevedel--directive-model-values directive)))
-           (list (car values) (cadr values))))))))
-
-(defun mevedel--ov-actions-read-choice
-    (instruction label prompt choices &optional hint-str)
-  "Read one of CHOICES for INSTRUCTION, rendering them on its overlay.
-LABEL heads the rendered overlay row and PROMPT is the minibuffer
-prompt.  HINT-STR is an optional right-aligned annotation ending in a
-newline.  The overlay row is restored afterwards; without a displayed
-overlay the choices appear only in the minibuffer."
-  (let ((before-string (and (overlay-buffer instruction)
-                            (overlay-get instruction 'before-string))))
-    (unwind-protect
-        (progn
-          (when (overlay-buffer instruction)
-            (overlay-put
-             instruction 'before-string
-             (concat
-              before-string
-              (propertize label 'face 'success)
-              (when (fboundp #'rmc--add-key-description)
-                (mapconcat (lambda (e) (cdr e))
-                           (mapcar #'rmc--add-key-description choices)
-                           ", "))
-              (if hint-str
-                  (concat
-                   (propertize
-                    " " 'display
-                    `(space :align-to (- right ,(1+ (length hint-str)))))
-                   (propertize hint-str 'face 'success))
-                "\n"))))
-          (read-multiple-choice prompt choices))
-      (when (overlay-buffer instruction)
-        (overlay-put instruction 'before-string before-string)))))
-
-(defun mevedel--directive-skills-session (record workspace)
-  "Return the session that enumerates skills for RECORD in WORKSPACE.
-Prefers RECORD's live bound execution session, then the workspace's
-active chat session."
-  (require 'mevedel-chat)
-  (let ((buffer (or (mevedel--directive-bound-session-buffer
-                     record workspace)
-                    (mevedel--active-chat-buffer workspace))))
-    (or (and (buffer-live-p buffer)
-             (buffer-local-value 'mevedel--session buffer))
-        (user-error
-         "Skill selection needs an open session for this workspace"))))
-
-(defun mevedel--ov-actions-toggle-skill (directive)
-  "Toggle one implementation skill on DIRECTIVE's directive record."
-  (require 'mevedel-skills-ui)
-  (let* ((record (mevedel--directive-record directive))
-         (workspace
-          (mevedel--instruction-buffer-workspace
-           (overlay-buffer directive)))
-         (session (mevedel--directive-skills-session record workspace))
-         (candidates
-          (mapcar (lambda (skill)
-                    (cons (mevedel-skill-name skill) skill))
-                  (mevedel-skills--user-visible-skills session))))
-    (unless candidates
-      (user-error "No user-invocable skills available"))
-    (let* ((choice (completing-read "Toggle implementation skill: "
-                                    candidates nil t))
-           (skill (cdr (assoc choice candidates)))
-           (source-file (mevedel-skill-source-file skill))
-           (selected (mevedel-directive-skills record))
-           (existing
-            (cl-find source-file selected
-                     :key (lambda (item) (plist-get item :source-file))
-                     :test #'equal)))
-      (mevedel-directive-set-skills
-       record
-       (if existing
-           (delete existing selected)
-         (append selected
-                 (list (list :name (mevedel-skill-name skill)
-                             :source-file source-file)))))
-      (mevedel--update-instruction-overlay directive t))))
-
-(defun mevedel--ov-actions-settings (&optional instruction)
-  "Edit Plan-before-implementation, skills, and model settings for INSTRUCTION."
-  (interactive (list (mevedel--ov-actions-getov)))
-  (let* ((directive (mevedel--topmost-instruction instruction 'directive))
-         (record (mevedel--directive-record directive))
-         (planning-enabled (mevedel-directive-planning-enabled record))
-         (skills-label
-          (if-let* ((skills (mevedel-directive-skills record)))
-              (mapconcat (lambda (skill) (plist-get skill :name))
-                         skills ", ")
-            "none"))
-         (choice
-          (mevedel--ov-actions-read-choice
-           directive "SETTINGS: " "Directive settings: "
-           `((?p ,(format "plan before implementation: %s"
-                          (if planning-enabled "on" "off")))
-             (?s ,(format "skills: %s" skills-label))
-             (?m ,(if planning-enabled
-                      "planning model/effort"
-                    "model/effort"))
-             (?b "back")))))
-    (pcase (car choice)
-      (?p
-       (mevedel-directive-set-planning-enabled record (not planning-enabled))
-       (mevedel--update-instruction-overlay directive t))
-      (?s (mevedel--ov-actions-toggle-skill directive))
-      (?m (mevedel--ov-actions-model directive))
-      (?b (mevedel--ov-actions-dispatch directive t)))))
-
-(defun mevedel--ov-actions-dispatch (&optional instruction ci)
-  "Dispatch actions for a successful instruction overlay.
-
-INSTRUCTION is the overlay to dispatch actions for, CI is true for
-interactive calls."
-  (interactive (list (mevedel--ov-actions-getov) t))
-  (let ((choice)
-        (instruction-type (mevedel--instruction-type instruction)))
-    (pcase-let* ((request-owner
-                      (and (eq instruction-type 'directive)
-                           (mevedel--topmost-instruction
-                            instruction 'directive)))
-                     (record
-                      (and request-owner
-                           (mevedel--directive-record request-owner)))
-                     (actions (and record (mevedel-directive-actions record)))
-                     (settings-choice
-                      (and request-owner
-                           (not (memq 'abort actions))
-                           '(?s "settings")))
-                     (has-activity-p
-                      (and record (mevedel-directive-has-activity-p record)))
-                     (activity-choice
-                      (and has-activity-p '(?o "activity")))
-                     (continue-plan-choice
-                      (and record
-                           (eq (plist-get (mevedel-directive-plan record)
-                                          :status)
-                               'draft)
-                           (not (plist-get (mevedel-directive-plan record)
-                                           :invalidated))
-                           (not (plist-get (mevedel-directive-plan record)
-                                           :cancelled))
-                           '(?P "continue-plan")))
-                     (view-changes-choice
-                      (and request-owner
-                           (mevedel-get-directive-patch request-owner)
-                           '(?v "view-changes")))
-                     (remove-choice
-                      (if has-activity-p
-                          '(?A "archive")
-                        '(?k "clear")))
-                     (choices
-                     (pcase instruction-type
-                       (`reference `((?t "add-tags") (?r "remove-tags") (?l "link") (?u "unlink") (?c "commentary") (?k "clear")
-                                     ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                          '(?e "expand") '(?e "collapse"))))
-                       (`directive
-                        (cond
-                          ;; In flight: always reachable activity, and no
-                          ;; clear/archive that would conflict with the
-                          ;; running submission.
-                          ((memq 'abort actions)
-                           `((?a "abort")
-                             (?o "activity")
-                             ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                  '(?e "expand") '(?e "collapse"))))
-                          ((memq 'implement-this actions)
-                           `(,@(and activity-choice (list activity-choice))
-                             ,@(and continue-plan-choice
-                                    (list continue-plan-choice))
-                             (?d "continue-discussion")
-                             (?i "implement-this") (?m "modify") ,remove-choice
-                             ,@(and settings-choice (list settings-choice))
-                             ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                  '(?e "expand") '(?e "collapse"))))
-                          ((memq 'request-changes actions)
-                           `(,@(and activity-choice (list activity-choice))
-                             ,@(and continue-plan-choice
-                                    (list continue-plan-choice))
-                             (?d "discuss-result")
-                             ,@(and view-changes-choice
-                                    (list view-changes-choice))
-                             (?w "show-answer") (?c "request-changes") (?p "preview") (?m "modify") ,remove-choice
-                                        ,@(and settings-choice
-                                               (list settings-choice))
-                                        ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                             '(?e "expand") '(?e "collapse"))))
-                          ((memq 'retry actions)
-                           `(,@(and activity-choice (list activity-choice))
-                             ,@(and continue-plan-choice
-                                    (list continue-plan-choice))
-                             (?d "discuss-result")
-                             (?r "retry") (?m "modify") (?p "preview") ,remove-choice
-                                     ,@(and settings-choice
-                                            (list settings-choice))
-                                     ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                          '(?e "expand") '(?e "collapse"))))
-                          (t `(,@(and activity-choice (list activity-choice))
-                               ,@(and continue-plan-choice
-                                      (list continue-plan-choice))
-                               (?d "discuss") (?i "implement") (?t "tags") (?m "modify")
-                               (?p "preview") ,remove-choice
-                               ,@(and settings-choice (list settings-choice))
-                               ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
-                                    '(?e "expand") '(?e "collapse"))))))))
-                    (model-values
-                     (and request-owner
-                          (mevedel--directive-model-values request-owner)))
-                    (hint-str
-                     (concat
-                      "["
-                      (if model-values
-                          (format "%s · effort %s%s"
-                                  (car model-values)
-                                  (or (cadr model-values) "default")
-                                  (if (caddr model-values) " · session" ""))
-                        (gptel--model-name gptel-model))
-                      "]\n")))
-      (setq choice (mevedel--ov-actions-read-choice
-                    instruction "ACTIONS: " "Action: " choices hint-str)))
-    (let ((cmd (if (member (cadr choice) '("expand" "collapse"))
-                   "cycle"
-                 (cadr choice))))
-      (if ci
-          (funcall-interactively (intern (concat "mevedel--ov-actions-" cmd)) instruction)
-        (funcall (intern (concat "mevedel--ov-actions-" cmd)) instruction)))))
-
-;; Declare overlay action functions
-(eval-and-compile
-  (dolist (pair '((add-tags    . mevedel-add-tags)
-                  (remove-tags . mevedel-remove-tags)
-                  (link        . mevedel-link-instructions)
-                  (unlink      . mevedel-unlink-instructions)
-                  (commentary  . mevedel-modify-reference-commentary)
-                  (abort       . mevedel-abort)
-                  (activity    . mevedel-open-directive-activity)
-                  (modify      . mevedel-modify-directive)
-                  (discuss     . mevedel-discuss-directive)
-                  (continue-discussion . mevedel-discuss-directive)
-                  (discuss-result . mevedel-discuss-directive)
-                  (implement   . mevedel-implement-directive)
-                  (implement-this . mevedel-implement-discussion-directive)
-                  (request-changes . mevedel-request-directive-changes)
-                  (retry       . mevedel-retry-directive)
-                  (tags        . mevedel-modify-directive-tag-query)
-                  (preview     . mevedel-preview-directive-prompt)))
-    (let ((name (car pair))
-          (target (cdr pair)))
-      (defalias (intern (format "mevedel--ov-actions-%s" name))
-        (lambda (&optional _instructions)
-          (interactive)
-          (call-interactively target))
-        (format "Wrapper around `%s' for overlay dispatch actions." target)))))
-
-(defun mevedel--ov-actions-continue-plan (&optional instruction)
-  "Continue INSTRUCTION's retained directive planning conversation."
-  (interactive (list (mevedel--ov-actions-getov)))
-  (require 'mevedel-view-composer)
-  (mevedel-view-enter-directive-scope
-   (mevedel--topmost-instruction instruction 'directive) 'plan))
-
-(defun mevedel--ov-actions-archive (&optional instruction)
-  "Archive INSTRUCTION's workspace directive record."
-  (interactive (list (mevedel--ov-actions-getov)))
-  (let* ((owner (mevedel--topmost-instruction instruction 'directive))
-         (workspace
-          (mevedel--instruction-buffer-workspace (overlay-buffer owner)))
-         (record (mevedel--directive-record owner)))
-    (mevedel-archive-directive record workspace)))
-
-(defun mevedel--ov-actions-clear (&optional _instructions)
-  "Clear instructions.
-Deletes all instructions at point and removes the eldoc hook that
-provides help for instruction actions if not other instructions are
-active in the buffer."
-  (interactive)
-  (mevedel-delete-instructions)
-  (with-current-buffer (current-buffer)
-    (unless (alist-get (current-buffer) (mevedel--instruction-alist))
-      (remove-hook 'eldoc-documentation-functions 'mevedel--ov-actions-help 'local))))
-
-(defun mevedel--ov-actions-show-answer (&optional instructions)
-  "Navigate to INSTRUCTIONS' latest rendered directive turn."
-  (interactive (list (mevedel--ov-actions-getov)))
-  (let* ((owner (mevedel--topmost-instruction instructions 'directive))
-         (workspace
-          (mevedel--instruction-buffer-workspace (overlay-buffer owner)))
-         (record (mevedel--directive-record owner))
-         (id (mevedel-directive-id record))
-         (data-buffer
-          (progn
-            (require 'mevedel-chat)
-            (car (mevedel--directive-session-buffer record workspace))))
-         (view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
-         found)
-    (with-current-buffer view-buffer
-      (mevedel-view--full-rerender)
-      (let ((pos (point-min))
-            (limit (mevedel-view--input-marker-position)))
-        (while (< pos limit)
-          (when-let* ((directive
-                       (get-text-property pos 'mevedel-view-directive)))
-            (when (equal id (plist-get directive :directive-id))
-              (setq found pos)))
-          (setq pos (or (next-single-property-change
-                         pos 'mevedel-view-directive nil limit)
-                        limit))))
-      (unless found
-        (user-error "Directive answer is not in the live transcript"))
-      (goto-char found)
-      (when (get-text-property found 'mevedel-view-collapsed)
-        (mevedel-view-toggle-section)))
-    ;; Navigation only: point stays on the answer, so this does not enter
-    ;; directive composer scope the way the follow-up actions do.
-    (require 'mevedel-directive-frame)
-    (mevedel-directive-frame-display owner view-buffer t)))
-
-(defun mevedel--ov-actions-view-changes (&optional instructions)
-  "Toggle the latest patch buffer for INSTRUCTIONS."
-  (interactive (list (mevedel--ov-actions-getov)))
-  (when-let* ((patch (mevedel-get-directive-patch instructions)))
-    (mevedel--replace-patch-buffer patch)
-    (let ((patch-buffer (mevedel--patch-buffer)))
-      (if-let* ((patch-buffer-window (get-buffer-window patch-buffer)))
-          (quit-window nil patch-buffer-window)
-        (display-buffer patch-buffer)))))
-
-(defun mevedel--ov-actions-cycle (&optional instructions)
-  "Collapse or expand INSTRUCTIONS."
-  (interactive (list (mevedel--ov-actions-getov)))
-  (if (eq (overlay-get instructions 'mevedel-instruction-collapse-p)
-          'collapse)
-      (overlay-put instructions 'mevedel-instruction-collapse-p 'expand)
-    (overlay-put instructions 'mevedel-instruction-collapse-p 'collapse))
-  (mevedel--update-instruction-overlay instructions))
-
-(defun mevedel--ov-actions-help (callback)
-  "Eldoc documentation function for `mevedel' instruction actions.
-
-CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
-  (when-let* ((instruction-type (get-char-property (point) 'mevedel-instruction-type)))
-    (funcall callback
-             (format
-              (pcase instruction-type
-                (`reference (substitute-command-keys
-                             "%s Options: show menu \\[mevedel--ov-actions-dispatch]"))
-                (`directive
-                 (pcase (when-let* ((directive
-                                     (mevedel--highest-priority-instruction
-                                      (mevedel--instructions-at
-                                       (point) 'directive))))
-                          (mevedel--directive-status directive))
-                   ((or 'implementing 'discussing)
-                    (substitute-command-keys "%s Options: abort \\[mevedel--ov-actions-abort] or show menu \\[mevedel--ov-actions-dispatch]"))
-                   (_
-                    (substitute-command-keys
-                     "%s Options: show menu \\[mevedel--ov-actions-dispatch]")))))
-              (propertize (gptel--model-name gptel-model) 'face 'mode-line-emphasis)))))
-
-
-(defvar-keymap mevedel-reference-actions-map
-  :doc "Keymap for `mevedel' reference overlay actions at point."
-  "M-m" #'mevedel--ov-actions-dispatch)
-
-(defvar-keymap mevedel-directive-actions-map
-  :doc "Keymap for `mevedel' directive overlay actions at point."
-  "M-m" #'mevedel--ov-actions-dispatch)
-
-(defvar-keymap mevedel-directive-processing-actions-map
-  :doc "Keymap for `mevedel' processing directive overlay actions at point."
-  "M-m" #'mevedel--ov-actions-dispatch
-  "C-c C-k" #'mevedel--ov-actions-abort)
-
-(defvar-keymap mevedel-directive-succeeded-actions-map
-  :doc "Keymap for `mevedel' succeeded directive overlay actions at point."
-  "M-m" #'mevedel--ov-actions-dispatch)
-
-(defvar-keymap mevedel-directive-failed-actions-map
-  :doc "Keymap for `mevedel' failed directive overlay actions at point."
-  "M-m" #'mevedel--ov-actions-dispatch)
-
-(defvar mevedel--actions-maps '(mevedel-reference-actions-map
-                                mevedel-directive-actions-map
-                                mevedel-directive-processing-actions-map
-                                mevedel-directive-succeeded-actions-map
-                                mevedel-directive-failed-actions-map))
-
-(defun mevedel--instruction-directive-color (instruction)
-  "Return the status color for directive INSTRUCTION."
-  (let ((own-color
-         (pcase (mevedel--directive-status instruction)
-           ((or 'implementing 'discussing)
-            mevedel-directive-processing-color)
-           ((or 'implemented 'discussed)
-            mevedel-directive-success-color)
-           ('aborted mevedel-directive-fail-color)
-           ('failed mevedel-directive-fail-color)
-           (_ mevedel-directive-color))))
-    (if-let* ((parent
-               (mevedel--topmost-instruction instruction 'directive)))
-        (pcase (mevedel--directive-status parent)
-          ((or 'implementing 'discussing)
-           mevedel-directive-processing-color)
-          ('failed mevedel-directive-fail-color)
-          (_ own-color))
-      own-color)))
-
-(defun mevedel--instruction-action-setup (instruction instruction-type)
-  "Install interaction properties for INSTRUCTION of INSTRUCTION-TYPE."
-  (add-hook 'eldoc-documentation-functions
-            #'mevedel--ov-actions-help nil 'local)
-  (let ((status (and (eq instruction-type 'directive)
-                     (mevedel--directive-status instruction))))
-    (overlay-put
-     instruction 'keymap
-     (if (eq instruction-type 'reference)
-         mevedel-reference-actions-map
-       (pcase status
-         ((or 'implementing 'discussing)
-          mevedel-directive-processing-actions-map)
-         ((or 'implemented 'discussed)
-          mevedel-directive-succeeded-actions-map)
-         ('aborted mevedel-directive-failed-actions-map)
-         ('failed mevedel-directive-failed-actions-map)
-         (_ mevedel-directive-actions-map))))
-    (overlay-put
-     instruction 'help-echo
-     (format
-      "%s \\[mevedel--ov-actions-dispatch] for options"
-      (if (eq instruction-type 'reference)
-          "Press"
-        (pcase status
-          ('implementing "Implementation in progress, press")
-          ('discussing "Discussion in progress, press")
-          ('implemented "Request implemented, press")
-          ('discussed "Request discussed, press")
-          ('aborted "Request aborted, press")
-          ('failed "Request failed, press")
-          (_ "Press")))))))
-
-(defun mevedel--instruction-directive-typename (instruction parent)
-  "Return the display type name for directive INSTRUCTION under PARENT."
-  (if (and parent (mevedel--directivep parent))
-      (pcase (mevedel--directive-status parent)
-        ((or 'implementing 'discussing 'failed 'aborted)
-         (or (overlay-get instruction 'mevedel-subdirective-typename)
-             "HINT"))
-        ('implemented "CORRECTION")
-        (_ "HINT"))
-    "DIRECTIVE"))
-
-(defun mevedel--instruction-label (presentation)
-  "Return PRESENTATION with its instruction label and color computed."
-  (let* ((instruction (plist-get presentation :instruction))
-         (instruction-type (plist-get presentation :type))
-         (directive-typename (plist-get presentation :directive-typename))
-         (padding (plist-get presentation :padding))
-         (bufferlevel-p (plist-get presentation :bufferlevel-p))
-         (parent (plist-get presentation :parent))
-         (parent-bufferlevel-p
-          (plist-get presentation :parent-bufferlevel-p))
-         (label "")
-        color)
-    (cl-labels
-        ((append-label (content &optional prefix)
-           (setq label
-                 (concat
-                  label
-                  (if (string-empty-p label) "" (concat "\n" padding))
-                  (mevedel--fill-label-string
-                   content (or prefix "") padding
-                   (overlay-buffer instruction)))))
-         (stylized-id (id)
-           (propertize (format "#%d" id)
-                       'face 'font-lock-constant-face))
-         (filter-link-ids (ids)
-           (cl-loop
-            for id in ids
-            unless
-            (let ((target (mevedel--instruction-with-id id)))
-              (or (null target)
-                  (not (eq (mevedel--instruction-type target)
-                           instruction-type))))
-            collect id))
-         (append-links ()
-           (let ((outlinks
-                  (filter-link-ids
-                   (mevedel--instruction-outlinks instruction)))
-                 (inlinks
-                  (filter-link-ids
-                   (mevedel--instruction-inlinks instruction))))
-             (when (or outlinks inlinks)
-               (append-label
-                (concat
-                 (when outlinks
-                   (format "TO: %s"
-                           (string-join
-                            (mapcar #'stylized-id outlinks) ", ")))
-                 (when inlinks
-                   (format "%sFROM: %s"
-                           (if outlinks "\n" "")
-                           (string-join
-                            (mapcar #'stylized-id inlinks) ", "))))
-                (format "%s LINKS: "
-                        (if (eq instruction-type 'reference)
-                            "REFERENCE"
-                          "DIRECTIVE"))))))
-         (tags-string (tags common-tags)
-           (string-join
-            (mapcar
-             (lambda (tag)
-               (propertize
-                (symbol-name tag) 'face
-                (if (memq tag common-tags)
-                    'font-lock-warning-face
-                  'font-lock-constant-face)))
-             tags)
-            " ")))
-      (pcase instruction-type
-        ('reference
-         (setq color mevedel-reference-color)
-         (cond
-          ((and parent
-                (eq (mevedel--instruction-type parent) 'reference)
-                (not parent-bufferlevel-p))
-           (append-label
-            (format "SUBREFERENCE %s"
-                    (stylized-id
-                     (mevedel--instruction-id instruction)))))
-          (bufferlevel-p
-           (append-label
-            (format "BUFFER REFERENCE %s"
-                    (stylized-id
-                     (mevedel--instruction-id instruction)))))
-          (t
-           (append-label
-            (format "REFERENCE %s"
-                    (stylized-id
-                     (mevedel--instruction-id instruction))))))
-         (let* ((direct-tags (mevedel--reference-tags instruction))
-                (inherited-tags (mevedel--inherited-tags instruction))
-                (common-tags
-                 (cl-intersection inherited-tags direct-tags))
-                (unique-tags
-                 (cl-set-difference direct-tags common-tags)))
-           (when inherited-tags
-             (append-label
-              (tags-string
-               (sort (append inherited-tags) #'string-lessp)
-               common-tags)
-              (if common-tags
-                  "INHERITED & COMMON TAGS: "
-                "INHERITED TAGS: ")))
-           (when unique-tags
-             (append-label
-              (tags-string
-               (sort unique-tags #'string-lessp) common-tags)
-              (if inherited-tags
-                  (if common-tags "UNIQUE TAGS: " "DIRECT TAGS: ")
-                "TAGS: "))))
-         (append-links)
-         (let ((commentary
-                (string-trim
-                 (or
-                  (if (eq
-                       (overlay-get
-                        instruction 'mevedel-instruction-collapse-p)
-                       'collapse)
-                      (mevedel--commentary-truncated-text instruction)
-                    (mevedel--commentary-text instruction))
-                  ""))))
-           (unless (string-empty-p commentary)
-             (append-label commentary "COMMENTARY: "))))
-        ('directive
-         (pcase (mevedel--directive-status instruction)
-           ('planning (append-label "PLANNING"))
-           ('plan-ready (append-label "PLAN READY"))
-           ('plan-accepted (append-label "PLAN ACCEPTED"))
-           ('implementing (append-label "IMPLEMENTING"))
-           ('discussing (append-label "DISCUSSING"))
-           ('implemented (append-label "IMPLEMENTED"))
-           ('discussed (append-label "DISCUSSED"))
-           ('aborted (append-label "ABORTED"))
-           ('failed
-            (append-label
-             (or (overlay-get instruction 'mevedel-directive-fail-reason)
-                 (and parent
-                      (overlay-get parent 'mevedel-directive-fail-reason))
-                 "request failed")
-             "FAILED: "))
-           (_
-            (when-let* ((record (mevedel--directive-record instruction))
-                        ((mevedel-directive-request-changed-p record)))
-              (append-label "READY · REQUEST CHANGED"))))
-         (setq color
-               (mevedel--instruction-directive-color instruction))
-         (let* ((directive
-                 (string-trim
-                  (or
-                   (if (eq
-                        (overlay-get
-                         instruction 'mevedel-instruction-collapse-p)
-                        'collapse)
-                       (mevedel--directive-truncated-text instruction)
-                     (mevedel--directive-text instruction))
-                   "")))
-                (prefix
-                 (format "%s %s"
-                         directive-typename
-                         (stylized-id
-                          (mevedel--instruction-id instruction)))))
-           (append-label
-            directive
-            (if (string-empty-p directive)
-                (concat "EMPTY " prefix)
-              (concat prefix ": "))))
-         (when-let* ((provider
-                      (overlay-get
-                       instruction
-                       'mevedel-directive-model-provider)))
-           (append-label
-            (format
-             "%s · effort %s"
-             provider
-             (or
-              (overlay-get
-               instruction
-               'mevedel-directive-reasoning-effort)
-              "default"))
-            "MODEL: "))
-         (when-let* ((owner (mevedel--topmost-instruction
-                             instruction 'directive))
-                     (record (mevedel--directive-record owner))
-                     ((mevedel-directive-planning-enabled record)))
-           (append-label "ON" "PLAN: "))
-         (when-let* ((owner (mevedel--topmost-instruction
-                             instruction 'directive))
-                     (record (mevedel--directive-record owner))
-                     (skills (mevedel-directive-skills record)))
-           (append-label
-            (mapconcat (lambda (skill) (plist-get skill :name))
-                       skills ", ")
-            "SKILLS: "))
-         (unless (mevedel--parent-instruction instruction 'directive)
-           (if-let* ((query
-                      (overlay-get
-                       instruction
-                       'mevedel-directive-infix-tag-query-string)))
-               (append-label query "TAG QUERY: ")
-             (append-label
-              (cond
-               (mevedel-empty-tag-query-matches-all
-                "REFERENCES ALL")
-               (mevedel-always-match-untagged-references
-                "REFERENCES UNTAGGED ONLY")
-               (t "REFERENCES NOTHING"))))
-           (append-links))
-         (when (mevedel--detached-directive-p instruction)
-           (setq label "")
-           (append-label
-            (format
-             "DETACHED · %s · DIRECTIVE %s: %s"
-             (upcase
-              (symbol-name
-             (or (mevedel--directive-status instruction) 'ready)))
-             (stylized-id (mevedel--instruction-id instruction))
-             (string-trim
-              (mevedel--directive-truncated-text instruction)))))))
-      (append presentation (list :label label :color color)))))
-
-(defun mevedel--instruction-style (presentation)
-  "Apply the computed instruction PRESENTATION."
-  (let* ((instruction (plist-get presentation :instruction))
-         (instruction-type (plist-get presentation :type))
-         (label (plist-get presentation :label))
-         (color (plist-get presentation :color))
-         (padding (plist-get presentation :padding))
-         (priority (plist-get presentation :priority))
-         (parent (plist-get presentation :parent))
-         (bufferlevel-p (plist-get presentation :bufferlevel-p))
-         (parent-bufferlevel-p
-          (plist-get presentation :parent-bufferlevel-p))
-         (default-fg (face-foreground 'default))
-         (default-bg (face-background 'default))
-         (bg-tint-intensity
-          (if (and parent (not parent-bufferlevel-p))
-              (* mevedel-subinstruction-tint-coefficient
-                 mevedel-instruction-bg-tint-intensity)
-            mevedel-instruction-bg-tint-intensity))
-         (label-color
-          (if bufferlevel-p
-              (mevedel--tint
-               default-fg color
-               mevedel-instruction-label-tint-intensity)
-            (let ((tint
-                   (mevedel--tint
-                    default-fg color
-                    mevedel-instruction-label-tint-intensity)))
-              (dotimes
-                  (_ (- priority
-                        mevedel--default-instruction-priority))
-                (setq tint
-                      (mevedel--tint
-                       tint color
-                       mevedel-instruction-label-tint-intensity)))
-              tint)))
-         (bg-color
-          (if (and bufferlevel-p
-                   (eq instruction-type 'reference))
-              default-bg
-            (let ((tint
-                   (mevedel--tint
-                    default-bg color
-                    mevedel-instruction-bg-tint-intensity)))
-              (dotimes
-                  (_ (- priority
-                        mevedel--default-instruction-priority))
-                (setq tint
-                      (mevedel--tint
-                       tint color bg-tint-intensity)))
-              tint))))
-    (overlay-put instruction 'mevedel-bg-color bg-color)
-    (overlay-put instruction 'mevedel-label-color label-color)
-    (overlay-put instruction 'priority priority)
-    (when (eq instruction mevedel--highlighted-instruction)
-      (setq bg-color
-            (mevedel--tint
-             default-bg
-             mevedel-highlighted-instruction-color
-             mevedel-highlighted-instruction-tint-intensity)))
-    (let ((instruction-at-eol-p
-           (with-current-buffer (overlay-buffer instruction)
-             (save-excursion
-               (goto-char (overlay-end instruction))
-               (eolp)))))
-      (cl-labels
-          ((colorize (beg end &optional fg bg)
-             (unless (= beg end)
-               (add-face-text-property
-                beg end
-                (list :inherit 'default
-                      :extend t
-                      :foreground (or fg label-color)
-                      :background (or bg bg-color))
-                t)))
-           (colorize-as-parent (beg end)
-             (when parent
-               (colorize
-                beg end
-                (overlay-get parent 'mevedel-label-color)
-                (overlay-get parent 'mevedel-bg-color)))))
-        (overlay-put
-         instruction 'before-string
-         (with-temp-buffer
-           (insert label)
-           (if (mevedel--bodyless-instruction-p instruction)
-               (unless instruction-at-eol-p
-                 (insert "\n"))
-             (insert "\n"))
-           (goto-char (point-min))
-           (end-of-line)
-           (unless (eobp)
-             (forward-char))
-           (colorize (point-min) (point))
-           (goto-char (point-min))
-           (forward-line)
-           (while (not (eobp))
-             (beginning-of-line)
-             (let ((mark (point)))
-               (forward-char (length padding))
-               (colorize-as-parent mark (point)))
-             (let ((mark (point))
-                   advanced)
-               (end-of-line)
-               (unless (eobp)
-                 (setq advanced t)
-                 (forward-char))
-               (colorize mark (point))
-               (unless advanced
-                 (forward-line))))
-           (unless (mevedel--bodyless-instruction-p instruction)
-             (let ((mark (point)))
-               (insert padding)
-               (colorize-as-parent mark (point))))
-           (buffer-string)))))
-    (overlay-put
-     instruction 'face `(:extend t :background ,bg-color))))
-
-(defun mevedel--update-instruction-overlay-tree
-    (instruction update-children priority parent)
-  "Render INSTRUCTION and optionally UPDATE-CHILDREN.
-PRIORITY is the inherited priority and PARENT is the tree parent."
-  (let* ((instruction-type
-          (mevedel--instruction-type instruction))
-         (padding
-          (with-current-buffer (overlay-buffer instruction)
-            (save-excursion
-              (goto-char (overlay-start instruction))
-              (make-string (current-column) ? ))))
-         (bufferlevel-p
-          (mevedel--instruction-bufferlevel-p instruction))
-         (parent-bufferlevel-p
-          (and parent
-               (mevedel--instruction-bufferlevel-p parent)))
-         (priority
-          (if bufferlevel-p (1- priority) priority))
-         (directive-typename
-          (and (eq instruction-type 'directive)
-               (mevedel--instruction-directive-typename
-                instruction parent)))
-         (presentation
-          (mevedel--instruction-label
-           (list :instruction instruction
-                 :type instruction-type
-                 :directive-typename directive-typename
-                 :padding padding
-                 :bufferlevel-p bufferlevel-p
-                 :parent parent
-                 :parent-bufferlevel-p parent-bufferlevel-p
-                 :priority priority))))
-    (overlay-put instruction 'mevedel-subdirective-typename
-                 (and parent
-                      (mevedel--directivep parent)
-                      directive-typename))
-    (mevedel--instruction-action-setup
-     instruction instruction-type)
-    (mevedel--instruction-style presentation)
-    (when update-children
-      (dolist (child
-               (mevedel--child-instructions instruction))
-        (mevedel--update-instruction-overlay-tree
-         child update-children (1+ priority) instruction)))))
-
-(defun mevedel--update-instruction-overlay
-    (instruction &optional update-children)
-  "Update INSTRUCTION's presentation and optionally UPDATE-CHILDREN."
-  (let ((conflicting
-         (cl-some
-          (lambda (other)
-            (and
-             (not (eq other instruction))
-             (mevedel--instructions-congruent-p
-              instruction other)))
-          (mevedel--instructions-at
-           (overlay-start instruction)))))
-    (if conflicting
-        (mevedel--delete-instruction instruction)
-      (let* ((parent
-              (mevedel--parent-instruction instruction))
-             (priority
-              (if parent
-                  (1+ (overlay-get parent 'priority))
-                mevedel--default-instruction-priority)))
-        (when (eq (overlay-get instruction 'mevedel-instruction-type)
-                  'directive)
-          (mevedel--refresh-directive-anchor instruction))
-        (mevedel--update-instruction-overlay-tree
-         instruction update-children priority parent)
-        (when (mevedel--detached-directive-p instruction)
-          (mevedel--order-detached-directives-at
-           (overlay-start instruction)))))))
 
 (defun mevedel--buffer-has-instructions-p (buffer)
   "Return non-nil if BUFFER has any mevedel instructions associated with it."
+  (require 'mevedel-instruction-registry)
   (mevedel--instruction-activate-buffer buffer)
   (assoc buffer (mevedel--instruction-alist)))
 
@@ -3068,6 +1213,7 @@ Does not return instructions that contain the region in its entirety."
 
 (defun mevedel--all-instructions ()
   "Return a list of all currently loaded instructions."
+  (require 'mevedel-instruction-registry)
   (mevedel--foreach-instruction inst collect inst))
 
 (cl-defun mevedel--topmost-instruction (instruction &optional of-type pred)
@@ -3096,30 +1242,6 @@ PRED must be a function which accepts an instruction."
           best-instruction
         nil))))
 
-(defun mevedel--directive-text (directive)
-  "Return the directive text of the DIRECTIVE overlay.
-
-Returns an empty string if there is no directive text."
-  (or (when-let* ((record (mevedel--directive-record directive)))
-        (mevedel-directive-request record))
-      (when-let* ((record (mevedel--subdirective-record directive)))
-        (mevedel-subdirective-request record))
-      ""))
-
-(defun mevedel--set-directive-request (directive request)
-  "Set DIRECTIVE's current REQUEST without changing its identity."
-  (let ((record (mevedel--directive-source-record directive)))
-    (cond
-     ((mevedel-directive-p record)
-     (mevedel-directive-set-request record request))
-     (record
-     (mevedel-subdirective-set-request record request)
-      (when-let* ((owner (mevedel--topmost-instruction
-                          directive 'directive))
-                  (parent-record (mevedel--directive-record owner))
-                  ((mevedel-directive-plan parent-record)))
-        (mevedel-directive-invalidate-plan parent-record)))
-     (t (error "Directive record not found")))))
 
 (defun mevedel--directive-truncated-text (directive)
   "Return the truncated directive text of the DIRECTIVE overlay.
@@ -3240,6 +1362,7 @@ Optionally filer the by OF-TYPE (either reference or directive)."
 
 Returns plist with :summary and :references keys, optionally for
 specified DIRECTIVE and tag QUERY."
+  (require 'mevedel-instruction-registry)
   (let* ((pred
           (lambda (instr)
             (mevedel--reference-matches-query-p instr
@@ -3469,6 +1592,8 @@ treat them as subdirectives, instead."
   "Return RECORD's live directive and validated prompt in WORKSPACE.
 
 This is the shared individual and batch submission eligibility check."
+  (require 'mevedel-directive-source)
+  (require 'mevedel-instruction-registry)
   (let* ((anchor (mevedel-directive-anchor record))
          (evidence (plist-get anchor :evidence))
          (directive
@@ -3507,34 +1632,6 @@ This is the shared individual and batch submission eligibility check."
              (kill-buffer buffer))))
        (signal (car err) (cdr err))))))
 
-(defun mevedel--create-id ()
-  "Create a unique identifier for an instruction.
-
-Retrieves an unused ID from retired IDs or generates a new one by
-incrementing the ID counter.  Tracks ID usage via a hash table."
-  (let ((id
-         (if (mevedel--instruction-retired-ids)
-             (prog1
-                 (car (mevedel--instruction-retired-ids))
-               (setf (mevedel--instruction-retired-ids) (cdr (mevedel--instruction-retired-ids))))
-           (cl-incf (mevedel--instruction-id-counter)))))
-    (puthash id t (mevedel--instruction-id-usage-map))
-    id))
-
-(defun mevedel--retire-id (id)
-  "Retire an ID by removing it from `(mevedel--instruction-id-usage-map)'.
-The id is added to `(mevedel--instruction-retired-ids)'"
-  (when (gethash id (mevedel--instruction-id-usage-map))
-    (remhash id (mevedel--instruction-id-usage-map))
-    (push id (mevedel--instruction-retired-ids))))
-
-(defun mevedel--instruction-outlinks (instruction)
-  "Return the :to links of INSTRUCTION."
-  (plist-get (overlay-get instruction 'mevedel-links) :to))
-
-(defun mevedel--instruction-inlinks (instruction)
-  "Return the :from links of INSTRUCTION."
-  (plist-get (overlay-get instruction 'mevedel-links) :from))
 
 (provide 'mevedel-overlays)
 ;;; mevedel-overlays.el ends here

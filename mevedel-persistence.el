@@ -14,11 +14,9 @@
 (require 'cl-lib)
 (require 'subr-x)
 
+(eval-when-compile (require 'mevedel-instruction-registry))
 (require 'mevedel-overlays)
 (require 'mevedel-utilities)
-
-;; `mevedel-utilities'
-(declare-function mevedel-version "mevedel-utilities" (&optional here message))
 
 ;; `mevedel-directive-persistence'
 (declare-function mevedel--deserialize-directives
@@ -28,18 +26,22 @@
                   "mevedel-directive-persistence"
                   (workspace base-directory))
 
-;; `mevedel-overlays'
+;; `mevedel-directive-source'
 (declare-function mevedel--mark-buffer-source-missing
-                  "mevedel-overlays" (buffer))
+                  "mevedel-directive-source" (buffer))
 (declare-function mevedel--reattach-directive
-                  "mevedel-overlays" (record workspace buffer start end))
+                  "mevedel-directive-source" (record workspace buffer start end))
 (declare-function mevedel--reattach-subdirective
-                  "mevedel-overlays"
+                  "mevedel-directive-source"
                   (record owner workspace buffer start end))
 (declare-function mevedel--reconcile-directive-sources
-                  "mevedel-overlays" (workspace))
+                  "mevedel-directive-source" (workspace))
 (declare-function mevedel--refresh-directive-anchor
-                  "mevedel-overlays" (directive))
+                  "mevedel-directive-source" (directive))
+(declare-function mevedel--restore-source-missing-directives
+                  "mevedel-directive-source" (buffer))
+
+;; `mevedel-overlays'
 (declare-function mevedel--subinstruction-of-p
                   "mevedel-overlays" (sub parent))
 
@@ -53,6 +55,9 @@
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-set-directives "mevedel-structs"
                   (workspace directives))
+
+;; `mevedel-utilities'
+(declare-function mevedel-version "mevedel-utilities" (&optional here message))
 
 ;; `mevedel-workspace'
 (defvar mevedel--workspace)
@@ -113,6 +118,8 @@ file names are serialized relative to it; otherwise absolute names are
 used.  When INCLUDE-ORIGINAL-CONTENT is non-nil, include full buffer
 contents for position patching if the file changes before restore."
   (require 'mevedel-directive-persistence)
+  (require 'mevedel-directive-source)
+  (require 'mevedel-instruction-registry)
   (mevedel--instruction-activate-buffer)
   (mevedel--reconcile-directive-sources
    (mevedel--instruction-buffer-workspace (current-buffer)))
@@ -222,6 +229,8 @@ Returns the number of saved instructions."
 (defun mevedel--reset-instructions-preserving-directives
     (workspace directives)
   "Clear WORKSPACE presentations while retaining authored DIRECTIVES."
+  (require 'mevedel-directive-source)
+  (require 'mevedel-instruction-registry)
   (let ((mevedel--instruction-state-key-override
          (mevedel--instruction-workspace-key workspace)))
     (dolist (entry (copy-sequence (mevedel--instruction-alist)))
@@ -233,6 +242,7 @@ Returns the number of saved instructions."
 
 (defun mevedel--restore-preserved-directives (workspace)
   "Safely restore Source missing directive presentations in WORKSPACE."
+  (require 'mevedel-directive-source)
   (dolist (file
            (delete-dups
             (cl-loop
@@ -267,6 +277,9 @@ before replacing existing instructions.  QUIET suppresses messages.
 DIRECTIVE-RECORDS retains current authored records; PRESERVE-DIRECTIVES-P
 enables that mode for an empty record list."
   (require 'mevedel-directive-persistence)
+  (require 'mevedel-directive-source)
+  (require 'mevedel-instruction-registry)
+  (require 'mevedel-overlay-ui)
   (setq workspace (or workspace
                       (mevedel--instruction-buffer-workspace
                        (current-buffer))))
@@ -346,6 +359,7 @@ enables that mode for an empty record list."
 
 A file being outdated refers to the file in the instructions alist not being
 up-to-date, not the actual file on the disk being outdated."
+  (require 'mevedel-instruction-registry)
   (when-let* ((buffer (find-buffer-visiting file)))
     (mevedel--instruction-activate-buffer buffer))
   (when (file-exists-p file)
@@ -372,6 +386,8 @@ Runs on the global `kill-buffer-hook' for the buffer being killed.
 It must be one named function registered once: a per-buffer closure
 per instruction buffer grows the global hook without bound and runs
 every closure on every kill in Emacs."
+  (require 'mevedel-directive-source)
+  (require 'mevedel-instruction-registry)
   (let ((buffer (current-buffer)))
     (mevedel--instruction-activate-buffer buffer)
     (when (mevedel--buffer-has-instructions-p buffer)
@@ -389,6 +405,8 @@ every closure on every kill in Emacs."
 
 Sets up hooks to preserve mevedel instructions when BUFFER is killed or
 reverted, and restores them afterward."
+  (require 'mevedel-directive-source)
+  (require 'mevedel-instruction-registry)
   (add-hook 'kill-buffer-hook #'mevedel--stash-instructions-on-kill)
   (with-current-buffer buffer
     (unless mevedel--buffer-hooks-setup
@@ -523,7 +541,7 @@ When RANGE is non-nil, it is a cons cell limiting valid bounds."
               (mevedel--instruction-anchor-unique-candidate
                candidates))))))
 
-(defun mevedel--instruction-anchor-resolve
+(defun mevedel-persistence-resolve-instruction-anchor
     (overlay-start overlay-end anchor parent-range)
   "Resolve ANCHOR near OVERLAY-START and OVERLAY-END within PARENT-RANGE."
   (let ((range (or parent-range (cons (point-min) (point-max)))))
@@ -536,71 +554,6 @@ When RANGE is non-nil, it is a cons cell limiting valid bounds."
       (mevedel--instruction-anchor-resolve-text
        overlay-start overlay-end anchor range)))))
 
-(defun mevedel--restore-subdirectives-in-buffer (workspace buffer file)
-  "Restore parent-owned directive details for FILE in BUFFER."
-  (let ((mevedel--instruction-state-key-override
-         (mevedel--instruction-workspace-key workspace)))
-    (mevedel--instruction-activate-workspace workspace)
-    (let ((restored 0)
-          (instructions
-           (cdr (assq buffer (mevedel--instruction-alist)))))
-      (dolist (owner (mevedel-workspace-directives workspace))
-        (when-let* ((parent
-                     (cl-find (mevedel-directive-id owner) instructions
-                              :key (lambda (instruction)
-                                     (overlay-get instruction 'mevedel-uuid))
-                              :test #'equal)))
-          (dolist (record (mevedel-directive-subdirectives owner))
-            (let ((anchor (mevedel-subdirective-anchor record)))
-              (when (and (stringp (plist-get anchor :file))
-                         (file-equal-p file (plist-get anchor :file)))
-                (if-let* ((overlay
-                           (cl-find (mevedel-subdirective-id record)
-                                    instructions
-                                    :key (lambda (instruction)
-                                           (overlay-get instruction
-                                                        'mevedel-uuid))
-                                    :test #'equal)))
-                    (when (mevedel--subinstruction-of-p overlay parent)
-                      (mevedel--refresh-directive-anchor overlay))
-                  (with-current-buffer buffer
-                    (when-let* ((bounds
-                                 (mevedel--instruction-anchor-resolve
-                                  (plist-get anchor :start)
-                                  (plist-get anchor :end)
-                                  (plist-get anchor :evidence)
-                                  (cons (overlay-start parent)
-                                        (overlay-end parent)))))
-                      (mevedel--reattach-subdirective
-                       record owner workspace buffer
-                       (car bounds) (cdr bounds))
-                      (cl-incf restored)))))))))
-      restored)))
-
-(defun mevedel--restore-source-missing-directives (buffer)
-  "Reattach exact unambiguous source-missing directives returning in BUFFER."
-  (let* ((workspace (mevedel--instruction-buffer-workspace buffer))
-         (file (buffer-file-name buffer))
-         (restored 0))
-    (when (and workspace file)
-      (dolist (record (mevedel-workspace-directives workspace))
-        (let ((anchor (mevedel-directive-anchor record)))
-          (when (and (eq 'source-missing (plist-get anchor :state))
-                     (file-equal-p file (plist-get anchor :file)))
-            (with-current-buffer buffer
-              ;; Without evidence there is nothing to resolve against;
-              ;; the raw 0/0 fallback would signal inside find-file.
-              (when-let* ((evidence (plist-get anchor :evidence))
-                          (bounds
-                           (mevedel--instruction-anchor-resolve
-                            0 0 evidence nil)))
-                (mevedel--reattach-directive
-                 record workspace buffer (car bounds) (cdr bounds))
-                (cl-incf restored))))))
-      (cl-incf restored
-               (mevedel--restore-subdirectives-in-buffer
-                workspace buffer file)))
-    restored))
 
 (defun mevedel--instruction-restore-order (instructions)
   "Return INSTRUCTIONS ordered so parents are restored before children."
@@ -633,7 +586,7 @@ Return the restored overlay, or nil when unresolved."
                       ((and parent-uuid (null parent-range))
                        nil)
                       (t
-                       (mevedel--instruction-anchor-resolve
+                       (mevedel-persistence-resolve-instruction-anchor
                         overlay-start overlay-end anchor parent-range)))))
         (when bounds
           (let ((ov (mevedel--restore-overlay buffer
@@ -653,6 +606,9 @@ the amount of instructions lost to the patching process, if any.
 If MESSAGE is non-nil, message the intent of patching outdated files.
 When WORKSPACE is non-nil, associate the restored buffer with it before
 restoring overlays."
+  (require 'mevedel-directive-source)
+  (require 'mevedel-instruction-registry)
+  (require 'mevedel-overlay-ui)
   (let ((mevedel--inhibit-file-patching t))
     (when-let* (((not mevedel--inhibit-source-missing-restore))
                 (buffer (find-buffer-visiting file)))
@@ -736,6 +692,7 @@ restoring overlays."
 (add-hook 'find-file-hook
           (lambda ()
             (unless mevedel--inhibit-file-patching
+              (require 'mevedel-instruction-registry)
               (mevedel--instruction-activate-buffer (current-buffer))
               (mevedel--restore-file-instructions (buffer-file-name (current-buffer))))))
 

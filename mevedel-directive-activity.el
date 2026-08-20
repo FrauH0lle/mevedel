@@ -31,25 +31,33 @@
 (declare-function mevedel-directive-request-changed-p
                   "mevedel-directive" (directive))
 
+;; `mevedel-directive-source'
+(declare-function mevedel--directive-record
+                  "mevedel-directive-source" (directive))
+(declare-function mevedel--reattach-directive
+                  "mevedel-directive-source"
+                  (record workspace buffer start end))
+(declare-function mevedel--reconcile-directive-sources
+                  "mevedel-directive-source" (workspace))
+(declare-function mevedel-archive-directive
+                  "mevedel-directive-source" (record workspace))
+
+;; `mevedel-instruction-registry'
+(declare-function mevedel--instruction-buffer-workspace
+                  "mevedel-instruction-registry" (buffer))
+(declare-function mevedel--instruction-with-uuid
+                  "mevedel-instruction-registry" (uuid &optional workspace))
+
+;; `mevedel-overlay-ui'
+(declare-function mevedel--ov-actions-getov "mevedel-overlay-ui" ())
+(declare-function mevedel--ov-actions-settings
+                  "mevedel-overlay-ui" (&optional instruction))
+
 ;; `mevedel-overlays'
 (declare-function mevedel--directive-action-context
                   "mevedel-overlays" (record workspace))
-(declare-function mevedel--directive-record "mevedel-overlays" (directive))
-(declare-function mevedel--instruction-buffer-workspace
-                  "mevedel-overlays" (buffer))
-(declare-function mevedel--instruction-with-uuid
-                  "mevedel-overlays" (uuid &optional workspace))
-(declare-function mevedel--ov-actions-getov "mevedel-overlays" ())
-(declare-function mevedel--ov-actions-settings
-                  "mevedel-overlays" (&optional instruction))
-(declare-function mevedel--reattach-directive
-                  "mevedel-overlays" (record workspace buffer start end))
-(declare-function mevedel--reconcile-directive-sources
-                  "mevedel-overlays" (workspace))
 (declare-function mevedel--topmost-instruction
-                  "mevedel-overlays" (instruction type))
-(declare-function mevedel-archive-directive
-                  "mevedel-overlays" (record workspace))
+                  "mevedel-overlays" (instruction &optional of-type pred))
 
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-rewind-checkpoint

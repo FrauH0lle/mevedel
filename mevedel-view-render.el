@@ -38,7 +38,6 @@
 		  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-chat'
-(declare-function mevedel--directive-action-label "mevedel-chat" (action))
 (declare-function mevedel--implement-discussion
                   "mevedel-chat" (directive &optional callback))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
@@ -63,6 +62,10 @@
 (declare-function mevedel-execution-transcript-pending-render-data
                   "mevedel-execution-transcript"
                   (data-buffer tool-use-id))
+
+;; `mevedel-overlay-ui'
+(declare-function mevedel-overlay-ui-directive-action-label
+                  "mevedel-overlay-ui" (action))
 
 ;; `mevedel-overlays'
 (declare-function mevedel--directive-action-context
@@ -4081,6 +4084,7 @@ the contiguous run of audit blocks that follows it."
 
 (defun mevedel-view--render-user-turn (segments data-buf &optional directive)
   "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."
+  (require 'mevedel-overlay-ui)
   (require 'mevedel-transcript)
   (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
          (prompt-drawers (mevedel-view--user-turn-prompt-drawers
@@ -4118,7 +4122,7 @@ the contiguous run of audit blocks that follows it."
                            (truncate-string-to-width
                             (or (plist-get directive :directive-id) "?")
                             8 nil nil "…")
-                           (mevedel--directive-action-label
+                           (mevedel-overlay-ui-directive-action-label
                             (plist-get directive :action))
                            (or (plist-get directive :turn) "?"))
                    (if-let* ((guest (mevedel-view--user-turn-guest-name
@@ -4180,19 +4184,21 @@ Directive turns are stored in the data buffer as regular gptel user
 turns plus an ignored `:PROMPT:' drawer.  In org buffers the action is
 stored as a trailing tag (\"Text :implement:\"); in markdown buffers it
 is stored as a leading code-formatted action (\"`implement` Text\")."
+  (require 'mevedel-overlay-ui)
   (let ((trimmed (string-trim text)))
     (cond
      ((string-match "\\`\\(.*?\\)[ \t]+:\\([[:alnum:]_-]+\\):\\'" trimmed)
       (let ((body (string-trim (match-string 1 trimmed)))
             (action (match-string 2 trimmed)))
         (if (string-empty-p body)
-            (mevedel--directive-action-label action)
+            (mevedel-overlay-ui-directive-action-label action)
           (format "%s: %s"
-                  (mevedel--directive-action-label action)
+                  (mevedel-overlay-ui-directive-action-label action)
                   body))))
      ((string-match "\\``\\([^`]+\\)`[ \t\n]+\\(.+\\)\\'" trimmed)
       (format "%s: %s"
-              (mevedel--directive-action-label (match-string 1 trimmed))
+              (mevedel-overlay-ui-directive-action-label
+               (match-string 1 trimmed))
               (match-string 2 trimmed)))
      (t trimmed))))
 
@@ -5458,6 +5464,7 @@ synthesizes a preview with tool counters."
 
 (defun mevedel-view--directive-turn-summary (start end directive)
   "Build a one-line summary for DIRECTIVE rendered between START and END."
+  (require 'mevedel-overlay-ui)
   (let ((tool-count 0)
         (attempt (nth 2 (mevedel-view--directive-metadata-context directive))))
     (let ((pos start))
@@ -5471,7 +5478,7 @@ synthesizes a preview with tool counters."
      (format "◆ %s · %s · T%s · %s%s%s"
              (truncate-string-to-width
               (or (plist-get directive :directive-id) "?") 8 nil nil "…")
-             (mevedel--directive-action-label
+             (mevedel-overlay-ui-directive-action-label
               (plist-get directive :action))
              (or (plist-get directive :turn) "?")
              (pcase (plist-get directive :outcome)

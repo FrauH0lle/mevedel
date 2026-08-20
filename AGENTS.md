@@ -178,7 +178,10 @@ Chat / view
   mevedel-view-markdown.el    Markdown links, images, paths, source panels
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
   mevedel-permissions-list.el remembered authority cockpit and per-row revoke
-  mevedel-overlays.el         instruction overlays (references/directives)
+  mevedel-instruction-registry.el workspace instruction buckets, IDs, links
+  mevedel-overlays.el         instruction geometry, tags, context, prompts
+  mevedel-directive-source.el directive anchor/presentation lifecycle
+  mevedel-overlay-ui.el       instruction overlay actions and rendering
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      save/load instructions
