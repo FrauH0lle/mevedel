@@ -700,14 +700,6 @@ optional strings from the `#L<start>[-<end>]' suffix."
                          (expand-file-name save-path))))
               (when (string-prefix-p root expanded)
                 (substring expanded (length root))))))
-         (artifact-present
-          (when artifact-logical
-            (require 'mevedel-session-publication)
-            (and (mevedel-session-publication-logical-path-p
-                  artifact-logical)
-                 (progn
-                   (mevedel-session-artifacts-artifact-present-p
-                    session artifact-logical)))))
          (workspace-root (plist-get info :workspace-root))
          (chat-buffer (or (plist-get info :chat-buffer) (current-buffer)))
          (permission-context
@@ -748,18 +740,24 @@ to the user."
                        (format "file @file:%s is unavailable: %s"
                                display-path msg))))))
     (cond
-     ((if artifact-logical
-          (not artifact-present)
-        (not (file-exists-p expanded)))
-      (funcall deny-placeholder "does not exist"))
-     ((and (not artifact-logical)
-           (not (file-readable-p expanded)))
-      (funcall deny-placeholder "unreadable"))
      ((not (eq 'allow
                (mevedel-check-permission
                 "Read"
                 :normalized-context permission-context)))
       (funcall deny-placeholder "permission denied"))
+     ((if artifact-logical
+          (progn
+            (require 'mevedel-session-publication)
+            (not
+             (and (mevedel-session-publication-logical-path-p
+                   artifact-logical)
+                  (mevedel-session-artifacts-artifact-present-p
+                   session artifact-logical))))
+        (not (file-exists-p expanded)))
+      (funcall deny-placeholder "does not exist"))
+     ((and (not artifact-logical)
+           (not (file-readable-p expanded)))
+      (funcall deny-placeholder "unreadable"))
      ((and (not artifact-logical)
            (file-directory-p expanded))
       (condition-case err
@@ -1027,12 +1025,15 @@ must explicitly commit the result after accepting every media context."
   "GPtel transform function expanding every mention type for FSM."
   (let* ((chat-buffer (and fsm (plist-get (gptel-fsm-info fsm) :buffer)))
          (session (and chat-buffer (buffer-live-p chat-buffer)
-                       (buffer-local-value 'mevedel--session chat-buffer))))
-    (let ((expansion
-           (mevedel-mentions--expand-buffer
-            session chat-buffer
-            (mevedel-transcript-prompt-transform-start)))
-          (request (and chat-buffer
+                       (buffer-local-value 'mevedel--session chat-buffer)))
+         (prompt-start
+          (copy-marker (mevedel-transcript-prompt-transform-start)))
+         (expansion
+          (unwind-protect
+              (mevedel-mentions--expand-buffer
+               session chat-buffer prompt-start)
+            (set-marker prompt-start nil))))
+    (let ((request (and chat-buffer
                         (buffer-live-p chat-buffer)
                         (buffer-local-value
                          'mevedel--current-request chat-buffer))))
