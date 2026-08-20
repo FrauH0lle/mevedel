@@ -830,10 +830,6 @@ Kills the associated view buffer."
     (mevedel-plan-approval-abort mevedel--session))
   (when-let* ((vb mevedel--view-buffer)
               (_ (buffer-live-p vb)))
-    (with-current-buffer vb
-      (mevedel-view-agent-cleanup-parent vb)
-      (mevedel-view-interaction-teardown)
-      (mevedel-view--interaction-clear))
     (kill-buffer vb)))
 
 (defun mevedel-view--status-strip-button (label area help)
