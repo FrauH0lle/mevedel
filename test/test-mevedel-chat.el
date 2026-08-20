@@ -111,40 +111,95 @@
 		 (should (fboundp 'mevedel--define-presets)))
 
 (mevedel-deftest mevedel-uninstall ()
-                 ,test
-                 (test)
+  ,test
+  (test)
 
-                 :doc "tears down skill hot-reload lifecycle state"
-                 (let ((gptel--known-tools gptel--known-tools)
-                       (gptel--known-presets gptel--known-presets)
-                       (gptel-prompt-transform-functions gptel-prompt-transform-functions)
-                       called)
-                   (cl-letf (((symbol-function 'mevedel-skills-uninstall-hot-reload)
-                              (lambda () (setq called t)))
-                             ((symbol-function 'mevedel-skills-uninstall-slash-commands)
-                              #'ignore)
-                             ((symbol-function 'mevedel-pipeline-uninstall-tool-result-scrubber)
-                              #'ignore)
-                             ((symbol-function 'mevedel-gptel-stream-bridge-uninstall)
-                              #'ignore))
-                     (mevedel-test--with-captured-diagnostics nil
-                                                              (mevedel-uninstall)))
-                   (should called))
+  :doc "tears down skill hot-reload lifecycle state"
+  (let ((gptel--known-tools gptel--known-tools)
+        (gptel--known-presets gptel--known-presets)
+        (gptel-prompt-transform-functions gptel-prompt-transform-functions)
+        called)
+    (cl-letf (((symbol-function 'mevedel-skills-uninstall-hot-reload)
+               (lambda () (setq called t)))
+              ((symbol-function 'mevedel-skills-uninstall-slash-commands)
+               #'ignore)
+              ((symbol-function 'mevedel-pipeline-uninstall-tool-result-scrubber)
+               #'ignore)
+              ((symbol-function 'mevedel-gptel-stream-bridge-uninstall)
+               #'ignore))
+      (mevedel-test--with-captured-diagnostics nil
+                                               (mevedel-uninstall)))
+    (should called))
 
-                 :doc "force-tears down executions"
-                 (let ((gptel--known-tools gptel--known-tools)
-                       (gptel--known-presets gptel--known-presets)
-                       (gptel-prompt-transform-functions gptel-prompt-transform-functions)
-                       torn-down)
-                   (cl-letf (((symbol-function 'mevedel-execution-teardown-all)
-                              (lambda () (setq torn-down t)))
-                             ((symbol-function 'mevedel-skills-uninstall-hot-reload) #'ignore)
-                             ((symbol-function 'mevedel-skills-uninstall-slash-commands) #'ignore)
-                             ((symbol-function 'mevedel-pipeline-uninstall-tool-result-scrubber) #'ignore)
-                             ((symbol-function 'mevedel-gptel-stream-bridge-uninstall) #'ignore))
-                     (mevedel-test--with-captured-diagnostics nil
-                                                              (mevedel-uninstall)))
-                   (should torn-down)))
+  :doc "force-tears down executions"
+  (let ((gptel--known-tools gptel--known-tools)
+        (gptel--known-presets gptel--known-presets)
+        (gptel-prompt-transform-functions gptel-prompt-transform-functions)
+        torn-down)
+    (cl-letf (((symbol-function 'mevedel-execution-teardown-all)
+               (lambda () (setq torn-down t)))
+              ((symbol-function 'mevedel-skills-uninstall-hot-reload) #'ignore)
+              ((symbol-function 'mevedel-skills-uninstall-slash-commands) #'ignore)
+              ((symbol-function 'mevedel-pipeline-uninstall-tool-result-scrubber) #'ignore)
+              ((symbol-function 'mevedel-gptel-stream-bridge-uninstall) #'ignore))
+      (mevedel-test--with-captured-diagnostics nil
+                                               (mevedel-uninstall)))
+    (should torn-down))
+
+  :doc "cancels deferred transport work and removes its advice"
+  (let ((gptel--known-tools gptel--known-tools)
+        (gptel--known-presets gptel--known-presets)
+        (gptel-prompt-transform-functions
+         gptel-prompt-transform-functions)
+        (mevedel-transport-retry-seconds 5)
+        (runs 0)
+        timer)
+    (unwind-protect
+        (progn
+          (mevedel-transport-install)
+          (let ((mevedel-transport--depth 1))
+            (mevedel-transport-run-when-idle
+             'uninstall-test "/ssh:user@host:/srv/x" #'ignore))
+          (setq timer
+                (gethash 'uninstall-test
+                         mevedel-transport--pending))
+          (should (timerp timer))
+          (cl-letf
+              (((symbol-function
+                 'mevedel-skills-uninstall-hot-reload)
+                #'ignore)
+               ((symbol-function
+                 'mevedel-skills-uninstall-slash-commands)
+                #'ignore)
+               ((symbol-function
+                 'mevedel-pipeline-uninstall-tool-result-scrubber)
+                #'ignore)
+               ((symbol-function
+                 'mevedel-gptel-stream-bridge-uninstall)
+                #'ignore))
+            (mevedel-test--with-captured-diagnostics nil
+                                                     (mevedel-uninstall)))
+          (should-not
+           (gethash 'uninstall-test
+                    mevedel-transport--pending))
+          (should-not (memq timer timer-list))
+          (should-not
+           (advice-member-p
+            #'mevedel-transport--handler-advice
+            'tramp-file-name-handler))
+          (should-not
+           (memq #'mevedel-transport--detach tramp-unload-hook)))
+      (mevedel-transport-run-when-idle
+       'late-uninstall-test "/srv/x" (lambda () (cl-incf runs)))
+      (should (= 0 runs))
+      (should-not
+       (gethash 'late-uninstall-test mevedel-transport--pending))
+      (mevedel-transport-install)
+      (mevedel-transport-run-when-idle
+       'late-uninstall-test "/srv/x" (lambda () (cl-incf runs)))
+      (should (= 1 runs))
+      (mevedel-transport-cancel-pending)
+      (mevedel-transport-install))))
 
 
 (mevedel-deftest mevedel--chat-buffer-disable-org-element-cache ()

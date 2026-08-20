@@ -462,6 +462,12 @@ refuses outright, with `mevedel-session-control-fs-busy`, any control operation
 issued while the transport is busy: a visible failure is recoverable, a
 fabricated answer is not.
 
+Transport integration follows both package and TRAMP lifecycle. Unloading TRAMP
+cancels deferred work and detaches the handler advice; reloading TRAMP restores
+it while mevedel remains active. `mevedel-uninstall` cancels the same work and
+keeps later TRAMP reloads detached until `mevedel-install` runs again; deferred
+producer callbacks arriving in that interval are dropped.
+
 The predicate only governs this package. It cannot stop the reverse case, which
 is just as destructive: an idle timer belonging to a syntax checker or a mode
 line does not consult it, and TRAMP's wait loop yields to timers with a command

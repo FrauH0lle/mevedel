@@ -51,6 +51,9 @@ signal that covers that window, and the only one that also sees remote
 operations started by other packages, which is what a mode line or a version
 control check does during redisplay.")
 
+(defvar mevedel-transport--enabled-p nil
+  "Whether transport integration should return when TRAMP reloads.")
+
 (defun mevedel-transport--handler-advice (original &rest args)
   "Count one TRAMP handler frame around ORIGINAL applied to ARGS.
 
@@ -62,16 +65,27 @@ uncounts itself."
 
 (defun mevedel-transport-install ()
   "Begin counting TRAMP handler frames."
+  (setq mevedel-transport--enabled-p t)
   (unless (advice-member-p #'mevedel-transport--handler-advice
                            'tramp-file-name-handler)
     (advice-add 'tramp-file-name-handler :around
-                #'mevedel-transport--handler-advice)))
+                #'mevedel-transport--handler-advice))
+  (when (boundp 'tramp-unload-hook)
+    (add-hook 'tramp-unload-hook #'mevedel-transport--detach)))
 
-(defun mevedel-transport-uninstall ()
-  "Stop counting TRAMP handler frames."
+(defun mevedel-transport--detach ()
+  "Detach transport integration and cancel work that cannot safely run."
+  (mevedel-transport-cancel-pending)
   (advice-remove 'tramp-file-name-handler
                  #'mevedel-transport--handler-advice)
   (setq mevedel-transport--depth 0))
+
+(defun mevedel-transport-uninstall ()
+  "Stop counting TRAMP handler frames and cancel deferred work."
+  (setq mevedel-transport--enabled-p nil)
+  (mevedel-transport--detach)
+  (when (boundp 'tramp-unload-hook)
+    (remove-hook 'tramp-unload-hook #'mevedel-transport--detach)))
 
 (defun mevedel-transport-nested-p ()
   "Return non-nil when a TRAMP file operation is already on the stack."
@@ -213,15 +227,16 @@ restored on exit as though the cancel never happened."
 KEY coalesces repeated scheduling of the same logical work, so a caller that
 re-arms on every event queues one retry rather than a growing fan of timers.
 THUNK runs immediately when the transport is already idle, because a filter or
-sentinel is only unsafe when it nests."
-  (if (mevedel-transport-busy-p path)
-      (unless (gethash key mevedel-transport--pending)
-        (puthash key
-                 (run-at-time mevedel-transport-retry-seconds nil
-                              #'mevedel-transport--retry key path thunk)
-                 mevedel-transport--pending))
-    (remhash key mevedel-transport--pending)
-    (funcall thunk)))
+sentinel is only unsafe when it nests. Disabled transport drops late work."
+  (when mevedel-transport--enabled-p
+    (if (mevedel-transport-busy-p path)
+        (unless (gethash key mevedel-transport--pending)
+          (puthash key
+                   (run-at-time mevedel-transport-retry-seconds nil
+                                #'mevedel-transport--retry key path thunk)
+                   mevedel-transport--pending))
+      (remhash key mevedel-transport--pending)
+      (funcall thunk))))
 
 (defun mevedel-transport-cancel-pending (&optional key)
   "Cancel deferred transport work for KEY, or all of it when KEY is nil."
@@ -237,7 +252,8 @@ sentinel is only unsafe when it nests."
 (mevedel-transport-install)
 
 (with-eval-after-load 'tramp
-  (add-hook 'tramp-unload-hook #'mevedel-transport-uninstall))
+  (when mevedel-transport--enabled-p
+    (mevedel-transport-install)))
 
 (provide 'mevedel-transport)
 
