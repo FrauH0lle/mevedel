@@ -183,7 +183,9 @@ detached row at that position. Its request, attempts, discussions, state, and
 actions remain available. If the file disappears, the workspace record remains
 available as Source missing until exact automatic or explicit reattachment.
 Deleting a complete reference still removes it. Nested directives remain
-current details of their topmost parent rather than owning separate activity.
+current details of their topmost parent rather than owning separate activity;
+if the parent detaches, prompts and submissions still consume those durable
+details after their source presentations disappear.
 
 ![Directive Overlay](.assets/images/ov-actions-menu.png)
 
@@ -371,7 +373,6 @@ separate instruction file per branch.
 
 | Command                               | Command Description                                               |
 |---------------------------------------|-------------------------------------------------------------------|
-| `mevedel-convert-instructions`        | Convert between reference and directive types at point.           |
 | `mevedel-modify-directive`            | Modify an existing directive instruction at point.                |
 | `mevedel-modify-reference-commentary` | Modify reference commentary at the current point.                 |
 | `mevedel-add-tags`                    | Add tags to the reference under the point.                        |
