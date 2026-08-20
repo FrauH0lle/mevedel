@@ -350,6 +350,45 @@ become implemented, obsolete, or unjustified.
   model, tool, and agent work.  Incorrect cleanup can drain a laptop battery or
   block explicit suspend after mevedel becomes idle.
 
+## Review
+
+### Automatic turn advisor
+
+- **Source:** Design discussion on 2026-08-20, prompted by oh-my-pi's
+  watchdog/advisor feature (`WATCHDOG.yml`, `advisor.immuneTurns`).
+- **What's owed:** After a successful top-level turn, quietly review it with a
+  second model and, when something is wrong, inject one hidden note into the
+  next request. Trigger from the existing `Stop` hook event only -- once per
+  landed turn, not per tool call and not mid-stream. Hand the reviewer the
+  transcript delta since the last check and reuse `mevedel-review.el`'s
+  spawn/wait/parse-findings machinery over the `reviewer` role in
+  `mevedel-agents.el`. Deliver a flagged finding through
+  `mevedel-reminders.el` as a `<system-reminder>` alongside the next user
+  message. Build both emission guards on day one, because a second model that
+  talks constantly is worse than none: hard dedupe (lowercase, collapse
+  punctuation and whitespace, drop anything already said this session, drop
+  content-free notes such as "looks good"/"lgtm"/"nothing to add", cap at one
+  note per pass) and a 3-turn cooldown after a successful injection, during
+  which anything further is demoted to a non-interrupting aside.
+- **Deliberate exclusions:** No advisor roster -- one reviewer; several named
+  advisors with their own models and prompts answer a prompt problem with
+  headcount. No per-advisor tool grants -- the reviewer keeps its read-only
+  investigation, never edit or bash. No `/advisor configure` UI -- without a
+  roster there is nothing to configure. No advisors on spawned sub-agents --
+  root session only, or a tree of five agents becomes ten model streams. Add a
+  roster when one reviewer prompt is visibly two unrelated jobs stapled
+  together; add tool grants when read/grep/glob demonstrably cannot confirm a
+  finding.
+- **Why deferred:** The routing is trivial and the guards are the real work;
+  the accepted cost is one extra model call per turn on the delta, in money and
+  latency, which wants deliberate acceptance rather than a quiet default.
+- **Status check:** All three pieces exist -- the `Stop` hook event, the
+  reviewer role with `/review`'s spawn-and-parse path, and reminder injection.
+  Nothing fires a review automatically and no dedupe or cooldown state exists.
+- **Blast radius:** Hook lifecycle, sub-agent spawning and capacity, reminder
+  injection, and per-turn cost. Ungated notes train the user to ignore
+  `<system-reminder>` blocks, at which point the feature is pure spend.
+
 ## Tools
 
 ### Explore programmatic tool calling
