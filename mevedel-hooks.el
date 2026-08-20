@@ -4,8 +4,9 @@
 
 ;; Hook execution subsystem for mevedel lifecycle and tool events.
 ;;
-;; Hooks are configured as Lisp data or JSON in user / project files,
-;; plus Emacs-native abnormal hook variables for package integration.
+;; Hooks are configured as Lisp data or JSON in user / project files, skill
+;; manifests, and agent definitions, plus Emacs-native abnormal hook variables
+;; for package integration.
 ;; Command hooks receive JSON on stdin and return structured decisions
 ;; on stdout; Elisp hooks receive the event plist directly.
 
@@ -56,6 +57,10 @@
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-append-diagnostic
                   "mevedel-session-publication" (session path content))
+
+;; `mevedel-skills-core'
+(declare-function mevedel-skills-project-files
+                  "mevedel-skills-core" (workspace-root))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
@@ -124,10 +129,10 @@ disable the cap."
   :group 'mevedel)
 
 (defcustom mevedel-hooks-require-project-trust t
-  "When non-nil, ignore project hook files until explicitly trusted.
+  "When non-nil, ignore project hook sources until explicitly trusted.
 
 User files under `mevedel-user-dir' and `mevedel-hook-rules' are always
-trusted.  Project files are trusted by file hash via
+trusted.  Project hook configs and skill manifests are trusted by file hash via
 `mevedel-hooks-trust-project'."
   :type 'boolean
   :group 'mevedel)
@@ -576,6 +581,15 @@ treated as `SubagentStop'."
                      (equal (plist-get entry :hash) hash))
             (setq trusted t))))))
 
+(defun mevedel-hooks-project-file-snapshot (workspace file)
+  "Return FILE's one-read trust snapshot for WORKSPACE.
+The returned plist includes `:path', `:hash', `:content', and
+`:trusted-p'."
+  (let ((snapshot (mevedel-hooks--config-snapshot file)))
+    (plist-put snapshot :trusted-p
+               (mevedel-hooks--project-snapshot-trusted-p
+                workspace snapshot))))
+
 (defun mevedel-hooks--project-config-candidates (workspace)
   "Return existing project hook files for WORKSPACE in load order."
   (when workspace
@@ -790,7 +804,7 @@ memo."
 
 ;;;###autoload
 (defun mevedel-hooks-trust-project (&optional workspace)
-  "Trust WORKSPACE's hook config files.
+  "Trust WORKSPACE's hook config files and skill manifests.
 
 Interactively, uses `mevedel--session' or `mevedel--workspace' in the
 current buffer.  Trust is keyed by workspace id, path, and file hash."
@@ -804,6 +818,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
          (workspace-id (mevedel-hooks--workspace-id workspace)))
     (unless workspace
       (user-error "No mevedel workspace in current buffer"))
+    (require 'mevedel-skills-core)
     (let ((db (cl-remove-if
                (lambda (old)
                  (and (listp old)
@@ -811,7 +826,12 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                       (equal (plist-get old :workspace-id) workspace-id)))
                (mevedel-hooks--read-trust-db)))
           (count 0))
-      (dolist (file (mevedel-hooks--project-config-candidates workspace))
+      (dolist (file
+               (delete-dups
+                (append
+                 (mevedel-hooks--project-config-candidates workspace)
+                 (mevedel-skills-project-files
+                  (mevedel-workspace-root workspace)))))
         (let* ((snapshot (mevedel-hooks--config-snapshot file))
                (entry (list :workspace-id workspace-id
                             :path (plist-get snapshot :path)
@@ -822,7 +842,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
       ;; Trust changes which project files resolve, so the memoized
       ;; configuration is stale from here.
       (clrhash mevedel-hooks--config-rules-cache)
-      (message "mevedel: trusted %d project hook file(s)" count))))
+      (message "mevedel: trusted %d project file(s)" count))))
 
 
 ;;

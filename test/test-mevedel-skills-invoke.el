@@ -1,4 +1,4 @@
-;;; test-mevedel-skills-invoke.el --- Skill invocation tests -*- lexical-binding: t -*-
+;;; test-mevedel-skills-invoke.el -- Skill invocation tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -587,6 +587,44 @@ allowed-tools:
                   (mevedel-skill-invocation-record-role record)))
       (should (eq 'user
                   (mevedel-skill-invocation-record-origin record)))))
+
+  :doc "user and model commands omit untrusted project skill hooks"
+  (let* ((root (make-temp-file "mevedel-skill-hook-origin-" t))
+         (user-dir (make-temp-file "mevedel-skill-hook-state-" t))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "hook-origin" workspace root))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (mevedel-hooks-require-project-trust t)
+         (mevedel-skills-include-bundled nil))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           (file-name-concat root ".mevedel" "skills") "hooked"
+           "name: hooked
+description: Hooked
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: elisp
+          function: mevedel-skills-test--hook-fn
+" "Body")
+          (let ((skill (car (mevedel-skills-scan
+                             root '(".mevedel/skills") workspace))))
+            (with-temp-buffer
+              (setq-local mevedel--session session)
+              (dolist (origin '(user model))
+                (let (outcome)
+                  (mevedel-skills-prepare
+                   skill "" (lambda (value) (setq outcome value))
+                   :role 'command :origin origin
+                   :policy-owner-p (eq origin 'user))
+                  (should (eq 'ok (plist-get outcome :status)))
+                  (should-not
+                   (plist-get (plist-get outcome :request-context)
+                              :hook-rules)))))))
+      (delete-directory root t)
+      (delete-directory user-dir t)))
 
   :doc "remote project and same-target plugin shell bodies use Bash with native skill paths"
   (let* ((root (file-name-as-directory

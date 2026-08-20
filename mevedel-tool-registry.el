@@ -154,6 +154,7 @@ CATEGORY is nil, search all entries for the first matching NAME."
                                      mevedel-tool--builtin-registrars))
                   (feature (nth (- (length entry) 2) entry))
                   (registrar (car (last entry))))
+        (require 'gptel-request)
         (require feature)
         (funcall registrar)
         (mevedel-tool-get name))))

@@ -41,9 +41,9 @@ Codex uses a similar shape but currently exposes a smaller practical set:
 `PostToolUse`, `Stop`, plus compaction events in the local code.  Hooks
 are mostly command handlers, run with session `cwd`, receive JSON on
 stdin, and use JSON stdout or exit code 2 for policy decisions.  Project
-hooks load only from trusted project config.  Mevedel keeps the same
-general shape while adding Emacs-native handler support and explicit
-skill/agent scoping.
+hooks load only from trusted project config or exact trusted skill
+manifests. Mevedel keeps the same general shape while adding
+Emacs-native handler support and explicit skill/agent scoping.
 
 opencode is plugin-centered rather than declarative hook-centered.  Trusted
 JS/TS plugins expose named blocking hooks such as `tool.execute.before`,
@@ -159,7 +159,8 @@ Recommended locations:
   `<workspace>/.mevedel/hooks.el`, and
   `<workspace>/.mevedel/hooks.json`: project hooks, trusted per
   workspace.
-- Skill frontmatter `hooks`: scoped to a command invocation. Instruction
+- Skill frontmatter `hooks`: scoped to a command invocation. Project skill
+  declarations require exact workspace/path/content trust. Instruction
   preparation ignores this field. In fork commands, a local `Stop`
   declaration is normalized to `SubagentStop`.
 - Agent definition `:hooks`: scoped to invocations of that registered
@@ -569,17 +570,18 @@ is trusted.  A minimal first trust model:
 
 - user defcustom plus `~/.mevedel/hooks.el` and
   `~/.mevedel/hooks.json` are trusted by the user.
-- project `<workspace>/.mevedel/hooks.el` and
-  `<workspace>/.mevedel/hooks.json` are ignored until the user trusts
-  them for that workspace.
+- project `<workspace>/.mevedel/hooks.el`,
+  `<workspace>/.mevedel/hooks.json`, and project `SKILL.md` hook declarations
+  are ignored until the user trusts them for that workspace.
 - trust state lives under user state, keyed by workspace id and project
   hook file hashes.
-- changed project hook files require re-trust.
+- changed project hook files or skill manifests require re-trust.
 - resolution reads each project config once, checks that snapshot's hash, and
   parses the same bytes; replacing the pathname after the check cannot
   substitute executable rules.
 - trusting a project refreshes that workspace's trust entries to the current
-  hook files only, so removed hook files are no longer trusted.
+  hook files and skill manifests only, so removed sources are no longer
+  trusted.
 
 Permission decisions are audit-surfaced by outcome.  `deny` and forced
 `ask` decisions are visible on the affected tool attempt because they
@@ -677,7 +679,8 @@ tool line includes a second line such as `blocked by PreToolUse: reason`.
 Useful commands:
 
 - `mevedel-hooks-list`: show effective hooks for the current session.
-- `mevedel-hooks-trust-project`: trust the current project's hook files.
+- `mevedel-hooks-trust-project`: trust the current project's hook files and
+  skill manifests.
 - `mevedel-hooks-run-dry`: show which native and declarative hooks would
   run for an event/matcher target without executing Elisp or shell
   handlers.

@@ -62,6 +62,10 @@ visible names are `local-mevedel:review`, `local-agents:review`,
 `global-mevedel:review`, and `global-agents:review`. Same-source
 duplicates keep the first entry.
 
+Recursive discovery does not follow directory symlinks.  A linked skill tree
+must be configured as its own explicit root; repository links cannot escape a
+configured root or create an ancestor cycle during scanning.
+
 Plugin skills are discovered from enabled `.codex-plugin/plugin.json`
 manifests. A manifest `skills` path is resolved relative to the plugin
 root and scanned with source `plugin`. User-facing plugin skill names
@@ -302,7 +306,10 @@ Current fields include:
 - `shell`
 - `hooks` (skill-scoped hooks active during invocation)
 
-Command hooks retain their skill resource origin.  Project skill commands and
+Command hooks retain their skill resource origin.  Project skill hooks are
+omitted until `mevedel-hooks-trust-project` records the exact workspace, path,
+and `SKILL.md` content hash; editing the manifest invalidates that consent for
+both user- and model-origin invocation.  Trusted project skill commands and
 same-target remote project-plugin commands run on the session target.  User,
 bundled, managed, and client-local plugin skill commands stay local at the
 directory containing their `SKILL.md`.  Elisp hooks remain local.
