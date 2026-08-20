@@ -326,11 +326,14 @@ directive and its frame scroll as one thing. Tracking runs from
 buffer, and repositions only on an actual change, because setting a frame
 position from a redisplay hook triggers redisplay again.
 
-Displaying a directive whose frame is already open reuses it without rebuilding
-it, so an action that both enters composer scope and dispatches a request does
-not recreate the frame between the two steps. Teardown runs from `delete-frame-functions`, so
-dismissing the frame, deleting it with ordinary frame commands, or exiting Emacs
-all restore point and leave the composer scope.
+Displaying the same directive in its already open frame reuses it without
+rebuilding, so an action that both enters composer scope and dispatches a
+request does not recreate the frame between the two steps. Displaying another
+directive in the shared view retargets the frame's identity, source anchor,
+follow hooks, filter, and close restoration before display. Teardown runs from
+`delete-frame-functions`, so dismissing the frame, deleting it with ordinary
+frame commands, or exiting Emacs all restore point and leave the composer
+scope.
 
 The frame may filter the displayed transcript to its own directive's turns.
 Filtering marks the turns of every other directive and of ordinary chat with an

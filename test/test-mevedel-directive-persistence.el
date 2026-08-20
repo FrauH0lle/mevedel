@@ -29,8 +29,9 @@
    :plan-context '(:request "Preserve this" :subdirectives nil)
    :plan-selection '(:mode edits :model-provider "Test:model")))
 
-(mevedel-deftest mevedel--deserialize-directives/source-states
-  (:vars ())
+(mevedel-deftest mevedel--deserialize-directives
+  (:doc "`mevedel--deserialize-directives' validates and restores records"
+   :vars ())
   ,test
   (test)
   :doc "round trips source-missing and archived records without source buffers"
@@ -127,6 +128,70 @@
                            (cadr restored))))))
             (should (eq 'implemented
                         (mevedel-directive-state (cadr restored))))))
+      (delete-directory directory t)))
+
+  :doc "rejects top-level and nested current directive ID collisions"
+  (let* ((directory (make-temp-file "mevedel-directive-ids-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'file :id directory :root directory
+                     :name "directive-ids"))
+         (child-a
+          (mevedel-subdirective--create
+           :id "child-a" :request "Child A"
+           :anchor (list :state 'attached
+                         :file (file-name-concat directory "a.el")
+                         :start 1 :end 2 :evidence nil :properties nil)))
+         (child-b
+          (mevedel-subdirective--create
+           :id "child-b" :request "Child B"
+           :anchor (list :state 'attached
+                         :file (file-name-concat directory "b.el")
+                         :start 1 :end 2 :evidence nil :properties nil)))
+         (attempt
+          (let ((attempt (mevedel-directive-persistence-test--attempt)))
+            (setf (mevedel-directive-attempt-consumed-subdirectives attempt)
+                  (list (mevedel-subdirective-copy child-a)))
+            attempt))
+         (parent-a
+          (mevedel-directive--create
+           :id "parent-a" :request "Parent A"
+           :anchor (list :state 'source-missing
+                         :file (file-name-concat directory "a.el")
+                         :start 1 :end 2 :evidence nil :properties nil)
+           :subdirectives (list child-a)
+           :attempts (list attempt)))
+         (parent-b
+          (mevedel-directive--create
+           :id "parent-b" :request "Parent B"
+           :anchor (list :state 'source-missing
+                         :file (file-name-concat directory "b.el")
+                         :start 1 :end 2 :evidence nil :properties nil)
+           :subdirectives (list child-b))))
+    (unwind-protect
+        (progn
+          (mevedel-workspace-set-directives workspace
+                                            (list parent-a parent-b))
+          (let ((serialized
+                 (mevedel--serialize-directives workspace directory)))
+            (should (= 2 (length
+                          (mevedel--deserialize-directives
+                           serialized directory))))
+            (dolist (collision '(top-level nested cross-level))
+              (let ((input (copy-tree serialized)))
+                (pcase collision
+                  ('top-level
+                   (plist-put (cadr input) :id "parent-a"))
+                  ('nested
+                   (plist-put
+                    (car (plist-get (cadr input) :subdirectives))
+                    :id "child-a"))
+                  ('cross-level
+                   (plist-put
+                    (car (plist-get (car input) :subdirectives))
+                    :id "parent-b")))
+                (should-error
+                 (mevedel--deserialize-directives input directory)
+                 :type 'user-error)))))
       (delete-directory directory t))))
 
 

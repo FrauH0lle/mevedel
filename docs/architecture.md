@@ -50,6 +50,9 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   implementation, and discussion turns, and current parent-owned
   subdirectives. Source overlays retain the id needed to resolve this record;
   they do not own another request, status, patch, or attempt copy.
+  Current top-level and nested ids are globally unique within the workspace;
+  durable decode rejects any collision before installing records. Historical
+  consumed-subdirective snapshots are evidence rather than current identities.
   The lifecycle state is derived from the current authored request and surviving
   activity whenever the record is loaded or queried; it is not persisted as an
   independent authority.

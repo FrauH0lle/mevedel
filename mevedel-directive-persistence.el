@@ -2,7 +2,8 @@
 
 ;;; Commentary:
 
-;; Serializes and validates workspace-owned directive activity records.
+;; Serializes and validates workspace-owned directive activity records,
+;; including globally unique current parent and nested identities.
 
 ;;; Code:
 
@@ -418,69 +419,77 @@
 
 (defun mevedel--deserialize-directives (serialized base-directory)
   "Return directive records from SERIALIZED relative to BASE-DIRECTORY."
-  (mapcar
-   (lambda (entry)
-     (let ((id (plist-get entry :id))
-           (request (plist-get entry :request))
-           (anchor (plist-get entry :anchor))
-           (subdirectives (plist-get entry :subdirectives))
-           (session-id (plist-get entry :session-id))
-           (planning-enabled (plist-get entry :planning-enabled))
-           (skills (plist-get entry :skills))
-           (plan (plist-get entry :plan))
-           (planning (plist-get entry :planning))
-           (attempts (plist-get entry :attempts))
-           (discussion (plist-get entry :discussion)))
-       (unless (and (stringp id) (stringp request)
-                    (plist-member entry :subdirectives)
-                    (listp subdirectives)
-                    (plist-member entry :session-id)
-                    (or (null session-id) (stringp session-id))
-                    (plist-member entry :planning-enabled)
-                    (booleanp planning-enabled)
-                    (plist-member entry :skills)
-                    (cl-every
-                     (lambda (skill)
-                       (and (stringp (plist-get skill :name))
-                            (stringp (plist-get skill :source-file))))
-                     skills)
-                    (plist-member entry :plan)
-                    (or (null plan) (listp plan))
-                    (plist-member entry :planning)
-                    (listp planning)
-                    (plist-member entry :attempts)
-                    (listp attempts)
-                    (plist-member entry :discussion)
-                    (listp discussion))
-         (user-error "Malformed mevedel directive list"))
-       (let ((directive
-              (mevedel-directive--create
-               :id id :request request
-               :anchor (mevedel--deserialize-directive-anchor
-                        anchor base-directory)
-               :subdirectives
-               (mapcar (lambda (subdirective)
-                         (mevedel--deserialize-subdirective
-                          subdirective base-directory))
-                       subdirectives)
-               :session-id session-id
-               :planning-enabled planning-enabled
-               :skills (copy-tree skills)
-               :plan (mevedel--deserialize-directive-plan plan)
-               :planning
-               (mapcar #'mevedel--deserialize-directive-planning-turn
-                       planning)
-               :attempts
-               (mapcar (lambda (attempt)
-                         (mevedel--deserialize-directive-attempt
-                          attempt base-directory))
-                       attempts)
-               :discussion
-               (mapcar #'mevedel--deserialize-directive-discussion-turn
-                       discussion))))
-         (mevedel-directive-recompute-state directive)
-         directive)))
-   serialized))
+  (let ((ids (make-hash-table :test #'equal)))
+    (mapcar
+     (lambda (entry)
+       (let ((id (plist-get entry :id))
+             (request (plist-get entry :request))
+             (anchor (plist-get entry :anchor))
+             (subdirectives (plist-get entry :subdirectives))
+             (session-id (plist-get entry :session-id))
+             (planning-enabled (plist-get entry :planning-enabled))
+             (skills (plist-get entry :skills))
+             (plan (plist-get entry :plan))
+             (planning (plist-get entry :planning))
+             (attempts (plist-get entry :attempts))
+             (discussion (plist-get entry :discussion)))
+         (unless (and (stringp id) (stringp request)
+                      (plist-member entry :subdirectives)
+                      (listp subdirectives)
+                      (plist-member entry :session-id)
+                      (or (null session-id) (stringp session-id))
+                      (plist-member entry :planning-enabled)
+                      (booleanp planning-enabled)
+                      (plist-member entry :skills)
+                      (cl-every
+                       (lambda (skill)
+                         (and (stringp (plist-get skill :name))
+                              (stringp (plist-get skill :source-file))))
+                       skills)
+                      (plist-member entry :plan)
+                      (or (null plan) (listp plan))
+                      (plist-member entry :planning)
+                      (listp planning)
+                      (plist-member entry :attempts)
+                      (listp attempts)
+                      (plist-member entry :discussion)
+                      (listp discussion))
+           (user-error "Malformed mevedel directive list"))
+         (let ((directive
+                (mevedel-directive--create
+                 :id id :request request
+                 :anchor (mevedel--deserialize-directive-anchor
+                          anchor base-directory)
+                 :subdirectives
+                 (mapcar (lambda (subdirective)
+                           (mevedel--deserialize-subdirective
+                            subdirective base-directory))
+                         subdirectives)
+                 :session-id session-id
+                 :planning-enabled planning-enabled
+                 :skills (copy-tree skills)
+                 :plan (mevedel--deserialize-directive-plan plan)
+                 :planning
+                 (mapcar #'mevedel--deserialize-directive-planning-turn
+                         planning)
+                 :attempts
+                 (mapcar (lambda (attempt)
+                           (mevedel--deserialize-directive-attempt
+                            attempt base-directory))
+                         attempts)
+                 :discussion
+                 (mapcar #'mevedel--deserialize-directive-discussion-turn
+                         discussion))))
+           (dolist (current-id
+                    (cons id
+                          (mapcar #'mevedel-subdirective-id
+                                  (mevedel-directive-subdirectives directive))))
+             (when (gethash current-id ids)
+               (user-error "Malformed mevedel directive list"))
+             (puthash current-id t ids))
+           (mevedel-directive-recompute-state directive)
+           directive)))
+     serialized)))
 
 (provide 'mevedel-directive-persistence)
 
