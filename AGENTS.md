@@ -143,7 +143,9 @@ Data model
   mevedel-reminders.el        system-reminder injection
   mevedel-skills-core.el      skill model, discovery, state, reload
   mevedel-mention-bindings.el shared atomic mention validation and edit lifecycle
-  mevedel-skills-invoke.el    skill preparation, invocation, model tools
+  mevedel-skills-preparation.el argument substitution and body injection execution
+  mevedel-skills-invoke.el    request context, invocation, fork dispatch, model tools
+  mevedel-skills-input.el     user token binding, raw dispatch, inline projection
   mevedel-skills-plan.el      deterministic user invocation planning and preparation
   mevedel-skills-prompt.el    model-visible roster, reminders, activation
   mevedel-skills-ui.el        slash commands, cockpit, completion, font-lock

@@ -31,6 +31,7 @@
 (require 'mevedel-reminders)
 (require 'mevedel-session-persistence)
 (require 'mevedel-skills-core)
+(require 'mevedel-skills-input)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-ui)
 (require 'mevedel-structs)
@@ -1282,7 +1283,8 @@ spanning lines")))
          (lambda (&rest _)
            (setq orig-called t
                  staged
-                 (copy-tree mevedel-skills--pending-inline-attachments)))))
+                 (copy-tree
+                  mevedel-skills-input--pending-inline-attachments)))))
       (should orig-called)
       (should (plist-get (car staged) :unavailable))))
 
@@ -1302,7 +1304,8 @@ spanning lines")))
          (lambda (&rest _)
            (setq orig-called t
                  staged
-                 (copy-tree mevedel-skills--pending-inline-attachments)))))
+                 (copy-tree
+                  mevedel-skills-input--pending-inline-attachments)))))
       (should orig-called)
       (should (= 2 (length staged)))
       (should (plist-get (car staged) :unavailable))
@@ -1406,7 +1409,7 @@ spanning lines")))
         (mevedel-skills-test--with-chat-buffer session
           (setq-local mevedel--view-buffer view-buffer)
           (insert "### prepared body says $nested")
-          (cl-letf (((symbol-function 'mevedel-skills--dispatch-skill-command)
+          (cl-letf (((symbol-function 'mevedel-skills-input-dispatch-command)
                      (lambda (&optional _) (setq dispatched t))))
             (mevedel-test--with-captured-messages nil
               (mevedel-skills--gptel-send-advice
@@ -1425,12 +1428,12 @@ spanning lines")))
       ;; Simulate a leaked stash (e.g., from a prior failed dispatch).
       (setq-local mevedel-skills--pending-request-context
                   '(:permission-rules nil :model haiku))
-      (setq-local mevedel-skills--pending-inline-attachments
+      (setq-local mevedel-skills-input--pending-inline-attachments
                   (list (list :name "alpha")))
       (mevedel-test--with-captured-messages nil
         (mevedel-skills--gptel-send-advice (lambda (&rest _) nil)))
       (should (null mevedel-skills--pending-request-context))
-      (should (null mevedel-skills--pending-inline-attachments))))
+      (should (null mevedel-skills-input--pending-inline-attachments))))
 
   :doc "stash leaks cleared even when orig-fn signals an error"
   (let ((session (mevedel-skills-test--make-session)))
@@ -1439,14 +1442,14 @@ spanning lines")))
       (goto-char (point-max))
       (setq-local mevedel-skills--pending-request-context
                   '(:permission-rules nil :model haiku))
-      (setq-local mevedel-skills--pending-inline-attachments
+      (setq-local mevedel-skills-input--pending-inline-attachments
                   (list (list :name "alpha")))
       (ignore-errors
         (mevedel-test--with-captured-messages nil
           (mevedel-skills--gptel-send-advice
            (lambda (&rest _) (error "Boom")))))
       (should (null mevedel-skills--pending-request-context))
-      (should (null mevedel-skills--pending-inline-attachments)))))
+      (should (null mevedel-skills-input--pending-inline-attachments)))))
 
 (mevedel-deftest mevedel-slash-capf ()
   ,test

@@ -474,6 +474,7 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
       (save-excursion
         (save-restriction
           (widen)
+          (require 'mevedel-transcript)
           (require 'mevedel-transcript-audit)
           (let* ((content-start
                   (mevedel-session-artifacts-content-start buffer))

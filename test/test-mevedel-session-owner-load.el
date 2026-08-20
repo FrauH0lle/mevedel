@@ -25,8 +25,13 @@
               (require 'mevedel-session-persistence)
               (let ((directory (make-temp-file "mevedel-owner-load-" t)))
                 (unwind-protect
-                    (mevedel-session-persistence-allocate-session-id
-                     "cold" directory)
+                    (progn
+                      (mevedel-session-persistence-allocate-session-id
+                       "cold" directory)
+                      (with-temp-buffer
+                        (insert "cold")
+                        (mevedel-session-persistence-write-current-buffer-atomically
+                         (file-name-concat directory "segment.chat.org"))))
                   (delete-directory directory t)))
               (unless (featurep 'mevedel-session-artifacts)
                 (error "Facade did not load its artifact owner"))))
@@ -45,7 +50,9 @@
                 (with-temp-buffer
                   (org-mode)
                   (insert "* Segment\n")
-                  (mevedel-session-artifacts--insert-segment-header session)))
+                  (mevedel-session-artifacts--insert-segment-header session)
+                  (mevedel-session-artifacts-collect-prompts
+                   (current-buffer))))
               (unless (featurep 'mevedel-session-codec)
                 (error "Artifacts did not load the codec"))
               (unless (featurep 'mevedel-utilities)

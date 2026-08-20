@@ -266,9 +266,9 @@
 		  (session &optional buffer))
 (defvar mevedel-skills--pending-request-context)
 
-;; `mevedel-skills-invoke'
-(declare-function mevedel-skills-prepare-user-input
-                  "mevedel-skills-invoke" (text session))
+;; `mevedel-skills-input'
+(declare-function mevedel-skills-input-prepare-user-input
+                  "mevedel-skills-input" (text session))
 
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-install-activation-hook
@@ -1265,10 +1265,10 @@ disabled, or malformed selection signals before any request starts."
   (if-let* ((skills (mevedel-directive-skills record)))
       (with-current-buffer chat-buffer
         (require 'mevedel-plan-handoff)
-        (require 'mevedel-skills-invoke)
+        (require 'mevedel-skills-input)
         (let ((result (mevedel-plan-handoff--append-implementation-input
                        prompt (list :skills skills))))
-          (setq result (mevedel-skills-prepare-user-input
+          (setq result (mevedel-skills-input-prepare-user-input
                         result mevedel--session))
           (mevedel-plan-handoff--validate-skill-bindings
            result mevedel--session)

@@ -62,7 +62,7 @@
       (delete-directory root t)))
 
   :doc "consumes structured binding outcomes without parsing their messages"
-  (cl-letf (((symbol-function 'mevedel-skills-resolve-user-mention-outcome)
+  (cl-letf (((symbol-function 'mevedel-skills-input-resolve-mention)
              (lambda (&rest _)
                '(:status unavailable :reason not-user-invocable
                  :message "Opaque policy rejection"))))

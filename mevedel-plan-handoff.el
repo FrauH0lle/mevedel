@@ -114,9 +114,9 @@
 (declare-function mevedel-skills--skill-enabled-p
                   "mevedel-skills-core" (skill))
 
-;; `mevedel-skills-invoke'
-(declare-function mevedel-skills-prepare-user-input
-                  "mevedel-skills-invoke" (text session))
+;; `mevedel-skills-input'
+(declare-function mevedel-skills-input-prepare-user-input
+                  "mevedel-skills-input" (text session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
@@ -857,9 +857,9 @@ the durable retry was retained"
       (mevedel-plan-handoff--apply-model-policy
        selection target-session target-buffer)
       (with-current-buffer target-buffer
-        (require 'mevedel-skills-invoke)
+        (require 'mevedel-skills-input)
         (setq prompt
-              (mevedel-skills-prepare-user-input prompt target-session))
+              (mevedel-skills-input-prepare-user-input prompt target-session))
         (mevedel-plan-handoff--validate-skill-bindings
          prompt target-session))
       (with-current-buffer view-buffer

@@ -1136,7 +1136,7 @@
       (unwind-protect
           (with-current-buffer chat-buffer
             (setq-local mevedel--session session)
-            (cl-letf (((symbol-function 'mevedel-skills-prepare-user-input)
+            (cl-letf (((symbol-function 'mevedel-skills-input-prepare-user-input)
                        (lambda (input _) input)))
               (let ((result (mevedel--attach-directive-skills
                              "PROMPT" record chat-buffer)))
