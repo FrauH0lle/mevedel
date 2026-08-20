@@ -1131,7 +1131,7 @@ All in `mevedel-session-persistence.el`:
 - `mevedel-session-follow-published` (in
   `mevedel-session-control-transfer.el`, default t)
 - `mevedel-view-control-transfer-active-poll-seconds` (in
-  `mevedel-view-interaction.el`, default 2)
+  `mevedel-view-control-transfer.el`, default 2)
 - `mevedel-session-publication-lease-seconds` (in
   `mevedel-session-durability.el`, default 3600)
 - `mevedel-view-input-history-size` (in `mevedel-view-history.el`,

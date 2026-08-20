@@ -98,6 +98,7 @@
 (require 'mevedel-session-fork)
 (require 'mevedel-session-save-as)
 (require 'mevedel-session-control-transfer)
+(require 'mevedel-view-control-transfer)
 (require 'mevedel-view-interaction)
 (require 'mevedel-view-disclosure)
 (require 'mevedel-view-segments)

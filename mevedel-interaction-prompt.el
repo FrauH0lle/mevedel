@@ -218,6 +218,7 @@ set on materialized interaction-zone descriptor text."
 (defun mevedel--prompt-framed-body (content face)
   "Return CONTENT inside the standard interaction prompt frame.
 FACE is inherited by the top and bottom rule lines."
+  (require 'gptel-agent-tools)
   (let ((body
          (concat
           "\n"

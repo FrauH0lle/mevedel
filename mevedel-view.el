@@ -158,6 +158,10 @@
 (defvar mevedel-view--composer-scope)
 (defvar mevedel-view--input-marker)
 
+;; `mevedel-view-control-transfer'
+(declare-function mevedel-view-control-transfer-teardown
+                  "mevedel-view-control-transfer" ())
+
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 
@@ -171,8 +175,6 @@
 (declare-function mevedel-view--interaction-rebuild
                   "mevedel-view-interaction" ())
 (declare-function mevedel-view-interaction-initialize
-                  "mevedel-view-interaction" ())
-(declare-function mevedel-view-interaction-teardown
                   "mevedel-view-interaction" ())
 
 ;; `mevedel-view-markdown'
@@ -800,7 +802,8 @@ it.  The reference is cleared before killing so the data buffer's own
 kill hook sees nil and exits without re-entering this function."
   (unless (mevedel-view-agent-handle-view-kill)
     (let ((view-buffer (current-buffer)))
-      (mevedel-view-interaction-teardown)
+      (require 'mevedel-view-control-transfer)
+      (mevedel-view-control-transfer-teardown)
       (mevedel-view--interaction-clear)
       (when-let* ((db mevedel--data-buffer)
                   (_ (buffer-live-p db)))
