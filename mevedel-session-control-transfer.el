@@ -80,8 +80,6 @@
                   "mevedel-session-transfer" (session &optional label))
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-active-p
-                  "mevedel-structs" (&optional buffer))
 (declare-function mevedel-session-adopt-committed-state
                   "mevedel-structs"
                   (session workspace save-path lease lease-renewal-timer
@@ -141,6 +139,10 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p
                   "mevedel-transport" (&optional path))
+
+;; `mevedel-turn'
+(declare-function mevedel-request-active-p
+                  "mevedel-turn" (&optional buffer))
 
 (defcustom mevedel-session-follow-published t
   "Whether a non-owner session buffer follows the owner's committed state.
@@ -321,6 +323,7 @@ Return BUFFER so lifecycle hooks can use this as their value."
 The coordinator owns the session-state part of this decision.  UI and other
 transient owners contribute through the registered drain predicates; a failed
 predicate is conservatively treated as still draining."
+  (require 'mevedel-turn)
   (and (not (mevedel-request-active-p
              (mevedel-session-control-transfer-root-buffer session)))
        (not (mevedel-session-pending-publication session))
@@ -343,6 +346,7 @@ predicate is conservatively treated as still draining."
 Only the owner can answer this: a requester sees `quiescing' and nothing
 about why.  The first blocker is enough -- the user wants to know whether the
 wait is theirs to end, not an inventory."
+  (require 'mevedel-turn)
   (cond
    ((mevedel-request-active-p
      (mevedel-session-control-transfer-root-buffer session))

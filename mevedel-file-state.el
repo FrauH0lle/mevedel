@@ -20,6 +20,9 @@
 
 (require 'mevedel-structs)
 
+;; `mevedel-turn'
+(declare-function mevedel-current-turn "mevedel-turn" (session))
+
 
 ;;
 ;;; Customization
@@ -243,6 +246,7 @@ the range arguments and are stored on the interaction entry.  Silently
 skips the cache update when the session has no workspace or PATH
 cannot be read; the interaction entry is always updated.  Returns the
 updated `mevedel-file-interaction'."
+  (require 'mevedel-turn)
   (when-let* ((ws (mevedel-session-workspace session))
               (cache (mevedel-workspace-file-cache ws))
               (state (mevedel-file-state-from-file path)))

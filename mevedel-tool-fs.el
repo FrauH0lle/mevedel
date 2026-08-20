@@ -83,7 +83,6 @@
                                                   &optional committed-only))
 
 ;; `mevedel-structs'
-(declare-function mevedel-current-origin "mevedel-structs" ())
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -106,6 +105,9 @@
 (declare-function mevedel-tool-string-arg "mevedel-tool-registry"
                   (args key &optional default))
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+
+;; `mevedel-turn'
+(declare-function mevedel-current-origin "mevedel-turn" ())
 
 ;; `mevedel-workspace'
 (defvar mevedel--workspace)
@@ -912,6 +914,7 @@ READ-PATHS and WRITABLE-ROOTS declare the helper's filesystem boundary.
 OUTPUT is returned unchanged because callers such as `diff' assign
 meaning to leading and trailing whitespace."
   (require 'mevedel-execution)
+  (require 'mevedel-turn)
   (let* ((result (mevedel-execution-run-helper
                   name command read-paths writable-roots
                   :session (or session (bound-and-true-p mevedel--session))
@@ -2036,6 +2039,7 @@ and FAILURE-GUIDANCE tells the caller how to narrow a failed invocation."
   "Find files matching a glob pattern using ripgrep.
 CALLBACK receives the result envelope.  ARGS is a plist with :pattern
 and optional :path."
+  (require 'mevedel-turn)
   (let* ((address (plist-get args :path))
          (attempt (and (not mevedel-tool-fs--resource-dispatching)
                        (mevedel-tool-fs--resource-attempt address))))
@@ -2173,6 +2177,7 @@ and optional :path."
 CALLBACK receives the result envelope.  ARGS is a plist with :pattern and
 optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
 :type, :multiline, :context, :-A, :-B, :-C."
+  (require 'mevedel-turn)
   (let* ((address (plist-get args :path))
          (attempt (and (not mevedel-tool-fs--resource-dispatching)
                        (mevedel-tool-fs--resource-attempt address))))

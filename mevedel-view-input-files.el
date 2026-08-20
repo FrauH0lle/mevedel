@@ -36,7 +36,6 @@
 (declare-function mevedel-session-pop-dropped-file-grants
                   "mevedel-structs" (session paths))
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--ensure-interactive-chat-view
@@ -51,6 +50,7 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-ensure-generated-state-ignored
                   "mevedel-workspace" (workspace))
+(declare-function mevedel-workspace-state-dir "mevedel-workspace" (workspace))
 
 ;; `select'
 (declare-function gui-get-selection "select" (selection-symbol target-type))
@@ -197,6 +197,7 @@ handler advertises `dnd-multiple-handler'."
 
 (defun mevedel-view--media-dir ()
   "Return the workspace media directory for clipboard images."
+  (require 'mevedel-workspace)
   (let* ((session (mevedel-view--session))
          (workspace (and session (mevedel-session-workspace session))))
     (unless workspace
@@ -204,7 +205,6 @@ handler advertises `dnd-multiple-handler'."
     (let ((dir (file-name-concat (mevedel-workspace-state-dir workspace)
                                  "media")))
       (make-directory dir t)
-      (require 'mevedel-workspace)
       (mevedel-workspace-ensure-generated-state-ignored workspace)
       dir)))
 

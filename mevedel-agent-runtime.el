@@ -163,8 +163,6 @@
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-end
-                  "mevedel-structs" (&optional abort-plan-approval))
 (declare-function mevedel-session-agent-transcripts
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
@@ -191,6 +189,11 @@
 (declare-function mevedel--hook-prompt-rewrite-audit-record
                   "mevedel-transcript-audit"
                   (event original submitted &optional reason))
+
+;; `mevedel-turn'
+(declare-function mevedel-current-turn "mevedel-turn" (session))
+(declare-function mevedel-request-end
+                  "mevedel-turn" (&optional abort-plan-approval))
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-agent-live-transcript-finalize
@@ -411,6 +414,7 @@
 
 (defun mevedel-agent-runtime--finalize (invocation status)
   "Persist terminal STATUS and lifecycle effects for INVOCATION."
+  (require 'mevedel-turn)
   (unless (memq (mevedel-agent-invocation-transcript-status invocation)
                 '(completed error aborted))
     (let ((buffer (mevedel-agent-invocation-buffer invocation))
@@ -824,6 +828,7 @@ blocked transition."
 PATH is the reserved canonical child path.  CALLBACK receives an outcome
 plist carrying either `:turn' and `:start-hook-audits' or `:error'."
   (require 'mevedel-hooks)
+  (require 'mevedel-turn)
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
          (workspace (and session (mevedel-session-workspace session)))
          (invocation (mevedel-agent-invocation-create agent))
@@ -961,6 +966,7 @@ identity values continue one.  PATH is the conversation's canonical address.
 ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
   (require 'mevedel-agent-conversation)
   (require 'mevedel-agent-exec)
+  (require 'mevedel-turn)
   (unless (and (stringp path) (string-match-p "\\`/root/" path))
     (error "Agent requires a canonical path below /root"))
   (when (and frozen-configuration

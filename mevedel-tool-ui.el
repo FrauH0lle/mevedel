@@ -41,8 +41,6 @@
                   "mevedel-pipeline" ())
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-push-canceller
-                  "mevedel-structs" (request canceller))
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -58,6 +56,10 @@
                   "mevedel-tools" (callback query &optional load))
 
 
+;; `mevedel-turn'
+(declare-function mevedel-request-push-canceller
+                  "mevedel-turn" (request canceller))
+
 ;;
 ;;; Agent tool
 
@@ -71,6 +73,7 @@
 
 (defun mevedel-tool-ui--agent (callback args)
   "Launch the agent described by ARGS and report through CALLBACK."
+  (require 'mevedel-turn)
   (let ((task-name (plist-get args :task_name))
         (message (plist-get args :message))
         (role (plist-get args :role))
@@ -199,6 +202,7 @@
 (defun mevedel-tool-ui--wait-agent (callback args)
   "Suspend WaitAgent ARGS and report the wake reason through CALLBACK."
   (require 'mevedel-agent-control)
+  (require 'mevedel-turn)
   (when-let* ((path
                (mevedel-agent-control-wait
                 mevedel--session

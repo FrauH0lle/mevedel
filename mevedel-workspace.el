@@ -27,25 +27,26 @@
 (declare-function mevedel-execution-target-expand-path
                   "mevedel-execution-target" (target path &optional directory))
 
-;; `tramp'
-(defvar tramp-verbose)
-
 ;; `mevedel-structs'
+(declare-function mevedel-file-cache--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-get-or-create "mevedel-structs"
-                  (type id root name))
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(defvar mevedel--session)
+(declare-function mevedel-workspace--create "mevedel-structs" (&rest slots))
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
+(defvar mevedel--session)
+(defvar mevedel-user-dir)
 
 ;; `mevedel-system'
 (defvar mevedel-memory-dirs)
 
 ;; `project'
 (declare-function project-current "project" (&optional maybe-prompt dir))
-(declare-function project-root "project" (project))
 (declare-function project-name "project" (project))
+(declare-function project-root "project" (project))
+
+;; `tramp'
+(defvar tramp-verbose)
 
 (defcustom mevedel-workspace-functions '(mevedel-workspace--project-workspace mevedel-workspace--file-workspace)
   "Functions to determine the workspace for the current buffer.
@@ -186,7 +187,83 @@ Returns (file . FILENAME) if the buffer is visiting a file, nil otherwise."
 
 
 ;;
+;;; Workspace registry
+
+(defvar mevedel-workspace--registry (make-hash-table :test #'equal)
+  "Global registry of workspace structs.
+
+Keyed by (TYPE . ID) cons cells.  Workspaces are created lazily on first
+chat buffer creation and cached here.")
+
+(defun mevedel-workspace--normalize-root (root)
+  "Return ROOT expanded for workspace filesystem paths."
+  (if (stringp root)
+      (expand-file-name root)
+    root))
+
+(defun mevedel-workspace-get-or-create (type id root name)
+  "Return the workspace for TYPE and ID, creating it if needed.
+
+ROOT is the absolute project root path.  NAME is the display name.  If a
+workspace already exists for this TYPE and ID, return it (ignoring ROOT
+and NAME arguments)."
+  (require 'mevedel-structs)
+  (let* ((id (if (and (eq type 'project)
+                      (stringp id)
+                      (file-name-absolute-p id))
+                 (mevedel-workspace--normalize-root id)
+               id))
+         (root (mevedel-workspace--normalize-root root))
+         (key (cons type id)))
+    (or (gethash key mevedel-workspace--registry)
+        (puthash key
+                 (mevedel-workspace--create
+                  :type type
+                  :id id
+                  :root root
+                  :name name
+                  :file-cache (mevedel-file-cache--create
+                               :table (make-hash-table :test #'equal)
+                               :order nil
+                               :total-bytes 0)
+                  :directives nil)
+                 mevedel-workspace--registry))))
+
+(defun mevedel-workspace-clear-registry ()
+  "Remove all workspaces from the global registry.
+
+Also drops remembered remote project detections, which are the same decision
+cached one level lower.  Intended for testing and cleanup."
+  (clrhash mevedel-workspace--registry)
+  (when (boundp 'mevedel-workspace--remote-project-cache)
+    (clrhash mevedel-workspace--remote-project-cache)))
+
+
+;;
+;;; Workspace helpers
+
+(defun mevedel-workspace-state-dir (workspace)
+  "Return the .mevedel/ directory for WORKSPACE."
+  (file-name-concat
+   (mevedel-workspace--normalize-root (mevedel-workspace-root workspace))
+   ".mevedel/"))
+
+(defun mevedel-workspace-find-state-file (workspace filename)
+  "Find FILENAME in WORKSPACE's state dir, falling back to global.
+
+Returns the first existing path, or the project path if neither exists."
+  (let ((project-path (file-name-concat
+                       (mevedel-workspace-state-dir workspace) filename))
+        (global-path (file-name-concat mevedel-user-dir filename)))
+    (cond
+     ((file-exists-p project-path) project-path)
+     ((file-exists-p global-path) global-path)
+     (t project-path))))
+
+
+;;
 ;;; Workspace management
+
 
 (defun mevedel-workspace (&optional buffer)
   "Get the workspace for BUFFER as a `mevedel-workspace' struct.

@@ -49,10 +49,12 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-state-label "mevedel-structs" (&optional buffer))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools-active-count "mevedel-tools" (&optional buffer))
+
+;; `mevedel-turn'
+(declare-function mevedel-request-state-label "mevedel-turn" (&optional buffer))
 
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
@@ -301,6 +303,7 @@ Leads with directive identity, then the state that changes while the
 conversation runs.  Session facts the parent frame's status strip
 already shows -- session name, workspace root, execution target, preset
 -- are deliberately absent: this header has a fraction of the width."
+  (require 'mevedel-turn)
   (when (and (boundp 'mevedel--data-buffer)
              (buffer-live-p mevedel--data-buffer))
     (require 'mevedel-models)

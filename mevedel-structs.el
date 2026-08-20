@@ -2,58 +2,22 @@
 
 ;;; Commentary:
 
-;; Workspace, directive, session, request, and task structs that form the
-;; foundation for mevedel's state management, plus canonical task data
-;; invariants.  All other modules reference these definitions.
+;; Passive workspace, directive, session, request, and task data shapes plus
+;; shape-local invariants and constructors.  Workspace, directive, and request
+;; lifecycle behavior belongs to their focused owners.
 
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
-
-;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-plan-read-only
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-require-path
-                  "mevedel-agents" (invocation))
-(defvar mevedel--agent-invocation)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
                   "mevedel-execution-target" (workspace-root))
 (declare-function mevedel-execution-target-expand-path
                   "mevedel-execution-target" (target path &optional directory))
-(declare-function mevedel-execution-target-probe
-                  "mevedel-execution-target"
-                  (target &optional refresh sandbox-mode))
-(declare-function mevedel-execution-target-readiness
-                  "mevedel-execution-target" (cl-x) t)
-(declare-function mevedel-execution-target-readiness-message
-                  "mevedel-execution-target" (target))
-(declare-function mevedel-execution-target-ready-p
-                  "mevedel-execution-target" (target))
-(declare-function mevedel-execution-target-remote-p
-                  "mevedel-execution-target" (target))
-(declare-function mevedel-execution-target-refresh-incarnation
-                  "mevedel-execution-target" (target))
-
-;; `mevedel-permission-queue'
-(declare-function mevedel-permission-queue-sweep-request
-                  "mevedel-permission-queue"
-                  (request-id &optional session no-render))
 
 ;; `mevedel-sandbox'
 (defvar mevedel-sandbox-mode)
-
-;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-assert-mutation-authority
-                  "mevedel-session-artifacts" (session &optional buffer))
-
-;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-record
-                  "mevedel-telemetry" (session event &rest props))
 
 (defun mevedel-agent-path-p (path)
   "Return non-nil when PATH is a canonical address in an agent tree."
@@ -149,71 +113,6 @@ One workspace per project, shared by all sessions for that project."
   file-cache        ; mevedel-file-cache struct: LRU workspace file cache
   directives)       ; list of workspace-owned mevedel-directive structs
 
-(defun mevedel-directive-set-anchor (directive anchor)
-  "Set DIRECTIVE's current ANCHOR."
-  (setf (mevedel-directive-anchor directive) anchor))
-
-(defun mevedel-directive-set-state (directive state)
-  "Set DIRECTIVE's transient lifecycle STATE."
-  (setf (mevedel-directive-state directive) state))
-
-(defun mevedel-directive-set-planning-enabled (directive enabled)
-  "Set DIRECTIVE's Plan-before-implementation preference to ENABLED."
-  (setf (mevedel-directive-planning-enabled directive) (and enabled t)))
-
-(defun mevedel-directive-set-skills (directive skills)
-  "Set DIRECTIVE's implementation skill selection to SKILLS."
-  (setf (mevedel-directive-skills directive) skills))
-
-(defun mevedel-subdirective-copy (subdirective)
-  "Return an independent snapshot of SUBDIRECTIVE."
-  (mevedel-subdirective--create
-   :id (substring-no-properties (mevedel-subdirective-id subdirective))
-   :request (substring-no-properties (mevedel-subdirective-request subdirective))
-   :anchor (copy-tree (mevedel-subdirective-anchor subdirective))))
-
-(defun mevedel-subdirective-set-anchor (subdirective anchor)
-  "Set SUBDIRECTIVE's current ANCHOR."
-  (setf (mevedel-subdirective-anchor subdirective) anchor))
-
-(defun mevedel-subdirective-set-request (subdirective request)
-  "Set SUBDIRECTIVE's current REQUEST."
-  (setf (mevedel-subdirective-request subdirective) request))
-
-(defun mevedel-directive-sort-subdirectives (directive)
-  "Sort DIRECTIVE's nested details by their source anchors."
-  (setf
-   (mevedel-directive-subdirectives directive)
-   (sort
-    (copy-sequence (mevedel-directive-subdirectives directive))
-    (lambda (a b)
-      (let* ((a-anchor (mevedel-subdirective-anchor a))
-             (b-anchor (mevedel-subdirective-anchor b))
-             (a-start (or (plist-get a-anchor :start) 0))
-             (b-start (or (plist-get b-anchor :start) 0))
-             (a-end (or (plist-get a-anchor :end) a-start))
-             (b-end (or (plist-get b-anchor :end) b-start)))
-        (or (< a-start b-start)
-            (and (= a-start b-start)
-                 (or (> a-end b-end)
-                     (and (= a-end b-end)
-                          (string-lessp (mevedel-subdirective-id a)
-                                        (mevedel-subdirective-id b)))))))))))
-
-(defun mevedel-workspace-add-directive (workspace directive)
-  "Add DIRECTIVE to WORKSPACE."
-  (push directive (mevedel-workspace-directives workspace))
-  directive)
-
-(defun mevedel-workspace-remove-directive (workspace directive)
-  "Remove DIRECTIVE from WORKSPACE."
-  (setf (mevedel-workspace-directives workspace)
-        (delq directive (mevedel-workspace-directives workspace))))
-
-(defun mevedel-workspace-set-directives (workspace directives)
-  "Replace WORKSPACE's directive records with DIRECTIVES."
-  (setf (mevedel-workspace-directives workspace) directives))
-
 
 ;;
 ;;; File state structs
@@ -262,80 +161,6 @@ the table."
   table
   order
   total-bytes)
-
-
-;;
-;;; Workspace registry
-
-(defvar mevedel-workspace--registry (make-hash-table :test #'equal)
-  "Global registry of workspace structs.
-
-Keyed by (TYPE . ID) cons cells.  Workspaces are created lazily on first
-chat buffer creation and cached here.")
-
-(defun mevedel-workspace--normalize-root (root)
-  "Return ROOT expanded for workspace filesystem paths."
-  (if (stringp root)
-      (expand-file-name root)
-    root))
-
-(defun mevedel-workspace-get-or-create (type id root name)
-  "Return the workspace for TYPE and ID, creating it if needed.
-
-ROOT is the absolute project root path.  NAME is the display name.  If a
-workspace already exists for this TYPE and ID, return it (ignoring ROOT
-and NAME arguments)."
-  (let* ((id (if (and (eq type 'project)
-                      (stringp id)
-                      (file-name-absolute-p id))
-                 (mevedel-workspace--normalize-root id)
-               id))
-         (root (mevedel-workspace--normalize-root root))
-         (key (cons type id)))
-    (or (gethash key mevedel-workspace--registry)
-        (puthash key
-                 (mevedel-workspace--create
-                  :type type
-                  :id id
-                  :root root
-                  :name name
-                  :file-cache (mevedel-file-cache--create
-                               :table (make-hash-table :test #'equal)
-                               :order nil
-                               :total-bytes 0)
-                  :directives nil)
-                 mevedel-workspace--registry))))
-
-(defun mevedel-workspace-clear-registry ()
-  "Remove all workspaces from the global registry.
-
-Also drops remembered remote project detections, which are the same decision
-cached one level lower.  Intended for testing and cleanup."
-  (clrhash mevedel-workspace--registry)
-  (when (boundp 'mevedel-workspace--remote-project-cache)
-    (clrhash mevedel-workspace--remote-project-cache)))
-
-
-;;
-;;; Workspace helpers
-
-(defun mevedel-workspace-state-dir (workspace)
-  "Return the .mevedel/ directory for WORKSPACE."
-  (file-name-concat
-   (mevedel-workspace--normalize-root (mevedel-workspace-root workspace))
-   ".mevedel/"))
-
-(defun mevedel-workspace-find-state-file (workspace filename)
-  "Find FILENAME in WORKSPACE's state dir, falling back to global.
-
-Returns the first existing path, or the project path if neither exists."
-  (let ((project-path (file-name-concat
-                       (mevedel-workspace-state-dir workspace) filename))
-        (global-path (file-name-concat mevedel-user-dir filename)))
-    (cond
-     ((file-exists-p project-path) project-path)
-     ((file-exists-p global-path) global-path)
-     (t project-path))))
 
 
 ;;
@@ -855,6 +680,10 @@ Return the expanded paths activated."
 ;;
 ;;; Request struct
 
+(defvar-local mevedel--current-request nil
+  "The `mevedel-request' struct for the active request.
+Set at request start and cleared by the request lifecycle owner.")
+
 (cl-defstruct (mevedel-request (:constructor mevedel-request--create))
   "Per-request state, scoped to a single LLM request/response cycle.
 Created at request start, cleared in the termination handler."
@@ -934,190 +763,6 @@ to the conversation without re-reading SKILL.md (which may have changed)."
   source-path
   prepared-body)
 
-
-;;
-;;; Request buffer-local
-
-(defvar-local mevedel--current-request nil
-  "The `mevedel-request' struct for the active request.
-Set at request start, cleared in the termination handler.  Tool functions
-access this through the buffer-local.")
-
-(defun mevedel-request-active-p (&optional buffer)
-  "Return non-nil when BUFFER has an active request."
-  (let ((buffer (or buffer (current-buffer))))
-    (and (buffer-live-p buffer)
-         (with-current-buffer buffer
-           (bound-and-true-p mevedel--current-request)))))
-
-(defun mevedel-request-state-label (&optional buffer)
-  "Return BUFFER's compact request state label."
-  (if (mevedel-request-active-p buffer) "running" "idle"))
-
-
-;;
-;;; Request cancellers
-
-(defun mevedel-request-push-canceller (request canceller)
-  "Append CANCELLER (a zero-arg thunk) onto REQUEST's `cancellers' list.
-
-Each canceller is invoked exactly once during teardown via the
-drain-then-invoke helper.  Primitives that own pending overlays
-register a thunk that drains their own overlays with the
-`aborted' sentinel."
-  (when request
-    (setf (mevedel-request-cancellers request)
-          (append (mevedel-request-cancellers request)
-                  (list canceller)))))
-
-(defun mevedel-request-drain-cancellers (request)
-  "Atomically clear and invoke every canceller on REQUEST.
-
-Drains the list before invoking, so a canceller that registers a new
-canceller during its run does not re-enter the current drain.  Each
-canceller runs inside `ignore-errors' so a misbehaving thunk cannot
-strand the others.
-
-Used by `mevedel-abort', `mevedel-request-end', and the stale-request
-replacement path in `mevedel-request-begin'.  Together these are the
-only call sites that may invoke cancellers."
-  (when request
-    (let ((cancellers (mevedel-request-cancellers request)))
-      (setf (mevedel-request-cancellers request) nil)
-      (dolist (canceller cancellers)
-        (ignore-errors (funcall canceller))))))
-
-
-;;
-;;; Request lifecycle
-
-(defun mevedel-current-origin ()
-  "Return the canonical owner for the current execution context."
-  (or (and (bound-and-true-p mevedel--current-request)
-           (mevedel-request-p mevedel--current-request)
-           (mevedel-request-origin mevedel--current-request))
-      (and-let* ((inv (bound-and-true-p mevedel--agent-invocation))
-                 ((fboundp 'mevedel-agent-invocation-p))
-                 ((mevedel-agent-invocation-p inv)))
-        (mevedel-agent-invocation-require-path inv))
-      "/root"))
-
-(defun mevedel-current-turn (session)
-  "Return SESSION's active reserved turn or next turn."
-  (if (and (mevedel-request-p mevedel--current-request)
-           (eq session (mevedel-request-session mevedel--current-request)))
-      (mevedel-request-turn mevedel--current-request)
-    (1+ (or (mevedel-session-turn-count session) 0))))
-
-(defun mevedel-request-note-untracked-effect (request source reason)
-  "Record one untracked filesystem effect SOURCE and REASON on REQUEST."
-  (unless (assoc source (mevedel-request-untracked-effects request))
-    (push (cons source reason)
-          (mevedel-request-untracked-effects request)))
-  (mevedel-request-untracked-effects request))
-
-(defun mevedel-request-assert-target-ready (session)
-  "Signal a user error when SESSION's execution target is not ready."
-  (when-let* ((session)
-              (target (mevedel-session-execution-target session)))
-    (require 'mevedel-execution-target)
-    (when (mevedel-execution-target-remote-p target)
-      (mevedel-execution-target-probe
-       target nil (mevedel-session-sandbox-mode session))
-      (unless (mevedel-execution-target-ready-p target)
-        (user-error "Execution target is not ready: %s"
-                    (mevedel-execution-target-readiness-message target))))
-    (unless (mevedel-execution-target-remote-p target)
-      (mevedel-execution-target-refresh-incarnation target)))
-  t)
-
-(defun mevedel-request-begin (session &optional directive-uuid)
-  "Create a new request for SESSION, guarding against stale requests.
-
-If `mevedel--current-request' is already set, log a warning and replace
-it.  Optional DIRECTIVE-UUID sets the directive being processed.  Returns
-the new request struct."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (mevedel-request-assert-target-ready session)
-  (mevedel-session-artifacts-assert-mutation-authority
-   session (current-buffer))
-  (when mevedel--current-request
-    (message "mevedel: stale request found, replacing")
-    (mevedel-request-end t))
-  (let* ((origin (mevedel-current-origin))
-         (id (format "request-%s-%s"
-                     (format-time-string "%Y%m%dT%H%M%S")
-                     (substring
-                      (secure-hash
-                       'sha1
-                       (format "%s:%s:%s" (emacs-pid) (float-time) origin))
-                      0 12)))
-         (request (mevedel-request--create
-                   :id id
-                   :session session
-                   :turn (1+ (or (mevedel-session-turn-count session) 0))
-                   :file-snapshots (make-hash-table :test #'equal)
-                   :untracked-effects nil
-                   :directive-uuid directive-uuid
-                   :plan-read-only
-                   (or (eq (plist-get
-                            (mevedel-session-directive-planning session)
-                            :phase)
-                           'planning)
-                       (and (boundp 'mevedel--agent-invocation)
-                            mevedel--agent-invocation
-                            (mevedel-agent-invocation-plan-read-only
-                             mevedel--agent-invocation)))
-                   :started-at (current-time)
-                   :origin origin)))
-    (setq mevedel--current-request request)
-    (when (equal origin "/root")
-      (setf (mevedel-session-agent-root-activity session) 'running))
-    (when (fboundp 'mevedel-telemetry-record)
-      (mevedel-telemetry-record
-       session 'request-queued :request-id id :origin origin
-       :permission-mode (mevedel-session-permission-mode session)
-       :sandbox-mode (mevedel-session-sandbox-mode session))
-      (mevedel-telemetry-record
-       session 'request-start :request-id id :origin origin
-       :permission-mode (mevedel-session-permission-mode session)
-       :sandbox-mode (mevedel-session-sandbox-mode session)))
-    request))
-
-(defun mevedel-request-cancel (request &optional abort-plan-approval)
-  "Cancel REQUEST and its owned pending interactions.
-Queued permission prompts are swept only for REQUEST's identity.  Plan
-approvals normally outlive the request that presented them; when
-ABORT-PLAN-APPROVAL is non-nil, abort it too."
-  (when request
-    (let ((session (mevedel-request-session request))
-          (request-id (mevedel-request-id request)))
-      (mevedel-request-drain-cancellers request)
-      (when (and request-id
-                 (fboundp 'mevedel-permission-queue-sweep-request))
-        (mevedel-permission-queue-sweep-request request-id session))
-      (when (and abort-plan-approval
-                 (fboundp 'mevedel-plan-approval-abort))
-        (mevedel-plan-approval-abort session)))))
-
-(defun mevedel-request-end (&optional abort-plan-approval)
-  "Cancel the current request, then clear `mevedel--current-request'."
-  (when mevedel--current-request
-    (let ((request mevedel--current-request))
-      (when (fboundp 'mevedel-telemetry-record)
-        (mevedel-telemetry-record
-         (mevedel-request-session request) 'request-teardown
-         :request-id (mevedel-request-id request)
-         :origin (mevedel-request-origin request)
-         :abort-plan-approval (and abort-plan-approval t)))
-      (mevedel-request-cancel request abort-plan-approval)
-      (when (equal (mevedel-request-origin request) "/root")
-        (setf (mevedel-session-agent-root-activity
-               (mevedel-request-session request))
-              'idle)))
-    (setq mevedel--current-request nil)))
 
 (provide 'mevedel-structs)
 ;;; mevedel-structs.el ends here

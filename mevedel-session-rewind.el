@@ -26,6 +26,7 @@
 
 ;; `mevedel-directive'
 (declare-function mevedel-workspace-rewind-directives "mevedel-directive" (workspace session-id target-turn))
+(declare-function mevedel-workspace-set-directives "mevedel-directive" (workspace directives))
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-session-live-p "mevedel-execution" (session))
@@ -109,7 +110,6 @@
 (declare-function mevedel-session-updated-at "mevedel-structs" (cl-x))
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x))
-(declare-function mevedel-workspace-set-directives "mevedel-structs" (workspace directives))
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -1421,6 +1421,7 @@ head CAS."
 (defun mevedel-session-rewind--commit-local-rewind
     (session buffer target plan)
   "Commit local SESSION, BUFFER, TARGET, and file PLAN as one Rewind."
+  (require 'mevedel-directive)
   (require 'mevedel-session-artifacts)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-persistence)

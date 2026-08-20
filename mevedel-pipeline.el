@@ -122,8 +122,6 @@
 (declare-function mevedel-request-directive-uuid "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
-(declare-function mevedel-request-note-untracked-effect
-                  "mevedel-structs" (request source reason))
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
@@ -203,6 +201,13 @@
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-audit-spans
                   "mevedel-transcript-audit" (text &optional type))
+
+;; `mevedel-turn'
+(declare-function mevedel-current-origin "mevedel-turn" ())
+(declare-function mevedel-request-note-untracked-effect
+                  "mevedel-turn" (request source reason))
+(declare-function mevedel-request-push-canceller
+                  "mevedel-turn" (request canceller))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-ensure-generated-state-ignored
@@ -1581,6 +1586,7 @@ unused -- a snapshot failure is best-effort and should never fail the
 
 (defun mevedel-pipeline--step-capture-coverage (context next _fail)
   "Record untracked directive filesystem effects from CONTEXT, then call NEXT."
+  (require 'mevedel-turn)
   (let ((tool (plist-get context :tool))
         (request (plist-get context :request)))
     (when (and request
@@ -2728,6 +2734,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
   (require 'mevedel-telemetry)
+  (require 'mevedel-turn)
   (let* ((dispatch-buffer (current-buffer))
          (session (and (boundp 'mevedel--session) mevedel--session))
          (workspace

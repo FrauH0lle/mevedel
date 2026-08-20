@@ -89,12 +89,8 @@
                   "mevedel-session-artifacts" (session))
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-begin
-                  "mevedel-structs" (session &optional directive-uuid))
 (declare-function mevedel-request-directive-uuid
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-end
-                  "mevedel-structs" (&optional abort-plan-approval))
 (declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x) t)
@@ -142,6 +138,12 @@
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-exclude-directive-turns
                   "mevedel-transcript-audit" (&optional fsm))
+
+;; `mevedel-turn'
+(declare-function mevedel-request-begin
+                  "mevedel-turn" (session &optional directive-uuid))
+(declare-function mevedel-request-end
+                  "mevedel-turn" (&optional abort-plan-approval))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--restore-overlay
@@ -580,6 +582,7 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
+  (require 'mevedel-turn)
   (let* ((info (gptel-fsm-info fsm))
          (data-buffer (plist-get info :buffer)))
     (when (and (not (plist-get info :mevedel-request-begun))
@@ -604,6 +607,7 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 
 (defun mevedel-side-conversation--handle-terminal (fsm)
   "Settle the transient side request owned by terminal FSM."
+  (require 'mevedel-turn)
   (when-let* ((data-buffer (plist-get (gptel-fsm-info fsm) :buffer))
               ((buffer-live-p data-buffer)))
     (with-current-buffer data-buffer
@@ -616,6 +620,7 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 
 (defun mevedel-side-conversation--abort (&optional _data-buffer)
   "Abort work in the current side data buffer without persistence."
+  (require 'mevedel-turn)
   (let ((aborted (mevedel-side-conversation--busy-p (current-buffer))))
     ;; Tool and permission callbacks may launch a follow-up provider request.
     ;; Settle them before draining gptel's process list.

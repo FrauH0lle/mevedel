@@ -83,7 +83,6 @@
 (declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
@@ -110,6 +109,7 @@
 ;; `mevedel-workspace'
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
+(declare-function mevedel-workspace-state-dir "mevedel-workspace" (workspace))
 
 
 ;;
@@ -1619,6 +1619,7 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
 
 (defun mevedel-permission--persistent-file (workspace)
   "Return the path to WORKSPACE's persistent permission rules file."
+  (require 'mevedel-workspace)
   (file-name-concat (mevedel-workspace-state-dir workspace)
                      "permissions.el"))
 

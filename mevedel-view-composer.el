@@ -268,11 +268,6 @@
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-assert-target-ready
-                  "mevedel-structs" (session))
-(declare-function mevedel-request-begin "mevedel-structs"
-                  (session &optional directive-uuid))
-(declare-function mevedel-request-end "mevedel-structs" nil)
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session--set-dropped-file-grants
@@ -315,6 +310,14 @@
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
 		  "mevedel-transcript-audit" (record))
+
+;; `mevedel-turn'
+(declare-function mevedel-request-assert-target-ready
+                  "mevedel-turn" (session))
+(declare-function mevedel-request-begin "mevedel-turn"
+                  (session &optional directive-uuid))
+(declare-function mevedel-request-end
+                  "mevedel-turn" (&optional abort-plan-approval))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -1513,6 +1516,7 @@ to the data buffer as the authoritative user prompt.  The data-turn
 marker is anchored after that prompt so the eventual fork result can be
 rendered by the normal post-response hook.  HOOK-CONTEXT is summarized
 in the view when present."
+  (require 'mevedel-turn)
   (let ((view-turn-start
          (mevedel-view--insert-user-message display-text nil hook-context)))
     (mevedel-view--clear-input)
@@ -1544,6 +1548,7 @@ in the view when present."
     (name outcome view-buffer data-buffer &optional skill)
   "Handle fork skill OUTCOME for NAME."
   (require 'mevedel-skills-input)
+  (require 'mevedel-turn)
   (when (and (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
     (when (and (fboundp 'mevedel-review-command-skill-p)
@@ -2339,6 +2344,7 @@ DISPLAY-TEXT is shown in the view instead of INPUT when non-nil.  SUBMISSION
 supplies hook context, audits, and commit ownership.  MODEL-INPUT, when non-nil,
 replaces INPUT only in the temporary request prompt."
   (require 'mevedel-compact-run)
+  (require 'mevedel-turn)
   (mevedel-view--ensure-interactive-chat-view)
   (when (buffer-local-value 'mevedel-compact-run-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")

@@ -80,8 +80,6 @@
                   "mevedel-session-durability" (session))
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-push-canceller
-                  "mevedel-structs" (request canceller))
 (declare-function mevedel-session--set-execution-state
                   "mevedel-structs" (session state))
 (declare-function mevedel-session-audit-target "mevedel-structs" (session))
@@ -103,6 +101,10 @@
                   "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-profiler-directory
                   "mevedel-telemetry" (session))
+
+;; `mevedel-turn'
+(declare-function mevedel-request-push-canceller
+                  "mevedel-turn" (request canceller))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--head-tail-preview-parts
@@ -2311,6 +2313,7 @@ terminal settlement."
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
   (require 'mevedel-sandbox)
+  (require 'mevedel-turn)
   (unless session
     (signal 'mevedel-execution-error
             (list "Managed Bash requires an active session")))
@@ -2477,6 +2480,7 @@ terminal settlement."
 Ordinary non-empty CHARS require a PTY; a single Ctrl-C character interrupts
 either process mode.  CALLBACK receives immediately for terminal state or
 after WAIT-MS while the process remains live."
+  (require 'mevedel-turn)
   (let* ((record
           (mevedel-execution--owned-yielded-record
            session owner execution-id))

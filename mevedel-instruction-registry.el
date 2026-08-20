@@ -8,6 +8,10 @@
 
 (eval-when-compile (require 'cl-lib))
 
+;; `mevedel-directive'
+(declare-function mevedel-workspace-set-directives
+                  "mevedel-directive" (workspace directives))
+
 ;; `mevedel-directive-source'
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source"
@@ -35,8 +39,6 @@
 ;; `mevedel-structs'
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-set-directives
-                  "mevedel-structs" (workspace directives))
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-workspace'
@@ -143,6 +145,7 @@ Each value is a plist with keys `:instructions', `:id-counter',
 
 (defun mevedel--instruction-state-rollback (workspace)
   "Return a function that restores WORKSPACE's exact instruction state."
+  (require 'mevedel-directive)
   (require 'mevedel-structs)
   (let* ((key (mevedel--instruction-workspace-key workspace))
          (state (copy-tree (mevedel--instruction-state key)))
@@ -173,6 +176,7 @@ Each value is a plist with keys `:instructions', `:id-counter',
 
 (defun mevedel--clear-instruction-state (&optional workspace)
   "Delete all visible instruction overlays in WORKSPACE and clear its state."
+  (require 'mevedel-directive)
   (require 'mevedel-structs)
   (let ((mevedel--instruction-state-key-override
          (mevedel--instruction-workspace-key workspace)))

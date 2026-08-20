@@ -14,10 +14,10 @@
 ;; `gptel-agent-tools'
 (declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
 
-;; `mevedel-structs'
-(declare-function mevedel-current-origin "mevedel-structs" ())
+;; `mevedel-turn'
+(declare-function mevedel-current-origin "mevedel-turn" ())
 (declare-function mevedel-request-push-canceller
-                  "mevedel-structs" (request canceller))
+                  "mevedel-turn" (request canceller))
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
@@ -107,6 +107,7 @@ the overlay lives in the parent view, but the active request belongs
 to the agent data buffer.  OVERLAY, when non-nil, is tagged with the
 owning request so shared view buffers only cancel request-local
 prompts during request teardown."
+  (require 'mevedel-turn)
   (let ((prompt-buffer (current-buffer))
         (source-buffer (or source-buffer (current-buffer))))
     (when-let* ((data-buf (mevedel--prompt--data-buffer source-buffer))
@@ -250,6 +251,7 @@ CALLBACK receives `approve', `deny', `(feedback . TEXT)', or
 `aborted'.  TITLE is the heading text, CONTENT describes the
 request, QUESTION is the final question, and HELP-ECHO-TEXT is
 optional hover text."
+  (require 'mevedel-turn)
   (let* ((source-buffer (current-buffer))
          (origin (mevedel-current-origin))
          (target-buffer

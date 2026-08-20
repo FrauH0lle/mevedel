@@ -14,6 +14,10 @@
   (require 'mevedel-tool-registry)
   (require 'subr-x))
 
+;; `mevedel-directive'
+(declare-function mevedel-directive-set-anchor
+                  "mevedel-directive" (directive anchor))
+
 ;; `mevedel-directive-source'
 (declare-function mevedel--directive-record
                   "mevedel-directive-source" (directive))
@@ -68,8 +72,6 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-set-anchor
-                  "mevedel-structs" (directive anchor))
 (declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-one-shot-mutations-p
                   "mevedel-structs" (cl-x) t)
@@ -832,6 +834,7 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
 
 (defun mevedel-tool-patch--commit (changes)
   "Commit CHANGES as one filesystem and visited-buffer transaction."
+  (require 'mevedel-directive)
   (require 'mevedel-overlays)
   (dolist (change changes)
     (when-let* (((eq (plist-get change :action) 'write))

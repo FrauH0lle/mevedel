@@ -19,8 +19,22 @@
                   "mevedel-directive" (directive))
 (declare-function mevedel-directive-remove-subdirective
                   "mevedel-directive" (directive subdirective))
+(declare-function mevedel-directive-set-anchor
+                  "mevedel-directive" (directive anchor))
 (declare-function mevedel-directive-set-request
                   "mevedel-directive" (directive request))
+(declare-function mevedel-directive-set-state
+                  "mevedel-directive" (directive state))
+(declare-function mevedel-subdirective-copy
+                  "mevedel-directive" (subdirective))
+(declare-function mevedel-subdirective-set-anchor
+                  "mevedel-directive" (subdirective anchor))
+(declare-function mevedel-subdirective-set-request
+                  "mevedel-directive" (subdirective request))
+(declare-function mevedel-workspace-add-directive
+                  "mevedel-directive" (workspace directive))
+(declare-function mevedel-workspace-remove-directive
+                  "mevedel-directive" (workspace directive))
 
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--create-id "mevedel-instruction-registry" ())
@@ -88,29 +102,15 @@
 (declare-function mevedel-directive-p "mevedel-structs" (cl-x))
 (declare-function mevedel-directive-plan "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-set-anchor
-                  "mevedel-structs" (directive anchor))
-(declare-function mevedel-directive-set-state
-                  "mevedel-structs" (directive state))
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-subdirectives
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-subdirective--create
                   "mevedel-structs" (&rest slots))
 (declare-function mevedel-subdirective-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-subdirective-copy
-                  "mevedel-structs" (subdirective))
 (declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-subdirective-request "mevedel-structs" (cl-x) t)
-(declare-function mevedel-subdirective-set-anchor
-                  "mevedel-structs" (subdirective anchor))
-(declare-function mevedel-subdirective-set-request
-                  "mevedel-structs" (subdirective request))
-(declare-function mevedel-workspace-add-directive
-                  "mevedel-structs" (workspace directive))
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-remove-directive
-                  "mevedel-structs" (workspace directive))
 
 (defcustom mevedel-instruction-anchor-context-chars 160
   "Number of surrounding characters stored in instruction anchors."
@@ -265,6 +265,7 @@ overlay is restored.")
 
 (defun mevedel--refresh-directive-anchor (directive)
   "Refresh the durable anchor presented by DIRECTIVE."
+  (require 'mevedel-directive)
   (when-let* (((not (overlay-get directive
                                  'mevedel-transient-source-missing)))
               (record (mevedel--directive-source-record directive)))
@@ -306,6 +307,7 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--mark-buffer-source-missing (buffer)
   "Remove BUFFER's source presentations and retain directives as Source missing."
+  (require 'mevedel-directive)
   (require 'mevedel-instruction-registry)
   (require 'mevedel-overlays)
   (when (buffer-live-p buffer)
@@ -377,6 +379,7 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--reattach-directive (record workspace buffer start end)
   "Reattach source-missing RECORD in WORKSPACE to BUFFER from START to END."
+  (require 'mevedel-directive)
   (require 'mevedel-overlay-ui)
   (unless (and (memq record (mevedel-workspace-directives workspace))
                (eq 'source-missing
@@ -394,6 +397,7 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 (defun mevedel--reattach-subdirective
     (record owner workspace buffer start end)
   "Reattach nested RECORD owned by OWNER in WORKSPACE from START to END."
+  (require 'mevedel-directive)
   (unless (and (memq owner (mevedel-workspace-directives workspace))
                (memq record (mevedel-directive-subdirectives owner)))
     (user-error "Nested directive does not belong to this workspace"))
@@ -459,6 +463,7 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--detach-directive (entry)
   "Replace the evaporated directive described by ENTRY at a zero-width anchor."
+  (require 'mevedel-directive)
   (let* ((old (plist-get entry :overlay))
          (record (plist-get entry :record))
          (marker (plist-get entry :marker))
@@ -559,6 +564,7 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--register-directive (directive request)
   "Register DIRECTIVE and REQUEST under their top-level workspace owner."
+  (require 'mevedel-directive)
   (let* ((buffer (overlay-buffer directive))
          (workspace (mevedel--instruction-buffer-workspace buffer)))
     (unless workspace
@@ -613,6 +619,7 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--set-directive-status (directive status)
   "Set DIRECTIVE's workspace-owned transient STATUS."
+  (require 'mevedel-directive)
   (when-let* ((owner (mevedel--topmost-instruction directive 'directive))
               (record (mevedel--directive-record owner)))
     (mevedel-directive-set-state record status))
@@ -667,6 +674,7 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--submitted-subdirectives (directive)
   "Return immutable snapshots of DIRECTIVE's currently submitted details."
+  (require 'mevedel-directive)
   (mapcar #'mevedel-subdirective-copy
           (mevedel-directive-subdirectives
            (or (mevedel--directive-record directive)
@@ -779,6 +787,7 @@ Returns an empty string if there is no directive text."
 
 (defun mevedel--set-directive-request (directive request)
   "Set DIRECTIVE's current REQUEST without changing its identity."
+  (require 'mevedel-directive)
   (let ((record (mevedel--directive-source-record directive)))
     (cond
      ((mevedel-directive-p record)

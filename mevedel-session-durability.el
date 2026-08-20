@@ -86,7 +86,6 @@
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 
@@ -94,6 +93,9 @@
 (declare-function mevedel-transport-busy-p
                   "mevedel-transport" (&optional path))
 
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace-state-dir "mevedel-workspace" (workspace))
 
 ;;
 ;;; Customization
@@ -156,6 +158,7 @@ short enough that a picker row stays readable."
 
 The acknowledgement is once per target for this Emacs process.  Local
 project sessions need no disclosure."
+  (require 'mevedel-workspace)
   (let ((target (mevedel-session-execution-target session)))
     (when (and target (mevedel-execution-target-remote-p target))
       (let ((key (mevedel-execution-target-identity target)))

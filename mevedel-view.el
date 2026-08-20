@@ -71,10 +71,6 @@
 (declare-function mevedel-permission-queue-abort-all
                   "mevedel-permission-queue" (&optional session))
 
-;; `mevedel-view-interaction'
-(declare-function mevedel-view-interaction-teardown
-                  "mevedel-view-interaction" ())
-
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
@@ -85,8 +81,6 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-state-label "mevedel-structs"
-                  (&optional buffer))
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
@@ -121,6 +115,10 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p
                   "mevedel-transport" (&optional path))
+
+;; `mevedel-turn'
+(declare-function mevedel-request-state-label "mevedel-turn"
+                  (&optional buffer))
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view--on-agent-transcript-data-killed
@@ -160,9 +158,12 @@
 (defvar mevedel-view--composer-scope)
 (defvar mevedel-view--input-marker)
 
+;; `mevedel-view-disclosure'
+(declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
+
 ;; `mevedel-view-history'
-(declare-function mevedel-view-history-save "mevedel-view-history"
-                  (&optional view-buffer))
+(declare-function mevedel-view-history-save
+                  "mevedel-view-history" (&optional view-buffer))
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-clear
@@ -171,13 +172,12 @@
                   "mevedel-view-interaction" ())
 (declare-function mevedel-view-interaction-initialize
                   "mevedel-view-interaction" ())
+(declare-function mevedel-view-interaction-teardown
+                  "mevedel-view-interaction" ())
 
 ;; `mevedel-view-markdown'
 (autoload 'mevedel-view--normalize-local-file-uri-path
   "mevedel-view-markdown")
-
-;; `mevedel-view-disclosure'
-(declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--after-header-position
@@ -885,6 +885,7 @@ Kills the associated view buffer."
 
 (defun mevedel-view--status-strip ()
   "Return a mevedel-owned clickable status strip for the view buffer."
+  (require 'mevedel-turn)
   (when (and (boundp 'mevedel--data-buffer)
              (buffer-live-p mevedel--data-buffer))
     (require 'mevedel-models)

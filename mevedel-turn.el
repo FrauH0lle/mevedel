@@ -2,9 +2,10 @@
 
 ;;; Commentary:
 
-;; Owns the terminal transaction shared by normal gptel turns and direct skill
-;; forks.  Every settlement step is isolated so one failure cannot skip later
-;; cleanup, persistence, hook delivery, or queued-message drainage.
+;; Owns request admission, identity, cancellation, and the terminal transaction
+;; shared by normal gptel turns and direct skill forks.  Every settlement step
+;; is isolated so one failure cannot skip later cleanup, persistence, hook
+;; delivery, or queued-message drainage.
 
 ;;; Code:
 
@@ -18,6 +19,14 @@
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-plan-read-only
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-require-path
+                  "mevedel-agents" (invocation))
+(defvar mevedel--agent-invocation)
+
 ;; `mevedel-chat'
 (declare-function mevedel--implementation-permission-mode-restore
                   "mevedel-chat" ())
@@ -25,6 +34,19 @@
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-record-token-baseline
                   "mevedel-compact-estimation" (fsm))
+
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-probe
+                  "mevedel-execution-target"
+                  (target &optional refresh sandbox-mode))
+(declare-function mevedel-execution-target-readiness-message
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-ready-p
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-refresh-incarnation
+                  "mevedel-execution-target" (target))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-dispatch-after-turn "mevedel-goal" (fsm))
@@ -46,12 +68,23 @@
 (declare-function mevedel-view--schedule-follow-up-drain
                   "mevedel-pending-inputs" (fsm))
 
+;; `mevedel-permission-queue'
+(declare-function mevedel-permission-queue-sweep-request
+                  "mevedel-permission-queue"
+                  (request-id &optional session no-render))
+
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-settle-request
                   "mevedel-plan-handoff"
                   (fsm status &optional reason))
 
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-approval-abort
+                  "mevedel-plan-mode" (&optional session outcome))
+
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-mutation-authority
+                  "mevedel-session-artifacts" (session &optional buffer))
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts"
                   (session buffer &optional settled force))
@@ -61,7 +94,6 @@
 (defvar mevedel-session--save-failed)
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-end "mevedel-structs" ())
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (declare-function mevedel-request-origin "mevedel-structs" (cl-x))
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x))
@@ -73,7 +105,6 @@
                   "mevedel-structs" (session paused))
 (declare-function mevedel-session-set-pending-inputs
                   "mevedel-structs" (session category entries))
-(defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
@@ -99,6 +130,186 @@
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+
+
+;;
+;;; Request lifecycle
+
+(defun mevedel-request-active-p (&optional buffer)
+  "Return non-nil when BUFFER has an active request."
+  (let ((buffer (or buffer (current-buffer))))
+    (and (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (bound-and-true-p mevedel--current-request)))))
+
+(defun mevedel-request-state-label (&optional buffer)
+  "Return BUFFER's compact request state label."
+  (if (mevedel-request-active-p buffer) "running" "idle"))
+
+
+;;
+;;; Request cancellers
+
+(defun mevedel-request-push-canceller (request canceller)
+  "Append CANCELLER (a zero-arg thunk) onto REQUEST's `cancellers' list.
+
+Each canceller is invoked exactly once during teardown via the
+drain-then-invoke helper.  Primitives that own pending overlays
+register a thunk that drains their own overlays with the
+`aborted' sentinel."
+  (when request
+    (setf (mevedel-request-cancellers request)
+          (append (mevedel-request-cancellers request)
+                  (list canceller)))))
+
+(defun mevedel-request-drain-cancellers (request)
+  "Atomically clear and invoke every canceller on REQUEST.
+
+Drains the list before invoking, so a canceller that registers a new
+canceller during its run does not re-enter the current drain.  Each
+canceller runs inside `ignore-errors' so a misbehaving thunk cannot
+strand the others.
+
+Used by `mevedel-abort', `mevedel-request-end', and the stale-request
+replacement path in `mevedel-request-begin'.  Together these are the
+only call sites that may invoke cancellers."
+  (when request
+    (let ((cancellers (mevedel-request-cancellers request)))
+      (setf (mevedel-request-cancellers request) nil)
+      (dolist (canceller cancellers)
+        (ignore-errors (funcall canceller))))))
+
+
+;;
+;;; Request identity and admission
+
+(defun mevedel-current-origin ()
+  "Return the canonical owner for the current execution context."
+  (or (and (bound-and-true-p mevedel--current-request)
+           (mevedel-request-p mevedel--current-request)
+           (mevedel-request-origin mevedel--current-request))
+      (and-let* ((inv (bound-and-true-p mevedel--agent-invocation))
+                 ((fboundp 'mevedel-agent-invocation-p))
+                 ((mevedel-agent-invocation-p inv)))
+        (mevedel-agent-invocation-require-path inv))
+      "/root"))
+
+(defun mevedel-current-turn (session)
+  "Return SESSION's active reserved turn or next turn."
+  (if (and (mevedel-request-p mevedel--current-request)
+           (eq session (mevedel-request-session mevedel--current-request)))
+      (mevedel-request-turn mevedel--current-request)
+    (1+ (or (mevedel-session-turn-count session) 0))))
+
+(defun mevedel-request-note-untracked-effect (request source reason)
+  "Record one untracked filesystem effect SOURCE and REASON on REQUEST."
+  (unless (assoc source (mevedel-request-untracked-effects request))
+    (push (cons source reason)
+          (mevedel-request-untracked-effects request)))
+  (mevedel-request-untracked-effects request))
+
+(defun mevedel-request-assert-target-ready (session)
+  "Signal a user error when SESSION's execution target is not ready."
+  (when-let* ((session)
+              (target (mevedel-session-execution-target session)))
+    (require 'mevedel-execution-target)
+    (when (mevedel-execution-target-remote-p target)
+      (mevedel-execution-target-probe
+       target nil (mevedel-session-sandbox-mode session))
+      (unless (mevedel-execution-target-ready-p target)
+        (user-error "Execution target is not ready: %s"
+                    (mevedel-execution-target-readiness-message target))))
+    (unless (mevedel-execution-target-remote-p target)
+      (mevedel-execution-target-refresh-incarnation target)))
+  t)
+
+(defun mevedel-request-begin (session &optional directive-uuid)
+  "Create a new request for SESSION, guarding against stale requests.
+
+If `mevedel--current-request' is already set, log a warning and replace
+it.  Optional DIRECTIVE-UUID sets the directive being processed.  Returns
+the new request struct."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
+  (mevedel-request-assert-target-ready session)
+  (mevedel-session-artifacts-assert-mutation-authority
+   session (current-buffer))
+  (when mevedel--current-request
+    (message "mevedel: stale request found, replacing")
+    (mevedel-request-end t))
+  (let* ((origin (mevedel-current-origin))
+         (id (format "request-%s-%s"
+                     (format-time-string "%Y%m%dT%H%M%S")
+                     (substring
+                      (secure-hash
+                       'sha1
+                       (format "%s:%s:%s" (emacs-pid) (float-time) origin))
+                      0 12)))
+         (request (mevedel-request--create
+                   :id id
+                   :session session
+                   :turn (1+ (or (mevedel-session-turn-count session) 0))
+                   :file-snapshots (make-hash-table :test #'equal)
+                   :untracked-effects nil
+                   :directive-uuid directive-uuid
+                   :plan-read-only
+                   (or (eq (plist-get
+                            (mevedel-session-directive-planning session)
+                            :phase)
+                           'planning)
+                       (and (boundp 'mevedel--agent-invocation)
+                            mevedel--agent-invocation
+                            (mevedel-agent-invocation-plan-read-only
+                             mevedel--agent-invocation)))
+                   :started-at (current-time)
+                   :origin origin)))
+    (setq mevedel--current-request request)
+    (when (equal origin "/root")
+      (setf (mevedel-session-agent-root-activity session) 'running))
+    (when (fboundp 'mevedel-telemetry-record)
+      (mevedel-telemetry-record
+       session 'request-queued :request-id id :origin origin
+       :permission-mode (mevedel-session-permission-mode session)
+       :sandbox-mode (mevedel-session-sandbox-mode session))
+      (mevedel-telemetry-record
+       session 'request-start :request-id id :origin origin
+       :permission-mode (mevedel-session-permission-mode session)
+       :sandbox-mode (mevedel-session-sandbox-mode session)))
+    request))
+
+(defun mevedel-request-cancel (request &optional abort-plan-approval)
+  "Cancel REQUEST and its owned pending interactions.
+Queued permission prompts are swept only for REQUEST's identity.  Plan
+approvals normally outlive the request that presented them; when
+ABORT-PLAN-APPROVAL is non-nil, abort it too."
+  (when request
+    (let ((session (mevedel-request-session request))
+          (request-id (mevedel-request-id request)))
+      (mevedel-request-drain-cancellers request)
+      (when (and request-id
+                 (fboundp 'mevedel-permission-queue-sweep-request))
+        (mevedel-permission-queue-sweep-request request-id session))
+      (when (and abort-plan-approval
+                 (fboundp 'mevedel-plan-approval-abort))
+        (mevedel-plan-approval-abort session)))))
+
+(defun mevedel-request-end (&optional abort-plan-approval)
+  "Cancel the current request, then clear `mevedel--current-request'."
+  (when mevedel--current-request
+    (let ((request mevedel--current-request))
+      (when (fboundp 'mevedel-telemetry-record)
+        (mevedel-telemetry-record
+         (mevedel-request-session request) 'request-teardown
+         :request-id (mevedel-request-id request)
+         :origin (mevedel-request-origin request)
+         :abort-plan-approval (and abort-plan-approval t)))
+      (mevedel-request-cancel request abort-plan-approval)
+      (when (equal (mevedel-request-origin request) "/root")
+        (setf (mevedel-session-agent-root-activity
+               (mevedel-request-session request))
+              'idle)))
+    (setq mevedel--current-request nil)))
 
 
 ;;

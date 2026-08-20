@@ -99,6 +99,7 @@
 
 ;; `mevedel-directive'
 (declare-function mevedel-workspace-rewind-directives "mevedel-directive" (workspace session-id target-turn))
+(declare-function mevedel-workspace-set-directives "mevedel-directive" (workspace directives))
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-relocate-artifacts "mevedel-execution" (session old-root new-root))
@@ -330,18 +331,15 @@
 (declare-function mevedel-task-status "mevedel-structs" (cl-x))
 (declare-function mevedel-task-subject "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x))
-(declare-function mevedel-workspace-get-or-create "mevedel-structs" (type id root name))
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x))
-(declare-function mevedel-workspace-set-directives "mevedel-structs" (workspace directives))
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x))
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 (defvar mevedel-session--read-only-mode)
-(defvar mevedel-workspace--registry)
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
@@ -386,7 +384,9 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace-ensure-generated-state-ignored "mevedel-workspace" (workspace))
+(declare-function mevedel-workspace-get-or-create "mevedel-workspace" (type id root name))
 (defvar mevedel-workspace-additional-roots)
+(defvar mevedel-workspace--registry)
 
 ;; `mevedel-workspace-identity'
 (declare-function mevedel-workspace-identity-ensure "mevedel-workspace-identity" (root))
@@ -1400,6 +1400,7 @@ client whose filesystem authority is the target itself.  SESSION-DIR is a
 live path below that same root, so its TRAMP prefix -- empty on the target,
 the client's spelling of the connection elsewhere -- qualifies the persisted
 root for the client doing the restore."
+  (require 'mevedel-workspace)
   (let* ((saved (plist-get sidecar :workspace))
          (root (concat (file-remote-p session-dir)
                        (plist-get saved :target-native-root))))
