@@ -367,6 +367,74 @@
       (clrhash mevedel-workspace--generated-state-ignored)
       (delete-directory root t)))
 
+  :doc "writes a linked worktree's common exclude and retries target failure"
+  (let* ((parent (make-temp-file "mevedel-ws-linked-ignore-" t))
+         (root (file-name-concat parent "root"))
+         (linked (file-name-concat parent "linked"))
+         (exclude (file-name-concat root ".git" "info" "exclude")))
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (let ((default-directory (file-name-as-directory root)))
+            (should (zerop (process-file "git" nil nil nil
+                                         "init" "--quiet")))
+            (with-temp-file (file-name-concat root "tracked")
+              (insert "tracked\n"))
+            (should (zerop (process-file "git" nil nil nil
+                                         "add" "tracked")))
+            (should
+             (zerop
+              (process-file "git" nil nil nil
+                            "-c" "user.name=Mevedel Test"
+                            "-c" "user.email=mevedel@example.invalid"
+                            "commit" "--quiet" "-m" "initial")))
+            (should
+             (zerop
+              (process-file "git" nil nil nil
+                            "worktree" "add" "--detach" "--quiet"
+                            linked))))
+          (let ((workspace
+                 (mevedel-workspace--create
+                  :type 'project :id linked :root linked :name "linked")))
+            (mevedel-workspace-ensure-generated-state-ignored workspace))
+          (with-temp-buffer
+            (insert-file-contents exclude)
+            (should (string-match-p
+                     "^/.mevedel/sessions/$" (buffer-string))))
+          (clrhash mevedel-workspace--generated-state-ignored)
+          (let* ((qualified (concat "/mevedelmock:linked:" linked "/"))
+                 (workspace
+                  (mevedel-workspace--create
+                   :type 'project :id qualified :root qualified
+                   :name "remote-linked"))
+                 (real-process-file (symbol-function 'process-file))
+                 (failed nil))
+            (mevedel-test--with-local-shell-tramp '("linked")
+              (cl-letf (((symbol-function 'process-file)
+                         (lambda (program infile destination display
+                                  &rest args)
+                           (if (and (not failed)
+                                    (equal program "git")
+                                    (equal args '("rev-parse" "--git-path"
+                                                  "info/exclude")))
+                               (progn
+                                 (setq failed t)
+                                 1)
+                             (apply real-process-file
+                                    program infile destination display
+                                    args)))))
+                (mevedel-workspace-ensure-generated-state-ignored workspace)
+                (should-not
+                 (gethash qualified
+                          mevedel-workspace--generated-state-ignored))
+                (mevedel-workspace-ensure-generated-state-ignored workspace)
+                (should
+                 (gethash qualified
+                          mevedel-workspace--generated-state-ignored))))
+            (should failed)))
+      (clrhash mevedel-workspace--generated-state-ignored)
+      (delete-directory parent t)))
+
   :doc "writes generated-state excludes through a TRAMP workspace"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-ws-remote-ignore-" t)))

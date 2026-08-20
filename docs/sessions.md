@@ -1042,12 +1042,14 @@ text in this ring immediately, independently of the transient queue state.
 
 When mevedel writes generated workspace state, it best-effort appends
 exact entries to `.git/info/exclude` instead of ignoring the whole
-`.mevedel/` tree. The generated entries are:
+`.mevedel/` tree. In a linked worktree, Git resolves that file to the
+repository's common exclude file. The generated entries are:
 
 - `/.mevedel/sessions/`
 - `/.mevedel/tool-results/`
 - `/.mevedel/input-history.el`
 - `/.mevedel/media/`
+- `/.mevedel/plugin-data/`
 
 ### Locking
 

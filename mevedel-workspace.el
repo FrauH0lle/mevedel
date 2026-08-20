@@ -234,10 +234,28 @@ registry, creating one lazily if needed."
               ((file-directory-p root))
               (git-root (locate-dominating-file root ".git"))
               (dot-git (file-name-concat git-root ".git"))
-              ((file-directory-p dot-git))
-              ((file-in-directory-p (file-truename dot-git)
-                                     (file-truename git-root))))
-    (file-name-concat dot-git "info" "exclude")))
+              ((not (file-symlink-p dot-git))))
+    (cond
+     ((and (file-directory-p dot-git)
+           (file-in-directory-p (file-truename dot-git)
+                                (file-truename git-root)))
+      (file-name-concat dot-git "info" "exclude"))
+     ((file-regular-p dot-git)
+      (with-temp-buffer
+        (let ((default-directory root)
+              (process-environment
+               (unless (file-remote-p root) process-environment)))
+          (unless (zerop (process-file "git" nil (list t t) nil
+                                       "rev-parse" "--git-path"
+                                       "info/exclude"))
+            (error "Could not resolve Git exclude file"))
+          (let ((path (string-trim (buffer-string))))
+            (if (file-remote-p root)
+                (progn
+                  (require 'mevedel-execution-target)
+                  (mevedel-execution-target-expand-path
+                   (mevedel-execution-target-create root) path root))
+              (expand-file-name path root)))))))))
 
 (defvar mevedel-workspace--generated-state-ignored
   (make-hash-table :test #'equal)
