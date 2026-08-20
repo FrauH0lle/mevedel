@@ -1661,6 +1661,105 @@
         (search-forward "input.pdf")
         (should (get-text-property (point) 'mevedel-view-collapsed)))))
 
+  :doc "preserves independent tool-audit fold state across full rerender"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat
+      "(:name \"Read\" :args (:file_path \"audit.el\"))\n\ncontents\n"
+      (mevedel--format-hook-audit-record
+       '(:type tool-input-rewrite
+               :event "PreToolUse"
+               :original-input (:file_path "before.el")
+               :updated-input (:file_path "audit.el")
+               :reason "first audit detail"))
+      (mevedel--format-hook-audit-record
+       '(:type tool-result-rewrite
+               :event "PostToolUse"
+               :original-result "raw result"
+               :updated-result "contents"
+               :reason "second audit detail")))
+     '(tool . "call_audit_state"))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "hook changed tool result")
+      (mevedel-view-toggle-section)
+      (should (string-match-p "second audit detail" (buffer-string)))
+      (should-not (string-match-p "first audit detail" (buffer-string)))
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "hook changed tool input")
+      (should (get-text-property (point) 'mevedel-view-collapsed))
+      (search-forward "hook changed tool result")
+      (should-not (get-text-property (point) 'mevedel-view-collapsed))
+      (should (string-match-p "second audit detail" (buffer-string)))
+      (should-not (string-match-p "first audit detail" (buffer-string)))
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "hook changed tool input")
+      (should (get-text-property (point) 'mevedel-view-collapsed))
+      (search-forward "hook changed tool result")
+      (should-not (get-text-property (point) 'mevedel-view-collapsed))))
+
+  :doc "deduplicates renderer audit fallbacks and preserves their fold state"
+  (mevedel-view-test--with-buffers
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "FallbackAuditTool"
+      :category "mevedel"
+      :renderer
+      (lambda (_name _args result _data)
+        (list
+         :header "FallbackAuditTool: complete"
+         :body result
+         :initially-collapsed-p t
+         :hook-audits
+         '((:type tool-input-rewrite
+                  :event "PreToolUse"
+                  :original-input (:value "before")
+                  :updated-input (:value "after")
+                  :reason "fallback first detail")
+           (:type tool-result-rewrite
+                  :event "PostToolUse"
+                  :original-result "raw"
+                  :updated-result "clean"
+                  :reason "fallback second detail")
+           (:type tool-result-rewrite
+                  :event "PostToolUse"
+                  :original-result "raw"
+                  :updated-result "clean"
+                  :reason "fallback second detail"))))))
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"FallbackAuditTool\" :args nil)\n\ncomplete\n"
+     '(tool . "call_fallback_audit_state"))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (should (= 1 (how-many "hook changed tool input")))
+      (goto-char (point-min))
+      (should (= 1 (how-many "hook changed tool result")))
+      (goto-char (point-min))
+      (search-forward "hook changed tool result")
+      (mevedel-view-toggle-section)
+      (should (string-match-p "fallback second detail" (buffer-string)))
+      (should-not (string-match-p "fallback first detail" (buffer-string)))
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "hook changed tool input")
+      (should (get-text-property (point) 'mevedel-view-collapsed))
+      (search-forward "hook changed tool result")
+      (should-not (get-text-property (point) 'mevedel-view-collapsed))
+      (should (string-match-p "fallback second detail" (buffer-string)))
+      (should-not (string-match-p "fallback first detail" (buffer-string)))
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "hook changed tool input")
+      (should (get-text-property (point) 'mevedel-view-collapsed))
+      (search-forward "hook changed tool result")
+      (should-not (get-text-property (point) 'mevedel-view-collapsed))))
+
   :doc "preserves source-backed agent handle state across full rerender"
   (mevedel-view-test--with-buffers
     (mevedel-tool-register
@@ -3972,6 +4071,43 @@
 (mevedel-deftest mevedel-view--tool-call-parse ()
   ,test
   (test)
+  :doc "cold-loads exact audit source ranges through the disclosure owner"
+  (let ((root
+         (file-name-as-directory
+          (file-name-directory (locate-library "mevedel"))))
+        (emacs (expand-file-name invocation-name invocation-directory)))
+    (with-temp-buffer
+      (should
+       (= 0
+          (call-process
+           emacs nil t nil "--batch" "-Q" "-L" root
+           "--eval"
+           (prin1-to-string
+            '(progn
+               (require 'mevedel-view-render)
+               (require 'mevedel-transcript-audit)
+               (require 'mevedel-utilities)
+               (with-temp-buffer
+                 (insert
+                  "(:name \"Read\" :args (:file_path \"audit.el\"))\n\n"
+                  (mevedel--format-hook-audit-record
+                   '(:type tool-result-rewrite
+                           :event "PostToolUse"
+                           :original-result "raw"
+                           :updated-result "clean")))
+                 (add-text-properties
+                  (point-min) (point-max) '(gptel (tool . "cold")))
+                 (let* ((call (mevedel-view--tool-call-parse
+                               (current-buffer) (point-min) (point-max)))
+                        (source (plist-get
+                                 (car (plist-get call :hook-audits))
+                                 :source)))
+                   (unless (and call
+                                (featurep 'mevedel-view-disclosure)
+                                (markerp (car-safe source))
+                                (markerp (cdr-safe source)))
+                     (error "Audit disclosure owner did not load")))))))))
+      (should (string-empty-p (string-trim (buffer-string))))))
   :doc "extracts name, args, and result from a tool segment"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data

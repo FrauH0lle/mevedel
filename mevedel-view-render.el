@@ -284,7 +284,8 @@
 (declare-function mevedel-view-disclosure-state-entry
                   "mevedel-view-disclosure" (source vtype))
 (declare-function mevedel-view-disclosure-state-key
-                  "mevedel-view-disclosure" (source vtype))
+                  "mevedel-view-disclosure"
+                  (source vtype &optional previous-key))
 (declare-function mevedel-view-disclosure-truncate-line
                   "mevedel-view-disclosure" (text limit))
 
@@ -1434,8 +1435,18 @@ renderer to fall back to the bare `Tool' one-liner."
                           (org-unescape-code-in-string full-result)
                         full-result))
                      (hook-audits
-                      (mevedel-view--hook-audit-records-from-text
-                       full-result))
+                      (pcase-let* ((bounds
+                                    (mevedel-view--tool-block-bounds
+                                     seg-start seg-end))
+                                   (audit-start
+                                    (min seg-start
+                                         (or (car-safe bounds) seg-start)))
+                                   (audit-end
+                                    (max seg-end
+                                         (or (cdr-safe bounds) seg-end))))
+                        (mevedel-view--hook-audit-records-from-text
+                         (buffer-substring audit-start audit-end)
+                         nil data-buf audit-start)))
                      (full-result
                       (mevedel--strip-hook-audit-blocks full-result))
                      (extract (mevedel-tool-render-data-extract
@@ -1960,7 +1971,8 @@ the raw tool segment.  When `:hidden-p' is non-nil, insert nothing."
       (when hook-audits
         (let ((audit-start (point)))
           (dolist (audit hook-audits)
-            (mevedel-view--insert-hook-audit-block audit source))
+            (mevedel-view--insert-hook-audit-block
+             audit (or (plist-get audit :source) source)))
           (mevedel-view-render-add-display-properties
            audit-start (point) 'hook-audit))))))
 
@@ -2052,8 +2064,10 @@ RAW is an optional precomputed expanded tool segment text."
       (when tool-use-id
         (setq rendering
               (plist-put rendering :tool-use-id tool-use-id)))
-      (when-let* ((audits (append (plist-get rendering :hook-audits)
-                                  (plist-get call :hook-audits))))
+      (when-let* ((audits
+                   (mevedel-view--merge-hook-audits
+                    (plist-get call :hook-audits)
+                    (plist-get rendering :hook-audits))))
         (setq rendering (plist-put rendering :hook-audits audits)))
       (if collapsed-only
           (mevedel-view--omit-rendering-body-for-cache rendering)
@@ -4593,7 +4607,7 @@ Return the normalized source coordinates used for the insertion."
           (mevedel-view-render-add-display-properties
            start (point) (plist-get rendering :vtype)))
       (let ((text (mevedel-view-disclosure-data-substring
-                   data-buf data-start data-end))
+                   data-buf data-start data-end (eq vtype 'hook-audit)))
             body-start)
         (when (eq vtype 'thinking-summary)
           (setq text
@@ -4626,10 +4640,15 @@ Return the normalized source coordinates used for the insertion."
                  (mevedel-view--hook-context-events-from-text text) t)))
         (when (eq vtype 'hook-audit)
           (setq text
-                (mapconcat
-                 (lambda (record)
-                   (mevedel-view--format-hook-audit-block record t))
-                 (mevedel-view--hook-audit-records-from-text text) "")))
+                (if-let* ((record
+                           (and header
+                                (get-text-property
+                                 0 'mevedel-view-hook-audit-record header))))
+                    (mevedel-view--format-hook-audit-block record t)
+                  (mapconcat
+                   (lambda (record)
+                     (mevedel-view--format-hook-audit-block record t))
+                   (mevedel-view--hook-audit-records-from-text text) ""))))
         (when (eq vtype 'system-reminder-summary)
           (setq text
                 (mevedel-view--fontify-as

@@ -715,7 +715,9 @@ isolated in `mevedel-view-markdown.el`. Pipe tables remain raw fontified
 Markdown rather than undergoing a second parser and alignment pass.
 Audit disclosure formatting and toggling live in `mevedel-view-audit.el`;
 `mevedel-view-disclosure.el` owns its shared source-backed toggle state, and
-`mevedel-view-render.el` retains the surrounding turn projection.
+`mevedel-view-render.el` retains the surrounding turn projection. Each
+tool-attached hook audit uses its own transcript span, so audits attached to
+one tool retain independent collapse state across rerenders.
 
 Tool-rendering caches are disposable UI caches, not just text caches.
 Cache keys must include session-side state that changes visible
