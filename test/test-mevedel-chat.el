@@ -1714,9 +1714,12 @@
 				(tmpdir (file-name-as-directory
 					 (make-temp-file "mevedel-directive-terminal-" t)))
 				(file (file-name-concat tmpdir "sample.txt"))
+				(gap-file (file-name-concat tmpdir "gap.txt"))
 				(buf (find-file-noselect file))
 				(captured-fsm nil)
-				(captured-chat nil))
+				(captured-chat nil)
+				(failure-called nil)
+				(provider-aborted nil))
 		     (unwind-protect
 			 (with-current-buffer buf
 			   (insert "source\n")
@@ -1750,23 +1753,57 @@
 				directive '(:system "test")
 				#'mevedel--implement-directive-prompt nil)
 			       (if (eq kind 'abort)
-				   (funcall
-				    (plist-get (gptel-fsm-info captured-fsm)
-					       :mevedel-request-callback)
-				    'abort captured-fsm)
+				   (progn
+				     (with-current-buffer captured-chat
+				       (puthash
+					file "source\n"
+					(mevedel-request-file-snapshots
+					 mevedel--current-request))
+				       (puthash
+					gap-file '(:gap "capture denied")
+					(mevedel-request-file-snapshots
+					 mevedel--current-request)))
+				     (cl-letf
+					 (((symbol-function
+					    'ask-user-about-supersession-threat)
+					   (lambda (&rest _) nil)))
+				       (with-temp-file file
+					 (insert "changed\n")))
+				     (let ((gptel--request-alist
+					    (list
+					     (cons
+					      'directive
+					      (cons
+					       captured-fsm
+					       (lambda ()
+						 (setq provider-aborted t)))))))
+				       (cl-letf
+					   (((symbol-function
+					      'mevedel--fail-turn)
+					     (lambda (_fsm status)
+					       (setq failure-called status)))
+					    ((symbol-function
+					      'mevedel--replace-patch-buffer)
+					     #'ignore))
+					 (mevedel-test--with-captured-messages
+					  nil
+					  (gptel-abort captured-chat)))))
 				 (setf (gptel-fsm-state captured-fsm) 'ERRS
 				       (gptel-fsm-info captured-fsm)
 				       (plist-put
 					(gptel-fsm-info captured-fsm)
 					:error '(:message "transport failed")))
-					 (funcall
-					  (plist-get (gptel-fsm-info captured-fsm)
-						     :mevedel-request-callback)
-					  nil captured-fsm))
-				       (with-current-buffer captured-chat
-					 (mevedel--turn-commit captured-fsm)
-					 (mevedel-request-end))
-				       (let* ((record (mevedel--directive-record directive))
+				 (funcall
+				  (plist-get (gptel-fsm-info captured-fsm)
+					     :mevedel-request-callback)
+				  nil captured-fsm))
+			       (when (eq kind 'abort)
+				 (should provider-aborted)
+				 (should (eq 'aborted failure-called)))
+			       (with-current-buffer captured-chat
+				 (mevedel--turn-commit captured-fsm)
+				 (mevedel-request-end))
+			       (let* ((record (mevedel--directive-record directive))
 				      (attempt
 				       (car (mevedel-directive-attempts record))))
 				 (should (eq state (mevedel-directive-state record)))
@@ -1776,6 +1813,24 @@
 				 (should
 				  (equal result
 					 (mevedel-directive-attempt-result attempt)))
+				 (when (eq kind 'abort)
+				   (should
+				    (string-match-p
+				     "changed"
+				     (mevedel-directive-attempt-patch attempt)))
+				   (should
+				    (eq 'incomplete
+					(mevedel-directive-attempt-capture
+					 attempt)))
+				   (should
+				    (equal
+				     (list file)
+				     (mevedel-directive-attempt-covered-files
+				      attempt)))
+				   (should
+				    (equal
+				     (list (cons gap-file "capture denied"))
+				     (mevedel-directive-attempt-gaps attempt))))
 				 (should-not
 				  (mevedel-directive-attempt-consumed-subdirectives
 				   attempt))
@@ -2352,7 +2407,9 @@
 			     (setf (mevedel-session-agent-registry session)
 				   (list (cons "/root/explorer" record)))
 			     (cl-letf (((symbol-function 'mevedel-agent-runtime-interrupt)
-					(lambda (&rest _) (setq interrupted t))))
+					(lambda (&rest _) (setq interrupted t)))
+				       ((symbol-function 'mevedel-session-artifacts-save)
+					#'ignore))
 			       (mevedel-abort (current-buffer)))
 			     (should-not interrupted)
 			     (should-not

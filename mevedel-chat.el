@@ -1645,17 +1645,7 @@ settling."
 					  gptel-model (plist-get model-policy :model)
 					  gptel-reasoning-effort
 					  (plist-get model-policy :effort))))))
-				:fsm (gptel-make-fsm :handlers gptel-send--handlers)))
-			      (info (gptel-fsm-info fsm))
-			      (fsm-callback (plist-get info :callback))
-			      (wrapped-callback
-			       (lambda (response &rest rest)
-				 "Settle an abort, then pass RESPONSE to the gptel callback."
-				 (when (eq response 'abort)
-				   (funcall request-callback 'abort fsm))
-				 (apply fsm-callback response rest))))
-			 (setf (gptel-fsm-info fsm)
-			       (plist-put info :callback wrapped-callback))
+				:fsm (gptel-make-fsm :handlers gptel-send--handlers))))
 			 (setf (gptel-fsm-info fsm)
 			       (plist-put (gptel-fsm-info fsm)
 					  :mevedel-request-callback request-callback))

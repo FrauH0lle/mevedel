@@ -9,6 +9,9 @@
 (require 'mevedel-buddy)
 (require 'mevedel-buddy-note)
 (require 'mevedel-chat)
+(require 'mevedel-models)
+(require 'mevedel-system)
+(require 'mevedel-workspace)
 (require 'gptel)
 (require 'helpers
          (file-name-concat
@@ -35,6 +38,10 @@
 
 (defun mevedel-test--buddy-cleanup ()
   "Kill buddy test buffers and clear recorded state."
+  (when (timerp mevedel-buddy--timeout-timer)
+    (cancel-timer mevedel-buddy--timeout-timer))
+  (when (buffer-live-p mevedel-buddy--request-buffer)
+    (kill-buffer mevedel-buddy--request-buffer))
   (dolist (buf mevedel-test--buddy-buffers)
     (when (buffer-live-p buf)
       (with-current-buffer buf
@@ -43,7 +50,8 @@
   (setq mevedel-test--buddy-buffers nil
         mevedel-buddy--running nil
         mevedel-buddy--running-automatic nil
-        mevedel-buddy--running-buffer nil)
+        mevedel-buddy--request-buffer nil
+        mevedel-buddy--timeout-timer nil)
   (mevedel-buddy-clear-changes))
 
 (defun mevedel-test--buddy-edit (buffer fn)
@@ -431,20 +439,22 @@
   (test)
 
   :doc "`mevedel-buddy--preempt' abandons an automatic review in flight"
-  (let ((buf (mevedel-test--buddy-buffer "preempt.el" "alpha\n")))
+  (let ((buf (mevedel-test--buddy-buffer "preempt.el" "alpha\n"))
+        (request-buffer (generate-new-buffer " *buddy-preempt*")))
     (with-current-buffer buf
       (setq mevedel-buddy--running "scope"
             mevedel-buddy--running-automatic t
-            mevedel-buddy--running-buffer buf)
+            mevedel-buddy--request-buffer request-buffer)
       (mevedel-buddy--preempt)
       (should-not mevedel-buddy--running)))
 
   :doc "`mevedel-buddy--preempt' leaves an explicit request alone"
-  (let ((buf (mevedel-test--buddy-buffer "preempt-explicit.el" "alpha\n")))
+  (let ((buf (mevedel-test--buddy-buffer "preempt-explicit.el" "alpha\n"))
+        (request-buffer (generate-new-buffer " *buddy-explicit*")))
     (with-current-buffer buf
       (setq mevedel-buddy--running "scope"
             mevedel-buddy--running-automatic nil
-            mevedel-buddy--running-buffer buf)
+            mevedel-buddy--request-buffer request-buffer)
       (mevedel-buddy--preempt)
       (should (equal "scope" mevedel-buddy--running))))
 
@@ -551,6 +561,118 @@
     (funcall (car (last (cdr (assq 'ABRT handlers)))) fsm)
     (should (eq nil settled))))
 
+(mevedel-deftest mevedel-buddy--request
+  (:after-each (mevedel-test--buddy-cleanup)
+   :quiet t)
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy--request' aborts only Buddy after its source dies"
+  (let* ((source (mevedel-test--buddy-buffer "buddy-request.el" "alpha\n"))
+         (source-directory
+          (buffer-local-value 'default-directory source))
+         (ordinary-fsm (gptel-make-fsm :info (list :buffer source)))
+         (gptel--request-alist nil)
+         request-buffer
+         (ordinary-aborts 0)
+         (buddy-aborts 0))
+    (with-current-buffer source
+      (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                 (lambda (&rest _) '(:backend mock :model mock)))
+                ((symbol-function 'mevedel-buddy-note-capture-markers)
+                 #'ignore)
+                ((symbol-function 'mevedel-buddy-note-release-markers)
+                 #'ignore)
+                ((symbol-function 'mevedel-buddy-note-serialize)
+                 (lambda () ""))
+                ((symbol-function 'mevedel-buddy-note-tools)
+                 (lambda (_) nil))
+                ((symbol-function 'mevedel-buddy--telemetry) #'ignore)
+                ((symbol-function 'mevedel-buddy--workspace) #'ignore)
+                ((symbol-function 'mevedel-system-build-prompt)
+                 (lambda (&rest _) "system"))
+                ((symbol-function 'gptel-request)
+                 (lambda (_prompt &rest keys)
+                   (let ((fsm (plist-get keys :fsm)))
+                     (setq request-buffer (plist-get keys :buffer))
+                     (setf (gptel-fsm-info fsm)
+                           (list :buffer request-buffer
+                                 :callback (plist-get keys :callback)))
+                     (setq gptel--request-alist
+                           (list
+                            (cons 'ordinary
+                                  (cons ordinary-fsm
+                                        (lambda ()
+                                          (cl-incf ordinary-aborts))))
+                            (cons 'buddy
+                                  (cons fsm
+                                        (lambda ()
+                                          (cl-incf buddy-aborts))))))))))
+        (mevedel-buddy--request
+         "scope" 'buddy "payload" '("buddy-request.el")
+         (current-time) nil)))
+    (should (buffer-live-p request-buffer))
+    (should-not (eq source request-buffer))
+    (should (equal source-directory
+                   (buffer-local-value 'default-directory request-buffer)))
+    (kill-buffer source)
+    (mevedel-buddy--abandon 'user)
+    (should (= 0 ordinary-aborts))
+    (should (= 1 buddy-aborts))
+    (should (assq 'ordinary gptel--request-alist))
+    (should-not (assq 'buddy gptel--request-alist))
+    (should-not (buffer-live-p request-buffer)))
+
+  :doc "the Buddy tool-round cap uses the same exact request identity"
+  (let* ((source (mevedel-test--buddy-buffer "buddy-cap.el" "alpha\n"))
+         (ordinary-fsm (gptel-make-fsm :info (list :buffer source)))
+         (gptel--request-alist nil)
+         (mevedel-buddy-max-iterations 0)
+         request-buffer callback
+         (ordinary-aborts 0)
+         (buddy-aborts 0))
+    (with-current-buffer source
+      (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                 (lambda (&rest _) '(:backend mock :model mock)))
+                ((symbol-function 'mevedel-buddy-note-capture-markers)
+                 #'ignore)
+                ((symbol-function 'mevedel-buddy-note-release-markers)
+                 #'ignore)
+                ((symbol-function 'mevedel-buddy-note-serialize)
+                 (lambda () ""))
+                ((symbol-function 'mevedel-buddy-note-tools)
+                 (lambda (_) nil))
+                ((symbol-function 'mevedel-buddy--telemetry) #'ignore)
+                ((symbol-function 'mevedel-buddy--workspace) #'ignore)
+                ((symbol-function 'mevedel-system-build-prompt)
+                 (lambda (&rest _) "system"))
+                ((symbol-function 'gptel-request)
+                 (lambda (_prompt &rest keys)
+                   (let ((fsm (plist-get keys :fsm)))
+                     (setq request-buffer (plist-get keys :buffer)
+                           callback (plist-get keys :callback))
+                     (setf (gptel-fsm-info fsm)
+                           (list :buffer request-buffer :callback callback))
+                     (setq gptel--request-alist
+                           (list
+                            (cons 'ordinary
+                                  (cons ordinary-fsm
+                                        (lambda ()
+                                          (cl-incf ordinary-aborts))))
+                            (cons 'buddy
+                                  (cons fsm
+                                        (lambda ()
+                                          (cl-incf buddy-aborts))))))))))
+        (mevedel-buddy--request
+         "scope" 'buddy "payload" '("buddy-cap.el")
+         (current-time) nil)))
+    (kill-buffer source)
+    (funcall callback '(tool-result) nil)
+    (should (= 0 ordinary-aborts))
+    (should (= 1 buddy-aborts))
+    (should (assq 'ordinary gptel--request-alist))
+    (should-not (buffer-live-p request-buffer))))
+
 (mevedel-deftest mevedel-buddy--current-generation-p
   (:after-each (mevedel-test--buddy-cleanup))
   ,test
@@ -561,10 +683,8 @@
     (should (mevedel-buddy--current-generation-p generation)))
 
   :doc "a request outlived by its review is not"
-  ;; Abandoning a review cannot always stop its request: the source buffer
-  ;; may be gone, and `gptel-abort' matches on that buffer.  When such a
-  ;; straggler finally settles, a newer review may be running, and it must
-  ;; neither retire that review's changes nor tear down its state.
+  ;; A callback racing with cancellation must neither retire a newer
+  ;; review's changes nor tear down its state.
   (let ((stale (cl-incf mevedel-buddy--generation)))
     (cl-incf mevedel-buddy--generation)
     (should-not (mevedel-buddy--current-generation-p stale))))
@@ -575,29 +695,26 @@
   (test)
 
   :doc "`mevedel-buddy--abandon' retires the abandoned review's generation"
-  ;; Abandoning must not depend on another review starting to neutralise
-  ;; the straggler: `gptel-abort' cannot stop a request whose source buffer
-  ;; is gone, and if the user simply stops editing, that request would
-  ;; still look current when it settles and would retire the very changes
-  ;; abandonment exists to preserve.
-  (let ((buf (mevedel-test--buddy-buffer "abandon.el" "alpha\n")))
+  (let ((buf (mevedel-test--buddy-buffer "abandon.el" "alpha\n"))
+        (request-buffer (generate-new-buffer " *buddy-abandon*")))
     (with-current-buffer buf
       (setq mevedel-buddy--running "scope"
             mevedel-buddy--running-automatic t
-            mevedel-buddy--running-buffer buf)
+            mevedel-buddy--request-buffer request-buffer)
       (let ((generation mevedel-buddy--generation))
         (mevedel-buddy--abandon 'timeout)
         (should-not (mevedel-buddy--current-generation-p generation)))))
 
   :doc "`mevedel-buddy--abandon' keeps the changes it abandoned"
-  (let ((buf (mevedel-test--buddy-buffer "abandon-keep.el" "alpha\n")))
+  (let ((buf (mevedel-test--buddy-buffer "abandon-keep.el" "alpha\n"))
+        (request-buffer (generate-new-buffer " *buddy-abandon-keep*")))
     (mevedel-test--buddy-edit
      buf (lambda () (goto-char (point-max)) (insert "beta\n")))
     (with-current-buffer buf
       (let ((scope (mevedel-buddy--scope-key)))
         (setq mevedel-buddy--running scope
               mevedel-buddy--running-automatic t
-              mevedel-buddy--running-buffer buf)
+              mevedel-buddy--request-buffer request-buffer)
         (mevedel-buddy--abandon 'timeout)
         (should (mevedel-buddy--changes-for-scope scope))
         (should-not mevedel-buddy--running)))))

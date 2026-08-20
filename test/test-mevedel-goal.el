@@ -186,7 +186,10 @@
             (mevedel-goal-capture-request root)
             (should (equal "goal-1"
                            (plist-get (gptel-fsm-info root)
-                                      :mevedel-goal-id))))
+                                      :mevedel-goal-id)))
+            (should (equal "goal-1"
+                           (plist-get (gptel-fsm-info root)
+                                      :mevedel-goal-accounting-id))))
           (setf (mevedel-goal-status goal) 'complete)
           (let ((after-completion
                  (gptel-make-fsm :info (list :buffer buffer :data "next"))))
@@ -257,9 +260,11 @@
       (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-goal-settle-turn
-  (:doc "charges provider tokens, elapsed time, and one turn to an attributed Goal")
-  (progn
-   (let* ((session (mevedel-session--create :name "main"))
+  (:doc "settles only the Goal lineage attributed to the request")
+  ,test
+  (test)
+  :doc "charges provider tokens, elapsed time, and one turn"
+  (let* ((session (mevedel-session--create :name "main"))
          (goal (mevedel-goal--create
                 :id "goal-1" :objective "Ship" :status 'active
                 :tokens-used 2 :time-used-seconds 1 :turns-run 3
@@ -267,6 +272,7 @@
          (buffer (generate-new-buffer " *mevedel-goal-settle*"))
          (fsm (gptel-make-fsm
                :info (list :buffer buffer :mevedel-goal-id "goal-1"
+                           :mevedel-goal-accounting-id "goal-1"
                            :mevedel-goal-started-at (- (float-time) 2)
                            :tokens-full '(:input 10 :output 3)))))
     (unwind-protect
@@ -279,6 +285,8 @@
           (should (>= (mevedel-goal-time-used-seconds goal) 3))
           (should (= 4 (mevedel-goal-turns-run goal))))
       (kill-buffer buffer)))
+
+  :doc "enforces budget thresholds and terminal Goal states"
   (let* ((session (mevedel-session--create :name "main"))
          (goal (mevedel-goal--create
                 :id "goal-2" :objective "Ship" :status 'active
@@ -288,6 +296,7 @@
          (buffer (generate-new-buffer " *mevedel-goal-budget-crossing*"))
          (fsm (gptel-make-fsm
                :info (list :buffer buffer :mevedel-goal-id "goal-2"
+                           :mevedel-goal-accounting-id "goal-2"
                            :tokens-full '(:input 40 :output 11 :cached 500)))))
     (unwind-protect
         (progn
@@ -313,9 +322,12 @@
           (mevedel-goal-settle-turn
            (gptel-make-fsm
             :info (list :buffer buffer :mevedel-goal-id "goal-2"
+                        :mevedel-goal-accounting-id "goal-2"
                         :tokens-full '(:input 1 :output 0))))
           (should (= 3 (length (mevedel-session-pending-reminders session)))))
       (kill-buffer buffer)))
+
+  :doc "does not reactivate a complete or blocked Goal"
   (dolist (status '(complete blocked))
     (let* ((session (mevedel-session--create :name "main"))
            (goal (mevedel-goal--create
@@ -332,12 +344,48 @@
             (mevedel-goal-settle-turn
              (gptel-make-fsm
               :info (list :buffer buffer :mevedel-goal-id "goal-3"
+                          :mevedel-goal-accounting-id "goal-3"
                           :tokens-full '(:input 1 :output 0))))
             (should (eq status (mevedel-goal-status goal))))
-        (kill-buffer buffer))))))
+        (kill-buffer buffer))))
+
+  :doc "does not charge a replacement created after clear"
+  (let* ((session (mevedel-session--create :name "main"))
+         (old-goal (mevedel-goal--create
+                    :id "goal-old" :objective "Old" :status 'active
+                    :tokens-used 0 :time-used-seconds 0 :turns-run 0))
+         (buffer (generate-new-buffer " *mevedel-goal-replaced-success*"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buffer :mevedel-goal-id "goal-old"
+                           :mevedel-goal-accounting-id "goal-old"
+                           :tokens-full '(:input 7 :output 3)))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-goal session) old-goal)
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (cl-letf (((symbol-function 'mevedel-goal--assert-mutation-authority)
+                       #'ignore)
+                      ((symbol-function 'mevedel-session-artifacts-save)
+                       #'ignore)
+                      ((symbol-function 'mevedel-goal-new-id)
+                       (lambda () "goal-new"))
+                      ((symbol-function 'mevedel-telemetry-record) #'ignore)
+                      ((symbol-function 'run-at-time) #'ignore))
+              (mevedel-goal-clear)
+              (mevedel-goal-start "Replacement")))
+          (let ((replacement (mevedel-session-goal session)))
+            (mevedel-goal-settle-turn fsm)
+            (should (equal "goal-new" (mevedel-goal-id replacement)))
+            (should (= 0 (mevedel-goal-tokens-used replacement)))
+            (should (= 0 (mevedel-goal-turns-run replacement)))))
+      (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-goal-settle-failure
-  (:doc "retries one transient failure and pauses on the next or a terminal failure")
+  (:doc "settles failure only against the attributed Goal lineage")
+  ,test
+  (test)
+  :doc "retries one transient failure and pauses on the next or terminal failure"
   (let* ((session (mevedel-session--create :name "main"))
          (goal (mevedel-goal--create
                 :id "goal-1" :objective "Ship" :status 'active
@@ -352,6 +400,7 @@
                         mevedel-goal--transient-retries 0))
           (let ((fsm (gptel-make-fsm
                       :info (list :buffer buffer :mevedel-goal-id "goal-1"
+                                  :mevedel-goal-accounting-id "goal-1"
                                   :error "temporary network timeout"))))
             (mevedel-goal-settle-failure fsm 'error)
             (should (eq 'active (mevedel-goal-status goal)))
@@ -365,6 +414,7 @@
           (mevedel-goal-settle-failure
            (gptel-make-fsm
             :info (list :buffer buffer :mevedel-goal-id "goal-1"
+                        :mevedel-goal-accounting-id "goal-1"
                         :error "authentication failed"))
            'error)
           (should (eq 'paused (mevedel-goal-status goal)))
@@ -373,9 +423,33 @@
           (mevedel-goal-settle-failure
            (gptel-make-fsm
             :info (list :buffer buffer :mevedel-goal-id "goal-1"
+                        :mevedel-goal-accounting-id "goal-1"
                         :error "provider failed"))
            'error)
           (should (eq 'complete (mevedel-goal-status goal))))
+      (kill-buffer buffer)))
+
+  :doc "does not pause a current Goal with a different identity"
+  (let* ((session (mevedel-session--create :name "main"))
+         (replacement (mevedel-goal--create
+                       :id "goal-new" :objective "Replacement"
+                       :status 'active :tokens-used 0
+                       :time-used-seconds 0 :turns-run 0))
+         (buffer (generate-new-buffer " *mevedel-goal-replaced-failure*"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buffer :mevedel-goal-id "goal-old"
+                           :mevedel-goal-accounting-id "goal-old"
+                           :error "authentication failed"))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-goal session) replacement)
+          (with-current-buffer buffer
+            (setq-local mevedel--session session))
+          (mevedel-goal-settle-failure fsm 'error)
+          (should (eq 'active (mevedel-goal-status replacement)))
+          (should-not (mevedel-goal-reason replacement))
+          (should (= 0 (mevedel-goal-tokens-used replacement)))
+          (should (= 0 (mevedel-goal-turns-run replacement))))
       (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-goal-pause-runtime-failure
@@ -500,7 +574,10 @@
       (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-goal-tool-result-budget-warning
-  (:doc "returns the 100% tool-boundary warning once for known provider usage")
+  (:doc "warns only for the attributed Goal lineage")
+  ,test
+  (test)
+  :doc "returns the 100% tool-boundary warning once for provider usage"
   (let* ((session (mevedel-session--create :name "main"))
          (goal (mevedel-goal--create
                 :id "goal-1" :objective "Ship" :status 'active
@@ -509,13 +586,29 @@
                 :created-at "now" :updated-at "now"))
          (fsm (gptel-make-fsm
                :info '(:mevedel-goal-id "goal-1"
+                       :mevedel-goal-accounting-id "goal-1"
                        :tokens-full (:input 7 :output 3 :cached 1000)))))
     (setf (mevedel-session-goal session) goal)
     (should (string-match-p
              "stop new substantive work"
              (mevedel-goal-tool-result-budget-warning session fsm)))
     (should-not (mevedel-goal-tool-result-budget-warning session fsm))
-    (should (= 90 (mevedel-goal-tokens-used goal)))))
+    (should (= 90 (mevedel-goal-tokens-used goal))))
+
+  :doc "does not warn a current Goal with a different identity"
+  (let* ((session (mevedel-session--create :name "main"))
+         (replacement (mevedel-goal--create
+                       :id "goal-new" :objective "Replacement"
+                       :status 'active :token-budget 100 :tokens-used 0
+                       :time-used-seconds 0 :turns-run 0))
+         (fsm (gptel-make-fsm
+               :info '(:mevedel-goal-id "goal-old"
+                       :mevedel-goal-accounting-id "goal-old"
+                       :tokens-full (:input 100 :output 0)))))
+    (setf (mevedel-session-goal session) replacement)
+    (should-not (mevedel-goal-tool-result-budget-warning session fsm))
+    (should-not (plist-get (gptel-fsm-info fsm)
+                           :mevedel-goal-budget-warnings))))
 
 (mevedel-deftest mevedel-goal-edit
   (:doc "rotates identity, retains the run, and refreshes an in-flight Goal")
@@ -527,14 +620,20 @@
                 :plan-reference "accepted-plan.md"
                 :created-at "created" :updated-at "old-update"))
          (buffer (generate-new-buffer " *mevedel-goal-edit*"))
+         (request-fsm
+          (gptel-make-fsm
+           :info (list :buffer buffer :mevedel-goal-id "goal-1"
+                       :mevedel-goal-accounting-id "goal-1"
+                       :tokens-full '(:input 3 :output 2))))
+         (request (mevedel-request--create
+                   :session session :fsm request-fsm))
          saved scheduled refreshed)
     (unwind-protect
         (progn
           (setf (mevedel-session-goal session) goal)
           (with-current-buffer buffer
             (setq-local mevedel--session session
-                        mevedel--current-request
-                        (mevedel-request--create :session session)))
+                        mevedel--current-request request))
           (with-current-buffer buffer
             (should-error (mevedel-goal-edit "  ") :type 'user-error))
           (should (equal "goal-1" (mevedel-goal-id goal)))
@@ -574,10 +673,13 @@
                         (mevedel-goal-continue-if-idle session buffer))))
           (should-error
            (mevedel-tool-goal-update 'complete nil session "goal-1"))
-          (mevedel-goal-settle-turn
-           (gptel-make-fsm
-            :info (list :buffer buffer :mevedel-goal-id "goal-1"
-                        :tokens-full '(:input 3 :output 2))))
+          (should (equal "goal-1"
+                         (plist-get (gptel-fsm-info request-fsm)
+                                    :mevedel-goal-id)))
+          (should (equal "goal-2"
+                         (plist-get (gptel-fsm-info request-fsm)
+                                    :mevedel-goal-accounting-id)))
+          (mevedel-goal-settle-turn request-fsm)
           (should (= 25 (mevedel-goal-tokens-used goal)))
           (should (= 5 (mevedel-goal-turns-run goal)))
           (should (equal "Goal status changed to complete"

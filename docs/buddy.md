@@ -123,9 +123,10 @@ offered again rather than silently skipped.
 A review that never settles is abandoned after `mevedel-buddy-timeout`, which
 releases its markers and frees the one-at-a-time slot. `mevedel-buddy-abort`
 does the same by hand. Abandoning also retires the review's generation, so a
-request that outlives it — `gptel-abort` cannot stop one whose source buffer has
-been killed — settles into nothing rather than retiring changes it never got
-notes for.
+callback racing with cancellation settles into nothing rather than retiring
+changes it never got notes for. Each review uses its own hidden live request
+buffer as the exact `gptel-abort` identity, so cancellation cannot select an
+ordinary request from the source buffer and still works after that source dies.
 
 Turning `mevedel-buddy-mode` off in a buffer, or disabling
 `mevedel-buddy-global-mode`, **discards that buffer's recorded edits** along

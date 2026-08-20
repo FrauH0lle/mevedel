@@ -484,19 +484,15 @@ are grouped per buffer and each group becomes one section."
 An explicitly requested review may preempt one of those; it may not
 preempt another explicit request.")
 
-(defvar mevedel-buddy--running-buffer nil
-  "Buffer the review in flight was started from, for `gptel-abort'.")
+(defvar mevedel-buddy--request-buffer nil
+  "Hidden request buffer that identifies the review for `gptel-abort'.")
 
 (defvar mevedel-buddy--generation 0
   "Counter identifying the review in flight.
 
-A request outlives the review that started it: abandoning one cannot
-always stop it, because its source buffer may be gone by then and
-`gptel-abort' matches on that buffer -- and matches any request made
-from it, not necessarily ours.  Each review takes the next generation
-and its callbacks do nothing once that number has moved on, so a
-straggler cannot retire another review's changes or tear down its
-state.")
+Each review takes the next generation and its callbacks do nothing once
+that number has moved on, so a callback racing with abandonment cannot
+retire another review's changes or tear down its state.")
 
 (defvar mevedel-buddy--timeout-timer nil
   "Timer that abandons the review in flight if it never settles.")
@@ -591,28 +587,22 @@ changes are offered again."
   (when mevedel-buddy--timeout-timer
     (cancel-timer mevedel-buddy--timeout-timer)
     (setq mevedel-buddy--timeout-timer nil))
+  (when (buffer-live-p mevedel-buddy--request-buffer)
+    (kill-buffer mevedel-buddy--request-buffer))
   (mevedel-buddy-note-release-markers)
   (setq mevedel-buddy-note--scope-buffers nil
         mevedel-buddy--running nil
         mevedel-buddy--running-automatic nil
-        mevedel-buddy--running-buffer nil))
+        mevedel-buddy--request-buffer nil))
 
 (defun mevedel-buddy--abandon (reason)
   "Abandon the review in flight because of REASON, retiring nothing."
   (when mevedel-buddy--running
     (let ((scope-key mevedel-buddy--running)
-          (buffer mevedel-buddy--running-buffer))
-      ;; Retire the generation before anything else.  `gptel-abort' cannot
-      ;; stop a request whose source buffer is gone, and if no further
-      ;; review starts, that straggler would still look current when it
-      ;; settles and would retire the changes this abandonment exists to
-      ;; preserve.  Retiring first also means the ABRT-driven callback
-      ;; finds itself stale and leaves the settle below to do the work.
+          (buffer mevedel-buddy--request-buffer))
+      ;; Retire first so the ABRT-driven callback leaves settlement here.
       (cl-incf mevedel-buddy--generation)
       (when (buffer-live-p buffer)
-        ;; `gptel-abort' matches on the buffer the request was made from,
-        ;; which is not necessarily the buffer we are standing in: scope is
-        ;; workspace-wide, so the review may have started elsewhere.
         (ignore-errors (gptel-abort buffer)))
       (mevedel-buddy--telemetry 'buddy-abandoned
                                 :scope scope-key :reason reason)
@@ -651,12 +641,17 @@ started by the idle timer, which an explicit request may preempt."
         (rounds 0)
         (settled nil)
         (generation (cl-incf mevedel-buddy--generation))
-        (source (current-buffer)))
+        (source (current-buffer))
+        (request-buffer (generate-new-buffer " *mevedel-buddy-request*")))
     (unless (plist-get policy :model)
+      (kill-buffer request-buffer)
       (user-error "No model resolves for the buddy workload"))
+    (with-current-buffer request-buffer
+      (setq default-directory
+            (buffer-local-value 'default-directory source)))
     (setq mevedel-buddy--running scope-key
           mevedel-buddy--running-automatic automatic
-          mevedel-buddy--running-buffer source
+          mevedel-buddy--request-buffer request-buffer
           mevedel-buddy-note--scope-buffers buffer-names)
     (mevedel-buddy-note-capture-markers
      (mevedel-buddy--payload-lines payload))
@@ -693,7 +688,7 @@ started by the idle timer, which an explicit request may preempt."
                     (mevedel-buddy--current-generation-p generation)))))
             (gptel-request
              (concat payload (mevedel-buddy-note-serialize))
-             :buffer source
+             :buffer request-buffer
              :fsm (mevedel-buddy--request-fsm #'finish)
              ;; Follow the user's streaming setting rather than forcing it
              ;; off.  Buddy has no use for streamed prose, but some
@@ -711,7 +706,7 @@ started by the idle timer, which an explicit request may preempt."
                  (when (> rounds mevedel-buddy-max-iterations)
                    ;; Aborting reaches the machine's ABRT state, which
                    ;; settles the review without retiring its changes.
-                   (ignore-errors (gptel-abort source)))))))
+                   (ignore-errors (gptel-abort request-buffer)))))))
         (error (finish nil))))))
 
 (defun mevedel-buddy--workspace ()
