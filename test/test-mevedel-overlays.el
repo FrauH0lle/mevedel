@@ -822,6 +822,38 @@
             (should (equal "Child detail" (mevedel--directive-text child)))))
       (mevedel-overlays-test--discard-directive cell)))
 
+  :doc "rejected parent deletion keeps every presentation attached"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'file :id "reject-detach" :root "/tmp"
+                     :name "reject-detach"))
+         (cell (mevedel-overlays-test--make-directive
+                "outer child tail\n" "Parent request" workspace))
+         (buffer (car cell))
+         (parent (cdr cell))
+         child)
+    (unwind-protect
+        (with-current-buffer buffer
+          (goto-char (point-min))
+          (search-forward "child")
+          (setq child
+                (mevedel--create-directive-in
+                 buffer (match-beginning 0) (match-end 0) nil
+                 "Child detail"))
+          (add-hook 'before-change-functions
+                    (lambda (&rest _) (error "Reject edit")) t t)
+          (should-error
+           (delete-region (overlay-start parent) (overlay-end parent))
+           :type 'error)
+          (should (overlay-buffer parent))
+          (should (overlay-buffer child))
+          (should (equal "outer child tail\n"
+                         (buffer-substring-no-properties
+                          (point-min) (point-max))))
+          (should (= 1 (length
+                        (mevedel-directive-subdirectives
+                         (mevedel--directive-record parent))))))
+      (mevedel-overlays-test--discard-directive cell)))
+
   :doc "detaches Ready and attempted directives after real full-region edits"
   (dolist (state '(nil implemented))
     (let* ((request (concat "A request " (make-string 140 ?x)))
@@ -871,6 +903,71 @@
                             (overlay-get detached 'before-string))))
               (should (keymapp (overlay-get detached 'keymap)))))
         (mevedel-overlays-test--discard-directive cell))))
+
+  :doc "detached parents retain nested prompt and submission details"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'file :id "detach-nested" :root "/tmp"
+                     :name "detach-nested"))
+         (cell (mevedel-overlays-test--make-directive
+                "outer child tail\n" "" workspace))
+         (buffer (car cell))
+         (parent (cdr cell))
+         child)
+    (unwind-protect
+        (with-current-buffer buffer
+          (goto-char (point-min))
+          (search-forward "child")
+          (setq child
+                (mevedel--create-directive-in
+                 buffer (match-beginning 0) (match-end 0) nil
+                 "Child detail"))
+          (delete-region (overlay-start parent) (overlay-end parent))
+          (setq parent
+                (mevedel--instruction-with-uuid
+                 (mevedel-directive-id
+                  (car (mevedel-workspace-directives workspace)))
+                 workspace))
+          (should-not (overlay-buffer child))
+          (should (= 1 (length
+                        (mevedel-directive-subdirectives
+                         (mevedel--directive-record parent)))))
+          (should (string-match-p "Child detail"
+                                  (mevedel--directive-llm-prompt parent)))
+          (let ((submitted (mevedel--submitted-subdirectives parent)))
+            (should (= 1 (length submitted)))
+            (should (equal "Child detail"
+                           (mevedel-subdirective-request
+                            (car submitted))))))
+      (mevedel-overlays-test--discard-directive cell)))
+
+  :doc "deleting only a nested range still removes its durable detail"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'file :id "delete-nested" :root "/tmp"
+                     :name "delete-nested"))
+         (cell (mevedel-overlays-test--make-directive
+                "outer child tail\n" "Parent request" workspace))
+         (buffer (car cell))
+         (parent (cdr cell))
+         child)
+    (unwind-protect
+        (with-current-buffer buffer
+          (goto-char (point-min))
+          (search-forward "child")
+          (setq child
+                (mevedel--create-directive-in
+                 buffer (match-beginning 0) (match-end 0) nil
+                 "Child detail"))
+          (delete-region (overlay-start child) (overlay-end child))
+          (mevedel--all-instructions)
+          (should-not
+           (mevedel-directive-subdirectives
+            (mevedel--directive-record parent)))
+          (should (eq 'attached
+                      (plist-get
+                       (mevedel-directive-anchor
+                        (mevedel--directive-record parent))
+                       :state))))
+      (mevedel-overlays-test--discard-directive cell)))
 
   :doc "keeps partial edits attached through ordinary overlay resizing"
   (let* ((workspace (mevedel-workspace--create

@@ -124,8 +124,10 @@ Top-level directive presentations may persist an exact provider and
 reasoning-effort override. Nested directives are durable details owned by the
 topmost directive. Acting on any nested presentation resolves that owner, and
 prompt construction includes every current nested detail in stable source
-order. Without an override, the directive inherits the main session model at
-dispatch.
+order. When the top-level range detaches, its nested source presentations may
+disappear, but prompt construction and submission snapshots continue from the
+parent-owned records. Without an override, the directive inherits the main
+session model at dispatch.
 
 Directive requests submit an explicit string prompt built from the current
 authored request and freshly resolved references, so request construction never

@@ -497,9 +497,10 @@ overlay is restored.")
                             directive)))))))))
   directive)
 
-(defun mevedel--remove-directive-presentation (directive)
-  "Remove DIRECTIVE's source presentation without deleting its record."
-  (when-let* ((buffer (overlay-buffer directive)))
+(defun mevedel--remove-directive-presentation (directive &optional buffer)
+  "Remove DIRECTIVE's source presentation without deleting its record.
+BUFFER identifies the former owner when DIRECTIVE has already evaporated."
+  (when-let* ((buffer (or (overlay-buffer directive) buffer)))
     (mevedel--instruction-activate-buffer buffer)
     (setf (alist-get buffer (mevedel--instruction-alist))
           (delq directive (alist-get buffer (mevedel--instruction-alist))))
@@ -679,25 +680,31 @@ overlay is restored.")
     new))
 
 (defun mevedel--instruction-before-change (beg end)
-  "Capture attached directives wholly deleted between BEG and END."
+  "Capture attached directive trees wholly deleted between BEG and END."
   (setq mevedel--pending-directive-detachments nil)
   (when (< beg end)
     (dolist (directive (mevedel--instructions-in beg end 'directive))
       (let ((start (overlay-start directive))
-            (finish (overlay-end directive)))
+            (finish (overlay-end directive))
+            (owner (mevedel--topmost-instruction directive 'directive)))
         (when (and (< start finish)
                    (<= beg start)
                    (<= finish end)
                    (not (mevedel--detached-directive-p directive)))
-          (when-let* ((record (mevedel--directive-record directive)))
-            (push (list :overlay directive
-                        :record record
-                        :marker (copy-marker start)
-                        :start start
-                        :end finish
-                        :properties
-                        (mevedel--instruction-persisted-properties directive))
-                  mevedel--pending-directive-detachments)))))))
+          (if-let* ((record (mevedel--directive-record directive)))
+              (push (list :overlay directive
+                          :record record
+                          :marker (copy-marker start)
+                          :start start
+                          :end finish
+                          :properties
+                          (mevedel--instruction-persisted-properties directive))
+                    mevedel--pending-directive-detachments)
+            (when (and owner
+                       (<= beg (overlay-start owner))
+                       (<= (overlay-end owner) end))
+              (push (list :overlay directive :buffer (current-buffer))
+                    mevedel--pending-directive-detachments))))))))
 
 (defun mevedel--order-detached-directives-at (position)
   "Give detached directives at POSITION stable source-order priorities."
@@ -732,7 +739,11 @@ overlay is restored.")
   (let ((pending (prog1 mevedel--pending-directive-detachments
                    (setq mevedel--pending-directive-detachments nil))))
     (dolist (entry pending)
-      (mevedel--detach-directive entry)))
+      (if (plist-get entry :record)
+          (mevedel--detach-directive entry)
+        (mevedel--remove-directive-presentation
+         (plist-get entry :overlay)
+         (plist-get entry :buffer)))))
   (let ((beg (max (point-min) (1- beg)))
         (end (min (point-max) (1+ end))))
     (dolist (instruction (mevedel--instructions-in beg end))
@@ -1146,62 +1157,6 @@ deleted.  Throw a user error if no instructions to delete were found."
                (if (= 1 buffer-count) "" "s"))))
   (mevedel--clear-instruction-state
    (mevedel--instruction-buffer-workspace (current-buffer))))
-
-(defun mevedel-convert-instructions ()
-  "Convert instructions between reference and directive type.
-
-If a region is selected, convert all instructions within the region.  If
-no region is selected, convert only the highest priority instruction at
-point.
-
-Bodyless directives cannot be converted to references.  Attempting to do
-so will throw a user error."
-  (interactive)
-  (let* ((instructions (if (use-region-p)
-                           (mevedel--instructions-in (region-beginning)
-                                                     (region-end))
-                         (cl-remove-if #'null
-                                       (list (mevedel--highest-priority-instruction
-                                              (mevedel--instructions-at (point))
-                                              t)))))
-         (num-instructions (length instructions))
-         (converted-directives-to-references 0)
-         (converted-references-to-directives 0))
-    (if (= num-instructions 0)
-        (user-error "No instructions to convert")
-      (dolist (instr instructions)
-        (cond
-         ((mevedel--directivep instr)
-          (unless (mevedel--bodyless-instruction-p instr)
-            (overlay-put instr 'mevedel-instruction-type 'reference)
-            (setq converted-directives-to-references (1+ converted-directives-to-references))))
-         ((mevedel--referencep instr)
-          (overlay-put instr 'mevedel-instruction-type 'directive)
-          (setq converted-references-to-directives (1+ converted-references-to-directives)))
-         (t
-          (user-error "Unknown instruction type")))
-        (mevedel--update-instruction-overlay instr t))
-      (let ((msg "Converted %d instruction%s")
-            (conversion-msgs
-             (delq nil
-                   (list (when (> converted-directives-to-references 0)
-                           (format "%d directive%s to reference%s"
-                                   converted-directives-to-references
-                                   (if (= converted-directives-to-references 1) "" "s")
-                                   (if (= converted-directives-to-references 1) "" "s")))
-                         (when (> converted-references-to-directives 0)
-                           (format "%d reference%s to directive%s"
-                                   converted-references-to-directives
-                                   (if (= converted-references-to-directives 1) "" "s")
-                                   (if (= converted-references-to-directives 1) "" "s")))))))
-        (message (concat
-                  msg (if conversion-msgs
-                          (concat ": " (mapconcat #'identity conversion-msgs " and "))
-                        ""))
-                 num-instructions
-                 (if (> num-instructions 1) "s" ""))
-        (when (region-active-p)
-          (deactivate-mark))))))
 
 (defun mevedel-next-instruction ()
   "Cycle through instructions in the forward direction."
@@ -1766,14 +1721,15 @@ Returns the deleted instruction overlay."
   "Check if DIRECTIVE is empty.
 
 A directive is empty if it does not have a body or secondary directives."
-  (let ((subdirectives
-         (cl-remove-if-not #'mevedel--directivep
-                           (mevedel--wholly-contained-instructions (overlay-buffer directive)
-                                                                   (overlay-start directive)
-                                                                   (overlay-end directive)))))
-    (not (cl-some (lambda (subdir)
-                    (not (string-empty-p (mevedel--directive-text subdir))))
-                  subdirectives))))
+  (let* ((record (or (mevedel--directive-record directive)
+                     (error "Directive record not found")))
+         (requests
+          (cons (mevedel-directive-request record)
+                (mapcar #'mevedel-subdirective-request
+                        (mevedel-directive-subdirectives record)))))
+    (not (cl-some (lambda (request)
+                    (not (string-empty-p request)))
+                  requests))))
 
 (defun mevedel--create-instruction (type)
   "Create or scale an instruction of the given TYPE within the region.
@@ -2015,12 +1971,10 @@ itself."
 
 (defun mevedel--submitted-subdirectives (directive)
   "Return immutable snapshots of DIRECTIVE's currently submitted details."
-  (mapcar
-   (lambda (nested)
-     (mevedel-subdirective-copy
-      (or (mevedel--subdirective-record nested)
-          (error "Nested directive record not found"))))
-   (mevedel--nested-directives directive)))
+  (mapcar #'mevedel-subdirective-copy
+          (mevedel-directive-subdirectives
+           (or (mevedel--directive-record directive)
+               (error "Directive record not found")))))
 
 (defun mevedel--create-reference-in (buffer start end)
   "Create a region reference from START to END in BUFFER."
@@ -3388,6 +3342,7 @@ specified DIRECTIVE and tag QUERY."
 
 (defun mevedel--directive-llm-prompt (directive)
   "Craft the prompt for the LLM model associated with the DIRECTIVE."
+  (require 'mevedel-workspace)
   (when (mevedel--directive-empty-p directive)
     (error "Directive %s is empty" directive))
   (let* ((context (mevedel--context nil directive))
@@ -3404,8 +3359,12 @@ specified DIRECTIVE and tag QUERY."
     (cl-destructuring-bind (directive-region-info-string directive-region-string)
         (mevedel--overlay-region-info directive)
       (let ((expanded-directive-text
-             (let ((secondary-directives
-                    (mevedel--nested-directives directive))
+             (let* ((detached-p (mevedel--detached-directive-p directive))
+                    (secondary-directives
+                     (if detached-p
+                         (mevedel-directive-subdirectives
+                          (mevedel--directive-record directive))
+                       (mevedel--nested-directives directive)))
                    (sd-typename (if (not (eq (mevedel--directive-status directive)
                                              'implemented))
                                     "hint"
@@ -3436,38 +3395,48 @@ specified DIRECTIVE and tag QUERY."
                   (format "The directive is composed entirely out of %ss, so you should \
 treat them as subdirectives, instead."
                           sd-typename))
-                (cl-loop for sd in secondary-directives
-                         when (not (string-empty-p (mevedel--directive-text sd)))
-                         concat (concat
-                                 "\n\n"
-                                 (cl-destructuring-bind (sd-region-info sd-region)
-                                     (mevedel--overlay-region-info sd)
-                                   (concat
-                                    (format "For file `%s`, %s"
-                                            directive-filename-relpath
-                                            sd-region-info)
-                                    (let ((sd-text (mevedel--markdown-enquote
-                                                    (mevedel--directive-text sd))))
-                                      (if (mevedel--bodyless-instruction-p sd)
-                                          (format ", you have a %s:\n\n%s"
-                                                  sd-typename
-                                                  sd-text)
-                                        (let ((markdown-delimiter
-                                               (mevedel--delimiting-markdown-backticks
-                                                sd-region)))
-                                          (concat
-                                           (if mevedel-include-full-instructions
-                                               (format ", which correspond%s to:\n\n%s"
-                                                       (if (mevedel--multiline-string-p sd-region)
-                                                           "" "s")
-                                                       (format "%s\n%s\n%s"
-                                                               markdown-delimiter
-                                                               sd-region
-                                                               markdown-delimiter))
-                                             ".")
-                                           (format "\n\nYou have the %s:\n\n%s"
-                                                   sd-typename
-                                                   sd-text)))))))))))))
+                (cl-loop
+                 for sd in secondary-directives
+                 for sd-request =
+                 (if detached-p
+                     (mevedel-subdirective-request sd)
+                   (mevedel--directive-text sd))
+                 when (not (string-empty-p sd-request))
+                 concat
+                 (if detached-p
+                     (format "\n\nYou have the %s:\n\n%s"
+                             sd-typename
+                             (mevedel--markdown-enquote sd-request))
+                   (concat
+                    "\n\n"
+                    (cl-destructuring-bind (sd-region-info sd-region)
+                        (mevedel--overlay-region-info sd)
+                      (concat
+                       (format "For file `%s`, %s"
+                               directive-filename-relpath
+                               sd-region-info)
+                       (let ((sd-text (mevedel--markdown-enquote sd-request)))
+                         (if (mevedel--bodyless-instruction-p sd)
+                             (format ", you have a %s:\n\n%s"
+                                     sd-typename
+                                     sd-text)
+                           (let ((markdown-delimiter
+                                  (mevedel--delimiting-markdown-backticks
+                                   sd-region)))
+                             (concat
+                              (if mevedel-include-full-instructions
+                                  (format ", which correspond%s to:\n\n%s"
+                                          (if (mevedel--multiline-string-p
+                                               sd-region)
+                                              "" "s")
+                                          (format "%s\n%s\n%s"
+                                                  markdown-delimiter
+                                                  sd-region
+                                                  markdown-delimiter))
+                                ".")
+                              (format "\n\nYou have the %s:\n\n%s"
+                                      sd-typename
+                                      sd-text))))))))))))))
         (with-temp-buffer
           (insert
            (concat
