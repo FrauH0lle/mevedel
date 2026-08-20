@@ -866,7 +866,9 @@ History persists at the workspace level as
 sessions in the same project share prompt recall. When persistence is not
 writable, the active ring remains available in memory. Rewind keeps the current
 workspace ring and composer draft. The Lisp sidecar is printed with circle
-syntax enabled so shared text-property objects remain readable.
+syntax enabled so shared text-property objects remain readable. Transient read
+failures leave the canonical sidecar in place for a later retry; only malformed
+history is renamed aside.
 
 The input zone installs slash command completion, `$` skill completion,
 and display-only skill argument hints. Root slash completion offers local
