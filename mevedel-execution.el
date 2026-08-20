@@ -1093,13 +1093,21 @@ unprovable outcome and is recorded as such before settlement."
                       (* 4 mevedel-execution--remote-control-timeout))
                    nil #'mevedel-execution--settle-timed-out record))))
 
-(defun mevedel-execution--settle-managed-main-exit (record)
-  "Clean remaining descendants, or settle RECORD after its shell exits."
-  (setf (mevedel-execution--record-settle-timer record) nil)
-  (if (mevedel-execution--group-live-p record)
+(defun mevedel-execution--settle-main-exit (record)
+  "Clean remaining descendants, or settle RECORD after its main process exits."
+  (let ((managed-p (mevedel-execution--record-execution-id record))
+        (workdir (mevedel-execution--record-workdir record)))
+    (setf (mevedel-execution--record-settle-timer record) nil)
+    (if (and (or managed-p
+                 (and (not (eq system-type 'windows-nt))
+                      (not (file-remote-p (or workdir "")))))
+             (mevedel-execution--group-live-p record))
       (mevedel-execution--begin-stop
        record (or (mevedel-execution--record-termination record) 'exited))
-    (mevedel-execution--finish-managed record)))
+      (if managed-p
+          (mevedel-execution--finish-managed record)
+        (mevedel-execution--finish-record
+         record (or (mevedel-execution--record-exit-code record) -1))))))
 
 (defun mevedel-execution--settle-stop-main-exit (record)
   "Finish stopping RECORD early when its remote group already settled.
@@ -1160,16 +1168,10 @@ watchdog checks list membership, not just the slot."
                   (run-at-time
                    0.02 nil
                    #'mevedel-execution--settle-stop-main-exit record))))
-         ((mevedel-execution--record-execution-id record)
-          (setf (mevedel-execution--record-settle-timer record)
-                (run-at-time
-                 0.02 nil
-                 #'mevedel-execution--settle-managed-main-exit record)))
          (t
           (setf (mevedel-execution--record-settle-timer record)
                 (run-at-time
-                 0.02 nil #'mevedel-execution--finish-record record
-                 (mevedel-execution--record-exit-code record)))))))))
+                 0.02 nil #'mevedel-execution--settle-main-exit record))))))))
 
 (defun mevedel-execution--launch-record
     (record name command workdir coding filter)
