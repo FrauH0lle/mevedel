@@ -120,11 +120,15 @@
 (declare-function mevedel-plan-mode-enter
                   "mevedel-plan-mode" (&optional session))
 
-;; `mevedel-plugins'
-(declare-function mevedel-plugin-name "mevedel-plugins" (cl-x) t)
-(declare-function mevedel-plugins-list "mevedel-plugins" ())
-(declare-function mevedel-plugins-slash-command "mevedel-plugins" (args))
-(autoload 'mevedel-plugins-slash-command "mevedel-plugins" nil nil)
+;; `mevedel-plugin-registry'
+(declare-function mevedel-plugin-name
+                  "mevedel-plugin-registry" (cl-x) t)
+(declare-function mevedel-plugins-list
+                  "mevedel-plugin-registry" (&optional workspace))
+
+;; `mevedel-plugin-ui'
+(declare-function mevedel-plugins-slash-command "mevedel-plugin-ui" (args))
+(autoload 'mevedel-plugins-slash-command "mevedel-plugin-ui" nil nil)
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-refresh-visited-file-modtime-or-error
@@ -1076,7 +1080,7 @@ BUFFER and SESSION identify the current chat."
 
 (defun mevedel-skills--plugin-name-candidates ()
   "Return installed plugin names for slash command argument completion."
-  (require 'mevedel-plugins)
+  (require 'mevedel-plugin-registry)
   (sort (delete-dups
          (mapcar #'mevedel-plugin-name (mevedel-plugins-list)))
         #'string<))

@@ -208,9 +208,9 @@
 (declare-function mevedel-plan-mode-restore-pending-approval
 		  "mevedel-plan-mode" (&optional session chat-buffer))
 
-;; `mevedel-plugins'
+;; `mevedel-plugin-ui'
 (declare-function mevedel-plugins-notify-pending-consent
-		  "mevedel-plugins" (&optional workspace))
+                  "mevedel-plugin-ui" (&optional workspace))
 
 ;; `mevedel-presets'
 (declare-function mevedel-preset--build-handlers "mevedel-presets"
@@ -792,7 +792,7 @@ mutation lease."
     (add-hook 'completion-at-point-functions #'mevedel-slash-capf nil t)
     ;; Populate session skills from workspace skill dirs
     (mevedel-skills-install mevedel--session (current-buffer))
-    (require 'mevedel-plugins)
+    (require 'mevedel-plugin-ui)
     (mevedel-plugins-notify-pending-consent workspace)
     ;; Drop this buffer from the skill watcher registry on kill so any
     ;; orphaned `file-notify' watchers are torn down.
