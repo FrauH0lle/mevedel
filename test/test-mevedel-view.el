@@ -751,7 +751,7 @@
       (when (buffer-live-p agent-buffer)
         (kill-buffer agent-buffer))))
 
-  :doc "killing the data buffer aborts both queues and kills the view"
+  :doc "killing the data buffer aborts queued and direct interactions"
   (let ((data-buf (generate-new-buffer " *test-data-kill-data*"))
         (view-buf (generate-new-buffer " *test-view-kill-data*"))
         (session (mevedel-session-create
@@ -766,6 +766,13 @@
             (org-mode)
             (setq-local mevedel--session session))
           (mevedel-view--setup view-buf data-buf)
+          (require 'gptel-agent-tools)
+          (require 'mevedel-interaction-prompt)
+          (with-current-buffer data-buf
+            (mevedel--prompt-user-with-overlay
+             "Confirm" "Direct request" "Proceed?" nil
+             (lambda (outcome)
+               (push (cons 'direct outcome) outcomes))))
           (setf (mevedel-session-permission-queue session)
                 (list (list :kind 'generic
                             :tool-name "Read"
@@ -785,7 +792,9 @@
           (should-not (buffer-live-p view-buf))
           (should (null (mevedel-session-permission-queue session)))
           (should (null (mevedel-session-pending-plan-approval session)))
-          (should (equal '((plan . aborted) (permission . aborted))
+          (should (equal '((direct . aborted)
+                           (plan . aborted)
+                           (permission . aborted))
                          outcomes)))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
