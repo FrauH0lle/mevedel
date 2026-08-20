@@ -467,6 +467,38 @@
             (should-not (file-exists-p
                          (file-name-concat root "foreign")))))
       (delete-directory root t)))
+  :doc "rejects a remote escape introduced after reservation"
+  (let* ((base (file-name-as-directory
+                (make-temp-file "mevedel-worktree-fork-symlink-" t)))
+         (root (file-name-as-directory (file-name-concat base "repo")))
+         (outside (file-name-as-directory
+                   (file-name-concat base "outside")))
+         (remote-root (format "/mevedelmock:escape:%s" root)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("escape")
+          (make-directory root t)
+          (make-directory outside t)
+          (mevedel-worktree-test--init-repo remote-root)
+          (let* ((workspace
+                  (mevedel-worktree-test--workspace remote-root))
+                 (session
+                  (mevedel-session-create "remote" workspace remote-root))
+                 (reservation
+                  (mevedel-worktree-fork-reservation session)))
+            (make-symbolic-link
+             outside (file-name-concat root ".worktrees"))
+            (should-error (mevedel-worktree-fork-create reservation)
+                          :type 'user-error)
+            (should-not
+             (file-exists-p
+              (file-name-concat outside "remote-fork-1")))
+            (should-not
+             (eq 0
+                 (mevedel-worktree--git-exit
+                  remote-root "show-ref" "--verify" "--quiet"
+                  "refs/heads/worktree/remote-fork-1")))))
+      (delete-directory base t)
+      (mevedel-workspace-clear-registry)))
   :doc "creates a linked worktree and branch at the reserved base commit"
   (let ((root (file-name-as-directory
                (make-temp-file "mevedel-worktree-fork-create-" t))))
@@ -614,6 +646,37 @@
           (should-not (member '("check-ref-format" "--branch"
                                 "worktree/accepted-plan")
                               calls)))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-worktree--validate-destination ()
+  ,test
+  (test)
+  :doc "accepts a direct non-symlinked workspace destination"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-destination-" t)))
+         (directory
+          (file-name-as-directory
+           (file-name-concat root ".worktrees" "topic"))))
+    (unwind-protect
+        (should
+         (equal directory
+                (mevedel-worktree--validate-destination root directory)))
+      (delete-directory root t)))
+  :doc "rejects a worktrees symlink even when its target stays inside"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-inside-symlink-" t)))
+         (target (file-name-as-directory
+                  (file-name-concat root "target")))
+         (directory
+          (file-name-as-directory
+           (file-name-concat root ".worktrees" "topic"))))
+    (unwind-protect
+        (progn
+          (make-directory target t)
+          (make-symbolic-link target (file-name-concat root ".worktrees"))
+          (should-error
+           (mevedel-worktree--validate-destination root directory)
+           :type 'user-error))
       (delete-directory root t))))
 
 
@@ -1856,6 +1919,37 @@
             (should-not (file-exists-p
                          (file-name-concat root ".worktrees")))))
       (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+  :doc "rejects an escaping local worktrees symlink before Git mutation"
+  (let* ((base (file-name-as-directory
+                (make-temp-file "mevedel-plan-worktree-symlink-" t)))
+         (root (file-name-as-directory (file-name-concat base "repo")))
+         (outside (file-name-as-directory
+                   (file-name-concat base "outside")))
+         opened)
+    (unwind-protect
+        (progn
+          (make-directory root t)
+          (make-directory outside t)
+          (mevedel-worktree-test--init-repo root)
+          (make-symbolic-link
+           outside (file-name-concat root ".worktrees"))
+          (mevedel-worktree-test--with-session root
+            (cl-letf (((symbol-function 'mevedel-worktree--open-session)
+                       (lambda (&rest _args) (setq opened t))))
+              (should-error
+               (mevedel-worktree-create-session
+                "worktree/escape" nil t)
+               :type 'user-error)
+              (should-not opened)
+              (should-not
+               (file-exists-p (file-name-concat outside "escape")))
+              (should-not
+               (eq 0
+                   (mevedel-worktree--git-exit
+                    root "show-ref" "--verify" "--quiet"
+                    "refs/heads/worktree/escape"))))))
+      (delete-directory base t)
       (mevedel-workspace-clear-registry)))
   :doc "creates Plan Worktree with target Git on the source target"
   (let* ((root (file-name-as-directory
