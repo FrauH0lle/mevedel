@@ -1416,6 +1416,57 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
             (should (string-match-p "50\tline 50" result))
             (should (string-match-p "54\tline 54" result))))
       (delete-file tmp)))
+  :doc "preserves a UTF-8 character split across input chunks"
+  (let ((tmp (make-temp-file "mevedel-test-")))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'utf-8-unix))
+            (with-temp-file tmp
+              (insert (make-string (- (* 512 1024) 4) ?x)
+                      "\nab\u00e9\n")))
+          (let ((result (mevedel-tool-fs--read-file
+                         (list :file_path tmp :offset 2 :limit 1))))
+            (should (string-match-p
+                     (regexp-quote "2\tab\u00e9") result))))
+      (delete-file tmp)))
+  :doc "preserves a UTF-16 surrogate pair split across input chunks"
+  (let ((tmp (make-temp-file "mevedel-test-")))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'utf-16le-with-signature))
+            (write-region
+             (concat (make-string (/ (- (* 512 1024) 8) 2) ?x)
+                     "\na\U0001f600\n")
+             nil tmp nil 'silent))
+          (let ((result (mevedel-tool-fs--read-file
+                         (list :file_path tmp :offset 2 :limit 1))))
+            (should (string-match-p
+                     (regexp-quote "2\ta\U0001f600") result))))
+      (delete-file tmp)))
+  :doc "ignores newline bytes spanning UTF-16 code units"
+  (let ((tmp (make-temp-file "mevedel-test-")))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'utf-16le-with-signature))
+            (write-region "\u0a41\u0100\nsecond\n"
+                          nil tmp nil 'silent))
+          (let ((result (mevedel-tool-fs--read-file
+                         (list :file_path tmp :offset 2 :limit 1))))
+            (should (string-match-p "2\tsecond" result))))
+      (delete-file tmp)))
+  :doc "counts a bare LF after a DOS-coded input chunk"
+  (let ((tmp (make-temp-file "mevedel-test-")))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region
+             (concat "one\r\n" (make-string (* 512 1024) ?x)
+                     "\nthree\r\n")
+             nil tmp nil 'silent))
+          (let ((result (mevedel-tool-fs--read-file
+                         (list :file_path tmp :offset 3 :limit 1))))
+            (should (string-match-p "3\tthree" result))))
+      (delete-file tmp)))
   :doc "follows symlinks"
   (let ((tmp (make-temp-file "mevedel-test-"))
         (link (make-temp-file "mevedel-link-")))
