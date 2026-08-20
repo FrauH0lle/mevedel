@@ -145,10 +145,12 @@ next successful session save. Telemetry failures never block tool execution.
 `mevedel-tool-input-repair-enabled` disables mutation while retaining
 validation and telemetry.
 
-`mevedel-define-tool :wrap SOURCE` adopts an existing `gptel-tool` via
-`gptel-get-tool` on every call (so upstream changes take effect without
-rewrapping). Re-registering the same wrapped `(category, name)` replaces
-the prior mevedel wrapper, matching native tool registration.
+`mevedel-define-tool :wrap SOURCE` freezes the source argument schema, order,
+and async calling convention exposed to the provider.  Each call resolves the
+current source with `gptel-get-tool`, so a reconnect can replace its function
+without rewrapping when that contract is unchanged.  Contract drift fails the
+call and requires rewrapping.  Re-registering the same wrapped `(category,
+name)` replaces the prior mevedel wrapper, matching native tool registration.
 Preset application also resolves its tool specs from the current registry.
 Reloading a native tool therefore updates the next request's schema and
 handler instead of leaving a stale `gptel-tool` captured by an older preset.

@@ -491,51 +491,61 @@ a trailing plist tail on the mevedel spec element."
          (hack-local-variables-hook nil))
      ,@body))
 
-(defun mevedel-tool--call-wrapped-handler (source-category source-name async-p)
+(defun mevedel-tool--call-wrapped-handler (source)
   "Return a handler that dispatches to the wrapped source tool.
 
-SOURCE-CATEGORY and SOURCE-NAME identify the source `gptel-tool'.
-ASYNC-P reflects the source's :async flag.  The returned function
-has mevedel handler shape -- `(callback args-plist)' -- and is
-called by `mevedel-pipeline--step-handler'.
+SOURCE is the `gptel-tool' whose identity, argument schema, positional
+order, and calling convention are frozen.  The returned function has
+mevedel handler shape -- `(callback args-plist)' -- and is called by
+`mevedel-pipeline--step-handler'.
 
 The dispatcher does a fresh `gptel-get-tool' lookup on every call
 so MCP reconnects (where mcp.el rebuilds the source struct with a
-fresh `:function') propagate automatically."
-  (lambda (callback args)
-    (let ((return (lambda (result)
-                    (funcall callback (list :result result)))))
-      (condition-case err
-          (let* ((source (condition-case _
-                             (gptel-get-tool
-                              (list source-category source-name))
-                           (error nil))))
-            (cond
-             ((null source)
-              (funcall return
-                       (format "Error: wrapped tool %S has been unregistered; reconnect and re-wrap if needed"
-                               source-name)))
-             ((not (gptel-tool-p source))
-              (funcall return
-                       (format "Error: wrapped tool %S resolved to a non-tool value"
-                               source-name)))
-             (t
-              (let* ((fn (gptel-tool-function source))
-                     (arg-specs (mevedel-tool--args-from-gptel
-                                 (gptel-tool-args source) source-name))
-                     (positional
-                      (cl-loop for spec in arg-specs
-                               collect (plist-get
-                                        args
-                                        (intern
-                                         (format ":%s" (car spec)))))))
-                (mevedel-tool--with-quiet-file-visit
-                  (if async-p
-                      (apply fn return positional)
-                    (funcall return (apply fn positional))))))))
-        (error
-         (funcall return
-                  (format "Error: %s" (error-message-string err))))))))
+fresh `:function') propagate automatically when the source contract
+is unchanged."
+  (let* ((source-category (gptel-tool-category source))
+         (source-name (gptel-tool-name source))
+         (source-args (copy-tree (gptel-tool-args source) t))
+         (mevedel-args (mevedel-tool--args-from-gptel
+                        source-args source-name))
+         (async-p (and (gptel-tool-async source) t)))
+    (lambda (callback args)
+      (let ((return (lambda (result)
+                      (funcall callback (list :result result)))))
+        (condition-case err
+            (let* ((source (condition-case _
+                               (gptel-get-tool
+                                (list source-category source-name))
+                             (error nil))))
+              (cond
+               ((null source)
+                (funcall return
+                         (format "Error: wrapped tool %S has been unregistered; reconnect and re-wrap if needed"
+                                 source-name)))
+               ((not (gptel-tool-p source))
+                (funcall return
+                         (format "Error: wrapped tool %S resolved to a non-tool value"
+                                 source-name)))
+               ((or (not (equal source-args (gptel-tool-args source)))
+                    (not (eq async-p (and (gptel-tool-async source) t))))
+                (funcall return
+                         (format "Error: wrapped tool %S contract changed; re-wrap it"
+                                 source-name)))
+               (t
+                (let* ((fn (gptel-tool-function source))
+                       (positional
+                        (cl-loop for spec in mevedel-args
+                                 collect (plist-get
+                                          args
+                                          (intern
+                                           (format ":%s" (car spec)))))))
+                  (mevedel-tool--with-quiet-file-visit
+                    (if async-p
+                        (apply fn return positional)
+                      (funcall return (apply fn positional))))))))
+          (error
+           (funcall return
+                    (format "Error: %s" (error-message-string err)))))))))
 
 (defun mevedel-tool-truthy-p (value)
   "Return non-nil if VALUE is a truthy LLM-supplied boolean.
@@ -862,15 +872,14 @@ RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
          (source-category (gptel-tool-category source))
          (target-category (or category-override
                               (format "mevedel-%s" source-category)))
+         (source-args (copy-tree (gptel-tool-args source) t))
          (mevedel-args (mevedel-tool--args-from-gptel
-                        (gptel-tool-args source) source-name))
-         (source-async-p (and (gptel-tool-async source) t)))
+                        source-args source-name)))
     (let* ((source-description (gptel-tool-description source))
            (description (or description-override source-description))
            (resolved-prompt (mevedel-tool--resolve-prompt
                              (or prompt-override description)))
-           (handler (mevedel-tool--call-wrapped-handler
-                     source-category source-name source-async-p))
+           (handler (mevedel-tool--call-wrapped-handler source))
            (mtool
             (mevedel-tool--create
              :name source-name

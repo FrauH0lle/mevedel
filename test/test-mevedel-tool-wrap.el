@@ -121,13 +121,12 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
   (test)
   :doc "sync path calls source function and forwards result"
   (let* ((name (test-mevedel-tool-wrap--unique "sync"))
-         (_ (test-mevedel-tool-wrap--make-source
-             :name name
-             :function (lambda (a b) (format "%s+%s" a b))
-             :args '((:name "a" :type string :description "a")
-                     (:name "b" :type string :description "b"))))
-         (handler (mevedel-tool--call-wrapped-handler
-                   "test-src" name nil))
+         (source (test-mevedel-tool-wrap--make-source
+                  :name name
+                  :function (lambda (a b) (format "%s+%s" a b))
+                  :args '((:name "a" :type string :description "a")
+                          (:name "b" :type string :description "b"))))
+         (handler (mevedel-tool--call-wrapped-handler source))
          (got nil))
     (funcall handler (lambda (r) (setq got r))
              (list :a "x" :b "y"))
@@ -136,13 +135,12 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
 
   :doc "async path receives callback as first arg"
   (let* ((name (test-mevedel-tool-wrap--unique "async"))
-         (_ (test-mevedel-tool-wrap--make-source
-             :name name
-             :async t
-             :function (lambda (cb v) (funcall cb (concat "async:" v)))
-             :args '((:name "v" :type string :description "v"))))
-         (handler (mevedel-tool--call-wrapped-handler
-                   "test-src" name t))
+         (source (test-mevedel-tool-wrap--make-source
+                  :name name
+                  :async t
+                  :function (lambda (cb v) (funcall cb (concat "async:" v)))
+                  :args '((:name "v" :type string :description "v"))))
+         (handler (mevedel-tool--call-wrapped-handler source))
          (got nil))
     (funcall handler (lambda (r) (setq got r)) (list :v "hi"))
     (should (equal '(:result "async:hi") got))
@@ -150,12 +148,11 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
 
   :doc "sync source error propagates to callback as Error: string"
   (let* ((name (test-mevedel-tool-wrap--unique "err"))
-	         (_ (test-mevedel-tool-wrap--make-source
-	             :name name
-	             :function (lambda (_v) (error "Boom"))
-             :args '((:name "v" :type string :description "v"))))
-         (handler (mevedel-tool--call-wrapped-handler
-                   "test-src" name nil))
+         (source (test-mevedel-tool-wrap--make-source
+                  :name name
+                  :function (lambda (_v) (error "Boom"))
+                  :args '((:name "v" :type string :description "v"))))
+         (handler (mevedel-tool--call-wrapped-handler source))
          (got nil))
     (funcall handler (lambda (r) (setq got r)) (list :v "x"))
     (should (string-prefix-p "Error:" (plist-get got :result)))
@@ -164,12 +161,11 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
 
   :doc "source replaced: dispatcher picks up fresh :function on next call"
   (let* ((name (test-mevedel-tool-wrap--unique "replace"))
-         (_ (test-mevedel-tool-wrap--make-source
-             :name name
-             :function (lambda (_v) "one")
-             :args '((:name "v" :type string :description "v"))))
-         (handler (mevedel-tool--call-wrapped-handler
-                   "test-src" name nil))
+         (source (test-mevedel-tool-wrap--make-source
+                  :name name
+                  :function (lambda (_v) "one")
+                  :args '((:name "v" :type string :description "v"))))
+         (handler (mevedel-tool--call-wrapped-handler source))
          (first nil)
          (second nil))
     (funcall handler (lambda (r) (setq first r)) (list :v "x"))
@@ -182,13 +178,27 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
     (should (equal '(:result "two") second))
     (test-mevedel-tool-wrap--remove-source "test-src" name))
 
+  :doc "in-place nested schema drift is rejected before dispatch"
+  (let* ((name (test-mevedel-tool-wrap--unique "nested_drift"))
+         (source (test-mevedel-tool-wrap--make-source
+                  :name name
+                  :function (lambda (_mode) "called")
+                  :args '((:name "mode" :type string :description "mode"
+                                  :enum ["one" "two"]))))
+         (handler (mevedel-tool--call-wrapped-handler source))
+         got)
+    (aset (plist-get (car (gptel-tool-args source)) :enum) 0 "changed")
+    (funcall handler (lambda (result) (setq got result)) '(:mode "one"))
+    (should (string-match-p "contract changed; re-wrap"
+                            (plist-get got :result)))
+    (test-mevedel-tool-wrap--remove-source "test-src" name))
+
   :doc "source unregistered: dispatcher returns actionable error"
   (let* ((name (test-mevedel-tool-wrap--unique "gone"))
-         (_ (test-mevedel-tool-wrap--make-source
-             :name name
-             :function (lambda () "ok")))
-         (handler (mevedel-tool--call-wrapped-handler
-                   "test-src" name nil))
+         (source (test-mevedel-tool-wrap--make-source
+                  :name name
+                  :function (lambda () "ok")))
+         (handler (mevedel-tool--call-wrapped-handler source))
          (got nil))
     (test-mevedel-tool-wrap--remove-source "test-src" name)
     (funcall handler (lambda (r) (setq got r)) nil)
