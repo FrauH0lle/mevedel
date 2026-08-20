@@ -12,7 +12,8 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'subr-x))
+  (require 'subr-x)
+  (require 'tramp-cache))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
@@ -112,7 +113,11 @@
                   (head tail total-length &optional preview-size))
 
 ;; `tramp'
-(defvar tramp-connection-properties)
+(declare-function tramp-dissect-file-name "tramp" (name &optional nodefault))
+
+;; `tramp-cache'
+(declare-function tramp-set-connection-property
+                  "tramp-cache" (key property value))
 
 
 ;;
@@ -622,26 +627,6 @@ the client environment."
            mevedel-execution--remote-group-script marker)
      command)))
 
-(defvar mevedel-execution--direct-async-properties (make-hash-table :test #'equal)
-  "TRAMP prefixes whose ssh direct-async spawns drop the remote pty.")
-
-(defun mevedel-execution--ensure-direct-async-property (workdir)
-  "Make direct-async spawns below WORKDIR binary-faithful, once per prefix.
-The ssh and scp methods default the direct-async parameter to two -t
-options, which allocate a remote pty and mangle binary output; the
-documented override is the connection property t, which drops the pty.
-Signals still reach the group through the control connection, so
-nothing depends on the pty's death."
-  (when-let* ((prefix (file-remote-p workdir))
-              (method (file-remote-p workdir 'method)))
-    (when (and (member method '("ssh" "scp"))
-               (not (gethash prefix
-                             mevedel-execution--direct-async-properties)))
-      (require 'tramp)
-      (add-to-list 'tramp-connection-properties
-                   (list (regexp-quote prefix) "direct-async" t))
-      (puthash prefix t mevedel-execution--direct-async-properties))))
-
 (defun mevedel-execution--with-spawn-channel (remote direct-async thunk)
   "Call THUNK with the spawn channel forced for a REMOTE launch.
 DIRECT-ASYNC non-nil forces the private channel; nil forces the shared
@@ -668,7 +653,14 @@ run THUNK untouched."
                    (if shim
                        (symbol-function 'tramp-ssh-or-plink-options)
                      (symbol-function 'tramp-ssh-controlmaster-options))))
-          (funcall thunk)))
+          (if direct-async
+              (progn
+                (require 'tramp-cache)
+                (let ((vec (tramp-dissect-file-name remote)))
+                  (with-tramp-saved-connection-property vec "direct-async"
+                    (tramp-set-connection-property vec "direct-async" t)
+                    (funcall thunk))))
+            (funcall thunk))))
     (funcall thunk)))
 
 (defun mevedel-execution--direct-async-p (record command workdir)
@@ -1186,8 +1178,6 @@ watchdog checks list membership, not just the slot."
                (mevedel-execution--direct-async-p record command workdir)))
          (_ (setf (mevedel-execution--record-direct-async-p record)
                   direct-async))
-         (_ (when direct-async
-              (mevedel-execution--ensure-direct-async-property workdir)))
          (command (if remote
                       (mevedel-execution--remote-command record command)
                     command))

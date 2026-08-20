@@ -531,6 +531,61 @@ connection charges for, so the program path is proved here too."
                 (mevedel-execution--with-spawn-channel
                  nil t (lambda () 'untouched))))))
 
+(mevedel-deftest mevedel-execution--launch-record ()
+  ,test
+  (test)
+  :doc "scopes the remote direct-async property to one spawn"
+  (let* ((record (mevedel-execution--record-create))
+         (remote "/ssh:host:/srv/project/")
+         (prefix (file-remote-p remote))
+         (vec (tramp-dissect-file-name prefix))
+         (prior-direct-async '("-t" "-t"))
+         (initial-properties
+          `((,(regexp-quote prefix) "direct-async" ,prior-direct-async)
+            ("existing" "unrelated" keep)))
+         (tramp-connection-properties (copy-tree initial-properties))
+         (tramp-cache-data (make-hash-table :test #'equal))
+         (real-make-process (symbol-function 'make-process))
+         process
+         spawn-direct-async)
+    ;; Establish the cache before launch, as an earlier remote probe does.
+    (should (equal prior-direct-async
+                   (tramp-get-method-parameter vec 'tramp-direct-async)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-execution--localize-command)
+                   (lambda (_record command _workdir) command))
+                  ((symbol-function 'mevedel-execution--direct-async-p)
+                   (lambda (&rest _args) t))
+                  ((symbol-function 'mevedel-execution--remote-command)
+                   (lambda (_record command) command))
+                  ((symbol-function 'executable-find)
+                   (lambda (&rest _args) "/bin/sh"))
+                  ((symbol-function 'make-process)
+                   (lambda (&rest _args)
+                     (setq spawn-direct-async
+                           (tramp-get-method-parameter vec 'tramp-direct-async)
+                           process
+                           (let ((default-directory temporary-file-directory))
+                             (funcall real-make-process
+                                      :name "mevedel-test-scoped-spawn"
+                                      :buffer nil
+                                      :command '("sh" "-c" "sleep 10")
+                                      :noquery t
+                                      :sentinel #'ignore)))
+                     process)))
+          (mevedel-execution--launch-record
+           record "mevedel-test-scoped-spawn" '("sh" "-c" "true")
+           remote 'utf-8-unix #'ignore)
+          (should (eq t spawn-direct-async))
+          (should (equal prior-direct-async
+                         (tramp-get-method-parameter
+                          vec 'tramp-direct-async)))
+          (should (equal initial-properties tramp-connection-properties)))
+      (when (process-live-p process)
+        (delete-process process))
+      (when-let ((timer (mevedel-execution--record-watch-timer record)))
+        (cancel-timer timer)))))
+
 (mevedel-deftest mevedel-execution--remote-command ()
   ,test
   (test)
