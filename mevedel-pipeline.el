@@ -192,6 +192,9 @@
 ;; `mevedel-tool-repair-diagnostics'
 (declare-function mevedel-tool-repair-audit-record
                   "mevedel-tool-repair-diagnostics" (state repairs))
+(declare-function mevedel-tool-repair-record-result
+                  "mevedel-tool-repair-diagnostics"
+                  (entry result &optional outcome result-classification))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--ctx-record-used "mevedel-tools" (ctx name))
@@ -388,6 +391,8 @@ value so a misbehaving step still produces a legible error."
 
 (defun mevedel-pipeline--format-context-failure (context reason)
   "Return a failure for REASON with CONTEXT's accumulated audit metadata."
+  (when-let* ((cell (plist-get context :result-classification-cell)))
+    (setcar cell 'error))
   (let ((failure (mevedel-pipeline--format-failure reason)))
     (when-let* ((repairs (plist-get context :input-repairs)))
       (setq failure
@@ -1680,7 +1685,12 @@ buffer."
                                    "Error:" (plist-get raw :result))
                                   'error)
                              'success))
-                        (updated context))
+                        (updated (copy-sequence context)))
+                    (when-let* ((cell
+                                 (plist-get
+                                  context :result-classification-cell)))
+                      (unless (car cell)
+                        (setcar cell status)))
                     (setq updated
                           (plist-put
                            (plist-put
@@ -2757,6 +2767,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
          (repair-entry
           (mevedel-tool-repair-consume-ledger-entry tool args))
          (resource-attempts-cell (list nil))
+         (result-classification-cell (list nil))
          (steps (mevedel-pipeline--build-steps tool))
          (cancel-cell (list nil))
          (sandbox-summary-cell (list nil))
@@ -2786,6 +2797,8 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                         :buffer dispatch-buffer
                         :default-directory workdir
                         :resource-attempts-cell resource-attempts-cell
+                        :result-classification-cell
+                        result-classification-cell
                         :cancel-cell cancel-cell
                         :sandbox-summary-cell sandbox-summary-cell))
          (called nil)
@@ -2795,25 +2808,29 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
             (cond
              ((not called)
               (setq called t)
-              (mevedel-telemetry-record-audit
-               session 'tool-finished
-               :tool-name (mevedel-tool-name tool)
-               :tool-use-id tool-use-id
-               :request-id (and request (mevedel-request-id request))
-               :outcome (if (and (stringp result)
-                                 (string-prefix-p "Error:" result))
-                            'error
-                          'success)
-               :result-chars (and (stringp result) (length result))
-               :result-bytes (and (stringp result) (string-bytes result)))
-              (mevedel-tool-repair-record-result repair-entry result)
-              (condition-case err
-                  (funcall callback result)
-                (error
-                 (display-warning
-                  'mevedel
-                  (format "Pipeline final callback signaled: %S" err)
-                  :warning))))
+              (let ((classification
+                     (or (car result-classification-cell)
+                         (if (and (stringp result)
+                                  (string-prefix-p "Error:" result))
+                             'error
+                           'success))))
+                (mevedel-telemetry-record-audit
+                 session 'tool-finished
+                 :tool-name (mevedel-tool-name tool)
+                 :tool-use-id tool-use-id
+                 :request-id (and request (mevedel-request-id request))
+                 :outcome classification
+                 :result-chars (and (stringp result) (length result))
+                 :result-bytes (and (stringp result) (string-bytes result)))
+                (mevedel-tool-repair-record-result
+                 repair-entry result nil classification)
+                (condition-case err
+                    (funcall callback result)
+                  (error
+                   (display-warning
+                    'mevedel
+                    (format "Pipeline final callback signaled: %S" err)
+                    :warning)))))
              (t
               ;; Symmetric with the per-step latch's warning at
               ;; `mevedel-pipeline--run'.  The runner's condition-case

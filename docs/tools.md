@@ -393,7 +393,9 @@ Every handler returns a plist containing `:result` and may set `:status` to
 `success` or `error`. The handler boundary normalizes that optional status
 into canonical lifecycle state before post-use hooks run; legacy `Error:`
 results are classified only at that boundary. Invalid returns and handler
-signals become canonical errors there as well. When a handler
+signals become canonical errors there as well. Final lifecycle and repair
+telemetry retain that same classification regardless of displayed result text.
+When a handler
 includes `:render-data DATA` or
 explicit status, the pipeline writes `:result` to the data buffer and appends a
 hidden block wrapped in `<!-- mevedel-render-data -->` delimiters, propertized

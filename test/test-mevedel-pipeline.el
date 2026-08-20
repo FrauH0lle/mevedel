@@ -4204,6 +4204,82 @@ cover, so the permission step's warning about it is captured here."
 		     (should (eq 'success (plist-get event :result)))
 			     (should-not
 			      (string-match-p "sentinel" (prin1-to-string event)))))
+
+  :doc "structured errors remain errors in lifecycle and repair telemetry"
+  (let* ((session (mevedel-session--create :name "structured-error"))
+         (mevedel-tool--registry (make-hash-table :test #'equal))
+         (tool
+          (mevedel-tool--create
+           :name "StructuredFailure"
+           :category "mevedel"
+           :handler (lambda (_args)
+                      '(:result "plain failure" :status error))
+           :args '((message string :required "Message"))
+           :read-only-p t))
+         result)
+    (mevedel-tool-register tool)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (should-not
+       (mevedel-tool-repair-pre-tool-call
+        '(:name "StructuredFailure" :args (:message "hello"))))
+      (mevedel-pipeline-run-tool
+       tool (lambda (value) (setq result value)) '(:message "hello")))
+    (should-not (string-prefix-p "Error:" result))
+    (let ((finished
+           (cl-find 'tool-finished
+                    (mevedel-session-telemetry-pending session)
+                    :key (lambda (event) (plist-get event :event))))
+          (repair (car (mevedel-session-repair-log session))))
+      (should (eq 'error (plist-get finished :outcome)))
+      (should (eq 'error (plist-get repair :result)))))
+
+  :doc "rejected duplicate callbacks cannot replace settled handler status"
+  (let* ((session (mevedel-session--create :name "settled-status"))
+         (mevedel-tool--registry (make-hash-table :test #'equal))
+         handler-callback
+         post-callback
+         result
+         (tool
+          (mevedel-tool--create
+           :name "SettledStatus"
+           :category "mevedel"
+           :handler (lambda (callback _args)
+                      (setq handler-callback callback))
+           :args '((message string :required "Message"))
+           :read-only-p t
+           :async-p t)))
+    (mevedel-tool-register tool)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (should-not
+       (mevedel-tool-repair-pre-tool-call
+        '(:name "SettledStatus" :args (:message "hello"))))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (event _payload callback &rest _)
+                   (if (memq event '(PostToolUse PostToolUseFailure))
+                       (setq post-callback callback)
+                     (funcall callback nil)))))
+        (mevedel-pipeline-run-tool
+         tool (lambda (value) (setq result value)) '(:message "hello"))
+        (funcall handler-callback '(:result "accepted" :status success))
+        (should post-callback)
+        (mevedel-test--with-captured-diagnostics nil
+          (funcall handler-callback '(:result "late" :status error)))
+        (funcall post-callback nil)))
+    (should (string-prefix-p "accepted" result))
+    (should
+     (eq 'success
+         (plist-get
+          (cdr (mevedel-pipeline-extract-render-data result)) :status)))
+    (let ((finished
+           (cl-find 'tool-finished
+                    (mevedel-session-telemetry-pending session)
+                    :key (lambda (event) (plist-get event :event))))
+          (repair (car (mevedel-session-repair-log session))))
+      (should (eq 'success (plist-get finished :outcome)))
+      (should (eq 'success (plist-get repair :result)))))
+
 			 :doc "telemetry construction failures do not block result delivery"
 			 (let* ((session (mevedel-session--create :name "main"))
 				(tool (mevedel-tool--create
