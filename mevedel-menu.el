@@ -198,15 +198,15 @@
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 
-;; `mevedel-view-interaction'
-(declare-function mevedel-refresh-session "mevedel-view-interaction" ())
-(declare-function mevedel-release-control "mevedel-view-interaction" ())
-(declare-function mevedel-take-control "mevedel-view-interaction" ())
-(declare-function mevedel-toggle-follow "mevedel-view-interaction" ())
+;; `mevedel-view-control-transfer'
+(declare-function mevedel-refresh-session "mevedel-view-control-transfer" ())
+(declare-function mevedel-release-control "mevedel-view-control-transfer" ())
+(declare-function mevedel-take-control "mevedel-view-control-transfer" ())
+(declare-function mevedel-toggle-follow "mevedel-view-control-transfer" ())
 (declare-function mevedel-view-control-transfer-grant
-                  "mevedel-view-interaction" ())
+                  "mevedel-view-control-transfer" ())
 (declare-function mevedel-view-control-transfer-keep
-                  "mevedel-view-interaction" ())
+                  "mevedel-view-control-transfer" ())
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session-follow-published)
 
@@ -1122,34 +1122,40 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
 (defun mevedel-menu--take-control ()
   "Take control of this session from the view buffer."
   (interactive)
+  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-take-control))
 
 (defun mevedel-menu--release-control ()
   "Release this session's lease from the view buffer."
   (interactive)
+  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-release-control))
 
 (defun mevedel-menu--grant-control ()
   "Grant the pending control-transfer request from the view buffer."
   (interactive)
+  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-view-control-transfer-grant))
 
 (defun mevedel-menu--keep-control ()
   "Decline the pending control-transfer request from the view buffer."
   (interactive)
+  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-view-control-transfer-keep))
 
 (defun mevedel-menu--toggle-follow ()
   "Toggle published-state following from the view buffer."
   (interactive)
+  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-toggle-follow))
 
 (defun mevedel-menu--refresh-session ()
   "Re-read the owner's newest published state from the view buffer."
   (interactive)
+  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-refresh-session))
 

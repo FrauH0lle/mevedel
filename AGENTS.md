@@ -174,6 +174,7 @@ Chat / view
   mevedel-patch-review.el     staged ApplyPatch review UI
   mevedel-plan-mode.el        Plan conversations and proposal approval UI
   mevedel-view-interaction.el interaction registration, ordering, callback overlays, redraw
+  mevedel-view-control-transfer.el cooperative transfer polling, presentation, and commands
   mevedel-view-disclosure.el  source-backed transcript disclosure state and actions
   mevedel-view-render.el      transcript projection, source mapping, live navigation
   mevedel-view-segments.el    historical session segment projection and navigation

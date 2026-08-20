@@ -15,17 +15,16 @@
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
+(require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 (require 'mevedel-transcript)
 (require 'mevedel-structs)
 (require 'mevedel-pipeline)
+(require 'mevedel-permissions)
 (require 'mevedel-tool-registry)
 (require 'mevedel-workspace)
 (require 'mevedel-session-persistence)
-;; The control commands require these lazily, which would redefine stubbed
-;; symbols in the middle of a test.
-(require 'mevedel-session-control-transfer)
-(require 'mevedel-session-durability)
+(require 'mevedel-turn)
 (require 'mevedel-tool-ui)
 (require 'mevedel-permission-queue)
 (require 'mevedel-goal)
@@ -66,37 +65,7 @@
     (should-not (eq mevedel-view--interaction-descriptors
                     mevedel-view--interaction-overlays))
     (should (= 0 (hash-table-count mevedel-view--interaction-descriptors)))
-    (should (= 0 (hash-table-count mevedel-view--interaction-overlays)))
-    (mevedel-view-interaction-teardown)))
-
-(mevedel-deftest mevedel-view-control-transfer-keymaps ()
-  ,test
-  (test)
-  :doc "binds exactly the transfer keys each side displays, and nothing else"
-  (should (eq (lookup-key mevedel-view--control-transfer-map (kbd "g"))
-              #'mevedel-view-control-transfer-grant))
-  (should (eq (lookup-key mevedel-view--control-transfer-map (kbd "k"))
-              #'mevedel-view-control-transfer-keep))
-  (should (eq (lookup-key mevedel-view--control-transfer-request-map (kbd "r"))
-              #'mevedel-view-control-transfer-request))
-  (should-not
-   (eq (lookup-key mevedel-view--control-transfer-request-map (kbd "r"))
-       #'mevedel-view-control-transfer-grant))
-  ;; Giving a session to another machine is not undone by pressing something
-  ;; else, so these maps claim no click, no `RET', and no key the line does
-  ;; not display.  Those events reach the shared display fallback instead,
-  ;; and `mevedel-view-activate-at-point' declines to act on interaction
-  ;; text.  The owner's map in particular must not offer `r': requesting
-  ;; control from yourself makes your own poll grant it and release your
-  ;; lease.
-  (dolist (map (list mevedel-view--control-transfer-map
-                     mevedel-view--control-transfer-request-map
-                     mevedel-view--control-transfer-status-map))
-    (dolist (key '("<mouse-1>" "<mouse-2>" "<mouse-3>" "RET" "<return>"))
-      (should-not (lookup-key map (kbd key)))))
-  (should-not (lookup-key mevedel-view--control-transfer-map (kbd "r")))
-  (should-not (lookup-key mevedel-view--control-transfer-status-map (kbd "g")))
-  (should-not (lookup-key mevedel-view--control-transfer-status-map (kbd "r"))))
+    (should (= 0 (hash-table-count mevedel-view--interaction-overlays)))))
 
 (mevedel-deftest mevedel-view--show-pending-plan
   (:doc "uses the clicked view and focuses hidden or visible approvals")
@@ -1375,212 +1344,32 @@
                      'kept)))
         (should (equal kinds (mapcar #'car callbacks))))))))
 
-(defmacro test-mevedel-view-interaction--with-pair (session read-only &rest body)
-  "Run BODY in a view buffer paired to a data buffer holding SESSION.
-READ-ONLY sets the data buffer's read-only session mode."
-  (declare (indent 2))
-  `(let ((data (generate-new-buffer " *mevedel-pair-data*"))
-         (view (generate-new-buffer " *mevedel-pair-view*")))
-     (unwind-protect
-         (progn
-           (with-current-buffer data
-             (setq-local mevedel--session ,session)
-             (setq-local mevedel-session--read-only-mode ,read-only))
-           (with-current-buffer view
-             (setq-local mevedel--data-buffer data)
-             (setq-local mevedel-view--agent-transcript-p nil)
-             ,@body))
-       (dolist (buffer (list data view))
-         (when (buffer-live-p buffer)
-           (kill-buffer buffer))))))
-
-(mevedel-deftest mevedel-view--control-transfer-body ()
+(mevedel-deftest mevedel-view--interaction-rebuild ()
   ,test
   (test)
-  :doc "frames the transfer line and keeps its text read-only"
-  (let* ((session (mevedel-session--create :name "control"))
-         (rendered nil))
-    (setf (mevedel-session-control-transfer session)
-          '(:state requested :request (:requester-label "Laptop")))
-    (test-mevedel-view-interaction--with-pair session nil
-      (cl-letf (((symbol-function 'mevedel-view--interaction-register)
-                 (lambda (descriptor) (setq rendered descriptor)))
+  :doc "registers the descriptor supplied by the transfer owner"
+  (let ((session (mevedel-session--create :name "control"))
+        (descriptor '(:id control-transfer :kind request :body "transfer"))
+        registered)
+    (with-temp-buffer
+      (setq-local mevedel-view--agent-transcript-p nil)
+      (cl-letf (((symbol-function 'mevedel-view--session)
+                 (lambda () session))
+                ((symbol-function
+                  'mevedel-view-control-transfer-current-descriptor)
+                 (lambda () descriptor))
+                ((symbol-function 'mevedel-view--interaction-register)
+                 (lambda (value) (setq registered value)))
                 ((symbol-function
                   'mevedel-view--interaction-clear-for-rebuild)
                  #'ignore)
                 ((symbol-function
                   'mevedel-view--interaction-delete-stale-overlays)
                  #'ignore)
-                ((symbol-function 'mevedel-view--session)
-                 (lambda () session)))
+                ((symbol-function 'mevedel-view--interaction-render)
+                 #'ignore))
         (mevedel-view--interaction-rebuild)))
-    (should rendered)
-    (let ((body (plist-get rendered :body)))
-      (should (string-match-p "Laptop" body))
-      ;; The keys carry the same face the permission prompts use, so a
-      ;; transfer reads as a decision rather than as transcript text.
-      (should
-       (cl-loop
-        for index from 0 below (length body)
-        thereis (let ((face (get-text-property index 'font-lock-face body)))
-                  (member 'help-key-binding
-                          (if (proper-list-p face) face (list face)))))))
-    ;; The rendered line is not editable: it shares the input zone with the
-    ;; composer, and a stray keystroke must not land in it.
-    (let ((rendered-body (mevedel-view--interaction-body rendered nil)))
-      (should (get-text-property 0 'read-only rendered-body)))))
-
-(mevedel-deftest mevedel-view--interaction-rebuild ()
-  ,test
-  (test)
-  :doc "reads read-only session mode from the data buffer, not the view"
-  ;; The flag is buffer-local to the data buffer.  Asking the view answered
-  ;; nil on every client, so a requester rendered the owner's grant prompt
-  ;; for its own request.
-  (let ((session (mevedel-session--create :name "control"))
-        (read-only-args nil))
-    (setf (mevedel-session-control-transfer session)
-          '(:state requested :request (:requester-label "Laptop")))
-    (cl-letf (((symbol-function 'mevedel-session-control-transfer-descriptor)
-               (lambda (_session read-only-p)
-                 (push read-only-p read-only-args)
-                 nil))
-              ((symbol-function 'mevedel-view--interaction-clear-for-rebuild)
-               #'ignore)
-              ((symbol-function
-                'mevedel-view--interaction-delete-stale-overlays)
-               #'ignore)
-              ((symbol-function 'mevedel-view--session)
-               (lambda () session)))
-      (test-mevedel-view-interaction--with-pair session t
-        (mevedel-view--interaction-rebuild))
-      (should (equal '(t) read-only-args))
-      (test-mevedel-view-interaction--with-pair session nil
-        (mevedel-view--interaction-rebuild))
-      (should (equal '(nil t) read-only-args)))))
-
-(mevedel-deftest mevedel-take-control ()
-  ,test
-  (test)
-  :doc "routes by lease state and refuses a session already writable here"
-  (let ((session (mevedel-session--create :name "control"))
-        (state 'available)
-        (acquired 0)
-        (requested 0))
-    (setf (mevedel-session-save-path session) "/session/")
-    (cl-letf (((symbol-function 'mevedel-session-durability-lease-state)
-               (lambda (&rest _) state))
-              ((symbol-function 'mevedel-session-control-transfer-acquire)
-               (lambda (&rest _) (cl-incf acquired)))
-              ((symbol-function 'mevedel-view-control-transfer-request)
-               (lambda (&rest _) (cl-incf requested)))
-              ((symbol-function 'mevedel-view--full-rerender) #'ignore)
-              ((symbol-function 'mevedel-view--interaction-rebuild)
-               #'ignore))
-      (test-mevedel-view-interaction--with-pair session t
-        ;; Nobody holds it, so there is no owner to ask.
-        (mevedel-take-control)
-        (should (= 1 acquired))
-        (should (= 0 requested))
-        ;; An expired lease negotiates through the lease layer's own
-        ;; takeover confirmation, not through a request nobody will answer.
-        (setq state 'expired)
-        (mevedel-take-control)
-        (should (= 2 acquired))
-        (should (= 0 requested))
-        (setq state 'foreign)
-        (mevedel-take-control)
-        (should (= 2 acquired))
-        (should (= 1 requested)))
-      (test-mevedel-view-interaction--with-pair session nil
-        (should-error (mevedel-take-control) :type 'user-error)))))
-
-(mevedel-deftest mevedel-release-control ()
-  ,test
-  (test)
-  :doc "saves and hands the lease back, and refuses while work is outstanding"
-  (let ((session (mevedel-session--create :name "control"))
-        (blocker "a live execution")
-        (saved 0)
-        (released 0)
-        (reason nil))
-    (setf (mevedel-session-save-path session) "/session/")
-    (cl-letf (((symbol-function
-                'mevedel-session-control-transfer-drain-blocker)
-               (lambda (&rest _) blocker))
-              ((symbol-function 'mevedel-session-artifacts-save)
-               (lambda (&rest _) (cl-incf saved)))
-              ((symbol-function 'mevedel-session-durability-lease-release)
-               (lambda (&rest _) (cl-incf released)))
-              ((symbol-function
-                'mevedel-session-persistence-apply-read-only-mode)
-               (lambda (_buffer &optional text) (setq reason text)))
-              ((symbol-function 'mevedel-view--interaction-rebuild)
-               #'ignore))
-      (test-mevedel-view-interaction--with-pair session nil
-        ;; Handing the lease over mid-execution would strand work the next
-        ;; owner cannot see, which is why a granted transfer waits too.
-        (should-error (mevedel-release-control) :type 'user-error)
-        (should (= 0 released))
-        (setq blocker nil)
-        (mevedel-test--with-captured-messages nil
-          (mevedel-release-control))
-        (should (= 1 saved))
-        (should (= 1 released))
-        ;; Releasing on purpose is not the same event as finding someone
-        ;; else holding the lock.
-        (should (stringp reason))
-        (should-not (string-match-p "another host" reason)))
-      (test-mevedel-view-interaction--with-pair session t
-        (should-error (mevedel-release-control) :type 'user-error)))))
-
-(mevedel-deftest mevedel-view--control-transfer-poll-seconds ()
-  ,test
-  (test)
-  :doc "polls a local session at the local cadence"
-  (let ((mevedel-view-control-transfer-poll-seconds 5)
-        (mevedel-view-control-transfer-remote-poll-seconds 30)
-        (session (mevedel-session--create
-                  :name "local"
-                  :working-directory "/srv/project/")))
-    (should (= 5 (mevedel-view--control-transfer-poll-seconds session)))
-    (setf (mevedel-session-save-path session) "/srv/project/.mevedel/main/")
-    (should (= 5 (mevedel-view--control-transfer-poll-seconds session))))
-
-  :doc "polls a target session at the remote cadence"
-  ;; Each poll is several synchronous round trips, and each one is a window
-  ;; for a foreign process sentinel to nest its own remote call in.
-  (let ((mevedel-view-control-transfer-poll-seconds 5)
-        (mevedel-view-control-transfer-remote-poll-seconds 30)
-        (session (mevedel-session--create
-                  :name "remote"
-                  :working-directory "/ssh:user@host:/srv/project/")))
-    ;; The working directory answers before the session is materialized.
-    (should (= 30 (mevedel-view--control-transfer-poll-seconds session)))
-    (setf (mevedel-session-save-path session)
-          "/ssh:user@host:/srv/project/.mevedel/main/")
-    (should (= 30 (mevedel-view--control-transfer-poll-seconds session))))
-
-  :doc "falls back to the local cadence without a session"
-  (let ((mevedel-view-control-transfer-poll-seconds 5)
-        (mevedel-view-control-transfer-remote-poll-seconds 30))
-    (should (= 5 (mevedel-view--control-transfer-poll-seconds nil))))
-
-  :doc "polls both sides of an in-flight transfer at the active cadence"
-  ;; The idle remote cadence exists to spare a connection nobody is waiting
-  ;; on.  A handoff composes three waits, so paying it there turns a thirty
-  ;; second transfer into minutes.
-  (let ((mevedel-view-control-transfer-poll-seconds 5)
-        (mevedel-view-control-transfer-remote-poll-seconds 30)
-        (mevedel-view-control-transfer-active-poll-seconds 2)
-        (session (mevedel-session--create
-                  :name "remote"
-                  :working-directory "/ssh:user@host:/srv/project/")))
-    (dolist (state '(requested quiescing))
-      (setf (mevedel-session-control-transfer session) (list :state state))
-      (should (= 2 (mevedel-view--control-transfer-poll-seconds session))))
-    (setf (mevedel-session-control-transfer session) '(:state acquired))
-    (should (= 30 (mevedel-view--control-transfer-poll-seconds session)))))
+    (should (equal descriptor registered))))
 
 (provide 'test-mevedel-view-interaction)
 ;;; test-mevedel-view-interaction.el ends here

@@ -12,6 +12,8 @@ buffer behavior for non-transcript surfaces.
 `mevedel-view-agent.el` owns agent transcript inspection, live agent status,
 and targeted handle refresh. `mevedel-view-interaction.el` owns interaction
 descriptor registration, ordering, callback overlays, and redraw.
+`mevedel-view-control-transfer.el` owns cooperative transfer polling,
+presentation, commands, and view registration.
 `mevedel-view-disclosure.el` owns source-backed disclosure identity, state,
 and expand/collapse actions. `mevedel-view-render.el` owns transcript
 projection, source mapping, and live transcript navigation.
@@ -252,7 +254,9 @@ Use `:body-properties-owned` only when the producer supplies complete per-span
 Interaction keybindings are active only when point is on the interaction text;
 composer input must never settle or cycle interaction prompts.
 
-Portable sessions also render cooperative lease-transfer controls in this zone.
+Portable sessions also render cooperative lease-transfer controls in this
+zone; `mevedel-view-control-transfer.el` supplies their descriptors while the
+generic interaction owner places them.
 The owner sees the requester label with `Grant` and `Keep` actions; a granted
 transfer remains quiescing until current requests, executions, prompts, pending
 inputs, and publication work drain, then the final save releases the owner to
