@@ -87,8 +87,10 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+
+;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir
-                  "mevedel-structs" (workspace))
+                  "mevedel-workspace" (workspace))
 
 (defun mevedel-session-publication--control-logical-path-p (path)
   "Return non-nil when logical PATH names durability control storage."
@@ -1074,6 +1076,7 @@ staging bytes are discarded before the error is returned to the caller."
 
 (defun mevedel-session-publication-status (session)
   "Return SESSION's stable read-only publication status plist."
+  (require 'mevedel-workspace)
   (let ((lease (mevedel-session-lease session))
         (pending (mevedel-session-pending-publication session)))
     (list :lease-state (plist-get lease :state)

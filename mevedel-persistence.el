@@ -18,6 +18,10 @@
 (require 'mevedel-overlays)
 (require 'mevedel-utilities)
 
+;; `mevedel-directive'
+(declare-function mevedel-workspace-set-directives "mevedel-directive"
+                  (workspace directives))
+
 ;; `mevedel-directive-persistence'
 (declare-function mevedel--deserialize-directives
                   "mevedel-directive-persistence"
@@ -53,8 +57,6 @@
 (declare-function mevedel-subdirective-anchor "mevedel-structs" (cl-x) t)
 (declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-set-directives "mevedel-structs"
-                  (workspace directives))
 
 ;; `mevedel-utilities'
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
@@ -229,6 +231,7 @@ Returns the number of saved instructions."
 (defun mevedel--reset-instructions-preserving-directives
     (workspace directives)
   "Clear WORKSPACE presentations while retaining authored DIRECTIVES."
+  (require 'mevedel-directive)
   (require 'mevedel-directive-source)
   (require 'mevedel-instruction-registry)
   (let ((mevedel--instruction-state-key-override
@@ -276,6 +279,7 @@ BASE-DIRECTORY resolves relative file names in PATH.  CONFIRM prompts
 before replacing existing instructions.  QUIET suppresses messages.
 DIRECTIVE-RECORDS retains current authored records; PRESERVE-DIRECTIVES-P
 enables that mode for an empty record list."
+  (require 'mevedel-directive)
   (require 'mevedel-directive-persistence)
   (require 'mevedel-directive-source)
   (require 'mevedel-instruction-registry)

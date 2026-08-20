@@ -30,10 +30,12 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-state-dir
-                  "mevedel-structs" (workspace))
 (defvar mevedel--session)
 (defvar mevedel-user-dir)
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace-state-dir
+                  "mevedel-workspace" (workspace))
 
 ;; `subr'
 (defvar read-eval)
@@ -101,6 +103,7 @@ roots below it."
   "Return the persistent plugin state file for WORKSPACE.
 Return nil when WORKSPACE is nil."
   (require 'mevedel-structs)
+  (require 'mevedel-workspace)
   (when workspace
     (file-name-concat (mevedel-workspace-state-dir workspace) "plugins.el")))
 
@@ -114,6 +117,7 @@ Return nil when WORKSPACE is nil."
 (defun mevedel-plugins-plugin-data-dir (plugin-name &optional workspace)
   "Return persistent data directory for PLUGIN-NAME in WORKSPACE."
   (require 'mevedel-structs)
+  (require 'mevedel-workspace)
   (unless workspace
     (error "No workspace for plugin data"))
   (file-name-concat (mevedel-workspace-state-dir workspace)

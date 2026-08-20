@@ -324,9 +324,6 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-drain-cancellers "mevedel-structs"
-		  (request))
-(declare-function mevedel-request-end "mevedel-structs" nil)
 (declare-function mevedel-request-file-snapshots "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-request-untracked-effects "mevedel-structs"
@@ -363,6 +360,14 @@
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
                   "mevedel-transcript-audit" (record))
+
+;; `mevedel-turn'
+(declare-function mevedel-request-begin
+                  "mevedel-turn" (session &optional directive-uuid))
+(declare-function mevedel-request-drain-cancellers "mevedel-turn"
+                  (request))
+(declare-function mevedel-request-end
+                  "mevedel-turn" (&optional abort-plan-approval))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -1698,6 +1703,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
+  (require 'mevedel-turn)
   (setq directive
         (or (mevedel--topmost-instruction directive 'directive)
             directive))
@@ -2036,6 +2042,7 @@ BUF defaults to the current buffer if not specified."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
+  (require 'mevedel-turn)
   (with-current-buffer (or buf (current-buffer))
     (when-let* ((chat-buffer (mevedel--active-chat-buffer))
                 (_ (buffer-live-p chat-buffer)))

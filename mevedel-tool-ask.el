@@ -26,8 +26,8 @@
 (defvar mevedel--prompt-overlays)
 (defvar mevedel-interaction-prompt-settled-hook)
 
-;; `mevedel-structs'
-(declare-function mevedel-current-origin "mevedel-structs" ())
+;; `mevedel-turn'
+(declare-function mevedel-current-origin "mevedel-turn" ())
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
@@ -156,6 +156,7 @@
 
 CALLBACK is the async callback function to call with results.
 QUESTIONS is an array of question plists, each with :question and :options keys."
+  (require 'mevedel-turn)
   (mevedel-tools--validate-params callback mevedel-tools--ask-user
     (questions (vectorp . "array")))
 

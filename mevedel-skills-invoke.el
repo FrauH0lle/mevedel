@@ -88,11 +88,8 @@
                   (text arguments session skill))
 
 ;; `mevedel-structs'
-(declare-function mevedel-current-origin "mevedel-structs" ())
 (declare-function mevedel-request-attached-skill-records
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-begin "mevedel-structs"
-                  (session &optional directive-uuid))
 (declare-function mevedel-request-hook-rules
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-skill-permission-rules
@@ -123,6 +120,11 @@
                   "mevedel-transcript-audit"
                   (event original submitted &optional reason))
 
+
+;; `mevedel-turn'
+(declare-function mevedel-current-origin "mevedel-turn" ())
+(declare-function mevedel-request-begin "mevedel-turn"
+                  (session &optional directive-uuid))
 
 ;;
 ;;; Request-scoped skill context

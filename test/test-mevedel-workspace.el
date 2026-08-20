@@ -118,6 +118,141 @@
 
 
 ;;
+;;; Workspace registry
+
+(mevedel-deftest mevedel-workspace-get-or-create
+  (:before-each (mevedel-workspace-clear-registry)
+   :after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "creates workspace on first call"
+  (let ((ws (mevedel-workspace-get-or-create
+             'project "/tmp/p1/" "/tmp/p1/" "p1")))
+    (should (mevedel-workspace-p ws))
+    (should (eq 'project (mevedel-workspace-type ws)))
+    (should (equal "p1" (mevedel-workspace-name ws)))
+    (should (mevedel-file-cache-p (mevedel-workspace-file-cache ws))))
+
+  :doc "returns same struct on second call"
+  (let ((ws1 (mevedel-workspace-get-or-create
+              'project "/tmp/p1/" "/tmp/p1/" "p1"))
+        (ws2 (mevedel-workspace-get-or-create
+              'project "/tmp/p1/" "/tmp/p1/" "p1-renamed")))
+    (should (eq ws1 ws2))
+    (should (equal "p1" (mevedel-workspace-name ws2))))
+
+  :doc "different IDs create different workspaces"
+  (let ((ws1 (mevedel-workspace-get-or-create
+              'project "/tmp/p1/" "/tmp/p1/" "p1"))
+        (ws2 (mevedel-workspace-get-or-create
+              'project "/tmp/p2/" "/tmp/p2/" "p2")))
+    (should-not (eq ws1 ws2))
+    (should (equal "p1" (mevedel-workspace-name ws1)))
+    (should (equal "p2" (mevedel-workspace-name ws2))))
+
+  :doc "different types with same ID create different workspaces"
+  (let ((ws1 (mevedel-workspace-get-or-create
+              'project "/tmp/p1/" "/tmp/p1/" "p1-project"))
+        (ws2 (mevedel-workspace-get-or-create
+              'file "/tmp/p1/" "/tmp/p1/" "p1-file")))
+    (should-not (eq ws1 ws2)))
+
+  :doc "normalizes tilde project roots"
+  (let* ((root "~/mevedel-workspace-root/")
+         (expected (expand-file-name root))
+         (ws (mevedel-workspace-get-or-create
+              'project root root "home-root")))
+    (should (equal expected (mevedel-workspace-id ws)))
+    (should (equal expected (mevedel-workspace-root ws))))
+
+  :doc "deduplicates project root aliases after expansion"
+  (let* ((root "~/mevedel-workspace-root/")
+         (expanded (expand-file-name root))
+         (ws1 (mevedel-workspace-get-or-create
+               'project root root "home-root"))
+         (ws2 (mevedel-workspace-get-or-create
+               'project expanded expanded "expanded-root")))
+    (should (eq ws1 ws2)))
+
+  :doc "keeps non-project identifiers opaque"
+  (let* ((root "~/mevedel-file-root/")
+         (ws (mevedel-workspace-get-or-create
+              'file "relative-id" root "file-root")))
+    (should (equal "relative-id" (mevedel-workspace-id ws)))
+    (should (equal (expand-file-name root)
+                   (mevedel-workspace-root ws)))))
+
+(mevedel-deftest mevedel-workspace-clear-registry
+  (:doc "`mevedel-workspace-clear-registry' removes all entries")
+  (let ((ws (mevedel-workspace-get-or-create 'project "/tmp/p1/" "/tmp/p1/" "p1")))
+    (mevedel-workspace-clear-registry)
+    (should-not
+     (eq ws (mevedel-workspace-get-or-create 'project "/tmp/p1/" "/tmp/p1/" "p1")))))
+
+
+;;
+;;; Workspace helpers
+
+(mevedel-deftest mevedel-workspace-state-dir
+  (:doc "`mevedel-workspace-state-dir' returns .mevedel/ under root")
+  ,test
+  (test)
+  :doc "returns .mevedel under root"
+  (let ((ws (mevedel-workspace--create :root "/tmp/project/")))
+    (should (equal (file-name-concat (expand-file-name "/tmp/project/")
+                                     ".mevedel/")
+                   (mevedel-workspace-state-dir ws))))
+
+  :doc "expands tilde roots"
+  (let* ((root "~/mevedel-test-root/")
+         (ws (mevedel-workspace--create :root root)))
+    (should (equal (file-name-concat (expand-file-name root) ".mevedel/")
+                   (mevedel-workspace-state-dir ws)))))
+
+(mevedel-deftest mevedel-workspace-find-state-file
+  (:doc "`mevedel-workspace-find-state-file' checks project then global")
+  ,test
+  (test)
+  :doc "returns project path when project file exists"
+  (let* ((dir (make-temp-file "mevedel-test-" t))
+         (mevedel-dir (file-name-concat dir ".mevedel/"))
+         (ws (mevedel-workspace--create :root (file-name-as-directory dir))))
+    (unwind-protect
+        (progn
+          (make-directory mevedel-dir t)
+          (write-region "" nil (file-name-concat mevedel-dir "config.el"))
+          (should (equal (file-name-concat mevedel-dir "config.el")
+                         (mevedel-workspace-find-state-file ws "config.el"))))
+      (delete-directory dir t)))
+
+  :doc "falls back to global path when project file missing"
+  (let* ((dir (make-temp-file "mevedel-test-" t))
+         (global-dir (make-temp-file "mevedel-global-" t))
+         (mevedel-user-dir (file-name-as-directory global-dir))
+         (ws (mevedel-workspace--create :root (file-name-as-directory dir))))
+    (unwind-protect
+        (progn
+          (write-region "" nil (file-name-concat global-dir "config.el"))
+          (should (equal (file-name-concat global-dir "config.el")
+                         (mevedel-workspace-find-state-file ws "config.el"))))
+      (delete-directory dir t)
+      (delete-directory global-dir t)))
+
+  :doc "returns project path when neither exists"
+  (let* ((dir (make-temp-file "mevedel-test-" t))
+         (root (file-name-as-directory
+                (file-name-concat dir "missing-project")))
+         (mevedel-user-dir
+          (file-name-as-directory
+           (file-name-concat dir "missing-global")))
+         (ws (mevedel-workspace--create :root root)))
+    (unwind-protect
+        (should (equal (file-name-concat root ".mevedel/config.el")
+                       (mevedel-workspace-find-state-file ws "config.el")))
+      (delete-directory dir t))))
+
+
+;;
 ;;; Main workspace accessor
 
 (mevedel-deftest mevedel-workspace

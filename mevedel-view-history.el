@@ -33,7 +33,6 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
@@ -50,6 +49,7 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-ensure-generated-state-ignored
                   "mevedel-workspace" (workspace))
+(declare-function mevedel-workspace-state-dir "mevedel-workspace" (workspace))
 
 
 ;;
@@ -161,6 +161,7 @@ duplicates are skipped.  History navigation state is reset."
 
 (defun mevedel-view-history--path (&optional session)
   "Return SESSION's workspace input-history path, or nil."
+  (require 'mevedel-workspace)
   (when-let* ((sess (or session (mevedel-view-history--session)))
               (workspace (mevedel-session-workspace sess)))
     (file-name-concat (mevedel-workspace-state-dir workspace)

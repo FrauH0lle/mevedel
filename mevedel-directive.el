@@ -2,10 +2,10 @@
 
 ;;; Commentary:
 
-;; Derived directive lifecycle: available actions, state recomputed from
-;; surviving model activity, plan invalidation on authored edits, and
-;; chronological workspace rewind of directive activity.  The underlying
-;; record structs live in `mevedel-structs'.
+;; Directive mutation and derived lifecycle: nested-detail ordering, available
+;; actions, state recomputed from surviving model activity, plan invalidation
+;; on authored edits, and chronological workspace rewind.  The underlying
+;; record structs remain in `mevedel-structs'.
 
 ;;; Code:
 
@@ -18,6 +18,87 @@
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
+
+;; `mevedel-structs'
+(declare-function mevedel-directive-attempt-sequence
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-directive-discussion-turn-sequence
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
+
+
+;;
+;;; Directive mutation
+
+(defun mevedel-directive-set-anchor (directive anchor)
+  "Set DIRECTIVE's current ANCHOR."
+  (setf (mevedel-directive-anchor directive) anchor))
+
+(defun mevedel-directive-set-state (directive state)
+  "Set DIRECTIVE's transient lifecycle STATE."
+  (setf (mevedel-directive-state directive) state))
+
+(defun mevedel-directive-set-planning-enabled (directive enabled)
+  "Set DIRECTIVE's Plan-before-implementation preference to ENABLED."
+  (setf (mevedel-directive-planning-enabled directive) (and enabled t)))
+
+(defun mevedel-directive-set-skills (directive skills)
+  "Set DIRECTIVE's implementation skill selection to SKILLS."
+  (setf (mevedel-directive-skills directive) skills))
+
+(defun mevedel-subdirective-copy (subdirective)
+  "Return an independent snapshot of SUBDIRECTIVE."
+  (mevedel-subdirective--create
+   :id (substring-no-properties (mevedel-subdirective-id subdirective))
+   :request (substring-no-properties (mevedel-subdirective-request subdirective))
+   :anchor (copy-tree (mevedel-subdirective-anchor subdirective))))
+
+(defun mevedel-subdirective-set-anchor (subdirective anchor)
+  "Set SUBDIRECTIVE's current ANCHOR."
+  (setf (mevedel-subdirective-anchor subdirective) anchor))
+
+(defun mevedel-subdirective-set-request (subdirective request)
+  "Set SUBDIRECTIVE's current REQUEST."
+  (setf (mevedel-subdirective-request subdirective) request))
+
+(defun mevedel-directive-sort-subdirectives (directive)
+  "Sort DIRECTIVE's nested details by their source anchors."
+  (setf
+   (mevedel-directive-subdirectives directive)
+   (sort
+    (copy-sequence (mevedel-directive-subdirectives directive))
+    (lambda (a b)
+      (let* ((a-anchor (mevedel-subdirective-anchor a))
+             (b-anchor (mevedel-subdirective-anchor b))
+             (a-start (or (plist-get a-anchor :start) 0))
+             (b-start (or (plist-get b-anchor :start) 0))
+             (a-end (or (plist-get a-anchor :end) a-start))
+             (b-end (or (plist-get b-anchor :end) b-start)))
+        (or (< a-start b-start)
+            (and (= a-start b-start)
+                 (or (> a-end b-end)
+                     (and (= a-end b-end)
+                          (string-lessp (mevedel-subdirective-id a)
+                                        (mevedel-subdirective-id b)))))))))))
+
+(defun mevedel-workspace-add-directive (workspace directive)
+  "Add DIRECTIVE to WORKSPACE."
+  (push directive (mevedel-workspace-directives workspace))
+  directive)
+
+(defun mevedel-workspace-remove-directive (workspace directive)
+  "Remove DIRECTIVE from WORKSPACE."
+  (setf (mevedel-workspace-directives workspace)
+        (delq directive (mevedel-workspace-directives workspace))))
+
+(defun mevedel-workspace-set-directives (workspace directives)
+  "Replace WORKSPACE's directive records with DIRECTIVES."
+  (setf (mevedel-workspace-directives workspace) directives))
+
+
+;;
+;;; Derived lifecycle
+
 
 (defun mevedel-directive-invalidate-plan (directive)
   "Invalidate DIRECTIVE's unstarted Plan authority."

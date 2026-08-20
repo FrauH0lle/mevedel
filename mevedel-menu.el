@@ -41,22 +41,6 @@
 (declare-function mevedel-cockpit-show-help
                   "mevedel-cockpit" (buffer text))
 
-;; `mevedel-session-control-transfer'
-(declare-function mevedel-session-control-transfer-drain-blocker
-                  "mevedel-session-control-transfer" (session))
-
-;; `mevedel-view-interaction'
-(declare-function mevedel-refresh-session "mevedel-view-interaction" ())
-(declare-function mevedel-release-control "mevedel-view-interaction" ())
-(declare-function mevedel-take-control "mevedel-view-interaction" ())
-(declare-function mevedel-toggle-follow "mevedel-view-interaction" ())
-(declare-function mevedel-view-control-transfer-grant
-                  "mevedel-view-interaction" ())
-(declare-function mevedel-view-control-transfer-keep
-                  "mevedel-view-interaction" ())
-(defvar mevedel-session-follow-published)
-(defvar mevedel-session--read-only-mode)
-
 ;; `mevedel-compact'
 (declare-function mevedel-compact "mevedel-compact"
                   (&optional aggressive instructions))
@@ -150,6 +134,10 @@
 (declare-function mevedel-review "mevedel-review" (&optional instructions))
 (declare-function mevedel-verify "mevedel-review" (&optional instructions))
 
+;; `mevedel-session-control-transfer'
+(declare-function mevedel-session-control-transfer-drain-blocker
+                  "mevedel-session-control-transfer" (session))
+
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-status
                   "mevedel-session-publication" (session))
@@ -168,10 +156,6 @@
 (declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-tokens-used "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-turns-run "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-active-p "mevedel-structs"
-                  (&optional buffer))
-(declare-function mevedel-request-state-label "mevedel-structs"
-                  (&optional buffer))
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-current-segment
@@ -195,6 +179,12 @@
 (declare-function mevedel-tools-list-open "mevedel-tools-list"
                   (&optional context))
 
+;; `mevedel-turn'
+(declare-function mevedel-request-active-p "mevedel-turn"
+                  (&optional buffer))
+(declare-function mevedel-request-state-label "mevedel-turn"
+                  (&optional buffer))
+
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--assert-live-tip
                   "mevedel-view-composer" (&optional allow-armed-fork))
@@ -207,6 +197,18 @@
 
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
+
+;; `mevedel-view-interaction'
+(declare-function mevedel-refresh-session "mevedel-view-interaction" ())
+(declare-function mevedel-release-control "mevedel-view-interaction" ())
+(declare-function mevedel-take-control "mevedel-view-interaction" ())
+(declare-function mevedel-toggle-follow "mevedel-view-interaction" ())
+(declare-function mevedel-view-control-transfer-grant
+                  "mevedel-view-interaction" ())
+(declare-function mevedel-view-control-transfer-keep
+                  "mevedel-view-interaction" ())
+(defvar mevedel-session--read-only-mode)
+(defvar mevedel-session-follow-published)
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view-next-display "mevedel-view-render" ())
@@ -416,6 +418,7 @@ may want to act on earn a line in a cockpit header."
   "Return the cockpit header string.
 One identity line, plus an alert line when session state is off-nominal.
 The complete target and durability state lives in the session info panel."
+  (require 'mevedel-turn)
   (let* ((context (mevedel-menu--context))
          (data-buffer (mevedel-cockpit-context-data-buffer context))
          (session (mevedel-cockpit-context-session context))
@@ -519,6 +522,7 @@ unavailable until it changes."
 
 (defun mevedel-menu--session-info-text ()
   "Return the complete session state as info-panel text."
+  (require 'mevedel-turn)
   (let* ((context (mevedel-menu--context))
          (data-buffer (mevedel-cockpit-context-data-buffer context))
          (session (mevedel-cockpit-context-session context))
@@ -918,6 +922,7 @@ state rather than as a fourth permission choice."
 
 (defun mevedel-menu--request-active-p ()
   "Return non-nil when the current session has an active request."
+  (require 'mevedel-turn)
   (mevedel-request-active-p
    (mevedel-cockpit-context-data-buffer (mevedel-menu--context))))
 

@@ -111,10 +111,10 @@ Entry point
   mevedel.el                  top-level loader, install/uninstall, directives
 
 Data model
-  mevedel-structs.el          workspace, session, request, task data invariants
-  mevedel-directive.el        directive lifecycle, plan invalidation, rewind
-  mevedel-turn.el             canonical success/failure turn settlement
-  mevedel-workspace.el        workspace detection and registry
+  mevedel-structs.el          passive workspace/session/request/task data shapes and invariants
+  mevedel-directive.el        directive mutation, lifecycle, plan invalidation, rewind
+  mevedel-turn.el             request admission/cancellation and terminal settlement
+  mevedel-workspace.el        workspace detection, registry, and state lookup
   mevedel-workspace-identity.el project-owned durable workspace identity
   mevedel-models.el           model tier/provider resolution, context budget
   mevedel-hooks.el            project/user/skill/agent hook loading + runner

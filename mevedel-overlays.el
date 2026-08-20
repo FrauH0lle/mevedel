@@ -48,21 +48,6 @@
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
 (defvar mevedel--view-buffer)
 
-;; `mevedel-directive'
-(declare-function mevedel-directive-actions "mevedel-directive" (directive))
-(declare-function mevedel-directive-add-subdirective
-                  "mevedel-directive" (directive subdirective))
-(declare-function mevedel-directive-has-activity-p
-                  "mevedel-directive" (directive))
-(declare-function mevedel-directive-invalidate-plan
-                  "mevedel-directive" (directive))
-(declare-function mevedel-directive-remove-subdirective
-                  "mevedel-directive" (directive subdirective))
-(declare-function mevedel-directive-request-changed-p
-                  "mevedel-directive" (directive))
-(declare-function mevedel-directive-set-request "mevedel-directive"
-                  (directive request))
-
 ;; `mevedel-directive-frame'
 (declare-function mevedel-directive-frame-display
                   "mevedel-directive-frame"
@@ -173,14 +158,6 @@
 (declare-function mevedel-directive-planning-enabled
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-request "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-set-anchor "mevedel-structs"
-                  (directive anchor))
-(declare-function mevedel-directive-set-planning-enabled
-                  "mevedel-structs" (directive enabled))
-(declare-function mevedel-directive-set-skills "mevedel-structs"
-                  (directive skills))
-(declare-function mevedel-directive-set-state "mevedel-structs"
-                  (directive state))
 (declare-function mevedel-directive-skills "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-subdirectives
@@ -189,22 +166,11 @@
 (declare-function mevedel-subdirective--create
                   "mevedel-structs" (&rest slots))
 (declare-function mevedel-subdirective-anchor "mevedel-structs" (cl-x) t)
-(declare-function mevedel-subdirective-copy "mevedel-structs" (subdirective))
 (declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-subdirective-request "mevedel-structs" (cl-x) t)
-(declare-function mevedel-subdirective-set-anchor
-                  "mevedel-structs" (subdirective anchor))
-(declare-function mevedel-subdirective-set-request
-                  "mevedel-structs" (subdirective request))
-(declare-function mevedel-workspace-add-directive "mevedel-structs"
-                  (workspace directive))
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-remove-directive "mevedel-structs"
-                  (workspace directive))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-set-directives "mevedel-structs"
-                  (workspace directives))
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view-composer'

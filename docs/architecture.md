@@ -39,6 +39,11 @@ loopback-only. See
 
 Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 
+`mevedel-structs.el` owns these passive shapes and their shape-local
+invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
+`mevedel-directive.el` owns directive mutation and derived lifecycle, and
+`mevedel-turn.el` owns request admission, cancellation, and settlement.
+
 - **`mevedel-workspace`**: type, id, root, name, file-cache, and the durable
   directive records shared by every session in the workspace.
   Additional roots live in `mevedel-workspace-additional-roots`.
@@ -398,10 +403,10 @@ kinds are a closed explicit dispatch over skill source path, reference UUID,
 absolute file pathname, and MCP server/URI; there is no resolver registry or
 sidecar identity store. See [`mentions.md`](mentions.md#atomic-binding-lifecycle).
 
-`mevedel-turn.el` owns the single top-level completion boundary. The ordinary
-gptel `DONE` state and awaited fork-skill workflows call it after response
-hooks, while error and abort terminals retain their separate
-no-save/no-follow-up behavior.
+`mevedel-turn.el` owns top-level request admission, identity, cancellation, and
+the single completion boundary. The ordinary gptel `DONE` state and awaited
+fork-skill workflows call it after response hooks, while error and abort
+terminals retain their separate no-save/no-follow-up behavior.
 
 Main and agent data buffers install buffer-local gptel pre/post-tool hooks.
 The pre-tool hook preserves raw JSON distinctions, validates the call as-is,

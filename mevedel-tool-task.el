@@ -32,6 +32,9 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
+;; `mevedel-turn'
+(declare-function mevedel-current-turn "mevedel-turn" (session))
+
 ;; `mevedel-view'
 (defvar mevedel-view--status-marker)
 (declare-function mevedel-view--render-status "mevedel-view" (&optional data-buf))
@@ -229,6 +232,7 @@ The JSON object from gptel may arrive as either form; normalize once."
 
 (defun mevedel-tool-task--write-turn (session)
   "Return the task-write turn for SESSION."
+  (require 'mevedel-turn)
   (mevedel-current-turn session))
 
 (defun mevedel-tool-task--mark-write (session)

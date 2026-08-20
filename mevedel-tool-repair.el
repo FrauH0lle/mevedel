@@ -23,9 +23,6 @@
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
 
-;; `mevedel-structs'
-(declare-function mevedel-current-origin "mevedel-structs" ())
-
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
@@ -40,6 +37,9 @@
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-address-like-p "mevedel-resource" (value))
+
+;; `mevedel-turn'
+(declare-function mevedel-current-origin "mevedel-turn" ())
 
 ;; `mevedel-utilities'
 (declare-function mevedel--format-hook-audit-record
@@ -648,6 +648,7 @@ Invalid outcomes intentionally omit tentative args and repair records."
     (name status raw-args final-args repairs issues info
           &optional failure-class abandoned-repairs)
   "Build a buffer-local dispatch entry from one raw tool-call INFO."
+  (require 'mevedel-turn)
   (list :tool name :status status
         :raw-args raw-args :args final-args
         :repairs repairs :issues issues

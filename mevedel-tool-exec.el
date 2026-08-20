@@ -177,10 +177,7 @@
 (defvar mevedel-sandbox-intrinsic-paths)
 
 ;; `mevedel-structs'
-(declare-function mevedel-current-origin "mevedel-structs" ())
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
-(declare-function mevedel-request-push-canceller
-                  "mevedel-structs" (request canceller))
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
@@ -207,6 +204,11 @@
                   "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-record-audit
                   "mevedel-telemetry" (session event &rest props))
+
+;; `mevedel-turn'
+(declare-function mevedel-current-origin "mevedel-turn" ())
+(declare-function mevedel-request-push-canceller
+                  "mevedel-turn" (request canceller))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clamped-integer
@@ -247,6 +249,7 @@
 
 (defun mevedel-tool-exec--capture-permission-origin (input)
   "Return INPUT with its permission owner and session captured."
+  (require 'mevedel-turn)
   (let* ((copy (copy-sequence input))
          (context (copy-sequence (plist-get copy :permission-context))))
     (unless (plist-get context :origin)
@@ -261,6 +264,7 @@
 
 (defun mevedel-tool-exec--permission-origin (permission-context)
   "Return the captured owner from PERMISSION-CONTEXT."
+  (require 'mevedel-turn)
   (or (plist-get permission-context :origin)
       (mevedel-current-origin)))
 
@@ -1891,6 +1895,7 @@ METADATA-P controls decision metadata.  PERMISSION-CONTEXT supplies the
 pending child-confinement request.
 Guardian deny recommendations become `deny'.  Timeout, failure, invalid
 output, and non-deny recommendations allow by default."
+  (require 'mevedel-turn)
   (let ((active t)
         (request (plist-get permission-context :request)))
     (when (mevedel-request-p request)
@@ -2718,6 +2723,7 @@ stopped command's outcome."
 (defun mevedel-tool-exec--bash (callback args)
   "Execute a Bash command and return its output.
 CALLBACK receives the result envelope.  ARGS is a plist with :command."
+  (require 'mevedel-turn)
   (let ((command (plist-get args :command))
         (tty (plist-get args :tty)))
     (unless (stringp command)
@@ -2773,6 +2779,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
 
 (defun mevedel-tool-exec--write-stdin (callback args)
   "Poll or write to one owner-scoped yielded execution from ARGS."
+  (require 'mevedel-turn)
   (let* ((execution-id (plist-get args :execution_id))
          (chars (or (plist-get args :chars) ""))
          (requested-yield-time-ms (plist-get args :yield-time_ms))
@@ -2815,6 +2822,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
 
 (defun mevedel-tool-exec--list-executions (_args)
   "Return yielded executions visible to the current model owner."
+  (require 'mevedel-turn)
   (let ((session (mevedel-tool-exec--permission-log-session))
         (owner (mevedel-current-origin)))
     (unless session
@@ -2829,6 +2837,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
 
 (defun mevedel-tool-exec--stop-execution (callback args)
   "Stop one owner-scoped yielded execution named by ARGS."
+  (require 'mevedel-turn)
   (let ((execution-id (plist-get args :execution_id))
         (session (mevedel-tool-exec--permission-log-session))
         (owner (mevedel-current-origin)))
@@ -2988,6 +2997,7 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
   "Evaluate EXPRESSION in a child process and call CALLBACK.
 ADDITIONAL-PERMISSIONS is the validated additive execution profile.
 SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
+  (require 'mevedel-turn)
   (let* ((workdir (mevedel-tool-exec--default-directory))
          (session (mevedel-tool-exec--permission-log-session))
          (owner (mevedel-current-origin))

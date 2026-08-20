@@ -109,11 +109,6 @@
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-begin
-                  "mevedel-structs" (session &optional directive-uuid))
-(declare-function mevedel-request-end "mevedel-structs" ())
-(declare-function mevedel-request-push-canceller
-                  "mevedel-structs" (request canceller))
 (declare-function mevedel-session-agent-registry
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
@@ -125,6 +120,14 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-turn'
+(declare-function mevedel-request-begin
+                  "mevedel-turn" (session &optional directive-uuid))
+(declare-function mevedel-request-end
+                  "mevedel-turn" (&optional abort-plan-approval))
+(declare-function mevedel-request-push-canceller
+                  "mevedel-turn" (request canceller))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -995,6 +998,7 @@ permission policy decides whether verifier validation commands may run."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
+  (require 'mevedel-turn)
   (require 'mevedel-utilities)
   (with-current-buffer data-buffer
     (when mevedel--session
@@ -1019,6 +1023,7 @@ permission policy decides whether verifier validation commands may run."
 
 (defun mevedel-review--end-direct-request (data-buffer)
   "End DATA-BUFFER's direct review request if one is active."
+  (require 'mevedel-turn)
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (when (bound-and-true-p mevedel--current-request)
@@ -1128,6 +1133,7 @@ non-empty, is appended to the leaf prompt.  PROGRESS-CALLBACK, when non-nil,
 receives the retained invocation before provider dispatch.  COMMAND defaults
 to `review'.  CWD and TARGET, when non-nil, create package evidence after the
 parent request has accepted the review turn."
+  (require 'mevedel-turn)
   (let* ((command (or command 'review))
          (session mevedel--session))
     (if (null session)

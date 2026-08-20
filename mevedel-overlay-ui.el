@@ -37,6 +37,10 @@
                   "mevedel-directive" (directive))
 (declare-function mevedel-directive-request-changed-p
                   "mevedel-directive" (directive))
+(declare-function mevedel-directive-set-planning-enabled
+                  "mevedel-directive" (directive enabled))
+(declare-function mevedel-directive-set-skills
+                  "mevedel-directive" (directive skills))
 
 ;; `mevedel-directive-frame'
 (declare-function mevedel-directive-frame-display
@@ -154,10 +158,6 @@
 (declare-function mevedel-directive-plan "mevedel-structs" (cl-x) t)
 (declare-function mevedel-directive-planning-enabled
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-directive-set-planning-enabled
-                  "mevedel-structs" (directive enabled))
-(declare-function mevedel-directive-set-skills
-                  "mevedel-structs" (directive skills))
 (declare-function mevedel-directive-skills "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-utilities'
@@ -297,6 +297,7 @@ active chat session."
 
 (defun mevedel--ov-actions-toggle-skill (directive)
   "Toggle one implementation skill on DIRECTIVE's directive record."
+  (require 'mevedel-directive)
   (require 'mevedel-skills-ui)
   (let* ((record (mevedel--directive-record directive))
          (workspace
@@ -330,6 +331,7 @@ active chat session."
 (defun mevedel--ov-actions-settings (&optional instruction)
   "Edit Plan-before-implementation, skills, and model settings for INSTRUCTION."
   (interactive (list (mevedel--ov-actions-getov)))
+  (require 'mevedel-directive)
   (let* ((directive (mevedel--topmost-instruction instruction 'directive))
          (record (mevedel--directive-record directive))
          (planning-enabled (mevedel-directive-planning-enabled record))

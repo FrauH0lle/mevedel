@@ -78,6 +78,11 @@
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 
+;; `mevedel-turn'
+(declare-function mevedel-current-turn "mevedel-turn" (session))
+(declare-function mevedel-request-push-canceller
+                  "mevedel-turn" (request canceller))
+
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--claim-spinner-status
                   "mevedel-view-stream" (snapshot status owner))
@@ -86,6 +91,10 @@
 (declare-function mevedel-view--spinner-active-p "mevedel-view-stream" ())
 (declare-function mevedel-view--spinner-status-snapshot
                   "mevedel-view-stream" ())
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace-state-dir
+                  "mevedel-workspace" (workspace))
 
 (defvar gptel-model)
 (defvar read-eval)
@@ -592,6 +601,7 @@ The returned plist includes `:path', `:hash', `:content', and
 
 (defun mevedel-hooks--project-config-candidates (workspace)
   "Return existing project hook files for WORKSPACE in load order."
+  (require 'mevedel-workspace)
   (when workspace
     (let (files)
       (dolist (dir (list (file-name-concat
@@ -1194,6 +1204,7 @@ slot unchanged and returns nil."
 
 (defun mevedel-hooks-event-plist (event &optional session workspace &rest extra)
   "Build a generic hook plist for EVENT, SESSION, WORKSPACE, and EXTRA."
+  (require 'mevedel-turn)
   (let* ((workspace (or workspace
                         (and session (mevedel-session-workspace session))))
          (workspace-root (and workspace (mevedel-workspace-root workspace)))
@@ -1728,6 +1739,7 @@ record only that context was added, without duplicating the body."
 (defun mevedel-hooks--run-command-handler
     (event handler event-plist session request callback)
   "Run command HANDLER for EVENT and call CALLBACK with decision."
+  (require 'mevedel-turn)
   (let* ((command (plist-get handler :command))
          (timeout (mevedel-hooks--command-timeout handler))
          (default-directory

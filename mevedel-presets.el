@@ -78,8 +78,6 @@
                   "mevedel-skills-invoke" (request))
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-begin
-                  "mevedel-structs" (session &optional directive-uuid))
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
@@ -118,6 +116,8 @@
 (declare-function mevedel--complete-turn "mevedel-turn" (fsm))
 (declare-function mevedel--fail-turn "mevedel-turn" (fsm status))
 (declare-function mevedel--safe-fsm-handler "mevedel-turn" (handler))
+(declare-function mevedel-request-begin
+                  "mevedel-turn" (session &optional directive-uuid))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-ensure-progress-for-fsm

@@ -96,8 +96,6 @@
                   "mevedel-skills-preparation" (text))
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-begin
-                  "mevedel-structs" (session &optional directive-uuid))
 (defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
@@ -114,6 +112,8 @@
 
 ;; `mevedel-turn'
 (declare-function mevedel--complete-turn "mevedel-turn" (fsm))
+(declare-function mevedel-request-begin
+                  "mevedel-turn" (session &optional directive-uuid))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties

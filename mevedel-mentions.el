@@ -100,8 +100,6 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
-(declare-function mevedel-request-push-canceller
-                  "mevedel-structs" (request canceller))
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-mentions-shown "mevedel-structs" (session))
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -134,6 +132,10 @@
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
                   "mevedel-transcript" ())
+
+;; `mevedel-turn'
+(declare-function mevedel-request-push-canceller
+                  "mevedel-turn" (request canceller))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--delimiting-markdown-backticks
@@ -613,6 +615,7 @@ boundary checks."
   "Add PATH with MIME to this prompt buffer's gptel media context.
 When BYTES is non-nil, stage those verified bytes locally until request
 teardown instead of letting gptel read PATH."
+  (require 'mevedel-turn)
   (if (not bytes)
       (progn
         (unless (local-variable-p 'gptel-context)
