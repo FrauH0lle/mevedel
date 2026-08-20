@@ -14,28 +14,27 @@
   (require 'mevedel-tool-registry)
   (require 'subr-x))
 
+;; `mevedel-directive-source'
+(declare-function mevedel--directive-record
+                  "mevedel-directive-source" (directive))
+(declare-function mevedel--mark-buffer-source-missing
+                  "mevedel-directive-source" (buffer))
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
                   "mevedel-execution-target" (workspace-root))
 (declare-function mevedel-execution-target-expand-path
                   "mevedel-execution-target" (target path &optional directory))
 
-(defvar mevedel-tool-patch--prepared-proposal nil)
-
-(define-error 'mevedel-tool-patch-partial-rollback
-  "Patch rollback incomplete")
-
 ;; `mevedel-file-state'
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind &optional offset limit))
 
-;; `mevedel-overlays'
-(declare-function mevedel--directive-record "mevedel-overlays" (directive))
-(declare-function mevedel--instruction-alist-value "mevedel-overlays" ())
-(declare-function mevedel--mark-buffer-source-missing
-                  "mevedel-overlays" (buffer))
+;; `mevedel-instruction-registry'
+(declare-function mevedel--instruction-alist-value
+                  "mevedel-instruction-registry" ())
 (declare-function mevedel--set-instruction-alist-value
-                  "mevedel-overlays" (value))
+                  "mevedel-instruction-registry" (value))
 
 ;; `mevedel-patch-review'
 (declare-function mevedel-patch-review-start
@@ -81,6 +80,11 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
+
+(defvar mevedel-tool-patch--prepared-proposal nil)
+
+(define-error 'mevedel-tool-patch-partial-rollback
+  "Patch rollback incomplete")
 
 (defconst mevedel-tool-patch--begin "*** Begin Patch")
 (defconst mevedel-tool-patch--end "*** End Patch")

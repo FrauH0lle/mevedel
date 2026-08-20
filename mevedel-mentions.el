@@ -10,7 +10,8 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib))
+  (require 'cl-lib)
+  (require 'mevedel-instruction-registry))
 
 (require 'mevedel-overlays)
 
@@ -26,16 +27,6 @@
 (declare-function mcp-read-resource "mcp" (connection uri))
 (defvar mcp-server-connections)
 
-;; `mevedel-resource'
-(declare-function mevedel-resource-encode-component
-                  "mevedel-resource" (value))
-(declare-function mevedel-resource-execute
-                  "mevedel-resource" (attempt &optional executor options))
-(declare-function mevedel-resource-normalize-file-path
-                  "mevedel-resource" (value &optional directory))
-(declare-function mevedel-resource-prepare
-                  "mevedel-resource" (operation address context))
-
 ;; `mevedel-agents'
 (declare-function mevedel-agent-description "mevedel-agents" (agent))
 (declare-function mevedel-agent-get "mevedel-agents" (name))
@@ -49,6 +40,16 @@
 ;; `mevedel-file-state'
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind &optional offset limit))
+
+;; `mevedel-instruction-registry'
+(declare-function mevedel--instruction-activate-buffer
+                  "mevedel-instruction-registry" (&optional buffer))
+(declare-function mevedel--instruction-alist-value
+                  "mevedel-instruction-registry" ())
+(declare-function mevedel--instruction-with-id
+                  "mevedel-instruction-registry" (target-id &optional workspace))
+(declare-function mevedel--instruction-with-uuid
+                  "mevedel-instruction-registry" (uuid &optional workspace))
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-at
@@ -64,13 +65,6 @@
 ;; `mevedel-overlays'
 (declare-function mevedel--filter-references
                   "mevedel-overlays" (query &optional workspace))
-(declare-function mevedel--instruction-activate-buffer
-                  "mevedel-overlays" (&optional buffer))
-(declare-function mevedel--instruction-alist-value "mevedel-overlays" ())
-(declare-function mevedel--instruction-with-id
-                  "mevedel-overlays" (target-id &optional workspace))
-(declare-function mevedel--instruction-with-uuid
-                  "mevedel-overlays" (uuid &optional workspace))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission
@@ -80,7 +74,17 @@
 
 ;; `mevedel-persistence'
 (declare-function mevedel--restore-file-instructions
-                  "mevedel-persistence" (file &optional message))
+                  "mevedel-persistence" (file &optional message workspace))
+
+;; `mevedel-resource'
+(declare-function mevedel-resource-encode-component
+                  "mevedel-resource" (value))
+(declare-function mevedel-resource-execute
+                  "mevedel-resource" (attempt &optional executor options))
+(declare-function mevedel-resource-normalize-file-path
+                  "mevedel-resource" (value &optional directory))
+(declare-function mevedel-resource-prepare
+                  "mevedel-resource" (operation address context))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
@@ -165,6 +169,7 @@ user-prompt boundary."
 (defun mevedel--resolve-ref-by-id (id &optional workspace)
   "Look up reference by numeric ID in WORKSPACE.
 Returns the reference overlay or nil if not found or not a reference."
+  (require 'mevedel-instruction-registry)
   (when-let* ((instr (mevedel--instruction-with-id id workspace)))
     (when (mevedel--referencep instr)
       instr)))
@@ -172,6 +177,7 @@ Returns the reference overlay or nil if not found or not a reference."
 (defun mevedel--resolve-ref-by-uuid (uuid &optional workspace)
   "Look up the reference carrying UUID in WORKSPACE, or return nil.
 Restore stashed instructions in WORKSPACE before searching live overlays."
+  (require 'mevedel-instruction-registry)
   (when-let* ((instr (mevedel--instruction-with-uuid uuid workspace)))
     (and (mevedel--referencep instr) instr)))
 
@@ -1068,6 +1074,7 @@ STATUS is the completion exit status."
 (defun mevedel-ref-capf ()
   "Completion-at-point function for @ref mentions.
 Provides completion for both @ref:ID and @ref:{tag-query} syntax."
+  (require 'mevedel-instruction-registry)
   (mevedel--instruction-activate-buffer)
   (when (mevedel--instruction-alist-value)
     (save-excursion

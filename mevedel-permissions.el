@@ -335,15 +335,13 @@ SESSION defaults to the current data buffer's session."
 (defun mevedel-permission-mode-transition (mode)
   "Transition the current session to permission MODE.
 Runs mode-specific lifecycle hooks."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((target (mevedel-permission-mode-normalize mode))
          (data-buf (mevedel-permission--current-data-buffer))
          (session (and data-buf
                        (buffer-local-value 'mevedel--session data-buf))))
     (if (not session)
         (set-default-toplevel-value 'mevedel-permission-mode target)
+      (require 'mevedel-session-artifacts)
       (with-current-buffer data-buf
         (mevedel-session-artifacts-assert-mutation-authority
          session data-buf)
@@ -408,16 +406,20 @@ Thin wrapper around `mevedel-permission--set-session-scoped' that
 targets the session struct's `permission-mode' slot.  See that helper's
 docstring for the full scoping contract."
   (setq val (mevedel-permission-mode-normalize val))
-  (if mevedel-permission-mode--raw-set
-      (mevedel-permission--set-session-scoped
-       sym val
-       (lambda (session v)
-         (setf (mevedel-session-permission-mode session) v)))
+  (cond
+   ((not (featurep 'mevedel-permissions))
+    (set-default-toplevel-value sym val))
+   (mevedel-permission-mode--raw-set
+    (mevedel-permission--set-session-scoped
+     sym val
+     (lambda (session v)
+       (setf (mevedel-session-permission-mode session) v))))
+   (t
     (let ((data-buf (mevedel-permission--current-data-buffer)))
       (if data-buf
           (with-current-buffer data-buf
             (mevedel-permission-mode-transition val))
-        (set-default-toplevel-value sym val)))))
+        (set-default-toplevel-value sym val))))))
 
 (defun mevedel-permission--get-session-scoped (sym slot-getter)
   "Scoped `:get' helper symmetric with `mevedel-permission--set-session-scoped'.

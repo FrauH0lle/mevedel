@@ -55,15 +55,19 @@
 ;; `mevedel-goal'
 (declare-function mevedel-goal-capture-request "mevedel-goal" (fsm))
 
+;; `mevedel-instruction-registry'
+(declare-function mevedel--find-directive-by-uuid
+                  "mevedel-instruction-registry" (uuid))
+
 ;; `mevedel-models'
 (declare-function mevedel-model-merge-tiers
                   "mevedel-models" (additions current))
 (declare-function mevedel-model-merge-workloads
                   "mevedel-models" (additions current))
 
-;; `mevedel-overlays'
-(declare-function mevedel--find-directive-by-uuid
-                  "mevedel-overlays" (uuid))
+;; `mevedel-reminders'
+(declare-function mevedel-reminders--handle-inject
+                  "mevedel-reminders" (fsm))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
@@ -109,10 +113,6 @@
                   "mevedel-tools" (fsm))
 (declare-function mevedel-tools--pending-steering-p
                   "mevedel-tools" (info))
-
-;; `mevedel-reminders'
-(declare-function mevedel-reminders--handle-inject
-                  "mevedel-reminders" (fsm))
 
 ;; `mevedel-turn'
 (declare-function mevedel--complete-turn "mevedel-turn" (fsm))

@@ -31,15 +31,21 @@
 (declare-function mevedel--directive-session-buffer
                   "mevedel-chat" (directive workspace))
 
+;; `mevedel-directive-source'
+(declare-function mevedel--directive-record
+                  "mevedel-directive-source" (directive))
+
+;; `mevedel-instruction-registry'
+(declare-function mevedel--instruction-buffer-workspace
+                  "mevedel-instruction-registry" (buffer))
+
 ;; `mevedel-models'
-(declare-function mevedel-model-current-label "mevedel-models" (&optional buffer))
+(declare-function mevedel-model-current-label
+                  "mevedel-models" (&optional buffer))
 
 ;; `mevedel-overlays'
-(declare-function mevedel--directive-record "mevedel-overlays" (directive))
-(declare-function mevedel--instruction-buffer-workspace
-                  "mevedel-overlays" (buffer))
 (declare-function mevedel--topmost-instruction
-                  "mevedel-overlays" (instruction type))
+                  "mevedel-overlays" (instruction &optional of-type pred))
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)

@@ -33,7 +33,6 @@
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 
 ;; `mevedel-chat'
-(declare-function mevedel--directive-action-label "mevedel-chat" (action))
 (declare-function mevedel--directive-session-buffer
                   "mevedel-chat" (directive workspace))
 (declare-function mevedel--discuss-directive-turn
@@ -61,6 +60,10 @@
                   "mevedel-directive-frame"
                   (directive view-buffer &optional focus))
 
+;; `mevedel-directive-source'
+(declare-function mevedel--directive-record
+                  "mevedel-directive-source" (directive))
+
 ;; `mevedel-goal'
 (declare-function mevedel-goal-start "mevedel-goal"
 		  (objective &optional prompt-submission))
@@ -77,6 +80,10 @@
 (declare-function mevedel-hooks-run-event "mevedel-hooks"
 		  (event event-plist callback &optional session
 			 workspace request invocation))
+
+;; `mevedel-instruction-registry'
+(declare-function mevedel--instruction-buffer-workspace
+                  "mevedel-instruction-registry" (buffer))
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-copy-text
@@ -105,15 +112,15 @@
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" nil)
 
+;; `mevedel-overlay-ui'
+(declare-function mevedel-overlay-ui-directive-action-label
+                  "mevedel-overlay-ui" (action))
+
 ;; `mevedel-overlays'
 (declare-function mevedel--directive-action-context
                   "mevedel-overlays" (record workspace))
-(declare-function mevedel--directive-record
-                  "mevedel-overlays" (directive))
-(declare-function mevedel--instruction-buffer-workspace
-                  "mevedel-overlays" (buffer))
 (declare-function mevedel--topmost-instruction
-                  "mevedel-overlays" (instruction type))
+                  "mevedel-overlays" (instruction &optional of-type pred))
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--queue-prepared-steering
@@ -477,13 +484,14 @@ Nil and unknown modes are treated as `ask'."
   "Return the read-only input prompt string for permission MODE.
 The prompt starts with a blank separator line so status and interaction
 rows remain visually distinct from the editable composer."
+  (require 'mevedel-overlay-ui)
   (require 'mevedel-pending-inputs)
   (let ((mode (or mode (mevedel-view--effective-permission-mode))))
     (if mevedel-view--composer-scope
         (let* ((record (plist-get mevedel-view--composer-scope :record))
                (action (plist-get mevedel-view--composer-scope :action))
                (action-label
-                (mevedel--directive-action-label
+                (mevedel-overlay-ui-directive-action-label
                  (if (eq action 'discuss)
                      (cond
                       ((plist-get mevedel-view--composer-scope :attempt-index)
@@ -749,7 +757,6 @@ This covers the interval before the prompt has been accepted and before
   (when mevedel-view--pending-skill-submission
     (setf (plist-get mevedel-view--pending-skill-submission :cancelled) t)
     (setq mevedel-view--pending-skill-submission nil)))
-
 
 
 (defun mevedel-view--position-in-input-region-p (position)
@@ -1331,6 +1338,7 @@ When FORCE is non-nil, replace the current draft unconditionally."
 (defun mevedel-view-enter-directive-scope
     (directive action &optional attempt-index workspace)
   "Open DIRECTIVE's shared session view in sticky ACTION scope."
+  (require 'mevedel-overlay-ui)
   (unless (memq action '(discuss plan request-changes retry))
     (error "Unknown directive composer action: %S" action))
   (pcase-let* ((`(,record ,workspace)
@@ -1346,7 +1354,7 @@ When FORCE is non-nil, replace the current draft unconditionally."
                      '(draft proposed)))
               (_ (memq action actions)))
       (user-error "Directive action is not available: %s"
-                  (mevedel--directive-action-label action)))
+                  (mevedel-overlay-ui-directive-action-label action)))
     (let* ((data-buffer
             (car (mevedel--directive-session-buffer record workspace)))
            (view-buffer
@@ -2456,8 +2464,6 @@ replaces INPUT only in the temporary request prompt."
               (_ (buffer-live-p data-buf)))
     (require 'mevedel-view)
     (mevedel-view--abort-data-buffer data-buf)))
-
-
 
 
 (provide 'mevedel-view-composer)

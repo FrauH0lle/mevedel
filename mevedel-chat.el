@@ -70,6 +70,14 @@
 (declare-function mevedel-agent-invocation-parent-data-buffer
 		  "mevedel-agents" (cl-x) t)
 
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration--safe-accepted-prompt
+                  "mevedel-collaboration" (data-buffer))
+(declare-function mevedel-collaboration--safe-post-response
+                  "mevedel-collaboration" (start end))
+(declare-function mevedel-collaboration--safe-post-stream
+                  "mevedel-collaboration" nil)
+
 ;; `mevedel-compact'
 (declare-function mevedel--compact-transform-auto "mevedel-compact"
 		  (continue fsm))
@@ -96,6 +104,25 @@
                   "mevedel-directive-plan"
                   (directive action prompt-fn callback))
 
+;; `mevedel-directive-source'
+(declare-function mevedel--delete-instruction
+                  "mevedel-directive-source"
+                  (instruction &optional buffer))
+(declare-function mevedel--detached-directive-p
+                  "mevedel-directive-source" (directive))
+(declare-function mevedel--directive-record
+                  "mevedel-directive-source" (directive))
+(declare-function mevedel--directive-text
+                  "mevedel-directive-source" (directive))
+(declare-function mevedel--reconcile-directive-sources
+                  "mevedel-directive-source" (workspace))
+(declare-function mevedel--remove-directive-presentation
+                  "mevedel-directive-source" (directive &optional buffer))
+(declare-function mevedel--set-directive-status
+                  "mevedel-directive-source" (directive status))
+(declare-function mevedel--submitted-subdirectives
+                  "mevedel-directive-source" (directive))
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-acknowledge-unknown
                   "mevedel-execution" (session))
@@ -120,6 +147,13 @@
 		  (event event-plist callback &optional session
 			 workspace request invocation))
 
+;; `mevedel-instruction-registry'
+(declare-function mevedel--find-directive-by-uuid
+                  "mevedel-instruction-registry" (uuid))
+(declare-function mevedel--instruction-with-uuid
+                  "mevedel-instruction-registry"
+                  (uuid &optional workspace))
+
 ;; `mevedel-models'
 (declare-function mevedel-model-apply-session-policy
                   "mevedel-models" (session &optional buffer))
@@ -128,38 +162,25 @@
 (declare-function mevedel-model-validate-effort
                   "mevedel-models" (model effort))
 
-;; `mevedel-overlays'
-(declare-function mevedel--delete-instruction "mevedel-overlays"
-		  (instruction))
-(declare-function mevedel--detached-directive-p "mevedel-overlays"
-		  (directive))
-(declare-function mevedel--directive-llm-prompt "mevedel-overlays"
-		  (directive))
-(declare-function mevedel--directive-record "mevedel-overlays" (directive))
-(declare-function mevedel--directive-text "mevedel-overlays"
-		  (directive))
-(declare-function mevedel--find-directive-by-uuid "mevedel-overlays"
-		  (uuid))
-(declare-function mevedel--highest-priority-instruction
-		  "mevedel-overlays"
-		  (instructions &optional non-processing))
-(declare-function mevedel--instruction-with-uuid "mevedel-overlays"
-                  (uuid &optional workspace))
-(declare-function mevedel--instructions-at "mevedel-overlays"
-		  (position &optional type))
-(declare-function mevedel--reconcile-directive-sources "mevedel-overlays"
-			  (workspace))
-(declare-function mevedel--remove-directive-presentation
-                  "mevedel-overlays" (directive))
-(declare-function mevedel--set-directive-status "mevedel-overlays"
-		  (directive status))
-(declare-function mevedel--submitted-subdirectives "mevedel-overlays"
-                  (directive))
-(declare-function mevedel--topmost-instruction "mevedel-overlays"
-		  (instruction type))
+;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
-		  "mevedel-overlays" (instruction &optional force))
-(declare-function mevedel-get-directive-patch "mevedel-overlays" (directive))
+                  "mevedel-overlay-ui"
+                  (instruction &optional update-children))
+(declare-function mevedel-overlay-ui-directive-action-label
+                  "mevedel-overlay-ui" (action))
+
+;; `mevedel-overlays'
+(declare-function mevedel--directive-llm-prompt
+                  "mevedel-overlays" (directive))
+(declare-function mevedel--highest-priority-instruction
+                  "mevedel-overlays"
+                  (instructions &optional return-highlighted))
+(declare-function mevedel--instructions-at
+                  "mevedel-overlays" (position &optional type))
+(declare-function mevedel--topmost-instruction
+                  "mevedel-overlays" (instruction &optional of-type pred))
+(declare-function mevedel-get-directive-patch
+                  "mevedel-overlays" (directive))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-mode-set-raw
@@ -364,14 +385,6 @@
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--full-rerender "mevedel-view-render" ())
-
-;; `mevedel-collaboration'
-(declare-function mevedel-collaboration--safe-accepted-prompt
-                  "mevedel-collaboration" (data-buffer))
-(declare-function mevedel-collaboration--safe-post-response
-                  "mevedel-collaboration" (start end))
-(declare-function mevedel-collaboration--safe-post-stream
-                  "mevedel-collaboration" nil)
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-post-tool "mevedel-view-stream"
@@ -1364,24 +1377,10 @@ FEEDBACK supplies requested changes or optional retry guidance."
 (defvar-local mevedel--current-directive-uuid nil
   "UUID of the directive currently being processed.")
 
-(defconst mevedel--directive-action-labels
-  '((implement . "Implement")
-    (request-changes . "Request changes")
-    (retry . "Retry")
-    (plan . "Plan")
-    (discuss . "Discuss"))
-  "Plain display labels for directive actions.")
-
-(defun mevedel--directive-action-label (action)
-  "Return the display label for directive ACTION."
-  (or (alist-get (if (symbolp action) action (intern-soft action))
-                 mevedel--directive-action-labels)
-      (capitalize (replace-regexp-in-string
-                   "[-_]+" " " (format "%s" action)))))
-
 (defun mevedel--directive-display-text (action directive-text)
   "Return the human-facing transcript text for ACTION and DIRECTIVE-TEXT."
-  (let ((label (mevedel--directive-action-label action)))
+  (require 'mevedel-overlay-ui)
+  (let ((label (mevedel-overlay-ui-directive-action-label action)))
     (if (string-empty-p (string-trim directive-text))
         label
       (format "%s: %s" label directive-text))))

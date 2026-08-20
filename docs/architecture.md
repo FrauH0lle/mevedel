@@ -115,6 +115,22 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 - Instruction types: **References** (source-bound context) and **Directives**
   (workspace-owned prompts with source presentations)
 
+Instruction ownership is split at the durable-record/presentation boundary:
+
+- `mevedel-instruction-registry.el` owns workspace buckets, IDs, traversal,
+  lookup, and links.
+- `mevedel-directive-source.el` owns anchors and every operation that changes
+  both a durable directive record and its source presentation, including
+  create, detach, reattach, archive, and delete.
+- `mevedel-overlay-ui.el` owns action dispatch, labels, keymaps, styling, and
+  redraw.
+- `mevedel-overlays.el` remains the geometry, containment, tag, navigation,
+  context, and prompt core.
+
+Callers do not update a directive record and then repair its overlay
+separately. They enter through the source owner, while registry and UI work
+remain presentation-neutral or durable-record-neutral respectively.
+
 Directive anchors are either Attached, with a live source range, or Detached,
 with a zero-width source position, former source order, and the last attached
 anchor evidence. Deleting an entire directive range preserves its durable

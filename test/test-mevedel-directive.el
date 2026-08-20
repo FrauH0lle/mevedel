@@ -1,6 +1,8 @@
-;;; test-mevedel-directive.el --- Tests for mevedel-directive.el -*- lexical-binding: t -*-
+;;; test-mevedel-directive.el -- Directive model tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
+
+;; Contract tests for durable directive state and rewind behavior.
 
 ;;; Code:
 
@@ -14,6 +16,12 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+
+(require 'mevedel-instruction-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-instruction-test-support"))
 
 (mevedel-deftest mevedel-directive-request-changed-p
   (:doc "compares the authored request with the latest attempt snapshot")
@@ -328,6 +336,19 @@
            :directives (list directive))))
     (mevedel-workspace-rewind-directives workspace "session" 1)
     (should-not (mevedel-directive-plan directive))))
+
+(mevedel-deftest mevedel-directive-has-activity-p
+  (:vars ())
+  ,test
+  (test)
+  :doc "distinguishes removable authored directives from durable activity"
+  (let ((directive (mevedel-directive--create
+                    :id "id" :request "request" :anchor nil
+                    :state nil :attempts nil :discussion nil)))
+    (should-not (mevedel-directive-has-activity-p directive))
+    (setf (mevedel-directive-attempts directive)
+          (list (mevedel-instruction-test--attempt)))
+    (should (mevedel-directive-has-activity-p directive))))
 
 (provide 'test-mevedel-directive)
 ;;; test-mevedel-directive.el ends here

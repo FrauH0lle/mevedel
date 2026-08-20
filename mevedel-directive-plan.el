@@ -28,6 +28,10 @@
                   "mevedel-chat"
                   (directive preset prompt-fn callback &optional options))
 
+;; `mevedel-directive-source'
+(declare-function mevedel--directive-record
+                  "mevedel-directive-source" (directive))
+
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-provider
                   "mevedel-models" (spec &optional noerror))
@@ -37,10 +41,10 @@
 (declare-function mevedel-model-validate-effort
                   "mevedel-models" (model effort))
 
-;; `mevedel-overlays'
-(declare-function mevedel--directive-record "mevedel-overlays" (directive))
+;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
-                  "mevedel-overlays" (instruction &optional refresh))
+                  "mevedel-overlay-ui"
+                  (instruction &optional update-children))
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--schedule-late-follow-up-drain
