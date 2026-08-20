@@ -127,6 +127,10 @@
 (declare-function mevedel-telemetry-record "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-start "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-transcript'
+(declare-function mevedel-transcript-normalize-properties
+                  "mevedel-transcript" ())
+
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record "mevedel-transcript-audit" (record))
 (declare-function mevedel-transcript-audit-spans "mevedel-transcript-audit" (text &optional type))
@@ -1193,6 +1197,7 @@ bounds no longer change."
   (when (and (derived-mode-p 'org-mode)
              (require 'org nil t)
              (fboundp 'gptel--get-buffer-bounds))
+    (require 'mevedel-transcript)
     (save-excursion
       (save-restriction
         (widen)

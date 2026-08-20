@@ -15,6 +15,7 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-file-state)
+(require 'mevedel-execution-transcript)
 (require 'mevedel-hooks)
 (require 'mevedel-mentions)
 (require 'mevedel-permission-queue)
@@ -187,46 +188,6 @@
           (mevedel-view--render-stream-update data-buf))
         (should warned)
         (should (equal before (buffer-string)))))))
-
-(mevedel-deftest mevedel-view-stream--terminal-render-data ()
-  ,test
-  (test)
-  :doc "omits the default sandbox boundary"
-  (should-not
-   (plist-member
-    (mevedel-view-stream--terminal-render-data
-     '(:facts (:outcome success)
-       :observation
-       (:sandbox-summary
-        (:attempt-count 1 :started-count 1 :refused-count 0
-         :sandbox bubblewrap :filesystem workspace-write
-         :network isolated :proc fresh
-         :additional-read-count 0 :additional-write-count 0))))
-    :sandbox-summary))
-  :doc "omits additional read-only access"
-  (should-not
-   (plist-member
-    (mevedel-view-stream--terminal-render-data
-     '(:facts (:outcome success)
-       :observation
-       (:sandbox-summary
-        (:attempt-count 1 :started-count 1 :refused-count 0
-         :sandbox bubblewrap :filesystem workspace-write
-         :network isolated :proc fresh
-         :additional-read-count 2 :additional-write-count 0))))
-    :sandbox-summary))
-  :doc "keeps a material sandbox boundary"
-  (should
-   (plist-get
-    (mevedel-view-stream--terminal-render-data
-     '(:facts (:outcome success)
-       :observation
-       (:sandbox-summary
-        (:attempt-count 1 :started-count 1 :refused-count 0
-         :sandbox bubblewrap :filesystem workspace-write
-         :network isolated :proc fresh
-         :additional-read-count 0 :additional-write-count 1))))
-    :sandbox-summary)))
 
 (mevedel-deftest mevedel-view-stream-handle-execution-event ()
   ,test
@@ -409,16 +370,16 @@
                     :output-lines 1 :omitted-output-bytes 0)))
     (with-current-buffer data-buf
       (should (gethash "call-late"
-                       mevedel-view-stream--pending-execution-terminals))
+                       mevedel-execution-transcript--pending-terminals))
       (insert "#+begin_tool (Bash :command \"printf late\")\n")
       (let ((start (point)))
         (insert "(:name \"Bash\" :args (:command \"printf late\"))\n\nyielded\n")
         (put-text-property start (point) 'gptel '(tool . "call-late")))
       (insert "#+end_tool\n")
-      (mevedel-view-stream--retry-pending-execution-terminals data-buf)
+      (mevedel-execution-transcript-retry-pending-terminals data-buf)
       (should-not (gethash
                    "call-late"
-                   mevedel-view-stream--pending-execution-terminals))
+                   mevedel-execution-transcript--pending-terminals))
       (let ((parsed
              (mevedel-pipeline-extract-render-data
               (buffer-substring-no-properties (point-min) (point-max))
@@ -443,18 +404,18 @@
             (should-not (bound-and-true-p mevedel--view-buffer))
             (should (gethash
                      "call-headless"
-                     mevedel-view-stream--pending-execution-terminals))
+                     mevedel-execution-transcript--pending-terminals))
             (insert "#+begin_tool (Bash :command \"printf headless\")\n")
             (let ((start (point)))
               (insert "(:name \"Bash\" :args (:command \"printf headless\"))\n\nyielded\n")
               (put-text-property start (point) 'gptel
                                  '(tool . "call-headless")))
             (insert "#+end_tool\n")
-            (mevedel-view-stream-retry-execution-terminals)
+            (mevedel-execution-transcript-retry-terminals)
             (should-not
              (gethash
               "call-headless"
-              mevedel-view-stream--pending-execution-terminals))
+              mevedel-execution-transcript--pending-terminals))
             (let ((parsed
                    (mevedel-pipeline-extract-render-data
                     (buffer-substring-no-properties
@@ -505,20 +466,6 @@
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
-(mevedel-deftest mevedel-view-stream-install ()
-  ,test
-  (test)
-  :doc "install enables advice and deferred installers honor that state"
-  (let ((mevedel-view-stream--gptel-stream-advice-installed nil)
-        (calls 0))
-    (cl-letf (((symbol-function 'mevedel-view-stream--install-advice)
-               (lambda () (cl-incf calls))))
-      (mevedel-view-stream-install)
-      (should mevedel-view-stream--gptel-stream-advice-installed)
-      (should (> calls 0))
-      (mevedel-view-stream-uninstall)
-      (should-not mevedel-view-stream--gptel-stream-advice-installed))))
-
 (mevedel-deftest mevedel-view-stream-ensure-progress-for-fsm ()
   ,test
   (test)
@@ -541,318 +488,6 @@
         (should (= (marker-position mevedel-view--data-turn-start)
                    (marker-position position)))
         (should (markerp mevedel-view--in-flight-turn-start))))))
-
-;;
-;;; gptel stream and bridge helpers
-
-(mevedel-deftest mevedel-view-stream--repair-gptel-stream-info ()
-  ,test
-  (test)
-  :doc "reanchors detached position markers for mevedel stream callbacks"
-  (mevedel-view-stream-test--with-buffers
-    (with-current-buffer data-buf
-      (insert "Prompt\n"))
-    (let ((position (copy-marker 1 nil))
-          (tracking (copy-marker 1 nil))
-          (reasoning (copy-marker 1 nil)))
-      (set-marker position nil)
-      (set-marker tracking nil)
-      (set-marker reasoning nil)
-      (let ((info (list :buffer data-buf
-                        :position position
-                        :tracking-marker tracking
-                        :reasoning-marker reasoning)))
-        (should (eq (mevedel-view-stream--repair-gptel-stream-info info) info))
-        (let ((new-position (plist-get info :position)))
-          (should (markerp new-position))
-          (should (eq (marker-buffer new-position) data-buf))
-          (should (= (marker-position new-position)
-                     (with-current-buffer data-buf (point-max)))))
-        (should-not (plist-get info :tracking-marker))
-        (should-not (plist-get info :reasoning-marker)))))
-
-  :doc "leaves unrelated gptel stream info untouched"
-  (with-temp-buffer
-    (let ((position (copy-marker (point) nil)))
-      (set-marker position nil)
-      (let ((info (list :buffer (current-buffer)
-                        :position position)))
-        (mevedel-view-stream--repair-gptel-stream-info info)
-        (should (eq (plist-get info :position) position))
-        (should-not (marker-position position))))))
-
-(mevedel-deftest mevedel-view-stream--gptel-stream-insert-response-advice ()
-  ,test
-  (test)
-  :doc "repairs detached markers before delegating to gptel streaming"
-  (mevedel-view-stream-test--with-buffers
-    (let ((position (copy-marker 1 nil))
-          (mevedel-view-stream-insert-batch-delay nil))
-      (set-marker position nil)
-      (let ((info (list :buffer data-buf :position position)))
-        (should
-         (eq (mevedel-view-stream--gptel-stream-insert-response-advice
-              (lambda (_response callback-info &optional _raw)
-                (let ((marker (plist-get callback-info :position)))
-                  (and (markerp marker)
-                       (eq (marker-buffer marker) data-buf)
-                       (marker-position marker)
-                       'delegated)))
-              "chunk"
-             info)
-             'delegated))))))
-
-(mevedel-deftest mevedel-view-stream--gptel-handle-wait-advice ()
-  ,test
-  (test)
-  :doc "keeps an open reasoning fence across a tool continuation request"
-  (mevedel-view-stream-test--with-buffers
-    (let* ((mevedel-view-stream-insert-batch-delay nil)
-           (info (list :buffer data-buf
-                       :position (with-current-buffer data-buf
-                                   (copy-marker (point-max) nil))
-                       :include-reasoning 'ignore))
-           (fsm (gptel-make-fsm :info info)))
-      (gptel--display-reasoning-stream "thinking" info)
-      ;; Current gptel tracks whether its rendered fence is still open.
-      (plist-put info :reasoning-open t)
-      (should (plist-get info :reasoning-open))
-      (should (mevedel-view-stream--gptel-stream-info-p info))
-      (should
-       (eq (mevedel-view-stream--gptel-handle-wait-advice
-            (lambda (_fsm)
-              (plist-put info :reasoning-open nil)
-              'continued)
-            fsm)
-           'continued))
-      (should (plist-get info :reasoning-open))
-      (gptel--display-reasoning-stream t info)
-      (with-current-buffer data-buf
-        (let ((text (buffer-string)))
-          (should
-           (= 1 (mevedel-view-stream-test--count-substring
-                 "#+begin_reasoning" text)))
-          (should
-           (= 1 (mevedel-view-stream-test--count-substring
-                 "#+end_reasoning" text))))))))
-
-(mevedel-deftest mevedel-view-stream--gptel-stream-insert-response-advice/performance ()
-  ,test
-  (test)
-
-  :doc "mevedel stream insertion suppresses after-change hooks but keeps post-stream hook"
-  (mevedel-view-stream-test--with-buffers
-    (let ((after-change-ran nil)
-          (post-stream-ran nil)
-          (mevedel-view-stream-insert-batch-delay nil)
-          (info (list :buffer data-buf
-                      :position (with-current-buffer data-buf
-                                  (copy-marker (point-max) nil)))))
-      (with-current-buffer data-buf
-        (setq-local after-change-functions nil)
-        (setq-local gptel-post-stream-hook nil)
-        (add-hook 'after-change-functions
-                  (lambda (&rest _) (setq after-change-ran t))
-                  nil t)
-        (add-hook 'gptel-post-stream-hook
-                  (lambda () (setq post-stream-ran t))
-                  nil t))
-      (mevedel-view-stream--gptel-stream-insert-response-advice
-       (lambda (response callback-info &optional _raw)
-         (with-current-buffer (plist-get callback-info :buffer)
-           (goto-char (plist-get callback-info :position))
-           (insert response)
-           (run-hooks 'gptel-post-stream-hook)))
-       "chunk" info)
-      (should-not after-change-ran)
-      (should post-stream-ran)
-      (with-current-buffer data-buf
-        (should (string-match-p "chunk" (buffer-string))))))
-
-  :doc "batching coalesces consecutive string stream chunks"
-  (mevedel-view-stream-test--with-buffers
-    (let ((calls nil)
-          (mevedel-view-stream-insert-batch-delay 10)
-          (info (list :buffer data-buf
-                      :position (with-current-buffer data-buf
-                                  (copy-marker (point-max) nil)))))
-      (cl-labels ((orig (response _info &optional raw)
-                    (push (list response raw) calls)))
-        (mevedel-view-stream--gptel-stream-insert-response-advice
-         #'orig "a" info)
-        (mevedel-view-stream--gptel-stream-insert-response-advice
-         #'orig "b" info)
-        (should-not calls)
-        (mevedel-view-stream--flush-gptel-stream-insert-batch info)
-        (should (equal '(("ab" nil)) calls)))))
-
-  :doc "batching flushes pending strings before non-string events"
-  (mevedel-view-stream-test--with-buffers
-    (let ((calls nil)
-          (mevedel-view-stream-insert-batch-delay 10)
-          (info (list :buffer data-buf
-                      :position (with-current-buffer data-buf
-                                  (copy-marker (point-max) nil)))))
-      (cl-labels ((orig (response _info &optional raw)
-                    (push (list response raw) calls)))
-        (mevedel-view-stream--gptel-stream-insert-response-advice
-         #'orig "text" info)
-        (mevedel-view-stream--gptel-stream-insert-response-advice
-         #'orig '(tool-call . nil) info)
-        (should (equal '(((tool-call) nil) ("text" nil)) calls)))))
-
-  :doc "batching flushes when raw insertion mode changes"
-  (mevedel-view-stream-test--with-buffers
-    (let ((calls nil)
-          (mevedel-view-stream-insert-batch-delay 10)
-          (info (list :buffer data-buf
-                      :position (with-current-buffer data-buf
-                                  (copy-marker (point-max) nil)))))
-      (cl-labels ((orig (response _info &optional raw)
-                    (push (list response raw) calls)))
-        (mevedel-view-stream--gptel-stream-insert-response-advice
-         #'orig "raw" info t)
-        (mevedel-view-stream--gptel-stream-insert-response-advice
-         #'orig "normal" info nil)
-        (mevedel-view-stream--flush-gptel-stream-insert-batch info)
-        (should (equal '(("normal" nil) ("raw" t)) calls)))))
-
-  :doc "batching flushes before stream cleanup"
-  (mevedel-view-stream-test--with-buffers
-    (let* ((process (make-pipe-process
-                     :name "mevedel-test-stream-cleanup"))
-           (calls nil)
-           (mevedel-view-stream-insert-batch-delay 10)
-           (info (list :buffer data-buf
-                       :position (with-current-buffer data-buf
-                                   (copy-marker (point-max) nil))))
-           (fsm (gptel-make-fsm :info info))
-           (gptel--request-alist (list (cons process (cons fsm #'ignore)))))
-      (unwind-protect
-          (cl-labels ((orig (response _info &optional raw)
-                        (push (list response raw) calls)))
-            (mevedel-view-stream--gptel-stream-insert-response-advice
-             #'orig "a" info)
-            (mevedel-view-stream--gptel-stream-insert-response-advice
-             #'orig "b" info)
-            (mevedel-view-stream--gptel-stream-cleanup-advice
-             (lambda (_process status)
-               (push (list 'cleanup status) calls))
-             process "finished")
-            (should (equal '((cleanup "finished") ("ab" nil)) calls)))
-        (when (process-live-p process)
-          (delete-process process)))))
-
-  :doc "batching drops stale batches after stream buffer teardown"
-  (mevedel-view-stream-test--with-buffers
-    (let ((calls nil)
-          (mevedel-view-stream-insert-batch-delay 10)
-          (info (list :buffer data-buf
-                      :position (with-current-buffer data-buf
-                                  (copy-marker (point-max) nil)))))
-      (cl-labels ((orig (response _info &optional raw)
-                    (push (list response raw) calls)))
-        (mevedel-view-stream--gptel-stream-insert-response-advice
-         #'orig "stale" info)
-        (kill-buffer data-buf)
-        (mevedel-view-stream--flush-gptel-stream-insert-batch info)
-        (should-not calls))))
-
-  :doc "nil or zero batch delay preserves immediate insertion"
-  (dolist (delay '(nil 0))
-    (mevedel-view-stream-test--with-buffers
-      (let ((calls nil)
-            (mevedel-view-stream-insert-batch-delay delay)
-            (info (list :buffer data-buf
-                        :position (with-current-buffer data-buf
-                                    (copy-marker (point-max) nil)))))
-        (cl-labels ((orig (response _info &optional raw)
-                      (push (list response raw) calls)))
-          (mevedel-view-stream--gptel-stream-insert-response-advice
-           #'orig "a" info)
-          (mevedel-view-stream--gptel-stream-insert-response-advice
-           #'orig "b" info)
-          (should (equal '(("b" nil) ("a" nil)) calls)))))))
-
-(mevedel-deftest mevedel-view-stream--wrap-gptel-stream-transformer ()
-  ,test
-  (test)
-  :doc "stale gptel stream transformer errors return the raw chunk"
-  (mevedel-view-stream-test--with-buffers
-    (let ((info (list :buffer data-buf
-                      :position (with-current-buffer data-buf
-                                  (copy-marker (point-max) nil))
-                      :transformer
-                      (lambda (_str)
-                        (error "Selecting deleted buffer")))))
-      (mevedel-view-stream--repair-gptel-stream-info info)
-      (should (plist-get info :mevedel-transformer-wrapped))
-      (let (diagnostics)
-        (mevedel-test--with-captured-diagnostics diagnostics
-          (should (equal "raw chunk"
-                         (funcall (plist-get info :transformer)
-                                  "raw chunk"))))
-        (should (string-match-p "stale gptel stream transformer"
-                                diagnostics))))))
-
-(mevedel-deftest mevedel-view-stream--gptel-stream-filter-advice ()
-  ,test
-  (test)
-  :doc "buffers stream chunks until gptel registers the process FSM"
-  (let ((process (make-pipe-process
-                  :name "mevedel-test-stream-filter"))
-        (gptel--request-alist nil)
-        (calls nil)
-        scheduled)
-    (unwind-protect
-        (cl-letf (((symbol-function
-                    'mevedel-view-stream--schedule-gptel-stream-filter-flush)
-                   (lambda (proc) (setq scheduled proc))))
-          (mevedel-view-stream--gptel-stream-filter-advice
-           (lambda (_process output)
-             (push output calls))
-           process "event: a\n")
-          (should (eq scheduled process))
-          (should-not calls)
-          (should (equal "event: a\n"
-                         (process-get
-                          process 'mevedel-view--pending-stream-output)))
-          (setf (alist-get process gptel--request-alist)
-                (cons 'fake-fsm #'ignore))
-          (mevedel-view-stream--gptel-stream-filter-advice
-           (lambda (_process output)
-             (push output calls))
-           process "event: b\n")
-          (should (equal '("event: a\nevent: b\n") calls))
-          (should-not
-           (process-get process 'mevedel-view--pending-stream-output)))
-      (when (process-live-p process)
-        (delete-process process)))))
-
-(mevedel-deftest mevedel-view-stream--install-if-enabled ()
-  ,test
-  (test)
-  :doc "deferred installer is a no-op after uninstall disables stream repair"
-  (let ((calls 0)
-        (mevedel-view-stream--gptel-stream-advice-installed nil))
-    (cl-letf (((symbol-function 'mevedel-view-stream--install-advice)
-               (lambda () (cl-incf calls))))
-      (mevedel-view-stream--install-if-enabled)
-      (should (= calls 0))
-      (let ((mevedel-view-stream--gptel-stream-advice-installed t))
-        (mevedel-view-stream--install-if-enabled))
-      (should (= calls 1)))))
-
-(mevedel-deftest mevedel-view-stream-uninstall ()
-  ,test
-  (test)
-  :doc "uninstall disables future deferred installs"
-  (let ((mevedel-view-stream--gptel-stream-advice-installed t))
-    (cl-letf (((symbol-function 'mevedel-view-stream--uninstall-advice)
-               #'ignore))
-      (mevedel-view-stream-uninstall))
-    (should-not mevedel-view-stream--gptel-stream-advice-installed)))
-
 
 ;;
 ;;; Pending tool lifecycle

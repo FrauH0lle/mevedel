@@ -124,6 +124,7 @@ Data model
   mevedel-transport.el        remote reentrancy detection and idle-transport deferral
   mevedel-execution-target.el immutable local/TRAMP target, path domains, readiness
   mevedel-execution.el        bounded child-process lifecycle and session state
+  mevedel-execution-transcript.el durable execution render data and archive reconciliation
   mevedel-execution-scheduler.el fair session-scoped Bash admission
   mevedel-sandbox.el          optional Bubblewrap child-process confinement
   mevedel-sandbox-grants.el   exact FD-backed grants and symlink mount planning
@@ -166,7 +167,8 @@ Chat / view
   mevedel-plan-mode.el        Plan conversations and proposal approval UI
   mevedel-view-interaction.el interaction registration, ordering, callback overlays, redraw
   mevedel-view-render.el      transcript rendering, folding, source mapping, navigation
-  mevedel-view-stream.el      streaming, request progress, and gptel stream integration
+  mevedel-view-stream.el      request progress and streaming redraw scheduling
+  mevedel-gptel-stream-bridge.el private gptel stream compatibility advice
   mevedel-view-audit.el       audit disclosure rendering
   mevedel-view-zone.el        managed view-zone lifecycle + fragments
   mevedel-view-history.el     view input history ring and persistence

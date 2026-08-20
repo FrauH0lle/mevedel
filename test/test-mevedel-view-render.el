@@ -4871,6 +4871,40 @@ state of its inner sections"
 ;;
 ;;; Tool-call parsing with render-data
 
+(mevedel-deftest mevedel-view--compute-segment-rendering/cold-load ()
+  ,test
+  (test)
+  :doc "loads pending execution data through its transcript owner"
+  (let ((root
+         (file-name-as-directory
+          (file-name-directory (locate-library "mevedel"))))
+        (emacs (expand-file-name invocation-name invocation-directory)))
+    (with-temp-buffer
+      (should
+       (= 0
+          (call-process
+           emacs nil t nil "--batch" "-Q" "-L" root
+           "--eval"
+           (prin1-to-string
+            '(progn
+               (require 'cl-lib)
+               (require 'mevedel-view-render)
+               (with-temp-buffer
+                 (cl-letf
+                     (((symbol-function 'mevedel-view--tool-call-parse)
+                       (lambda (&rest _)
+                         '(:name "Bash" :args nil :tool-use-id "cold"
+                                 :result "" :render-data nil)))
+                      ((symbol-function 'mevedel-tool-get) #'ignore)
+                      ((symbol-function
+                        'mevedel-view--generic-tool-rendering)
+                       (lambda (&rest _) '(:vtype tool))))
+                   (mevedel-view--compute-segment-rendering
+                    (current-buffer) (point-min) (point-max))))
+               (unless (featurep 'mevedel-execution-transcript)
+                 (error "Execution transcript owner was not loaded")))))))
+      (should (string-empty-p (string-trim (buffer-string)))))))
+
 (mevedel-deftest mevedel-view--tool-call-parse ()
   ,test
   (test)

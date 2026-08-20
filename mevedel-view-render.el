@@ -59,6 +59,11 @@
 (declare-function mevedel-execution-sandbox-summary-class
                   "mevedel-execution" (summary))
 
+;; `mevedel-execution-transcript'
+(declare-function mevedel-execution-transcript-pending-render-data
+                  "mevedel-execution-transcript"
+                  (data-buffer tool-use-id))
+
 ;; `mevedel-overlays'
 (declare-function mevedel--directive-action-context
                   "mevedel-overlays" (record workspace))
@@ -284,7 +289,6 @@
                   "mevedel-view-stream" (start end))
 (defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--execution-events)
-(defvar mevedel-view-stream--pending-execution-terminals)
 (defvar mevedel-view--in-flight-turn-start)
 (defvar mevedel-view--pending-tool-calls)
 (defvar mevedel-view-spinner-frames)
@@ -2007,18 +2011,16 @@ RAW is an optional precomputed expanded tool segment text."
            (tool-use-id (plist-get call :tool-use-id))
            (event
             (and (equal name "Bash")
+                 (bound-and-true-p mevedel-view--execution-events)
                  (hash-table-p mevedel-view--execution-events)
                  (gethash tool-use-id mevedel-view--execution-events)))
            (terminal-render-data
             (and (equal name "Bash")
                  (buffer-live-p data-buf)
-                 (let ((table
-                        (buffer-local-value
-                         'mevedel-view-stream--pending-execution-terminals
-                         data-buf)))
-                   (and (hash-table-p table)
-                        (plist-get (gethash tool-use-id table)
-                                   :render-data)))))
+                 (progn
+                   (require 'mevedel-execution-transcript)
+                   (mevedel-execution-transcript-pending-render-data
+                    data-buf tool-use-id))))
            (event-type (plist-get event :type))
            (call-render-data (plist-get call :render-data))
            (result

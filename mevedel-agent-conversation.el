@@ -95,6 +95,13 @@
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
 
+;; `mevedel-execution-transcript'
+(declare-function mevedel-execution-transcript-retry-terminals
+                  "mevedel-execution-transcript" (&rest args))
+(declare-function mevedel-execution-transcript-store-pending-terminal
+                  "mevedel-execution-transcript"
+                  (data-buffer event render-data))
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--find-render-data-block-by-agent-id
                   "mevedel-pipeline" (agent-id))
@@ -108,9 +115,6 @@
                   "mevedel-pipeline" (buffer tool-use-id))
 (declare-function mevedel-pipeline-update-tool-render-data
                   "mevedel-pipeline" (buffer tool-use-id updates))
-
-;; `mevedel-view'
-(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-find-artifact-noselect
@@ -129,13 +133,6 @@
                   "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-persistence-write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
-
-;; `mevedel-transcript'
-(declare-function mevedel-transcript-project-evidence
-                  "mevedel-transcript"
-                  (ranges &rest keys))
-(declare-function mevedel-transcript-segments
-                  "mevedel-transcript" (start end))
 
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-install-activation-hook
@@ -163,6 +160,11 @@
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-normalize-properties
                   "mevedel-transcript" ())
+(declare-function mevedel-transcript-project-evidence
+                  "mevedel-transcript"
+                  (ranges &rest keys))
+(declare-function mevedel-transcript-segments
+                  "mevedel-transcript" (start end))
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-gptel-state
@@ -178,6 +180,9 @@
 (declare-function mevedel--transcript-org-mode
                   "mevedel-utilities" ())
 
+;; `mevedel-view'
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
+
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-agent-live-transcript-post-tool
                   "mevedel-view-agent" (args))
@@ -187,12 +192,6 @@
                   "mevedel-view-agent" ())
 (declare-function mevedel-view-refresh-agent-rendering
                   "mevedel-view-agent" (view-buffer agent-id))
-
-;; `mevedel-view-stream'
-(declare-function mevedel-view-stream--store-pending-execution-terminal
-                  "mevedel-view-stream" (data-buffer event render-data))
-(declare-function mevedel-view-stream-retry-execution-terminals
-                  "mevedel-view-stream" (&rest args))
 
 ;; `org-element'
 (declare-function org-element-cache-reset "ext:org-element"
@@ -314,9 +313,9 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
                 #'mevedel-view-agent-live-transcript-pre-tool nil t)
       (add-hook 'gptel-post-tool-call-functions
                 #'mevedel-view-agent-live-transcript-post-tool nil t)
-      (require 'mevedel-view-stream)
+      (require 'mevedel-execution-transcript)
       (add-hook 'gptel-post-response-functions
-                #'mevedel-view-stream-retry-execution-terminals nil t)
+                #'mevedel-execution-transcript-retry-terminals nil t)
       (let ((inv invocation))
         (add-hook
          'gptel-pre-tool-call-functions
@@ -652,8 +651,8 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                       (mevedel-pipeline-update-tool-render-data
                        parent tool-use-id updates))
                 (unless patched-summary-p
-                  (require 'mevedel-view-stream)
-                  (mevedel-view-stream--store-pending-execution-terminal
+                  (require 'mevedel-execution-transcript)
+                  (mevedel-execution-transcript-store-pending-terminal
                    parent (list :tool-use-id tool-use-id) updates))))
             (when-let* ((bounds
                          (mevedel-agent-conversation--render-data-bounds

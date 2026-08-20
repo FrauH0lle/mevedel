@@ -2,9 +2,10 @@
 
 ;;; Commentary:
 
-;; Owns gptel streaming interception, active-turn progress state, and
-;; coalesced streaming/tool-boundary redraws.  Transcript interpretation and
-;; composer editing remain behind the view module's rendering interface.
+;; Owns active-turn progress state and coalesced streaming/tool-boundary
+;; redraws.  The gptel compatibility layer and durable execution transcripts
+;; have dedicated owners; transcript interpretation and composer editing remain
+;; behind the view module's rendering interface.
 
 ;;; Code:
 
@@ -14,51 +15,26 @@
 (declare-function cl-subseq "cl-extra" (sequence start &optional end))
 
 ;; `gptel'
-(declare-function gptel-curl--stream-filter "ext:gptel-request" (process output))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
-(defvar gptel--request-alist)
-
-;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-path "mevedel-agents" (cl-x))
 
 ;; `mevedel-compact'
 (defvar mevedel--compaction-in-flight)
 
-;; `mevedel-execution'
-(declare-function mevedel-execution-sandbox-summary-class
-                  "mevedel-execution" (summary))
+;; `mevedel-execution-transcript'
+(declare-function mevedel-execution-transcript-handle-event
+                  "mevedel-execution-transcript" (event))
+(declare-function mevedel-execution-transcript-retry-pending-terminals
+                  "mevedel-execution-transcript" (data-buffer))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--tool-segment-bounds
                   "mevedel-pipeline" (tool-use-id))
-(declare-function mevedel-pipeline-tool-render-data
-                  "mevedel-pipeline" (buffer tool-use-id))
-(declare-function mevedel-pipeline-update-tool-render-data
-                  "mevedel-pipeline" (buffer tool-use-id updates))
-
-;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-publish-transcript-state
-                  "mevedel-session-artifacts"
-                  (session root-buffer transcript-path content &optional coding))
-(declare-function mevedel-session-artifacts-read-artifact
-                  "mevedel-session-artifacts"
-                  (session logical &optional committed-only))
-(declare-function mevedel-session-artifacts-stabilize-gptel-bounds
-                  "mevedel-session-artifacts" ())
-
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-write-current-buffer-atomically
-                  "mevedel-session-persistence" (path))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-active-elapsed-seconds
                   "mevedel-structs" (request &optional now))
 (declare-function mevedel-request-active-work-pause-started-at
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-(defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -73,18 +49,6 @@
 ;; `mevedel-tool-exec'
 (declare-function mevedel-tool-exec-format-execution-metadata
                   "mevedel-tool-exec" (facts))
-
-;; `mevedel-transcript-audit'
-(declare-function mevedel--format-hook-audit-record
-                  "mevedel-transcript-audit" (record))
-(declare-function mevedel-transcript-audit-records
-                  "mevedel-transcript-audit" (text &optional type))
-(declare-function mevedel-transcript-audit-spans
-                  "mevedel-transcript-audit" (text &optional type))
-
-;; `mevedel-transcript-restore'
-(declare-function mevedel-transcript-restore-properties
-                  "mevedel-transcript-restore" (&optional only-if-missing))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--cancel-scheduled-render "mevedel-view" ())
@@ -137,9 +101,6 @@
 (declare-function mevedel-view-zone-reconcile "mevedel-view-zone" (namespace start end fragments))
 (declare-function mevedel-view-zone-region "mevedel-view-zone" (namespace))
 (declare-function mevedel-view-zone-start "mevedel-view-zone" (namespace))
-
-;; `org'
-(defvar org-agenda-file-menu-enabled)
 
 (defvar-local mevedel-view--spinner-status nil
   "Current base status text shown by the request-progress row.")
@@ -209,15 +170,6 @@ tools are in flight in parallel.")
 (defvar-local mevedel-view--execution-events nil
   "Latest transient Bash event keyed by durable tool-use id.")
 
-(defvar-local mevedel-view-stream--pending-execution-terminals nil
-  "Tool render-data updates waiting for their transcript rows.")
-
-(defvar-local mevedel-view-stream--archived-execution-rows nil
-  "Execution tool-use ids whose rows were explicitly removed by compaction.")
-
-(defconst mevedel-view-stream--pending-execution-terminal-limit 64
-  "Maximum render-data updates retained while rows are unavailable.")
-
 (defcustom mevedel-view-stream-render-delay 0.4
   "Seconds to wait before rendering a batch of stream chunks.
 
@@ -230,353 +182,12 @@ Tool boundaries use a shorter delay but join the same pending render."
   :type 'number
   :group 'mevedel)
 
-(defcustom mevedel-view-stream-insert-batch-delay 0.04
-  "Seconds to batch consecutive string stream inserts in data buffers.
-
-When positive, mevedel coalesces adjacent plain text stream chunks before
-letting gptel insert them into the authoritative transcript buffer.  nil
-or zero disables batching and preserves immediate insertion."
-  :type '(choice (const :tag "Disabled" nil)
-                 (number :tag "Seconds"))
-  :group 'mevedel)
-
 (defcustom mevedel-view-tool-boundary-render-delay 0.05
   "Seconds to coalesce incremental renders around tool boundaries.
 Pre/post tool hooks update their lightweight pending-tool status lines
 immediately, then use this delay for the heavier transcript render."
   :type 'number
   :group 'mevedel)
-(defvar mevedel-view-stream--gptel-stream-advice-installed nil
-  "Non-nil when mevedel's gptel stream repair advice should be active.")
-
-(defconst mevedel-view-stream--gptel-stream-filter-max-retries 100
-  "Maximum deferred flush attempts for early gptel stream chunks.")
-
-(defvar mevedel-view--stream-insert-batching-suspended nil
-  "Non-nil means nested gptel stream insert calls should not batch.")
-
-(defun mevedel-view-stream--gptel-data-buffer (buffer)
-  "Return BUFFER's mevedel data buffer, or nil when BUFFER is unrelated.
-If BUFFER is a view buffer, return its backing data buffer.  If BUFFER
-already is a mevedel data buffer, return BUFFER."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (cond
-       ((and (derived-mode-p 'mevedel-view-mode)
-             (boundp 'mevedel--data-buffer)
-             mevedel--data-buffer
-             (buffer-live-p mevedel--data-buffer))
-        mevedel--data-buffer)
-       ((and (boundp 'mevedel--view-buffer)
-             mevedel--view-buffer
-             (buffer-live-p mevedel--view-buffer)
-             (with-current-buffer mevedel--view-buffer
-               (and (derived-mode-p 'mevedel-view-mode)
-                    (eq mevedel--data-buffer buffer))))
-        buffer)))))
-
-(defun mevedel-view--live-marker-p (marker)
-  "Return non-nil when MARKER points into a live buffer."
-  (and (markerp marker)
-       (marker-position marker)
-       (buffer-live-p (marker-buffer marker))))
-
-(defun mevedel-view-stream--gptel-stream-info-p (info)
-  "Return non-nil when INFO belongs to a mevedel gptel stream."
-  (when-let* ((buffer (and (consp info) (plist-get info :buffer)))
-              ((buffer-live-p buffer)))
-    (with-current-buffer buffer
-      (or (bound-and-true-p mevedel--session)
-          (mevedel-view-stream--gptel-data-buffer buffer)))))
-
-(defun mevedel-view-stream--repair-gptel-stream-info (info)
-  "Repair detached stream markers in gptel INFO when it belongs to mevedel.
-
-gptel's streaming insertion path expects `:position' to point somewhere
-and calls `goto-char' on it before mevedel gets control back.  A detached
-marker can happen after request teardown or buffer reconstruction races.
-For mevedel streams, recover by appending future chunks to the data buffer
-and clear stale tracking markers so gptel reinitializes them."
-  (when (mevedel-view-stream--gptel-stream-info-p info)
-    (let ((buffer (plist-get info :buffer)))
-      (mevedel-view-stream--wrap-gptel-stream-transformer info)
-      (unless (mevedel-view--live-marker-p (plist-get info :position))
-        (with-current-buffer buffer
-          (plist-put info :position (copy-marker (point-max) nil))))
-      (dolist (key '(:tracking-marker :reasoning-marker))
-        (let ((marker (plist-get info key)))
-          (when (and marker
-                     (not (mevedel-view--live-marker-p marker)))
-            (plist-put info key nil))))))
-  info)
-
-(defun mevedel-view-stream--wrap-gptel-stream-transformer (info)
-  "Wrap INFO's stream transformer so stale cleanup does not signal.
-
-gptel's streaming Org converter owns an internal temporary buffer.  In
-some teardown orders that buffer is killed before the final callback
-reuses the transformer.  Let the response finish by returning the raw
-chunk when that stale transformer fails."
-  (when-let* ((transformer (and (consp info)
-                                (plist-get info :transformer)))
-              ((functionp transformer))
-              ((not (plist-get info :mevedel-transformer-wrapped))))
-    (plist-put info :mevedel-transformer-wrapped t)
-    (plist-put
-     info :transformer
-     (lambda (str)
-       (condition-case err
-           (funcall transformer str)
-         (error
-          (display-warning
-           'mevedel
-           (format "Ignoring stale gptel stream transformer: %s"
-                   (error-message-string err))
-           :warning)
-          str))))))
-
-(defun mevedel-view-stream--gptel-stream-insert-response-advice
-    (orig-fn response info &optional raw)
-  "Repair mevedel stream INFO before invoking ORIG-FN with RESPONSE."
-  (mevedel-view-stream--repair-gptel-stream-info info)
-  (cond
-   ((and (stringp response)
-         (not raw)
-         (mevedel-view-stream--gptel-stream-info-p info)
-         (not mevedel-view--stream-insert-batching-suspended)
-         (numberp mevedel-view-stream-insert-batch-delay)
-         (> mevedel-view-stream-insert-batch-delay 0))
-    (mevedel-view-stream--queue-gptel-stream-insert-batch
-     orig-fn response info raw))
-   (t
-    (when (mevedel-view-stream--gptel-stream-info-p info)
-      (mevedel-view-stream--flush-gptel-stream-insert-batch info))
-    (let ((inhibit-modification-hooks
-           (or inhibit-modification-hooks
-               (mevedel-view-stream--gptel-stream-info-p info)))
-          (mevedel-view--stream-insert-batching-suspended
-           (or mevedel-view--stream-insert-batching-suspended
-               (not (stringp response)))))
-      (funcall orig-fn response info raw)))))
-
-(defun mevedel-view-stream--gptel-handle-wait-advice (orig-fn fsm)
-  "Preserve an open mevedel reasoning fence across ORIG-FN for FSM."
-  (let* ((info (gptel-fsm-info fsm))
-         (reasoning-open
-          (and (mevedel-view-stream--gptel-stream-info-p info)
-               (plist-get info :reasoning-open))))
-    (prog1 (funcall orig-fn fsm)
-      (when reasoning-open
-        (plist-put info :reasoning-open t)))))
-
-(defun mevedel-view-stream--queue-gptel-stream-insert-batch
-    (orig-fn response info raw)
-  "Queue string RESPONSE for ORIG-FN as a batched gptel stream insert."
-  (when (and (plist-get info :mevedel-stream-insert-parts)
-             (not (equal raw (plist-get info :mevedel-stream-insert-raw))))
-    (mevedel-view-stream--flush-gptel-stream-insert-batch info))
-  (plist-put info :mevedel-stream-insert-orig orig-fn)
-  (plist-put info :mevedel-stream-insert-raw raw)
-  (plist-put info :mevedel-stream-insert-parts
-             (cons response
-                   (plist-get info :mevedel-stream-insert-parts)))
-  (unless (timerp (plist-get info :mevedel-stream-insert-timer))
-    (plist-put
-     info :mevedel-stream-insert-timer
-     (run-at-time mevedel-view-stream-insert-batch-delay nil
-                  #'mevedel-view-stream--flush-gptel-stream-insert-batch
-                  info))))
-
-(defun mevedel-view-stream--flush-gptel-stream-insert-batch (info)
-  "Flush any pending batched string stream insert on INFO."
-  (when-let* ((timer (plist-get info :mevedel-stream-insert-timer))
-              ((timerp timer)))
-    (cancel-timer timer))
-  (plist-put info :mevedel-stream-insert-timer nil)
-  (when-let* ((parts (plist-get info :mevedel-stream-insert-parts))
-              (orig-fn (plist-get info :mevedel-stream-insert-orig))
-              ((functionp orig-fn)))
-    (plist-put info :mevedel-stream-insert-parts nil)
-    (let ((raw (plist-get info :mevedel-stream-insert-raw))
-          (inhibit-modification-hooks t)
-          (mevedel-view--stream-insert-batching-suspended t))
-      (mevedel-view-stream--repair-gptel-stream-info info)
-      (when (mevedel-view-stream--gptel-stream-info-p info)
-        (funcall orig-fn
-                 (apply #'concat (nreverse parts))
-                 info raw)))))
-
-(defun mevedel-view-stream--gptel-stream-cleanup-advice (orig-fn process status)
-  "Call ORIG-FN after wrapping stream transformers for PROCESS.
-STATUS is passed through unchanged."
-  (let* ((entry (alist-get process gptel--request-alist))
-         (fsm (car-safe entry))
-         (info (and fsm (fboundp 'gptel-fsm-info)
-                    (ignore-errors (gptel-fsm-info fsm))))
-         (chat-buffer (plist-get info :buffer))
-         (session (and (buffer-live-p chat-buffer)
-                       (mevedel-telemetry-current-session chat-buffer))))
-    (when (mevedel-view-stream--gptel-stream-info-p info)
-      (mevedel-view-stream--flush-gptel-stream-insert-batch info)
-      (mevedel-view-stream--wrap-gptel-stream-transformer info))
-    (prog1 (funcall orig-fn process status)
-      (when (and session (fboundp 'mevedel-telemetry-record))
-        (mevedel-telemetry-record
-         session 'provider-stream-ended
-         :request-id (plist-get info :mevedel-request-id)
-         :agent-path
-         (when-let* ((invocation (plist-get info :mevedel-agent-invocation)))
-           (mevedel-agent-invocation-path invocation))
-         :provider-status status
-         :first-byte-seen
-         (and (process-get process 'mevedel-telemetry-first-byte) t))))))
-
-(defun mevedel-view-stream--gptel-stream-filter-registered-p (process)
-  "Return non-nil when PROCESS has a registered gptel FSM."
-  (and (boundp 'gptel--request-alist)
-       (car-safe (alist-get process gptel--request-alist))))
-
-(defun mevedel-view-stream--schedule-gptel-stream-filter-flush (process)
-  "Schedule a deferred gptel stream filter flush for PROCESS."
-  (unless (process-get process 'mevedel-view--stream-filter-timer)
-    (process-put
-     process 'mevedel-view--stream-filter-timer
-     (run-at-time 0 nil
-                  #'mevedel-view-stream--flush-gptel-stream-filter process))))
-
-(defun mevedel-view-stream--flush-gptel-stream-filter (process)
-  "Flush buffered early stream chunks for PROCESS once gptel is ready."
-  (process-put process 'mevedel-view--stream-filter-timer nil)
-  (when (process-get process 'mevedel-view--pending-stream-output)
-    (cond
-     ((not (process-live-p process))
-      (process-put process 'mevedel-view--pending-stream-output nil)
-      (process-put process 'mevedel-view--stream-filter-retries nil))
-     ((mevedel-view-stream--gptel-stream-filter-registered-p process)
-      (process-put process 'mevedel-view--stream-filter-retries nil)
-      (gptel-curl--stream-filter process ""))
-     (t
-      (let ((retries
-             (1+ (or (process-get process
-                                   'mevedel-view--stream-filter-retries)
-                     0))))
-        (if (> retries mevedel-view-stream--gptel-stream-filter-max-retries)
-            (progn
-              (process-put process 'mevedel-view--pending-stream-output nil)
-              (process-put process 'mevedel-view--stream-filter-retries nil)
-              (display-warning
-               'mevedel
-               "Dropping gptel stream chunk without registered request FSM"
-               :warning))
-          (process-put process 'mevedel-view--stream-filter-retries retries)
-          (process-put
-           process 'mevedel-view--stream-filter-timer
-           (run-at-time 0.01 nil
-                        #'mevedel-view-stream--flush-gptel-stream-filter
-                        process))))))))
-
-(defun mevedel-view-stream--gptel-stream-filter-advice (orig-fn process output)
-  "Delay ORIG-FN until gptel has registered PROCESS's FSM.
-OUTPUT is the stream chunk passed to gptel's process filter.
-
-`gptel-curl-get-response' installs the streaming process filter before
-it records PROCESS in `gptel--request-alist'.  If curl produces an
-early chunk in that gap, gptel's filter sees a nil FSM.  Preserve the
-chunk and replay it once the request entry exists."
-  (when (and (> (length output) 0)
-             (not (process-get process 'mevedel-telemetry-first-byte)))
-    (when-let* ((entry (and (boundp 'gptel--request-alist)
-                            (alist-get process gptel--request-alist)))
-                (fsm (car-safe entry))
-                (info (and (fboundp 'gptel-fsm-info)
-                           (ignore-errors (gptel-fsm-info fsm))))
-                (chat-buffer (plist-get info :buffer))
-                ((buffer-live-p chat-buffer)))
-      (process-put process 'mevedel-telemetry-first-byte t)
-      (with-current-buffer chat-buffer
-        (when (and (mevedel-telemetry-current-session chat-buffer)
-                   (fboundp 'mevedel-telemetry-record))
-          (mevedel-telemetry-record
-           (mevedel-telemetry-current-session chat-buffer)
-           'provider-first-byte
-           :request-id (plist-get info :mevedel-request-id)
-           :agent-path
-           (when-let* ((invocation
-                        (plist-get info :mevedel-agent-invocation)))
-             (mevedel-agent-invocation-path invocation))
-           :chunk-bytes (string-bytes output))))))
-  (let ((pending (process-get process
-                              'mevedel-view--pending-stream-output)))
-    (if (mevedel-view-stream--gptel-stream-filter-registered-p process)
-        (progn
-          (when pending
-            (setq output (concat pending output))
-            (process-put process 'mevedel-view--pending-stream-output nil))
-          (process-put process 'mevedel-view--stream-filter-retries nil)
-          (funcall orig-fn process output))
-      (process-put process 'mevedel-view--pending-stream-output
-                   (concat pending output))
-      (mevedel-view-stream--schedule-gptel-stream-filter-flush process))))
-
-(defun mevedel-view-stream--advice-add-if-bound (symbol where function)
-  "Add advice FUNCTION to SYMBOL at WHERE when SYMBOL is fbound."
-  (when (and (fboundp symbol)
-             (not (advice-member-p function symbol)))
-    (advice-add symbol where function)))
-
-(defun mevedel-view-stream--advice-remove-if-bound (symbol function)
-  "Remove advice FUNCTION from SYMBOL when SYMBOL is fbound."
-  (when (fboundp symbol)
-    (advice-remove symbol function)))
-
-(defun mevedel-view-stream--install-advice ()
-  "Install gptel stream marker repair advice."
-  (mevedel-view-stream--advice-add-if-bound
-   'gptel--handle-wait
-   :around #'mevedel-view-stream--gptel-handle-wait-advice)
-  (mevedel-view-stream--advice-add-if-bound
-   'gptel-curl--stream-insert-response
-   :around #'mevedel-view-stream--gptel-stream-insert-response-advice)
-  (mevedel-view-stream--advice-add-if-bound
-   'gptel-curl--stream-cleanup
-   :around #'mevedel-view-stream--gptel-stream-cleanup-advice)
-  (mevedel-view-stream--advice-add-if-bound
-   'gptel-curl--stream-filter
-   :around #'mevedel-view-stream--gptel-stream-filter-advice))
-
-(defun mevedel-view-stream--install-if-enabled ()
-  "Install gptel stream marker repair advice when enabled."
-  (when mevedel-view-stream--gptel-stream-advice-installed
-    (mevedel-view-stream--install-advice)))
-
-(defun mevedel-view-stream--uninstall-advice ()
-  "Remove gptel stream marker repair advice."
-  (mevedel-view-stream--advice-remove-if-bound
-   'gptel--handle-wait
-   #'mevedel-view-stream--gptel-handle-wait-advice)
-  (mevedel-view-stream--advice-remove-if-bound
-   'gptel-curl--stream-insert-response
-   #'mevedel-view-stream--gptel-stream-insert-response-advice)
-  (mevedel-view-stream--advice-remove-if-bound
-   'gptel-curl--stream-cleanup
-   #'mevedel-view-stream--gptel-stream-cleanup-advice)
-  (mevedel-view-stream--advice-remove-if-bound
-   'gptel-curl--stream-filter
-   #'mevedel-view-stream--gptel-stream-filter-advice))
-
-(defun mevedel-view-stream-install ()
-  "Install gptel view stream repair advice."
-  (setq mevedel-view-stream--gptel-stream-advice-installed t)
-  (mevedel-view-stream--install-if-enabled)
-  (with-eval-after-load 'gptel
-    (mevedel-view-stream--install-if-enabled))
-  (with-eval-after-load 'gptel-request
-    (mevedel-view-stream--install-if-enabled)))
-
-(defun mevedel-view-stream-uninstall ()
-  "Remove gptel view stream repair advice."
-  (setq mevedel-view-stream--gptel-stream-advice-installed nil)
-  (mevedel-view-stream--uninstall-advice))
 
 (defun mevedel-view--spinner-frame ()
   "Return the current spinner frame string."
@@ -1076,310 +687,6 @@ POSITION may be an integer or marker."
                    (buffer-local-value 'mevedel--data-buffer buffer))))
         (buffer-list))))
 
-(defun mevedel-view-stream--execution-status (facts)
-  "Return visual status for terminal execution FACTS."
-  (if (memq (plist-get facts :outcome)
-            '(success no-match different false))
-      'success
-    'error))
-
-(defun mevedel-view-stream--terminal-render-data (event)
-  "Return durable terminal render data projected from EVENT."
-  (let* ((facts (copy-tree (plist-get event :facts)))
-         (summary
-          (copy-tree
-           (plist-get (plist-get event :observation) :sandbox-summary)))
-         (render-data
-          (append
-           facts
-           (list :status (mevedel-view-stream--execution-status facts)
-                 :live-execution-p nil
-                 :sandbox-facts
-                 (copy-tree
-                  (plist-get (plist-get event :observation) :sandbox-facts))
-                 :execution-output
-                 (copy-sequence (or (plist-get event :whole-output) ""))))))
-    (if (and summary
-             (progn
-               (require 'mevedel-execution)
-               (mevedel-execution-sandbox-summary-class summary)))
-        (plist-put render-data :sandbox-summary summary)
-      render-data)))
-
-(defun mevedel-view-stream--replace-archived-execution-record
-    (tool-use-id replacement)
-  "Replace current buffer's archived TOOL-USE-ID with REPLACEMENT."
-  (require 'mevedel-transcript-audit)
-  (when-let* ((span
-               (cl-find-if
-                (lambda (candidate)
-                  (equal
-                   (plist-get (plist-get candidate :record) :tool-use-id)
-                   tool-use-id))
-                (mevedel-transcript-audit-spans
-                 (buffer-substring (point-min) (point-max))
-                 'execution-archive))))
-    (let ((begin (+ (point-min) (plist-get span :start)))
-          (end (+ (point-min) (plist-get span :end))))
-      (delete-region begin end)
-      (goto-char begin)
-      (insert (mevedel--format-hook-audit-record replacement))
-      t)))
-
-(defun mevedel-view-stream--execution-completion-record-p
-    (tool-use-id &optional expected)
-  "Return non-nil when the current buffer completed TOOL-USE-ID.
-When EXPECTED is non-nil, require the durable record to equal it."
-  (require 'mevedel-transcript-audit)
-  (cl-some
-   (lambda (record)
-     (and (equal (plist-get record :tool-use-id) tool-use-id)
-          (or (null expected) (equal record expected))))
-   (mevedel-transcript-audit-records
-    (buffer-substring (point-min) (point-max))
-    'execution-completion)))
-
-(defun mevedel-view-stream--record-archived-execution-terminal
-    (data-buffer event render-data)
-  "Record terminal EVENT in DATA-BUFFER after its original row was archived.
-RENDER-DATA is retained in the hidden transcript audit record."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (when (buffer-live-p data-buffer)
-    (with-current-buffer data-buffer
-      (save-restriction
-        (widen)
-        (let* ((inhibit-read-only t)
-               (modified-p (buffer-modified-p))
-               (tool-use-id (plist-get event :tool-use-id))
-               (path buffer-file-name)
-               (replacement
-                (list :type 'execution-completion
-                      :tool-use-id tool-use-id
-                      :owner (plist-get event :owner)
-                      :render-data render-data))
-               (marker-table mevedel-view-stream--archived-execution-rows))
-          (when path
-            (if (file-remote-p path)
-                (let* ((session (or mevedel--session
-                                    (error "Remote transcript has no session")))
-                       (save-path (mevedel-session-save-path session))
-                       (logical (file-relative-name path save-path))
-                       (root-buffer
-                        (if (bound-and-true-p mevedel--agent-invocation)
-                            (mevedel-agent-invocation-parent-data-buffer
-                             mevedel--agent-invocation)
-                          data-buffer))
-                       (coding (or buffer-file-coding-system 'utf-8-unix)))
-                  (with-temp-buffer
-                    (setq buffer-file-coding-system coding)
-                    (insert
-                     (decode-coding-string
-                      (mevedel-session-artifacts-read-artifact
-                       session logical)
-                      coding))
-                    (let ((org-agenda-file-menu-enabled nil))
-                      (org-mode))
-                    (require 'mevedel-transcript-restore)
-                    (mevedel-transcript-restore-properties)
-                    (unless
-                        (or
-                         (mevedel-view-stream--replace-archived-execution-record
-                          tool-use-id replacement)
-                         (mevedel-view-stream--execution-completion-record-p
-                          tool-use-id replacement))
-                      (error "Persisted execution record missing: %s"
-                             tool-use-id))
-                    (mevedel-session-artifacts-stabilize-gptel-bounds)
-                    (mevedel-session-artifacts-publish-transcript-state
-                     session root-buffer path
-                     (buffer-substring-no-properties (point-min) (point-max))
-                     coding)))
-              (with-temp-buffer
-                (insert-file-contents path)
-                (let ((org-agenda-file-menu-enabled nil))
-                  (org-mode))
-                (require 'mevedel-transcript-restore)
-                (mevedel-transcript-restore-properties)
-                (unless
-                    (or
-                     (mevedel-view-stream--replace-archived-execution-record
-                      tool-use-id replacement)
-                     (mevedel-view-stream--execution-completion-record-p
-                      tool-use-id replacement))
-                  (error "Persisted execution record missing: %s" tool-use-id))
-                (mevedel-session-artifacts-stabilize-gptel-bounds)
-                (mevedel-session-persistence-write-current-buffer-atomically
-                 path)))
-            ;; The atomic rename changed the visited file.  Refresh the
-            ;; buffer's baseline before applying the same replacement in
-            ;; memory, otherwise Emacs may report a spurious file-supersession
-            ;; conflict.
-            (set-visited-file-modtime))
-          (save-excursion
-            (unless
-                (or (mevedel-view-stream--replace-archived-execution-record
-                     tool-use-id replacement)
-                    (mevedel-view-stream--execution-completion-record-p
-                     tool-use-id replacement))
-              (error "Archived execution record missing: %s" tool-use-id)))
-          (when path
-            (mevedel-session-artifacts-stabilize-gptel-bounds))
-          (set-buffer-modified-p modified-p)
-          (when (hash-table-p marker-table)
-            (remhash tool-use-id marker-table)))))))
-
-(defun mevedel-view-stream--archived-execution-render-data
-    (data-buffer tool-use-id)
-  "Return archived render data for TOOL-USE-ID in DATA-BUFFER."
-  (when (buffer-live-p data-buffer)
-    (with-current-buffer data-buffer
-      (save-restriction
-        (widen)
-        (require 'mevedel-transcript-audit)
-        (when-let* ((record
-                     (cl-find-if
-                      (lambda (candidate)
-                        (equal (plist-get candidate :tool-use-id)
-                               tool-use-id))
-                      (mevedel-transcript-audit-records
-                       (buffer-substring
-                        (point-min) (point-max))
-                       'execution-archive))))
-          (copy-tree (plist-get record :render-data)))))))
-
-(defun mevedel-view-stream-prepare-execution-row-archive
-    (data-buffer tool-use-ids)
-  "Return a compaction plan for TOOL-USE-IDS removed from DATA-BUFFER."
-  (let (live completed)
-    (dolist (tool-use-id tool-use-ids)
-      (when-let* ((render-data
-                   (or (mevedel-pipeline-tool-render-data
-                        data-buffer tool-use-id)
-                       (mevedel-view-stream--archived-execution-render-data
-                        data-buffer tool-use-id)))
-                  ((or (plist-get render-data :execution-id)
-                       (plist-get render-data :live-execution-p))))
-        (if (plist-get render-data :live-execution-p)
-            (push (cons tool-use-id render-data) live)
-          (push (cons tool-use-id render-data) completed))))
-    (list :live (nreverse live) :completed (nreverse completed))))
-
-(defun mevedel-view-stream-execution-row-archive-text (plan)
-  "Return durable hidden transcript records for archive PLAN."
-  (require 'mevedel-transcript-audit)
-  (concat
-   (mapconcat
-    (lambda (entry)
-      (mevedel--format-hook-audit-record
-       (list :type 'execution-archive
-             :tool-use-id (car entry)
-             :render-data (cdr entry))))
-    (plist-get plan :live)
-    "")
-   (mapconcat
-    (lambda (entry)
-      (mevedel--format-hook-audit-record
-       (list :type 'execution-completion
-             :tool-use-id (car entry)
-             :render-data (cdr entry))))
-    (plist-get plan :completed)
-    "")))
-
-(defun mevedel-view-stream-commit-execution-row-archive
-    (data-buffer plan)
-  "Commit execution row archive PLAN after DATA-BUFFER compaction succeeds."
-  (when (buffer-live-p data-buffer)
-    (with-current-buffer data-buffer
-      (when-let* ((live (plist-get plan :live)))
-        (unless (hash-table-p mevedel-view-stream--archived-execution-rows)
-          (setq-local mevedel-view-stream--archived-execution-rows
-                      (make-hash-table :test #'equal)))
-        (dolist (entry live)
-          (puthash (car entry) t
-                   mevedel-view-stream--archived-execution-rows))))))
-
-(defun mevedel-view-stream--archived-execution-row-p
-    (data-buffer tool-use-id)
-  "Return non-nil when DATA-BUFFER archived TOOL-USE-ID."
-  (when (buffer-live-p data-buffer)
-    (with-current-buffer data-buffer
-      (and (hash-table-p mevedel-view-stream--archived-execution-rows)
-           (gethash tool-use-id
-                    mevedel-view-stream--archived-execution-rows)))))
-
-(defun mevedel-view-stream--pending-execution-table (data-buffer)
-  "Return DATA-BUFFER's pending terminal table, creating it if needed."
-  (when (buffer-live-p data-buffer)
-    (with-current-buffer data-buffer
-      (unless (hash-table-p mevedel-view-stream--pending-execution-terminals)
-        (setq-local mevedel-view-stream--pending-execution-terminals
-                    (make-hash-table :test #'equal)))
-      mevedel-view-stream--pending-execution-terminals)))
-
-(defun mevedel-view-stream--store-pending-execution-terminal
-    (data-buffer event render-data)
-  "Retain EVENT's RENDER-DATA until its durable row is ready."
-  (when-let* ((table
-               (mevedel-view-stream--pending-execution-table data-buffer)))
-    (let ((tool-use-id (plist-get event :tool-use-id)))
-      (when (and (not (gethash tool-use-id table))
-                 (>= (hash-table-count table)
-                     mevedel-view-stream--pending-execution-terminal-limit))
-        (let (evicted)
-          (maphash (lambda (key _value)
-                     (unless evicted (setq evicted key)))
-                   table)
-          (when evicted
-            (remhash evicted table)
-            (display-warning
-             'mevedel
-             (format "Discarding stale render-data update for tool %s" evicted)
-             :warning))))
-      (puthash tool-use-id
-               (list :event event :render-data render-data)
-               table))))
-
-(defun mevedel-view-stream--retry-pending-execution-terminals (data-buffer)
-  "Persist pending tool updates whose rows exist in DATA-BUFFER."
-  (when (buffer-live-p data-buffer)
-    (with-current-buffer data-buffer
-      (when (hash-table-p mevedel-view-stream--pending-execution-terminals)
-        (require 'mevedel-pipeline)
-        (let (settled)
-          (maphash
-           (lambda (tool-use-id pending)
-             (let ((event (plist-get pending :event))
-                   (render-data (plist-get pending :render-data)))
-               (cond
-                ((mevedel-pipeline-update-tool-render-data
-                  data-buffer tool-use-id render-data)
-                 (push tool-use-id settled))
-                ((and (eq (plist-get event :type) 'terminal)
-                      (mevedel-view-stream--archived-execution-row-p
-                       data-buffer tool-use-id))
-                 (condition-case err
-                     (progn
-                       (mevedel-view-stream--record-archived-execution-terminal
-                        data-buffer event render-data)
-                       (push tool-use-id settled))
-                   (error
-                    (display-warning
-                     'mevedel
-                     (format "Could not persist archived execution %s: %s"
-                             tool-use-id (error-message-string err))
-                     :warning)))))))
-           mevedel-view-stream--pending-execution-terminals)
-          (dolist (tool-use-id settled)
-            (remhash tool-use-id
-                     mevedel-view-stream--pending-execution-terminals)))))))
-
-(defun mevedel-view-stream-retry-execution-terminals (&rest _args)
-  "Persist pending tool updates in the current data buffer."
-  (mevedel-view-stream--retry-pending-execution-terminals (current-buffer))
-  nil)
-
 (defun mevedel-view-stream--cache-execution-progress (event)
   "Cache bounded transient progress from EVENT in the current view."
   (when-let* ((tool-use-id (plist-get event :tool-use-id)))
@@ -1430,38 +737,13 @@ RENDER-DATA is retained in the hidden transcript audit record."
 (defun mevedel-view-stream-handle-execution-event (event)
   "Apply Bash EVENT to its authoritative row and visible view.
 Always return nil; only the mailbox sink may acknowledge durable delivery."
+  (require 'mevedel-execution-transcript)
+  (mevedel-execution-transcript-handle-event event)
   (let* ((type (plist-get event :type))
          (tool-use-id (plist-get event :tool-use-id))
          (data-buffer (plist-get event :data-buffer))
          (view-buffer
           (mevedel-view-stream--execution-view-buffer data-buffer)))
-    (when (and (eq type 'terminal) tool-use-id)
-      (require 'mevedel-pipeline)
-      (let ((render-data
-             (mevedel-view-stream--terminal-render-data event)))
-        (cond
-         ((mevedel-pipeline-update-tool-render-data
-           data-buffer tool-use-id render-data)
-          (when-let* ((table
-                       (mevedel-view-stream--pending-execution-table
-                        data-buffer)))
-            (remhash tool-use-id table)))
-         ((mevedel-view-stream--archived-execution-row-p
-           data-buffer tool-use-id)
-          (condition-case err
-              (mevedel-view-stream--record-archived-execution-terminal
-               data-buffer event render-data)
-            (error
-             (mevedel-view-stream--store-pending-execution-terminal
-              data-buffer event render-data)
-             (display-warning
-              'mevedel
-              (format "Could not persist archived execution %s: %s"
-                      tool-use-id (error-message-string err))
-              :warning))))
-         (t
-          (mevedel-view-stream--store-pending-execution-terminal
-           data-buffer event render-data)))))
     (when view-buffer
       (with-current-buffer view-buffer
         (pcase type
@@ -1485,7 +767,8 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
 
 (defun mevedel-view--render-stream-update (data-buf)
   "Incrementally render DATA-BUF, isolating observer-view failures."
-  (mevedel-view-stream--retry-pending-execution-terminals data-buf)
+  (require 'mevedel-execution-transcript)
+  (mevedel-execution-transcript-retry-pending-terminals data-buf)
   (if (not mevedel-view--agent-transcript-p)
       (mevedel-view--render-incremental data-buf)
     (condition-case err
@@ -1597,7 +880,8 @@ Runs as a `gptel-post-tool-call-functions' hook in the data buffer.
 ARGS is the tool-call plist.  The lightweight pending-tool live line is
 refreshed immediately, while the heavier incremental render is
 debounced so bursts of completed tool calls coalesce."
-  (mevedel-view-stream--retry-pending-execution-terminals (current-buffer))
+  (require 'mevedel-execution-transcript)
+  (mevedel-execution-transcript-retry-pending-terminals (current-buffer))
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))
@@ -1717,7 +1001,8 @@ When NO-PROGRESS is non-nil, record no active progress state."
 
 (defun mevedel-view-stream-render-response (start end)
   "Finish and render gptel response bounds START and END."
-  (mevedel-view-stream--retry-pending-execution-terminals (current-buffer))
+  (require 'mevedel-execution-transcript)
+  (mevedel-execution-transcript-retry-pending-terminals (current-buffer))
   (when-let* ((view-buf (buffer-local-value 'mevedel--view-buffer
                                             (current-buffer)))
               ((buffer-live-p view-buf)))

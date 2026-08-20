@@ -354,13 +354,15 @@ The shared tool-orchestration component asks models to batch independent tool
 calls within a bounded stage and keep dependencies, waits, approvals, and
 conflicting mutations sequential. It does not encode provider pricing.
 
-`mevedel-view-stream.el` isolates gptel stream advice, incremental-render
-scheduling, pending-tool live rows, and foreground request-progress state.
-It delegates transcript rendering to `mevedel-view-render.el`, while
-`mevedel-view-composer.el` owns the editable input, submission hooks, queued
-follow-ups, and send/fork dispatch. `mevedel-view.el` coordinates the view
-mode, zones, and session lifecycle. The authoritative text remains in the
-gptel data buffer.
+`mevedel-gptel-stream-bridge.el` isolates private, version-sensitive gptel
+stream advice. `mevedel-view-stream.el` owns incremental-render scheduling,
+pending-tool live rows, and foreground request-progress state, while
+`mevedel-execution-transcript.el` owns durable execution render data and
+compaction archive reconciliation. View Stream delegates transcript rendering
+to `mevedel-view-render.el`; `mevedel-view-composer.el` owns the editable input,
+submission hooks, and send/fork dispatch, and `mevedel-pending-inputs.el` owns
+queued follow-ups. `mevedel-view.el` coordinates the view mode, zones, and
+session lifecycle. The authoritative text remains in the gptel data buffer.
 
 `mevedel-mention-bindings.el` owns atomic mention identity as validated text
 properties on ordinary prompt strings. Completion or programmatic insertion

@@ -79,6 +79,14 @@
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 
+;; `mevedel-execution-transcript'
+(declare-function mevedel-execution-transcript-archive-text
+                  "mevedel-execution-transcript" (plan))
+(declare-function mevedel-execution-transcript-commit-archive
+                  "mevedel-execution-transcript" (data-buffer plan))
+(declare-function mevedel-execution-transcript-prepare-archive
+                  "mevedel-execution-transcript" (data-buffer tool-use-ids))
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
                   (decision &optional event))
@@ -211,12 +219,6 @@
 (declare-function mevedel-view--stop-spinner "mevedel-view-stream" ())
 (declare-function mevedel-view--update-spinner
                   "mevedel-view-stream" (status &optional owner))
-(declare-function mevedel-view-stream-commit-execution-row-archive
-                  "mevedel-view-stream" (data-buffer plan))
-(declare-function mevedel-view-stream-execution-row-archive-text
-                  "mevedel-view-stream" (plan))
-(declare-function mevedel-view-stream-prepare-execution-row-archive
-                  "mevedel-view-stream" (data-buffer tool-use-ids))
 (defvar mevedel-view--status-owner-override)
 
 ;; `org'
@@ -1583,15 +1585,15 @@ pending continuation."
 (defun mevedel--compact-commit-execution-row-archive (target)
   "Commit TARGET's prepared execution-row archive after compaction."
   (when-let* ((plan (plist-get target :execution-archive-plan)))
-    (require 'mevedel-view-stream)
-    (mevedel-view-stream-commit-execution-row-archive
+    (require 'mevedel-execution-transcript)
+    (mevedel-execution-transcript-commit-archive
      (plist-get target :buffer) plan)))
 
 (defun mevedel--compact-execution-row-archive-text (target)
   "Return TARGET's durable execution-row replacement records."
   (when-let* ((plan (plist-get target :execution-archive-plan)))
-    (require 'mevedel-view-stream)
-    (mevedel-view-stream-execution-row-archive-text plan)))
+    (require 'mevedel-execution-transcript)
+    (mevedel-execution-transcript-archive-text plan)))
 
 (defun mevedel--compact-agent-apply
     (target summary tail-text pending-text hook-audits
@@ -1903,13 +1905,13 @@ the persistent failure counter unchanged."
                        (mevedel--compact-run-state-summary-ready state)))
             (setq summary (funcall summary-ready summary)))
           (when (mevedel--compact-run-state-archived-tool-use-ids state)
-            (require 'mevedel-view-stream)
+            (require 'mevedel-execution-transcript)
             (setf
              (mevedel--compact-run-state-target state)
              (plist-put
               (mevedel--compact-run-state-target state)
               :execution-archive-plan
-              (mevedel-view-stream-prepare-execution-row-archive
+              (mevedel-execution-transcript-prepare-archive
                (mevedel--compact-run-state-chat-buffer state)
                (mevedel--compact-run-state-archived-tool-use-ids state)))))
           (mevedel--compact-target-call

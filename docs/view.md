@@ -13,8 +13,9 @@ buffer behavior for non-transcript surfaces.
 and targeted handle refresh. `mevedel-view-interaction.el` owns interaction
 descriptor registration, ordering, callback overlays, and redraw.
 `mevedel-view-render.el` owns transcript rendering, folding, source mapping,
-and navigation. `mevedel-view-stream.el` owns streaming, request progress,
-and gptel stream integration. `mevedel-side-conversation.el` owns transient
+and navigation. `mevedel-view-stream.el` owns request progress and streaming
+redraw scheduling; `mevedel-gptel-stream-bridge.el` owns private gptel stream
+compatibility. `mevedel-side-conversation.el` owns transient
 `/btw` conversations. The data buffer remains the model-visible transcript.
 
 ## Buffer Roles
@@ -626,10 +627,10 @@ the authoritative data buffer and keep source-coordinate disclosure state.
 Provider failures are expanded by default and preserve the complete provider
 message for manual retry. The incremental renderer
 in `mevedel-view-render.el` (`mevedel-view--render-incremental`) remains the
-correctness path for streaming
-assistant text. `mevedel-view-stream.el` schedules those updates and owns the
-gptel stream advice, request-progress state, and pending-tool live rows;
-fragment updates should not bypass the data-buffer transcript.
+correctness path for streaming assistant text. `mevedel-view-stream.el`
+schedules those updates and owns request-progress state and pending-tool live
+rows; `mevedel-gptel-stream-bridge.el` confines the private upstream advice.
+Fragment updates should not bypass the data-buffer transcript.
 Revisit source-backed transcript fragments only as a separate design after a
 concrete performance or correctness problem is identified.
 
