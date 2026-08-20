@@ -623,10 +623,13 @@ through the `mevedel-session-save-as.el` transaction while holding its lease.
 That module materializes only the manifest's logical artifacts in hidden child
 staging, acquires a fresh child lease before writing them, commits one complete
 replacement publication, and moves the staged child into discoverability
-before releasing the parent.  The child therefore starts with
-one publication and no copied lease, publication-history, recovery, lock, or
-staging controls; work is proportional to current logical state rather than
-the parent's retained history.  Its in-memory session is built by the same
+before releasing the parent.  Adoption target-verifies that already-owned
+child lease, transfers its exact path, generation, and renewal responsibility
+into the live session, and only then releases the old parent path; it never
+reacquires child authority after live mutation.  The child therefore starts
+with one publication and no copied lease, publication-history, recovery, lock,
+or staging controls; work is proportional to current logical state rather
+than the parent's retained history.  Its in-memory session is built by the same
 explicit slot policy as every Save As path: logical containers are deep-copied,
 the workspace and immutable execution-target identity are shared, and all
 request, queue, publication, transfer, and lease runtime is reset.  Pre-commit

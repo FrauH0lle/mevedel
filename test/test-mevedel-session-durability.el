@@ -980,6 +980,101 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
+(mevedel-deftest mevedel-session-durability-adopt-owned-lease ()
+  ,test
+  (test)
+  :doc "moves a verified child lease and renewal owner into the live session"
+  (let* ((root (make-temp-file "mevedel-adopt-lease-" t))
+         (parent-path (file-name-as-directory
+                       (file-name-concat root "parent")))
+         (child-path (file-name-as-directory
+                      (file-name-concat root "child")))
+         (parent (test-mevedel-session-durability--local-session root))
+         (child (test-mevedel-session-durability--local-session root))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory parent-path t)
+    (make-directory child-path t)
+    (setf (mevedel-session-save-path parent) parent-path
+          (mevedel-session-save-path child) child-path)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   parent-path "parent" parent))
+          (should (mevedel-session-durability-lease-acquire
+                   child-path "child" child))
+          (let ((child-generation
+                 (plist-get (mevedel-session-lease child) :generation))
+                (child-timer
+                 (mevedel-session-lease-renewal-timer child)))
+            (should
+             (mevedel-session-durability-adopt-owned-lease parent child))
+            (should (equal (mevedel-session-save-path parent) child-path))
+            (should (= (plist-get (mevedel-session-lease parent) :generation)
+                       child-generation))
+            (should (timerp
+                     (mevedel-session-lease-renewal-timer parent)))
+            (should-not (eq (mevedel-session-lease-renewal-timer parent)
+                            child-timer))
+            (should-not (mevedel-session-lease child))
+            (should-not (mevedel-session-lease-renewal-timer child))
+            (should (mevedel-session-durability-lease-owned-p parent))))
+      (ignore-errors
+        (mevedel-session-durability-lease-release child-path parent))
+      (ignore-errors
+        (mevedel-session-durability-lease-release parent-path))
+      (mevedel-session-durability--cancel-renewal parent)
+      (mevedel-session-durability--cancel-renewal child)
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "verification failure preserves both owned lease objects"
+  (let* ((root (make-temp-file "mevedel-adopt-verify-" t))
+         (parent-path (file-name-as-directory
+                       (file-name-concat root "parent")))
+         (child-path (file-name-as-directory
+                      (file-name-concat root "child")))
+         (parent (test-mevedel-session-durability--local-session root))
+         (child (test-mevedel-session-durability--local-session root))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory parent-path t)
+    (make-directory child-path t)
+    (setf (mevedel-session-save-path parent) parent-path
+          (mevedel-session-save-path child) child-path)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   parent-path "parent" parent))
+          (should (mevedel-session-durability-lease-acquire
+                   child-path "child" child))
+          (let ((parent-lease (mevedel-session-lease parent))
+                (parent-timer (mevedel-session-lease-renewal-timer parent))
+                (child-lease (mevedel-session-lease child))
+                (child-timer (mevedel-session-lease-renewal-timer child)))
+            (cl-letf (((symbol-function
+                        'mevedel-session-durability-call-with-reserved-lease)
+                       (lambda (&rest _)
+                         (error "Injected adoption verification failure"))))
+              (should-error
+               (mevedel-session-durability-adopt-owned-lease parent child)))
+            (should (equal parent-path (mevedel-session-save-path parent)))
+            (should (eq parent-lease (mevedel-session-lease parent)))
+            (should (eq parent-timer
+                        (mevedel-session-lease-renewal-timer parent)))
+            (should (equal child-path (mevedel-session-save-path child)))
+            (should (eq child-lease (mevedel-session-lease child)))
+            (should (eq child-timer
+                        (mevedel-session-lease-renewal-timer child)))
+            (should (mevedel-session-durability-lease-owned-p parent))
+            (should (mevedel-session-durability-lease-owned-p child))))
+      (ignore-errors
+        (mevedel-session-durability-lease-release parent-path parent))
+      (ignore-errors
+        (mevedel-session-durability-lease-release child-path child))
+      (mevedel-session-durability--cancel-renewal parent)
+      (mevedel-session-durability--cancel-renewal child)
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
 (mevedel-deftest mevedel-session-durability-set-unsettled-mutation ()
   ,test
   (test)

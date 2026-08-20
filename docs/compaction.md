@@ -189,6 +189,11 @@ Initial requests and streaming responses are never interrupted.
 The shared compaction runner owns admission, source selection, tail rules,
 retries, and hooks for both targets. The context-summary generator owns the
 tool-free request, complete-request preflight, validation, and cancellation.
+The runner also owns retry-backoff timers: settlement cancels the current
+timer, and stale timer, `PreCompact`, summary, or application callbacks are
+inert.  A successful target application is the commit point: cancellation is
+then inert while `PostCompact` owns context and view completion, and its
+callback settles the run once.
 The private
 target adapter supplies the protected transcript bounds and target-specific
 persistence, display, continuation, and failure operations.  Agent hooks run

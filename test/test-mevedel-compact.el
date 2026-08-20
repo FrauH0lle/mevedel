@@ -3193,6 +3193,129 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should-not mevedel--compaction-cancel)
       (should (= mevedel--compact-failure-count 0))))
 
+  :doc "cancellation rejects a late PreCompact callback"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let (hook-callback result
+          (requests 0)
+          (starts 0))
+      (insert "Prompt\n")
+      (insert (propertize "Response\n" 'gptel 'response))
+      (let ((target (mevedel--compact-main-target)))
+        (setq target
+              (plist-put target :start (lambda (&rest _) (cl-incf starts))))
+        (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (_event _payload callback &rest _)
+                     (setq hook-callback callback)))
+                  ((symbol-function 'mevedel-context-summary-generate)
+                   (lambda (&rest _)
+                     (cl-incf requests))))
+          (mevedel--compact-run
+           :target target
+           :aggressive t
+           :pending-start (point-max)
+           :callback (lambda (err) (setq result err)))
+          (should hook-callback)
+          (funcall mevedel--compaction-cancel)
+          (funcall hook-callback nil)))
+      (should (equal result "Compaction aborted"))
+      (should (= starts 0))
+      (should (= requests 0))))
+
+  :doc "applied compaction wins cancellation while PostCompact is held"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let (hook-callback results
+          (completes 0)
+          (epochs 0))
+      (insert "Prompt\n")
+      (insert (propertize "Response\n" 'gptel 'response))
+      (let ((target (mevedel--compact-main-target)))
+        (setq target (plist-put target :apply #'ignore))
+        (setq target
+              (plist-put target :complete
+                         (lambda (&rest _) (cl-incf completes))))
+        (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (event _payload callback &rest _)
+                     (if (eq event 'PostCompact)
+                         (setq hook-callback callback)
+                       (funcall callback nil))))
+                  ((symbol-function 'mevedel--compact-begin-root-context-epoch)
+                   (lambda (&rest _) (cl-incf epochs)))
+                  ((symbol-function 'message) #'ignore))
+          (mevedel--compact-run
+           :target target
+           :aggressive t
+           :prepared-summary "cached"
+           :callback (lambda (err) (push err results)))
+          (should hook-callback)
+          (funcall mevedel--compaction-cancel)
+          (should-not results)
+          (should mevedel--compaction-in-flight)
+          (funcall hook-callback nil)))
+      (should (equal results '(nil)))
+      (should (= epochs 1))
+      (should (= completes 1))
+      (should-not mevedel--compaction-in-flight)
+      (should-not mevedel--compaction-cancel)))
+
+  :doc "cancellation owns retry backoff and rejects stale summary callbacks"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let ((requests 0)
+          (hooks 0)
+          (retry-token (list 'retry))
+          applied
+          cancelled-timer
+          provider-callback
+          result
+          retry-callback)
+      (insert "Prompt\n")
+      (insert (propertize "Response\n" 'gptel 'response))
+      (let ((target (mevedel--compact-main-target)))
+        (setq target
+              (plist-put
+               target :apply
+               (lambda (_target summary &rest _)
+                 (setq applied summary))))
+        (setq target (plist-put target :complete #'ignore))
+        (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (_event _payload callback &rest _)
+                     (cl-incf hooks)
+                     (funcall callback nil)))
+                  ((symbol-function 'mevedel-context-summary-generate)
+                   (lambda (_source _purpose callback &rest _)
+                     (cl-incf requests)
+                     (setq provider-callback callback)
+                     (when (= requests 1)
+                       (funcall callback
+                                '(:outcome error :error "temporary")))
+                     #'ignore))
+                  ((symbol-function 'run-at-time)
+                   (lambda (_delay _repeat callback &rest args)
+                     (setq retry-callback
+                           (lambda () (apply callback args)))
+                     retry-token))
+                  ((symbol-function 'cancel-timer)
+                   (lambda (timer)
+                     (setq cancelled-timer timer)))
+                  ((symbol-function 'display-warning) #'ignore)
+                  ((symbol-function 'message) #'ignore))
+          (mevedel--compact-run
+           :target target
+           :aggressive t
+           :pending-start (point-max)
+           :callback (lambda (err) (setq result err)))
+          (should retry-callback)
+          (funcall mevedel--compaction-cancel)
+          (funcall provider-callback
+                   '(:outcome success :summary "late summary"))
+          (funcall retry-callback)))
+      (should (equal result "Compaction aborted"))
+      (should (eq cancelled-timer retry-token))
+      (should (= hooks 1))
+      (should (= requests 1))
+      (should-not applied)
+      (should-not mevedel--compaction-in-flight)
+      (should-not mevedel--compaction-cancel)))
+
   :doc "settles a synchronous generator failure as a retryable attempt"
   (test-mevedel-compact--with-persisted-buffer (chat-buf session)
     (let ((attempts 0) result)

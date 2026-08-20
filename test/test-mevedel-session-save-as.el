@@ -17,9 +17,10 @@
   ,test
   (test)
   :doc "cleans pre-commit recovery and keeps every committed child discoverable"
-  (dolist (failure-point
-           '(pre-commit publish-pre-commit post-commit move-post-commit))
-    (let* ((host (format "save-as-%s" failure-point))
+  (dolist (scenario
+           '(pre-commit publish-pre-commit post-commit move-post-commit
+             adopt-rebind adopt-verify))
+    (let* ((host (format "save-as-%s" scenario))
            (local-root
             (file-name-as-directory
              (make-temp-file "mevedel-save-as-failure-" t)))
@@ -29,7 +30,8 @@
            session
            old-save-path
            new-save-path
-           staging-path)
+           staging-path
+           retained-child)
       (unwind-protect
           (mevedel-test--with-local-shell-tramp (list host)
             (cl-destructuring-bind
@@ -42,7 +44,7 @@
                     (file-name-as-directory
                      (file-name-concat
                       (file-name-directory (directory-file-name session-dir))
-                      (format "clone-%s" failure-point)))
+                      (format "clone-%s" scenario)))
                     buffer (generate-new-buffer " *save-as-failure*")
                     view-buffer (generate-new-buffer " *save-as-failure:view*"))
               (let* ((mevedel-session-durability--client-id owner-id)
@@ -53,7 +55,21 @@
                        'mevedel-session-rewind-materialize-publication))
                      (publish-function
                       (symbol-function 'mevedel-session-publication-publish))
+                     (lock-acquire-function
+                      (symbol-function
+                       'mevedel-session-persistence-lock-acquire))
+                     (adopt-function
+                      (symbol-function
+                       'mevedel-session-durability-adopt-owned-lease))
                      (rename-function (symbol-function 'rename-file))
+                     (lock-acquires 0)
+                     old-buffer-file
+                     old-buffer-name
+                     old-publication
+                     old-renewal-timer
+                     old-session-id
+                     old-session-name
+                     old-view-name
                      recovery)
                 (puthash
                  (mevedel-execution-target-identity
@@ -68,18 +84,27 @@
                               mevedel--view-buffer view-buffer
                               buffer-file-name segment)
                   (insert "Parent transcript\n"))
+                (setq old-buffer-file
+                      (buffer-local-value 'buffer-file-name buffer)
+                      old-buffer-name (buffer-name buffer)
+                      old-publication (mevedel-session-publication session)
+                      old-renewal-timer
+                      (mevedel-session-lease-renewal-timer session)
+                      old-session-id (mevedel-session-session-id session)
+                      old-session-name (mevedel-session-name session)
+                      old-view-name (buffer-name view-buffer))
                 (cl-letf
                     (((symbol-function
                        'mevedel-session-rewind-materialize-publication)
                       (lambda (actual-session publication destination)
                         (setq staging-path destination)
-                        (if (eq failure-point 'pre-commit)
+                        (if (eq scenario 'pre-commit)
                             (error "Injected pre-commit Save As failure")
                           (funcall materialize-function
                                    actual-session publication destination))))
                      ((symbol-function 'mevedel-session-publication-publish)
                       (lambda (actual-session artifacts)
-                        (if (eq failure-point 'publish-pre-commit)
+                        (if (eq scenario 'publish-pre-commit)
                             (let* ((directory
                                     (make-temp-file
                                      "mevedel-save-as-recovery-" t))
@@ -100,27 +125,45 @@
                           (prog1
                               (funcall publish-function
                                        actual-session artifacts)
-                            (when (eq failure-point 'post-commit)
+                            (when (eq scenario 'post-commit)
                               (error "Injected post-commit Save As failure"))))))
+                     ((symbol-function
+                       'mevedel-session-persistence-lock-acquire)
+                      (lambda (path buffer-name &optional owner)
+                        (cl-incf lock-acquires)
+                        (if (and (eq scenario 'adopt-rebind)
+                                 (> lock-acquires 1))
+                            nil
+                          (funcall lock-acquire-function
+                                   path buffer-name owner))))
+                     ((symbol-function
+                       'mevedel-session-durability-adopt-owned-lease)
+                      (lambda (destination source)
+                        (if (eq scenario 'adopt-verify)
+                            (progn
+                              (setq retained-child source)
+                              (error "Injected adoption verification failure"))
+                          (funcall adopt-function destination source))))
                      ((symbol-function 'rename-file)
                       (lambda (file newname &optional ok-if-exists)
-                        (if (and (eq failure-point 'move-post-commit)
+                        (if (and (eq scenario 'move-post-commit)
                                  staging-path
                                  (equal file
                                         (directory-file-name staging-path)))
                             (error "Injected Save As discovery move failure")
                           (funcall rename-function
                                    file newname ok-if-exists)))))
-                  (let ((error
-                         (should-error
-                          (mevedel-session-save-as-run
-                           session buffer "clone"
-                           (file-name-nondirectory
-                            (directory-file-name new-save-path))
-                           new-save-path))))
-                    (if (memq failure-point
-                              '(pre-commit publish-pre-commit))
+                  (let ((outcome
+                         (condition-case error
+                             (mevedel-session-save-as-run
+                              session buffer "clone"
+                              (file-name-nondirectory
+                               (directory-file-name new-save-path))
+                              new-save-path)
+                           (error error))))
+                    (if (memq scenario '(pre-commit publish-pre-commit))
                         (progn
+                          (should (eq (car outcome) 'error))
                           (should-not (file-directory-p staging-path))
                           (should-not (file-directory-p new-save-path))
                           (should
@@ -128,34 +171,77 @@
                                   (mevedel-session-save-path session)))
                           (should
                            (mevedel-session-durability-lease-owned-p session)))
-                      (should
-                       (string-match-p
-                        "committed a child"
-                        (error-message-string error)))
-                      (if (eq failure-point 'move-post-commit)
+                      (if (eq scenario 'adopt-rebind)
                           (progn
-                            (should-not (file-directory-p new-save-path))
-                            (should (file-directory-p staging-path))
-                            (should
-                             (equal staging-path
-                                    (mevedel-session-save-path session)))
-                            (should
-                             (cl-find staging-path
-                                      (mevedel-session-persistence-list-sessions
-                                       (mevedel-session-workspace session))
-                                      :key (lambda (entry)
-                                             (plist-get entry :save-path))
-                                      :test #'equal)))
-                        (should (file-directory-p new-save-path)))
-                      (should
-                       (mevedel-session-publication-read
-                        (mevedel-session-save-path session)))
-                      (should
-                       (string-match-p "clone" (buffer-name buffer)))
-                      (should
-                       (string-match-p "clone" (buffer-name view-buffer)))
-                      (should
-                       (mevedel-session-durability-lease-owned-p session))))
+                            (should (eq (plist-get outcome :status)
+                                        'committed))
+                            (should (= lock-acquires 1)))
+                        (should
+                         (string-match-p
+                          "committed a child"
+                          (error-message-string outcome))))
+                      (cond
+                       ((eq scenario 'adopt-verify)
+                        (should retained-child)
+                        (should (equal old-save-path
+                                       (mevedel-session-save-path session)))
+                        (should (equal old-session-id
+                                       (mevedel-session-session-id session)))
+                        (should (equal old-session-name
+                                       (mevedel-session-name session)))
+                        (should (eq old-publication
+                                    (mevedel-session-publication session)))
+                        (should (eq old-renewal-timer
+                                    (mevedel-session-lease-renewal-timer
+                                     session)))
+                        (should
+                         (equal old-buffer-file
+                                (buffer-local-value 'buffer-file-name buffer)))
+                        (should (equal old-buffer-name (buffer-name buffer)))
+                        (should (equal old-view-name
+                                       (buffer-name view-buffer)))
+                        (should (mevedel-session-durability-lease-owned-p
+                                 session))
+                        (should (mevedel-session-durability-lease-owned-p
+                                 retained-child))
+                        (should (timerp
+                                 (mevedel-session-lease-renewal-timer
+                                  retained-child)))
+                        (should (equal new-save-path
+                                       (mevedel-session-save-path
+                                        retained-child)))
+                        (should
+                         (cl-find new-save-path
+                                  (mevedel-session-persistence-list-sessions
+                                   (mevedel-session-workspace session))
+                                  :key (lambda (entry)
+                                         (plist-get entry :save-path))
+                                  :test #'equal)))
+                       ((eq scenario 'move-post-commit)
+                        (should-not (file-directory-p new-save-path))
+                        (should (file-directory-p staging-path))
+                        (should
+                         (equal staging-path
+                                (mevedel-session-save-path session)))
+                        (should
+                         (cl-find staging-path
+                                  (mevedel-session-persistence-list-sessions
+                                   (mevedel-session-workspace session))
+                                  :key (lambda (entry)
+                                         (plist-get entry :save-path))
+                                  :test #'equal)))
+                       (t
+                        (should (file-directory-p new-save-path))))
+                      (unless (eq scenario 'adopt-verify)
+                        (should
+                         (mevedel-session-publication-read
+                          (mevedel-session-save-path session)))
+                        (should
+                         (string-match-p "clone" (buffer-name buffer)))
+                        (should
+                         (string-match-p "clone" (buffer-name view-buffer)))
+                        (should
+                         (mevedel-session-durability-lease-owned-p session)))))
                   (when recovery
                     (should-not (file-exists-p recovery)))))))
         (mevedel-test--with-local-shell-tramp (list host)
@@ -166,6 +252,10 @@
           (when old-save-path
             (ignore-errors
               (mevedel-session-persistence-lock-release old-save-path)))
+          (when retained-child
+            (ignore-errors
+              (mevedel-session-persistence-lock-release
+               (mevedel-session-save-path retained-child) retained-child)))
           (when (buffer-live-p buffer)
             (with-current-buffer buffer
               (set-buffer-modified-p nil)
