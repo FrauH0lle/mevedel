@@ -29,6 +29,8 @@
                   (path plist))
 
 ;; `mevedel-session-durability'
+(declare-function mevedel-session-durability-adopt-owned-lease
+                  "mevedel-session-durability" (session source))
 (declare-function mevedel-session-durability-call-with-reserved-lease
                   "mevedel-session-durability" (session function))
 (declare-function mevedel-session-durability-forget-removed-session
@@ -70,8 +72,6 @@
 (declare-function mevedel-session-forked-from-turn
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-lease
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-lease-renewal-timer
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name
                   "mevedel-structs" (cl-x) t)
@@ -303,13 +303,6 @@ parent identity."
 ;;
 ;;; Adoption and cleanup
 
-(defun mevedel-session-save-as--cancel-renewal (session)
-  "Cancel SESSION's renewal timer, if any."
-  (when-let ((timer (mevedel-session-lease-renewal-timer session)))
-    (when (timerp timer)
-      (cancel-timer timer))
-    (setf (mevedel-session-lease-renewal-timer session) nil)))
-
 (defun mevedel-session-save-as--adopt-child (transaction)
   "Adopt TRANSACTION's committed child into its live session."
   (when (and (mevedel-session-save-as--committed-p transaction)
@@ -324,15 +317,8 @@ parent identity."
               (plist-get transaction :staging-path))))
       (condition-case error
           (progn
-            (condition-case release-error
-                (mevedel-session-persistence-lock-release
-                 (plist-get transaction :old-save-path) session)
-              (error
-               (setq transaction
-                     (mevedel-session-save-as--record-error
-                      transaction release-error))))
-            (setf (mevedel-session-save-path session) committed-path
-                  (mevedel-session-session-id session)
+            (mevedel-session-durability-adopt-owned-lease session child)
+            (setf (mevedel-session-session-id session)
                   (plist-get transaction :new-id)
                   (mevedel-session-name session)
                   (plist-get transaction :new-name)
@@ -341,7 +327,9 @@ parent identity."
                   (mevedel-session-forked-from-turn session)
                   (mevedel-session-turn-count child)
                   (mevedel-session-updated-at session)
-                  (mevedel-session-updated-at child))
+                  (mevedel-session-updated-at child)
+                  (mevedel-session-publication session)
+                  (plist-get transaction :publication))
             (with-current-buffer buffer
               (setq buffer-file-name
                     (and (plist-get transaction :old-buffer-file)
@@ -350,12 +338,13 @@ parent identity."
                           (file-name-nondirectory
                            (plist-get transaction :old-buffer-file)))))
               (setq buffer-file-truename nil))
-            (unless
-                (mevedel-session-persistence-lock-acquire
-                 committed-path (buffer-name buffer) session)
-              (error "Could not bind committed Save As child lease"))
-            (setf (mevedel-session-publication session)
-                  (plist-get transaction :publication))
+            (condition-case release-error
+                (mevedel-session-persistence-lock-release
+                 (plist-get transaction :old-save-path))
+              (error
+               (setq transaction
+                     (mevedel-session-save-as--record-error
+                      transaction release-error))))
             (mevedel-session-save-as--rename-live-session-buffers
              session buffer)
             (plist-put transaction :stage 'adopted))
@@ -435,10 +424,6 @@ the existing lease/publication gates for every child write."
       (error
        (setq transaction
              (mevedel-session-save-as--record-error transaction error))))
-    (when (mevedel-session-save-as--committed-p transaction)
-      (mevedel-session-save-as--cancel-renewal session)
-      (mevedel-session-save-as--cancel-renewal
-       (plist-get transaction :child)))
     (if (mevedel-session-save-as--committed-p transaction)
         (setq transaction
               (mevedel-session-save-as--adopt-child transaction))

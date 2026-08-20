@@ -2548,8 +2548,9 @@
                   (should fresh-child)
                   (should child-rewrite-authorized)
                   (should child-session)
+                  (should-not (mevedel-session-lease child-session))
                   (should
-                   (mevedel-session-durability-lease-owned-p child-session))
+                   (mevedel-session-durability-lease-owned-p session))
                   (should
                    (= 1
                       (plist-get (mevedel-session-lease session)

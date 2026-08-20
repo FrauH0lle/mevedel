@@ -1742,6 +1742,7 @@ AUTO is non-nil for automatic compaction."
                (:constructor mevedel--compact-run-state-create))
   "Mutable state for one asynchronous compaction run."
   aggressive
+  applied
   archived-tool-use-ids
   auto
   callback
@@ -1756,6 +1757,7 @@ AUTO is non-nil for automatic compaction."
   preserved-tail-turns
   purpose
   request-cancel
+  retry-timer
   session
   settled
   source-transform
@@ -1773,12 +1775,16 @@ AUTO is non-nil for automatic compaction."
   (unless (mevedel--compact-run-state-settled state)
     (setf (mevedel--compact-run-state-settled state) t)
     (let ((chat-buffer (mevedel--compact-run-state-chat-buffer state))
-          (span (mevedel--compact-run-state-telemetry-span state)))
+          (span (mevedel--compact-run-state-telemetry-span state))
+          (retry-timer (mevedel--compact-run-state-retry-timer state)))
+      (when retry-timer
+        (cancel-timer retry-timer))
       (when (buffer-live-p chat-buffer)
         (with-current-buffer chat-buffer
           (setq-local mevedel--compaction-in-flight nil)
           (setq-local mevedel--compaction-cancel nil)))
-      (setf (mevedel--compact-run-state-request-cancel state) nil)
+      (setf (mevedel--compact-run-state-request-cancel state) nil
+            (mevedel--compact-run-state-retry-timer state) nil)
       (when span
         (mevedel-telemetry-finish
          span
@@ -1800,30 +1806,36 @@ AUTO is non-nil for automatic compaction."
   "Fail compaction STATE with ERR.
 Retry when RETRYABLE and attempts remain.  IGNORE-FAILURE-COUNT leaves
 the persistent failure counter unchanged."
-  (if (and retryable
-           (< (mevedel--compact-run-state-attempt state) 3))
-      (let* ((attempt (mevedel--compact-run-state-attempt state))
-             (delay (expt 2 (1- attempt)))
-             (chat-buffer (mevedel--compact-run-state-chat-buffer state)))
-        (message "mevedel: compaction failed, retrying in %ss (%s)"
-                 delay err)
-        (run-at-time
-         delay nil
-         (lambda ()
-           (when (buffer-live-p chat-buffer)
-             (with-current-buffer chat-buffer
-               (mevedel--compact-run-begin-attempt state))))))
-    (unless ignore-failure-count
-      (cl-incf mevedel--compact-failure-count))
-    (display-warning 'mevedel err :warning)
-    (unless (mevedel--compact-run-state-auto state)
-      (when-let* ((vb mevedel--view-buffer)
-                  (_ (buffer-live-p vb)))
-        (with-current-buffer vb
-          (if (fboundp 'mevedel-view--stop-request-progress)
-              (mevedel-view--stop-request-progress)
-            (mevedel-view--stop-spinner)))))
-    (mevedel--compact-run-finish state err)))
+  (unless (mevedel--compact-run-state-settled state)
+    (if (and retryable
+             (< (mevedel--compact-run-state-attempt state) 3))
+        (let* ((attempt (mevedel--compact-run-state-attempt state))
+               (delay (expt 2 (1- attempt)))
+               (chat-buffer (mevedel--compact-run-state-chat-buffer state)))
+          (message "mevedel: compaction failed, retrying in %ss (%s)"
+                   delay err)
+          (setf
+           (mevedel--compact-run-state-retry-timer state)
+           (run-at-time
+            delay nil
+            (lambda ()
+              (unless (mevedel--compact-run-state-settled state)
+                (setf (mevedel--compact-run-state-retry-timer state) nil
+                      (mevedel--compact-run-state-request-cancel state) nil)
+                (when (buffer-live-p chat-buffer)
+                  (with-current-buffer chat-buffer
+                    (mevedel--compact-run-begin-attempt state))))))))
+      (unless ignore-failure-count
+        (cl-incf mevedel--compact-failure-count))
+      (display-warning 'mevedel err :warning)
+      (unless (mevedel--compact-run-state-auto state)
+        (when-let* ((vb mevedel--view-buffer)
+                    (_ (buffer-live-p vb)))
+          (with-current-buffer vb
+            (if (fboundp 'mevedel-view--stop-request-progress)
+                (mevedel-view--stop-request-progress)
+              (mevedel-view--stop-spinner)))))
+      (mevedel--compact-run-finish state err))))
 
 (defun mevedel--compact-run-finish-success (state summary)
   "Complete compaction STATE after applying SUMMARY."
@@ -1850,72 +1862,76 @@ the persistent failure counter unchanged."
       :origin (plist-get target :origin)
       :transcript-path (plist-get target :transcript-path))
      (lambda (_decision)
-       (unwind-protect
-           (progn
-             (condition-case err
-                 (mevedel--compact-begin-root-context-epoch
-                  target (mevedel--compact-run-state-auto state))
-               (error
-                (display-warning
-                 'mevedel
-                 (format "SessionStart after compaction failed: %s"
-                         (error-message-string err))
-                 :warning)))
-             (condition-case err
-                 (mevedel--compact-target-call
-                  target :complete
-                  (mevedel--compact-run-state-auto state))
-               (error
-                (display-warning
-                 'mevedel
-                 (format "Compaction view completion failed: %s"
-                         (error-message-string err))
-                 :warning)))
-             (when (and (plist-get target :warn-on-completion)
-                        mevedel-compact-warn-on-completion
-                        (not mevedel--compact-warning-shown))
-               (setq mevedel--compact-warning-shown t)
-               (message
-                "mevedel: long threads with multiple compactions can reduce model accuracy; consider starting a new session for unrelated work")))
-         (mevedel--compact-run-finish state nil)))
+       (unless (mevedel--compact-run-state-settled state)
+         (unwind-protect
+             (progn
+               (condition-case err
+                   (mevedel--compact-begin-root-context-epoch
+                    target (mevedel--compact-run-state-auto state))
+                 (error
+                  (display-warning
+                   'mevedel
+                   (format "SessionStart after compaction failed: %s"
+                           (error-message-string err))
+                   :warning)))
+               (condition-case err
+                   (mevedel--compact-target-call
+                    target :complete
+                    (mevedel--compact-run-state-auto state))
+                 (error
+                  (display-warning
+                   'mevedel
+                   (format "Compaction view completion failed: %s"
+                           (error-message-string err))
+                   :warning)))
+               (when (and (plist-get target :warn-on-completion)
+                          mevedel-compact-warn-on-completion
+                          (not mevedel--compact-warning-shown))
+                 (setq mevedel--compact-warning-shown t)
+                 (message
+                  "mevedel: long threads with multiple compactions can reduce model accuracy; consider starting a new session for unrelated work")))
+           (mevedel--compact-run-finish state nil))))
      session workspace nil
      (mevedel--compact-run-state-invocation state))))
 
 (defun mevedel--compact-run-apply-summary (state summary hook-audits)
   "Apply SUMMARY and HOOK-AUDITS for compaction STATE once."
-  (condition-case err
-      (progn
-        (when-let* ((summary-ready
-                     (mevedel--compact-run-state-summary-ready state)))
-          (setq summary (funcall summary-ready summary)))
-        (when (mevedel--compact-run-state-archived-tool-use-ids state)
-          (require 'mevedel-view-stream)
-          (setf
+  (unless (mevedel--compact-run-state-settled state)
+    (condition-case err
+        (progn
+          (when-let* ((summary-ready
+                       (mevedel--compact-run-state-summary-ready state)))
+            (setq summary (funcall summary-ready summary)))
+          (when (mevedel--compact-run-state-archived-tool-use-ids state)
+            (require 'mevedel-view-stream)
+            (setf
+             (mevedel--compact-run-state-target state)
+             (plist-put
+              (mevedel--compact-run-state-target state)
+              :execution-archive-plan
+              (mevedel-view-stream-prepare-execution-row-archive
+               (mevedel--compact-run-state-chat-buffer state)
+               (mevedel--compact-run-state-archived-tool-use-ids state)))))
+          (mevedel--compact-target-call
            (mevedel--compact-run-state-target state)
-           (plist-put
-            (mevedel--compact-run-state-target state)
-            :execution-archive-plan
-            (mevedel-view-stream-prepare-execution-row-archive
-             (mevedel--compact-run-state-chat-buffer state)
-             (mevedel--compact-run-state-archived-tool-use-ids state)))))
-        (mevedel--compact-target-call
-         (mevedel--compact-run-state-target state)
-         :apply summary
-         (mevedel--compact-run-state-tail-text state)
-         (mevedel--compact-run-state-pending-text state)
-         hook-audits
-         (mevedel--compact-run-state-auto state)
-         (mevedel--compact-run-state-preserved-tail-turns state))
-        (setq mevedel--known-token-baseline nil
-              mevedel--compact-failure-count 0)
-        (mevedel--compact-run-finish-success state summary))
-    (error
-     (mevedel--compact-run-fail state (format "%s" err) nil))))
+           :apply summary
+           (mevedel--compact-run-state-tail-text state)
+           (mevedel--compact-run-state-pending-text state)
+           hook-audits
+           (mevedel--compact-run-state-auto state)
+           (mevedel--compact-run-state-preserved-tail-turns state))
+          (setf (mevedel--compact-run-state-applied state) t)
+          (setq mevedel--known-token-baseline nil
+                mevedel--compact-failure-count 0)
+          (mevedel--compact-run-finish-success state summary))
+      (error
+       (mevedel--compact-run-fail state (format "%s" err) nil)))))
 
 (defun mevedel--compact-run-handle-summary
     (state hook-audits result)
   "Handle one context-summary RESULT for STATE and HOOK-AUDITS."
-  (when (buffer-live-p (mevedel--compact-run-state-chat-buffer state))
+  (when (and (not (mevedel--compact-run-state-settled state))
+             (buffer-live-p (mevedel--compact-run-state-chat-buffer state)))
     (with-current-buffer (mevedel--compact-run-state-chat-buffer state)
       (pcase (plist-get result :outcome)
         ('success
@@ -1935,84 +1951,87 @@ the persistent failure counter unchanged."
   "Generate STATE's summary with HOOK-CONTEXT and HOOK-AUDITS.
 A synchronous generator failure settles STATE as a retryable attempt
 rather than escaping, because the caller may be an asynchronous hook."
-  (condition-case err
-      (if-let* ((prepared (mevedel--compact-run-state-prepared-summary state)))
-          (mevedel--compact-run-apply-summary state prepared hook-audits)
-        (require 'mevedel-context-summary)
-        (let* ((source
-                (if hook-context
-                    (concat
-                     (mevedel--compact-run-state-old-content state)
-                     "\n\n--- evidence item; provenance: hook-context ---\n"
-                     hook-context
-                     "\n--- end evidence item ---")
-                  (mevedel--compact-run-state-old-content state)))
-               (source-transform
-                (mevedel--compact-run-state-source-transform state))
-               (source (if source-transform
-                           (funcall source-transform source)
-                         source))
-               (purpose (mevedel--compact-run-state-purpose state))
-               (cancel
-                (mevedel-context-summary-generate
-                 source purpose
-                 (apply-partially
-                  #'mevedel--compact-run-handle-summary state hook-audits)
-                 :session (mevedel--compact-run-state-session state)
-                 :previous-summary
-                 (and (eq purpose 'continuation)
-                      (plist-get (mevedel--compact-run-state-target state)
-                                 :previous-summary))
-                 :focus (mevedel--compact-run-state-focus state)
-                 :guidance (mevedel--compact-run-state-instructions state)
-                 :policy (mevedel--compact-run-state-policy state))))
-          (unless (mevedel--compact-run-state-settled state)
-            (setf (mevedel--compact-run-state-request-cancel state) cancel))))
-    (error
-     (mevedel--compact-run-fail state (format "%s" err) t))))
+  (unless (mevedel--compact-run-state-settled state)
+    (condition-case err
+        (if-let* ((prepared (mevedel--compact-run-state-prepared-summary state)))
+            (mevedel--compact-run-apply-summary state prepared hook-audits)
+          (require 'mevedel-context-summary)
+          (let* ((source
+                  (if hook-context
+                      (concat
+                       (mevedel--compact-run-state-old-content state)
+                       "\n\n--- evidence item; provenance: hook-context ---\n"
+                       hook-context
+                       "\n--- end evidence item ---")
+                    (mevedel--compact-run-state-old-content state)))
+                 (source-transform
+                  (mevedel--compact-run-state-source-transform state))
+                 (source (if source-transform
+                             (funcall source-transform source)
+                           source))
+                 (purpose (mevedel--compact-run-state-purpose state))
+                 (cancel
+                  (mevedel-context-summary-generate
+                   source purpose
+                   (apply-partially
+                    #'mevedel--compact-run-handle-summary state hook-audits)
+                   :session (mevedel--compact-run-state-session state)
+                   :previous-summary
+                   (and (eq purpose 'continuation)
+                        (plist-get (mevedel--compact-run-state-target state)
+                                   :previous-summary))
+                   :focus (mevedel--compact-run-state-focus state)
+                   :guidance (mevedel--compact-run-state-instructions state)
+                   :policy (mevedel--compact-run-state-policy state))))
+            (unless (mevedel--compact-run-state-settled state)
+              (setf (mevedel--compact-run-state-request-cancel state) cancel))))
+      (error
+       (mevedel--compact-run-fail state (format "%s" err) t)))))
 
 (defun mevedel--compact-run-begin-attempt (state)
   "Run STATE's PreCompact hook and start one summary attempt."
-  (cl-incf (mevedel--compact-run-state-attempt state))
-  (let ((session (mevedel--compact-run-state-session state))
-        (workspace (mevedel--compact-run-state-workspace state))
-        (target (mevedel--compact-run-state-target state)))
-    (condition-case err
-        (mevedel-hooks-run-event
-         'PreCompact
-         (mevedel-hooks-event-plist
-          'PreCompact session workspace
-          :trigger (mevedel--compact-run-state-trigger state)
-          :tokens-before (mevedel--compact-run-state-tokens-before state)
-          :aggressive (mevedel--compact-run-state-aggressive state)
-          :instructions (mevedel--compact-run-state-instructions state)
-          :origin (plist-get target :origin)
-          :transcript-path (plist-get target :transcript-path))
-         (lambda (decision)
-           (if (and (plist-member decision :continue)
-                    (not (plist-get decision :continue)))
-               (mevedel--compact-run-finish
-                state
-                (or (plist-get decision :stop-reason)
-                    "PreCompact hook stopped compaction"))
-             (let* ((context
-                     (mevedel-hooks-additional-context-string
-                      decision 'PreCompact))
-                    (hook-audits
-                     (and context
-                          (mevedel--compact-hook-audit-records decision))))
-               (message "mevedel: compacting (%dk -> ...)"
-                        (/ (mevedel--compact-run-state-tokens-before state)
-                           1000))
-               (when (= (mevedel--compact-run-state-attempt state) 1)
-                 (mevedel--compact-target-call target :start))
-               (mevedel--compact-run-send-request
-                state context hook-audits))))
-         session workspace nil
-         (mevedel--compact-run-state-invocation state))
-      (error
-       (mevedel--compact-run-finish state (format "%s" err))
-       (signal (car err) (cdr err))))))
+  (unless (mevedel--compact-run-state-settled state)
+    (cl-incf (mevedel--compact-run-state-attempt state))
+    (let ((session (mevedel--compact-run-state-session state))
+          (workspace (mevedel--compact-run-state-workspace state))
+          (target (mevedel--compact-run-state-target state)))
+      (condition-case err
+          (mevedel-hooks-run-event
+           'PreCompact
+           (mevedel-hooks-event-plist
+            'PreCompact session workspace
+            :trigger (mevedel--compact-run-state-trigger state)
+            :tokens-before (mevedel--compact-run-state-tokens-before state)
+            :aggressive (mevedel--compact-run-state-aggressive state)
+            :instructions (mevedel--compact-run-state-instructions state)
+            :origin (plist-get target :origin)
+            :transcript-path (plist-get target :transcript-path))
+           (lambda (decision)
+             (unless (mevedel--compact-run-state-settled state)
+               (if (and (plist-member decision :continue)
+                        (not (plist-get decision :continue)))
+                   (mevedel--compact-run-finish
+                    state
+                    (or (plist-get decision :stop-reason)
+                        "PreCompact hook stopped compaction"))
+                 (let* ((context
+                         (mevedel-hooks-additional-context-string
+                          decision 'PreCompact))
+                        (hook-audits
+                         (and context
+                              (mevedel--compact-hook-audit-records decision))))
+                   (message "mevedel: compacting (%dk -> ...)"
+                            (/ (mevedel--compact-run-state-tokens-before state)
+                               1000))
+                   (when (= (mevedel--compact-run-state-attempt state) 1)
+                     (mevedel--compact-target-call target :start))
+                   (mevedel--compact-run-send-request
+                    state context hook-audits)))))
+           session workspace nil
+           (mevedel--compact-run-state-invocation state))
+        (error
+         (mevedel--compact-run-finish state (format "%s" err))
+         (signal (car err) (cdr err)))))))
 
 (defun mevedel--compact-evidence-selection (target limit aggressive)
   "Return TARGET's projected evidence selection ending at LIMIT.
@@ -2168,12 +2187,14 @@ complete projected evidence immediately before generation."
       (setq mevedel--compaction-in-flight t)
       (setq mevedel--compaction-cancel
             (lambda ()
-              (unless (mevedel--compact-run-state-settled state)
+              (unless (or (mevedel--compact-run-state-settled state)
+                          (mevedel--compact-run-state-applied state))
                 (when-let* ((cancel
                              (mevedel--compact-run-state-request-cancel
                               state)))
                   (funcall cancel))
-                (unless (mevedel--compact-run-state-settled state)
+                (unless (or (mevedel--compact-run-state-settled state)
+                            (mevedel--compact-run-state-applied state))
                   (mevedel--compact-run-fail
                    state "Compaction aborted" nil t)))))
       (mevedel--compact-run-begin-attempt state))))

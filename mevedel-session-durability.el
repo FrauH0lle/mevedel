@@ -1326,6 +1326,30 @@ manifest, or drain SESSION's publication queue."
       (signal (car failure) (cdr failure)))
     result))
 
+(defun mevedel-session-durability-adopt-owned-lease (session source)
+  "Move SOURCE's verified owned lease and path into SESSION.
+
+Verify SOURCE against its target before changing either object.  Renewal timer
+creation also precedes mutation, so failure leaves SESSION and SOURCE intact."
+  (mevedel-session-durability-call-with-reserved-lease source #'ignore)
+  (unless (mevedel-session-durability-lease-owned-p source)
+    (error "Committed child lease is not owned"))
+  (let ((lease (copy-sequence (mevedel-session-lease source)))
+        (save-path (mevedel-session-save-path source))
+        (timer
+         (run-at-time
+          mevedel-session-lease-renewal-seconds
+          mevedel-session-lease-renewal-seconds
+          #'mevedel-session-durability-lease-renew session)))
+    (mevedel-session-durability--cancel-renewal session)
+    (mevedel-session-durability--cancel-renewal source)
+    (setf (mevedel-session-save-path session) save-path
+          (mevedel-session-lease session) lease
+          (mevedel-session-lease-renewal-timer session) timer
+          (mevedel-session-lease source) nil
+          (mevedel-session-lease-renewal-timer source) nil)
+    t))
+
 
 (defun mevedel-session-durability-forget-removed-session (session)
   "Clear local durability state after SESSION's owned directory was removed.

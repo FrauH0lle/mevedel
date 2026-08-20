@@ -28,7 +28,10 @@ and sidecar eagerly and verify other artifact bytes only when selected.  A
 replacement marker starts from an empty logical snapshot.  Portable Save As
 materializes the parent's allowlisted logical artifacts without copying its
 manifest or control history, then the rewritten child sidecar performs that
-child's first durable commit.
+child's first durable commit.  An injected adoption-time acquisition failure
+showed that reacquiring after live mutation could leave neither parent nor
+child fully bound.  Adoption therefore verifies and transfers the already-owned
+child lease into the live session before releasing the parent path.
 
 Serialized publication uses a bounded publishing lease synchronously renewed
 before and checked after every artifact rather than target I/O from timer
