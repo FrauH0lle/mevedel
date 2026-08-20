@@ -522,6 +522,13 @@
       (should (equal "TestEdit" (gptel-tool-name gt)))
       (should (equal "mevedel" (gptel-tool-category gt)))))
 
+  :doc "rejects unknown properties in native and wrapped forms"
+  (dolist (form '((mevedel-define-tool
+                    :name "Typo" :description "Typo" :get-pths ignore)
+                  (mevedel-define-tool
+                    :wrap source :get-pths ignore)))
+    (should-error (macroexpand form) :type 'error))
+
   :doc "defaults category to mevedel"
   (progn
     (mevedel-define-tool

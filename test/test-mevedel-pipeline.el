@@ -39,7 +39,9 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar gptel--known-tools)
 (defvar mevedel-bash-dangerous-commands)
+(defvar mevedel-tool--registry)
 (defvar test-mevedel-pipeline--read-eval-ran nil)
 (defvar warning-minimum-level)
 
@@ -1684,23 +1686,33 @@ cover, so the permission step's warning about it is captured here."
 			      (make-temp-file "mevedel-multi-permission-" t)))
 			(path-a (file-name-concat dir "a.txt"))
 			(path-b (file-name-concat dir "b.txt"))
+                        (gptel--known-tools nil)
+                        (mevedel-tool--registry (make-hash-table :test #'equal))
 			(session (mevedel-session--create
 				  :name "multi" :save-path dir
 				  :permission-mode 'full-auto
 				  :resource-grants
 				  (list (list :path path-a :access 'write)
 					(list :path path-b :access 'write))))
-			(tool (mevedel-tool--create
-			       :name "ApplyPatch" :groups '(edit)
-			       :get-paths (lambda (_args) (list path-a path-b))))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
 			(mevedel-permission-log-enabled t)
 			called)
 		   (unwind-protect
 		       (progn
+                         (mevedel-define-tool
+                          :wrap (gptel-make-tool
+                                 :name "AggregateEdit"
+                                 :function #'ignore
+                                 :description "Edit several files"
+                                 :args nil
+                                 :category "test-aggregate")
+                          :groups (edit)
+                          :get-paths (lambda (_args) (list path-a path-b)))
 			 (mevedel-pipeline--step-permission
-			  (list :tool tool :args nil :session session)
+                          (list :tool (mevedel-tool-get
+                                       "AggregateEdit" "mevedel-test-aggregate")
+                                :args nil :session session)
 			  (lambda (_context) (setq called t)) #'ignore)
 			 (should called)
 			 (should
