@@ -141,6 +141,10 @@ Data model
   mevedel-queue.el            shared interaction entry metadata
   mevedel-permission-queue.el permission/Bash/Eval/execution-authority queue
   mevedel-reminders.el        system-reminder injection
+  mevedel-plugin-registry.el  plugin manifests, activation state, hook consent
+  mevedel-plugin-lifecycle.el managed Git install, update, and removal
+  mevedel-plugin-ui.el        plugin cockpit and /plugin command
+  mevedel-plugins.el          narrow session/workspace plugin facade
   mevedel-skills-core.el      skill model, discovery, state, reload
   mevedel-mention-bindings.el shared atomic mention validation and edit lifecycle
   mevedel-skills-preparation.el argument substitution and body injection execution

@@ -134,10 +134,12 @@
 (declare-function mevedel-plan-mode-enter
                   "mevedel-plan-mode" (&optional session))
 
-;; `mevedel-plugins'
-(declare-function mevedel-plugins-count-label "mevedel-plugins"
+;; `mevedel-plugin-registry'
+(declare-function mevedel-plugins-count-label "mevedel-plugin-registry"
                   (&optional workspace))
-(declare-function mevedel-plugins-list-open "mevedel-plugins"
+
+;; `mevedel-plugin-ui'
+(declare-function mevedel-plugins-list-open "mevedel-plugin-ui"
                   (&optional context))
 
 ;; `mevedel-presets'
@@ -659,7 +661,7 @@ unavailable until it changes."
 
 (defun mevedel-menu--plugins-description ()
   "Return the top-level plugins row description."
-  (require 'mevedel-plugins)
+  (require 'mevedel-plugin-registry)
   (let ((workspace (mevedel-cockpit-context-workspace
                     (mevedel-menu--context))))
     (mevedel-menu--state-description
@@ -1080,7 +1082,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
        (mevedel-cockpit-call-in-data
         context #'mevedel-skills-list-open context))
       ('plugins
-       (require 'mevedel-plugins)
+       (require 'mevedel-plugin-ui)
        (mevedel-cockpit-call-in-data
         context #'mevedel-plugins-list-open context))
       ('tools

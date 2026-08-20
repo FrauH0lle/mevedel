@@ -36,16 +36,17 @@
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
 
-;; `mevedel-plugins'
-(declare-function mevedel-plugin-hooks "mevedel-plugins" (cl-x) t)
-(declare-function mevedel-plugin-hooks-file "mevedel-plugins" (cl-x) t)
-(declare-function mevedel-plugin-name "mevedel-plugins" (cl-x) t)
-(declare-function mevedel-plugin-root "mevedel-plugins" (cl-x) t)
-(declare-function mevedel-plugins--hooks-enabled-p "mevedel-plugins"
+;; `mevedel-plugin-registry'
+(declare-function mevedel-plugin-hooks "mevedel-plugin-registry" (cl-x) t)
+(declare-function mevedel-plugin-hooks-file
+                  "mevedel-plugin-registry" (cl-x) t)
+(declare-function mevedel-plugin-name "mevedel-plugin-registry" (cl-x) t)
+(declare-function mevedel-plugin-root "mevedel-plugin-registry" (cl-x) t)
+(declare-function mevedel-plugins-hooks-enabled-p "mevedel-plugin-registry"
                   (plugin &optional workspace))
-(declare-function mevedel-plugins-enabled "mevedel-plugins"
+(declare-function mevedel-plugins-enabled "mevedel-plugin-registry"
                   (&optional workspace))
-(declare-function mevedel-plugins-plugin-data-dir "mevedel-plugins"
+(declare-function mevedel-plugins-plugin-data-dir "mevedel-plugin-registry"
                   (plugin-name &optional workspace))
 
 ;; `mevedel-reminders'
@@ -694,10 +695,10 @@ Plugin runtime data is scoped to WORKSPACE when provided."
 
 (defun mevedel-hooks--plugin-config-rules (&optional workspace)
   "Return normalized hook rules from plugins with enabled hooks in WORKSPACE."
-  (when (require 'mevedel-plugins nil t)
+  (when (require 'mevedel-plugin-registry nil t)
     (let (rules)
       (dolist (plugin (mevedel-plugins-enabled workspace) rules)
-        (when (mevedel-plugins--hooks-enabled-p plugin workspace)
+        (when (mevedel-plugins-hooks-enabled-p plugin workspace)
           (when-let* ((manifest-rules (mevedel-hooks--plugin-manifest-rules
                                         plugin)))
             (setq rules

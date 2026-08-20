@@ -20,6 +20,13 @@ and path-activation notices. `mevedel-skills-ui.el` owns local commands, the
 skills cockpit, command/skill completion, font-lock, and send-dispatch
 composition.
 
+Plugin ownership follows its existing trust boundaries:
+`mevedel-plugin-registry.el` owns manifests, discovery, activation state, and
+hook consent; `mevedel-plugin-lifecycle.el` owns managed Git installation,
+update, and removal; `mevedel-plugin-ui.el` owns the cockpit and `/plugin`
+parser. `mevedel-plugins.el` retains only the session/workspace projection used
+by skill discovery and cockpit refresh.
+
 ## Skill flow
 
 ```mermaid
