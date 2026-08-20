@@ -1184,6 +1184,7 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-make-follow-up ()
   "Convert the selected steering entry to a follow-up at the target tail."
   (interactive)
+  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (item (mevedel-pending-inputs--selected))
@@ -1191,6 +1192,7 @@ an unrelated remote operation started by redisplay or another package included
          (id (plist-get item :id)))
     (unless (eq (plist-get item :category) 'steering)
       (user-error "Pending input is already a follow-up"))
+    (mevedel-session-artifacts-assert-new-mutation-authority session)
     (when-let* ((submission (plist-get entry :submission)))
       (mevedel-prompt-submission-restore submission))
     (let ((replacement
@@ -1235,6 +1237,7 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-execute-deletions ()
   "Confirm and delete every marked pending input."
   (interactive)
+  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (steering
@@ -1257,6 +1260,7 @@ an unrelated remote operation started by redisplay or another package included
                    (if (= 1 (+ (length steering) (length follow-ups)))
                        ""
                      "s")))
+      (mevedel-session-artifacts-assert-new-mutation-authority session)
       (mevedel-pending-inputs--discard (append steering follow-ups))
       (mevedel-session-set-pending-inputs
        session 'steering
@@ -1274,6 +1278,7 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-clear ()
   "Confirm and clear all pending input in the owning root session."
   (interactive)
+  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-current-context))
          (session (mevedel-pending-inputs--session context))
          (steering (mevedel-session-pending-steering session))
@@ -1290,6 +1295,7 @@ an unrelated remote operation started by redisplay or another package included
                    (if (= 1 (+ (length steering) (length follow-ups)))
                        ""
                      "s")))
+      (mevedel-session-artifacts-assert-new-mutation-authority session)
       (mevedel-pending-inputs--discard (append steering follow-ups))
       (mevedel-session-set-pending-inputs session 'steering nil)
       (mevedel-session-set-pending-inputs session 'follow-up nil)
@@ -1304,6 +1310,7 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-resume-after-failure ()
   "Clear failure pause after all failed-turn steering is resolved."
   (interactive)
+  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (failed
@@ -1316,6 +1323,7 @@ an unrelated remote operation started by redisplay or another package included
     (when failed
       (user-error "Resolve %d failed-turn steering message%s first"
                   (length failed) (if (= 1 (length failed)) "" "s")))
+    (mevedel-session-artifacts-assert-new-mutation-authority session)
     (mevedel-session-set-pending-input-failure-paused session nil)
     (mevedel-pending-inputs--refresh)
     (message "mevedel: pending-input failure pause cleared")))

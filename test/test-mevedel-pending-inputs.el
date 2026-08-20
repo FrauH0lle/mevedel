@@ -546,7 +546,35 @@
       (should (equal context-entries
                      (mevedel-session-hook-context-pending session)))
       (should
-       (mevedel-session-pending-input-failure-paused session)))))
+       (mevedel-session-pending-input-failure-paused session))))
+
+  :doc "quiescing authority leaves steering and its submission reserved"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((submission
+            (mevedel-prompt-submission-create
+             :input "steer" :display-text "steer" :session session
+             :state 'reserved))
+           (steering
+            (mevedel-session-enqueue-pending-input
+             session 'steering
+             (list :input "steer" :submission submission
+                   :state 'failed-turn)))
+           (before (copy-tree (mevedel-session-pending-steering session))))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (setf (mevedel-session-control-transfer session)
+                '(:state quiescing))
+          (with-current-buffer cockpit
+            (mevedel-cockpit-goto-id (plist-get steering :id))
+            (should-error (mevedel-pending-inputs-make-follow-up)
+                          :type 'user-error))))
+      (should (equal before
+                     (mevedel-session-pending-steering session)))
+      (should-not (mevedel-session-pending-follow-ups session))
+      (should (eq 'reserved
+                  (mevedel-prompt-submission-state submission))))))
 
 (mevedel-deftest mevedel-pending-inputs-make-steering ()
   ,test
@@ -732,7 +760,37 @@
       (should (string-match-p "1 steering and 1 follow-up" prompt))
       (should-not (mevedel-session-pending-steering session))
       (should (equal (list keep)
-                     (mevedel-session-pending-follow-ups session))))))
+                     (mevedel-session-pending-follow-ups session)))))
+
+  :doc "quiescing authority preserves marked entries and submissions"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((submission
+            (mevedel-prompt-submission-create
+             :input "delete" :display-text "delete" :session session
+             :state 'reserved))
+           (entry
+            (mevedel-session-enqueue-pending-input
+             session 'steering
+             (list :input "delete" :submission submission)))
+           (before (copy-tree (mevedel-session-pending-steering session))))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (setq mevedel-pending-inputs--marked-ids
+                  (list (plist-get entry :id)))
+            (setf (mevedel-session-control-transfer session)
+                  '(:state quiescing))
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (&rest _) t)))
+              (should-error
+               (mevedel-pending-inputs-execute-deletions)
+               :type 'user-error)))))
+      (should (equal before
+                     (mevedel-session-pending-steering session)))
+      (should (eq 'reserved
+                  (mevedel-prompt-submission-state submission))))))
 
 (mevedel-deftest mevedel-pending-inputs-resume-after-failure ()
   ,test
@@ -802,7 +860,25 @@
             (mevedel-test--with-captured-messages nil
               (mevedel-pending-inputs-resume-after-failure)))))
       (should-not
-       (mevedel-session-pending-input-failure-paused session)))))
+       (mevedel-session-pending-input-failure-paused session))))
+
+  :doc "quiescing authority keeps the failure pause latched"
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-set-pending-input-failure-paused session t)
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "later"))
+    (save-window-excursion
+      (let ((cockpit
+             (with-current-buffer view-buf
+               (mevedel-pending-inputs-open))))
+        (setf (mevedel-session-control-transfer session)
+              '(:state quiescing))
+        (with-current-buffer cockpit
+          (should-error
+           (mevedel-test--with-captured-messages nil
+             (mevedel-pending-inputs-resume-after-failure))
+           :type 'user-error))))
+    (should (mevedel-session-pending-input-failure-paused session))))
 
 (mevedel-deftest mevedel-pending-inputs-clear ()
   ,test
@@ -821,7 +897,28 @@
             (mevedel-pending-inputs-clear))))
       (should (string-match-p "1 steering and 1 follow-up" prompt))
       (should-not (mevedel-session-pending-steering session))
-      (should-not (mevedel-session-pending-follow-ups session)))))
+      (should-not (mevedel-session-pending-follow-ups session))))
+
+  :doc "quiescing authority preserves both queues"
+  (mevedel-pending-inputs-test--with-session
+    (let ((steering
+           (mevedel-session-enqueue-pending-input
+            session 'steering '(:input "steer")))
+          (follow-up
+           (mevedel-session-enqueue-pending-input
+            session 'follow-up '(:input "later"))))
+      (setf (mevedel-session-control-transfer session) '(:state quiescing))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'yes-or-no-p)
+                   (lambda (&rest _) t)))
+          (should-error
+           (mevedel-test--with-captured-messages nil
+             (mevedel-pending-inputs-clear))
+           :type 'user-error)))
+      (should (equal (list steering)
+                     (mevedel-session-pending-steering session)))
+      (should (equal (list follow-up)
+                     (mevedel-session-pending-follow-ups session))))))
 
 
 ;;
