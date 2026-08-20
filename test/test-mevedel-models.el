@@ -564,7 +564,26 @@
   (let ((mevedel-model-context-limit 40000)
         (mevedel-model-reserve-tokens 10000))
     (should (= 30000 (mevedel-model-usable-input-tokens
-                      '(:model nil :max-tokens nil))))))
+                      '(:model nil :max-tokens nil)))))
+
+  :doc "preserves caller request parameters while merging provider defaults"
+  (let* ((gptel--known-backends nil)
+         (model (make-symbol "budget-model"))
+         (backend
+          (gptel-make-openai
+            "Budget"
+            :key "test"
+            :models (list model)
+            :request-params '(:max_tokens 4096)))
+         (params (list :max_tokens 7 :custom t))
+         (before (copy-tree params)))
+    (put model :context-window 100)
+    (mevedel-model-usable-input-tokens
+     (list :backend backend
+           :model model
+           :max-tokens nil
+           :request-params params))
+    (should (equal before params))))
 
 (provide 'test-mevedel-models)
 ;;; test-mevedel-models.el ends here

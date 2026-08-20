@@ -106,7 +106,7 @@ thousands of tokens, sometimes as a float."
                    (fboundp 'gptel--model-request-params))
           (let ((params
                  (gptel--merge-plists
-                  gptel--request-params
+                  (copy-sequence gptel--request-params)
                   (gptel-backend-request-params gptel-backend)
                   (gptel--model-request-params gptel-model))))
             (or (plist-get params :max_tokens)
