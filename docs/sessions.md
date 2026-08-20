@@ -998,9 +998,11 @@ suffix. Creation rejects symbolic links at the `.worktrees/` boundary and
 revalidates resolved workspace containment immediately before Git mutation.
 
 Renaming a materialized session preserves live execution ownership. Retained
-artifact paths are retargeted immediately after the session directory moves,
-before process filters can append further output; session-relative `local://`
-addresses remain valid within the renamed session.
+client-local spool paths and target-native remote recovery paths are retargeted
+in their own domains immediately after the session directory moves, before
+process filters can append further output. Session-relative `local://`
+addresses remain valid within the renamed session even when no new output
+arrives after the move.
 
 ### Agent transcripts
 

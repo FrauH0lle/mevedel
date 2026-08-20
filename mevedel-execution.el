@@ -2800,20 +2800,53 @@ Return the number selected, including queued one-shot helpers."
   "Retarget SESSION execution artifacts moved from OLD-ROOT to NEW-ROOT.
 Return the number of live or retained records updated."
   (let ((state (and session (mevedel-session-execution-state session)))
+        (target (and session (mevedel-session-execution-target session)))
         (old-prefix (file-name-as-directory (expand-file-name old-root)))
         (new-prefix (file-name-as-directory (expand-file-name new-root)))
         (count 0))
-    (when state
-      (maphash
-       (lambda (_key record)
-         (when-let* ((path (mevedel-execution--record-spool-path record))
-                     (expanded (expand-file-name path))
-                     ((string-prefix-p old-prefix expanded)))
-           (setf (mevedel-execution--record-spool-path record)
-                 (concat new-prefix (substring expanded (length old-prefix))))
-           (cl-incf count)))
-       (mevedel-execution--state-records state)))
-    count))
+    (when target
+      (require 'mevedel-execution-target))
+    (let ((old-native-prefix
+           (and target
+                (mevedel-execution-target-remote-p target)
+                (file-name-as-directory
+                 (mevedel-execution-target-native-path target old-prefix))))
+          (new-native-prefix
+           (and target
+                (mevedel-execution-target-remote-p target)
+                (file-name-as-directory
+                 (mevedel-execution-target-native-path target new-prefix)))))
+      (when state
+        (maphash
+         (lambda (_key record)
+           (let* ((spool-path
+                   (mevedel-execution--record-spool-path record))
+                  (expanded-spool (and spool-path
+                                       (expand-file-name spool-path)))
+                  (new-spool
+                   (and expanded-spool
+                        (string-prefix-p old-prefix expanded-spool)
+                        (concat new-prefix
+                                (substring expanded-spool
+                                           (length old-prefix)))))
+                  (recoverable-path
+                   (mevedel-execution--record-recoverable-output-path record))
+                  (new-recoverable
+                   (and recoverable-path old-native-prefix
+                        (string-prefix-p old-native-prefix recoverable-path)
+                        (concat new-native-prefix
+                                (substring recoverable-path
+                                           (length old-native-prefix))))))
+             (when (or new-spool new-recoverable)
+               (when new-spool
+                 (setf (mevedel-execution--record-spool-path record)
+                       new-spool))
+               (when new-recoverable
+                 (setf (mevedel-execution--record-recoverable-output-path record)
+                       new-recoverable))
+               (cl-incf count))))
+         (mevedel-execution--state-records state)))
+      count)))
 
 (defun mevedel-execution-stop (session owner execution-id callback)
   "Stop owner-scoped yielded EXECUTION-ID and call CALLBACK at settlement."
