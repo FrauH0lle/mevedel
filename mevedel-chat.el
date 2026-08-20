@@ -533,8 +533,38 @@ directory, signal `user-error' instead of silently switching context."
                                  (file-name-as-directory
                                   (expand-file-name working-directory)))))
     (when created-p
-      (mevedel--chat-buffer-setup
-       buf workspace session-name working-directory))
+      (let (setup-complete-p)
+        (unwind-protect
+            (progn
+              (mevedel--chat-buffer-setup
+               buf workspace session-name working-directory)
+              (setq setup-complete-p t))
+          (unless setup-complete-p
+            (when (buffer-live-p buf)
+              (let ((view-buffer
+                     (buffer-local-value 'mevedel--view-buffer buf)))
+                (dolist (buffer (list buf view-buffer))
+                  (when (buffer-live-p buffer)
+                    (let* ((hooks (buffer-local-value
+                                   'kill-buffer-hook buffer))
+                           (safe-hooks
+                            (lambda ()
+                              (let ((kill-buffer-hook hooks))
+                                (run-hook-wrapped
+                                 'kill-buffer-hook
+                                 (lambda (hook)
+                                   (let ((kill-buffer-hook nil))
+                                     (ignore-errors (funcall hook)))
+                                   nil))))))
+                      (with-current-buffer buffer
+                        (let ((kill-buffer-query-functions nil)
+                              (kill-buffer-hook (list safe-hooks)))
+                          (ignore-errors (kill-buffer buffer))))))
+                  (when (buffer-live-p buffer)
+                    (with-current-buffer buffer
+                      (let ((kill-buffer-hook nil)
+                            (kill-buffer-query-functions nil))
+                        (ignore-errors (kill-buffer buffer))))))))))))
     (when (and buf working-directory (not created-p))
       (with-current-buffer buf
         (when (and (bound-and-true-p mevedel--session)

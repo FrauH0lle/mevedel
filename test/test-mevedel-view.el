@@ -294,6 +294,29 @@
         (when (file-exists-p fake-file)
           (delete-file fake-file))))))
 
+(mevedel-deftest mevedel-view--ensure ()
+  ,test
+  (test)
+  :doc "setup failure removes only the newly created partial view"
+  (let ((data-buf (generate-new-buffer " *mevedel-view-ensure-data*"))
+        (view-name " *mevedel-view-ensure-partial*"))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-view-composer-initialize)
+                     (lambda () (error "Injected view setup failure"))))
+            (should (string-match-p
+                     "Injected view setup failure"
+                     (error-message-string
+                      (should-error
+                       (mevedel-view--ensure data-buf view-name))))))
+          (should (buffer-live-p data-buf))
+          (should-not (get-buffer view-name))
+          (should-not (buffer-local-value 'mevedel--view-buffer data-buf)))
+      (when-let* ((view-buf (get-buffer view-name)))
+        (kill-buffer view-buf))
+      (when (buffer-live-p data-buf)
+        (kill-buffer data-buf)))))
+
 (mevedel-deftest mevedel-view--status-strip-button ()
   ,test
   (test)

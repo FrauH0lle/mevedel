@@ -708,9 +708,27 @@ new view buffer is created."
              (derived-name (if (string-match "\\*$" data-name)
                                (replace-match ":view*" t t data-name)
                              (concat data-name ":view")))
-             (view-buf (get-buffer-create (or view-name derived-name))))
-        (mevedel-view--setup view-buf data-buf options)
-        view-buf)))
+             (view-name (or view-name derived-name))
+             (existing (get-buffer view-name))
+             (view-buf (or existing (get-buffer-create view-name)))
+             setup-complete-p)
+        (unwind-protect
+            (progn
+              (mevedel-view--setup view-buf data-buf options)
+              (setq setup-complete-p t)
+              view-buf)
+          (when (and (not setup-complete-p)
+                     (not existing)
+                     (buffer-live-p view-buf))
+            (with-current-buffer view-buf
+              (setq mevedel--data-buffer nil)
+              (let ((kill-buffer-query-functions nil))
+                (ignore-errors (kill-buffer view-buf))))
+            (when (buffer-live-p view-buf)
+              (with-current-buffer view-buf
+                (let ((kill-buffer-hook nil)
+                      (kill-buffer-query-functions nil))
+                  (ignore-errors (kill-buffer view-buf))))))))))
 
 
 ;;
