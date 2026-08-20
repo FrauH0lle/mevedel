@@ -572,15 +572,6 @@ CWD is used for git merge-base resolution."
   (mevedel-execution-target-native-path
    (mevedel-execution-target-create cwd) path))
 
-(defun mevedel-review--default-package-file (cwd target)
-  "Return a deterministic-ish review package path for TARGET in CWD."
-  (let* ((digest (substring (secure-hash 'sha1 (prin1-to-string target))
-                            0 8))
-         (stamp (format-time-string "%Y%m%d-%H%M%S")))
-    (file-name-concat
-     (mevedel-review--package-directory cwd)
-     (format "%s-%s.md" stamp digest))))
-
 (defun mevedel-review--insert-package-output (cwd title args &optional mode)
   "Insert TITLE and output from git ARGS in CWD.
 MODE is the optional markdown fence language."
@@ -642,22 +633,35 @@ MODE is the optional markdown fence language."
 (defun mevedel-review--write-package (cwd target &optional output-file)
   "Write a review package for TARGET in CWD and return its path."
   (let* ((cwd (file-name-as-directory (expand-file-name cwd)))
-         (output-file (or output-file
-                          (mevedel-review--default-package-file cwd target))))
-    (make-directory (file-name-directory output-file) t)
-    (with-temp-file output-file
-      (insert (format "# Review package: %s\n\n"
-                      (or (plist-get target :type) "unknown")))
-      (insert (format "- Working directory: %s\n"
-                      (mevedel-review--target-native-path cwd cwd)))
-      (insert (format "- Generated: %s\n\n"
-                      (format-time-string "%Y-%m-%d %H:%M:%S %z")))
-      (pcase (plist-get target :type)
-        ('range (mevedel-review--write-range-package cwd target))
-        ('commit (mevedel-review--write-commit-package cwd target))
-        ('uncommitted (mevedel-review--write-uncommitted-package cwd))
-        (_ (user-error "Unsupported review package target: %S" target))))
-    output-file))
+         (generated-p (null output-file))
+         (directory (if output-file
+                        (file-name-directory output-file)
+                      (mevedel-review--package-directory cwd))))
+    (make-directory directory t)
+    (when generated-p
+      (setq output-file
+            (make-nearby-temp-file
+             (file-name-concat directory "review-") nil ".md")))
+    (condition-case err
+        (progn
+          (with-temp-file output-file
+            (insert (format "# Review package: %s\n\n"
+                            (or (plist-get target :type) "unknown")))
+            (insert (format "- Working directory: %s\n"
+                            (mevedel-review--target-native-path cwd cwd)))
+            (insert (format "- Generated: %s\n\n"
+                            (format-time-string "%Y-%m-%d %H:%M:%S %z")))
+            (pcase (plist-get target :type)
+              ('range (mevedel-review--write-range-package cwd target))
+              ('commit (mevedel-review--write-commit-package cwd target))
+              ('uncommitted (mevedel-review--write-uncommitted-package cwd))
+              (_ (user-error "Unsupported review package target: %S"
+                             target))))
+          output-file)
+      (error
+       (when generated-p
+         (ignore-errors (delete-file output-file)))
+       (signal (car err) (cdr err))))))
 
 (defun mevedel-review--target-package-spec (target cwd)
   "Return package target spec for TARGET in CWD, or nil."
@@ -709,42 +713,69 @@ MODE is the optional markdown fence language."
 
 (defun mevedel-review-parse-output (text)
   "Parse reviewer TEXT into a normalized review output plist.
-Falls back to storing TEXT in `:overall_explanation' when JSON parsing
-fails."
-  (or (and (stringp text)
-           (or (mevedel-review--parse-json text)
-               (let ((start (string-search "{" text))
-                     (end (cl-position ?} text :from-end t)))
-                 (and start end (< start end)
-                      (mevedel-review--parse-json
-                       (substring text start (1+ end)))))))
-      (list :findings nil
-            :overall_correctness "patch is incorrect"
-            :overall_explanation (or text "")
-            :overall_confidence_score 0.0)))
-
-(defun mevedel-review--plist-get-any (plist &rest keys)
-  "Return the first non-nil value in PLIST for KEYS."
-  (catch 'found
-    (dolist (key keys)
-      (when (plist-member plist key)
-        (throw 'found (plist-get plist key))))
-    nil))
+Falls back to storing TEXT in `:overall_explanation' when parsing or
+schema validation fails."
+  (cl-labels
+      ((plist-shape-p
+        (value)
+        (and (proper-list-p value) (cl-evenp (length value))))
+       (score-p
+        (value)
+        (and (numberp value) (<= 0 value) (<= value 1)))
+       (line-range-p
+        (value)
+        (and (plist-shape-p value)
+             (let ((start (plist-get value :start))
+                   (end (plist-get value :end)))
+               (and (fixnump start) (> start 0)
+                    (fixnump end) (>= end start)))))
+       (location-p
+        (value)
+        (and (plist-shape-p value)
+             (stringp (plist-get value :absolute_file_path))
+             (line-range-p (plist-get value :line_range))))
+       (finding-p
+        (value)
+        (and (plist-shape-p value)
+             (stringp (plist-get value :title))
+             (stringp (plist-get value :body))
+             (score-p (plist-get value :confidence_score))
+             (or (not (plist-member value :priority))
+                 (let ((priority (plist-get value :priority)))
+                   (and (fixnump priority) (<= 0 priority 3))))
+             (location-p (plist-get value :code_location))))
+       (output-p
+        (value)
+        (and (plist-shape-p value)
+             (plist-member value :findings)
+             (proper-list-p (plist-get value :findings))
+             (cl-every #'finding-p (plist-get value :findings))
+             (member (plist-get value :overall_correctness)
+                     '("patch is correct" "patch is incorrect"))
+             (stringp (plist-get value :overall_explanation))
+             (score-p (plist-get value :overall_confidence_score)))))
+    (let ((parsed
+           (and (stringp text)
+                (or (mevedel-review--parse-json text)
+                    (let ((start (string-search "{" text))
+                          (end (cl-position ?} text :from-end t)))
+                      (and start end (< start end)
+                           (mevedel-review--parse-json
+                            (substring text start (1+ end)))))))))
+      (if (output-p parsed)
+          parsed
+        (list :findings nil
+              :overall_correctness "patch is incorrect"
+              :overall_explanation (or text "")
+              :overall_confidence_score 0.0)))))
 
 (defun mevedel-review--finding-location (finding)
   "Return a compact location string for FINDING, or nil."
-  (let* ((loc (mevedel-review--plist-get-any
-               finding :code_location :codeLocation))
-         (range (and (listp loc)
-                     (mevedel-review--plist-get-any
-                      loc :line_range :lineRange)))
-         (path (and (listp loc)
-                    (mevedel-review--plist-get-any
-                     loc :absolute_file_path :absoluteFilePath)))
-         (start (and (listp range)
-                     (mevedel-review--plist-get-any range :start)))
-         (end (and (listp range)
-                   (mevedel-review--plist-get-any range :end))))
+  (let* ((loc (plist-get finding :code_location))
+         (range (plist-get loc :line_range))
+         (path (plist-get loc :absolute_file_path))
+         (start (plist-get range :start))
+         (end (plist-get range :end)))
     (when path
       (if (and start end)
           (format "%s:%s-%s" path start end)
@@ -760,9 +791,8 @@ fails."
               "Review comment:")
             lines)
       (dolist (finding findings)
-        (let* ((title (or (mevedel-review--plist-get-any finding :title)
-                          "Untitled finding"))
-               (body (or (mevedel-review--plist-get-any finding :body) ""))
+        (let* ((title (or (plist-get finding :title) "Untitled finding"))
+               (body (or (plist-get finding :body) ""))
                (loc (mevedel-review--finding-location finding)))
           (push "" lines)
           (push (format "- %s%s"
@@ -777,11 +807,9 @@ fails."
   "Render normalized review OUTPUT as user-facing text."
   (let* ((explanation (string-trim
                        (format "%s"
-                               (or (mevedel-review--plist-get-any
-                                    output :overall_explanation
-                                    :overallExplanation)
+                               (or (plist-get output :overall_explanation)
                                    ""))))
-         (findings (mevedel-review--plist-get-any output :findings))
+         (findings (plist-get output :findings))
          (findings-block (mevedel-review-format-findings-block findings))
          sections)
     (unless (string-empty-p explanation)
@@ -1092,25 +1120,35 @@ permission policy decides whether verifier validation commands may run."
           "Original report:\n\n" report))))))
 
 (defun mevedel-review--run-task
-    (prompt hint callback &optional submit-context progress-callback command)
+    (prompt hint callback &optional submit-context progress-callback command
+            cwd target)
   "Run and await the dedicated validation leaf for PROMPT and HINT.
 CALLBACK receives the normalized fork-style outcome.  SUBMIT-CONTEXT, when
 non-empty, is appended to the leaf prompt.  PROGRESS-CALLBACK, when non-nil,
 receives the retained invocation before provider dispatch.  COMMAND defaults
-to `review'."
+to `review'.  CWD and TARGET, when non-nil, create package evidence after the
+parent request has accepted the review turn."
   (let* ((command (or command 'review))
-         (session mevedel--session)
-         (message
-          (if (and (stringp submit-context)
-                   (not (string-empty-p submit-context)))
-              (concat prompt "\n\n" submit-context)
-            prompt)))
+         (session mevedel--session))
     (if (null session)
         (funcall callback
                  '(:status error :reason no-session
                    :message "Validation requires an active session"))
-      (require 'mevedel-agent-control)
-      (let (path invocation preparation-cancel cancelled-p settled-p)
+      (let* ((package-file
+              (and cwd target
+                   (mevedel-review--write-target-package cwd target)))
+             (prompt
+              (if package-file
+                  (mevedel-review--prompt-with-package
+                   prompt package-file command)
+                prompt))
+             (message
+              (if (and (stringp submit-context)
+                       (not (string-empty-p submit-context)))
+                  (concat prompt "\n\n" submit-context)
+                prompt))
+             path invocation preparation-cancel cancelled-p settled-p)
+        (require 'mevedel-agent-control)
         (cl-labels
             ((finish
               (result)
@@ -1236,7 +1274,7 @@ to `review'."
          (gptel--update-status " Ready" 'success))))))
 
 (defun mevedel-review--send-from-view
-    (display prompt hint view-buffer data-buffer &optional command)
+    (display prompt hint view-buffer data-buffer &optional command cwd target)
   "Run COMMAND task for DISPLAY, PROMPT, and HINT from VIEW-BUFFER.
 DATA-BUFFER receives the task transcript."
   (with-current-buffer view-buffer
@@ -1277,10 +1315,10 @@ DATA-BUFFER receives the task transcript."
                 (lambda (invocation)
                   (mevedel-review--insert-progress-handle
                    invocation hint command))
-                command)))))))))
+                command cwd target)))))))))
 
-(defun mevedel-review--dispatch (prompt hint &optional cwd command)
-  "Dispatch COMMAND with PROMPT, HINT, and CWD."
+(defun mevedel-review--dispatch (prompt hint &optional cwd command target)
+  "Dispatch COMMAND with PROMPT, HINT, CWD, and optional package TARGET."
   (let ((command (or command 'review)))
     (mevedel-review--ensure-dispatch-deps command)
     (let* ((data-buffer (or (mevedel-review--current-data-buffer)
@@ -1304,7 +1342,7 @@ DATA-BUFFER receives the task transcript."
       (if view-buffer
           (progn
             (mevedel-review--send-from-view
-             display prompt hint view-buffer data-buffer command)
+             display prompt hint view-buffer data-buffer command cwd target)
             'mevedel-view-sent)
         (message "mevedel: running %s for %s" command-name hint)
         (mevedel-review--record-direct-turn display data-buffer)
@@ -1317,7 +1355,7 @@ DATA-BUFFER receives the task transcript."
            (lambda (invocation)
              (mevedel-review--insert-progress-handle
               invocation hint command))
-           command))))))
+           command cwd target))))))
 
 (defun mevedel-review--target-from-instructions
     (instructions cwd command)
@@ -1333,14 +1371,9 @@ DATA-BUFFER receives the task transcript."
          (cwd (mevedel-review--cwd))
          (target (mevedel-review--target-from-instructions
                   instructions cwd command))
-         (prompt+hint (mevedel-review--prompt-and-hint command target cwd))
-         (package-file (mevedel-review--write-target-package cwd target))
-         (prompt (if package-file
-                     (mevedel-review--prompt-with-package
-                      (car prompt+hint) package-file command)
-                   (car prompt+hint))))
+         (prompt+hint (mevedel-review--prompt-and-hint command target cwd)))
     (mevedel-review--dispatch
-     prompt (cdr prompt+hint) cwd command)))
+     (car prompt+hint) (cdr prompt+hint) cwd command target)))
 
 ;;;###autoload
 (defun mevedel-review (&optional instructions)
