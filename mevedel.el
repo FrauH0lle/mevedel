@@ -234,6 +234,10 @@
 (declare-function mevedel-tool-repair-uninstall-shape-adapter
                   "mevedel-tool-repair" ())
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-install "mevedel-transport" ())
+(declare-function mevedel-transport-uninstall "mevedel-transport" ())
+
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-install-slash-command "mevedel-worktree" ())
 (declare-function mevedel-worktree-uninstall-slash-command
@@ -679,6 +683,8 @@ always prompt for the session name."
   "Register `mevedel' presets, tools, and hooks."
   (interactive)
 
+  (mevedel-transport-install)
+
   ;; Define custom tools
   (mevedel-tools-register)
 
@@ -760,6 +766,7 @@ always prompt for the session name."
 (defun mevedel-uninstall ()
   "Remove `mevedel' hooks and cleanup."
   (interactive)
+  (mevedel-transport-uninstall)
   (mevedel-execution-teardown-all)
   ;; Remove tools
   (setf (alist-get "mevedel" gptel--known-tools nil 'remove #'equal) nil)

@@ -13,6 +13,41 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(mevedel-deftest mevedel-transport--detach ()
+  ,test
+  (test)
+  :doc "cancels deferred work on TRAMP unload and reinstalls on reload"
+  (let ((mevedel-transport-retry-seconds 5)
+        tramp-features
+        timer)
+    (unwind-protect
+        (progn
+          (require 'tramp)
+          (setq tramp-features
+                (cl-remove-if-not
+                 (lambda (feature)
+                   (string-prefix-p "tramp" (symbol-name feature)))
+                 features))
+          (mevedel-transport-install)
+          (let ((mevedel-transport--depth 1))
+            (mevedel-transport-run-when-idle
+             'reload-test "/ssh:user@host:/srv/x" #'ignore))
+          (setq timer (gethash 'reload-test mevedel-transport--pending))
+          (should (timerp timer))
+          (unload-feature 'tramp 'force)
+          (should-not (gethash 'reload-test mevedel-transport--pending))
+          (should-not (memq timer timer-list))
+          (require 'tramp)
+          (should (advice-member-p #'mevedel-transport--handler-advice
+                                   'tramp-file-name-handler))
+          (should (memq #'mevedel-transport--detach tramp-unload-hook)))
+      (mevedel-transport-cancel-pending)
+      (unless (featurep 'tramp)
+        (require 'tramp))
+      (dolist (feature (reverse tramp-features))
+        (require feature nil t))
+      (mevedel-transport-install))))
+
 (mevedel-deftest mevedel-transport-nested-p ()
   ,test
   (test)
