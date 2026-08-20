@@ -232,7 +232,9 @@ Plugin management:
 Plugin mutations refresh the current session's visible plugin skills and
 hook state immediately when possible; users should not need to start a new
 session after enabling, disabling, installing, updating, or removing a
-plugin. Starting or resuming an interactive session reports enabled plugins
+plugin. Cockpit mutations perform that refresh in the cockpit's owning chat
+buffer, never in the sessionless table buffer. Starting or resuming an
+interactive session reports enabled plugins
 whose hooks still need new consent; hooks remain withheld until consent is
 reviewed per plugin.
 
