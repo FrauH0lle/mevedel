@@ -22,9 +22,9 @@
 (declare-function mevedel--implementation-permission-mode-restore
                   "mevedel-chat" ())
 
-;; `mevedel-compact'
-(declare-function mevedel--compact-record-token-baseline
-                  "mevedel-compact" (fsm))
+;; `mevedel-compact-estimation'
+(declare-function mevedel-compact-estimation-record-token-baseline
+                  "mevedel-compact-estimation" (fsm))
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-dispatch-after-turn "mevedel-goal" (fsm))
@@ -365,6 +365,7 @@ command.
 The whole chain defers as one unit rather than step by step, because its order
 is load-bearing: `mevedel--turn-end-request\=' follows the autosave, and
 inverting them drops the turn's file-history checkpoints."
+  (require 'mevedel-compact-estimation)
   (mevedel--turn-commit fsm)
   (mevedel--defer-turn-steps
    fsm
@@ -373,7 +374,7 @@ inverting them drops the turn's file-history checkpoints."
          (lambda (machine)
            (mevedel--turn-settle-plan-handoff machine 'success))
          #'mevedel-goal-settle-turn
-         #'mevedel--compact-record-token-baseline
+         #'mevedel-compact-estimation-record-token-baseline
          #'mevedel--turn-autosave
          (lambda (machine)
            (mevedel--run-turn-terminal-hook machine 'Stop 'completed))
@@ -392,6 +393,7 @@ inverting them drops the turn's file-history checkpoints."
 
 Deferred for the same reason as `mevedel--complete-turn\=': the failure chain
 also autosaves, and it reaches here from the same process sentinel."
+  (require 'mevedel-compact-estimation)
   (mevedel--turn-commit fsm)
   (mevedel--defer-turn-steps
    fsm
@@ -400,7 +402,7 @@ also autosaves, and it reaches here from the same process sentinel."
             (mevedel--turn-record-settlement machine status))
           (lambda (machine)
             (mevedel--turn-settle-plan-handoff machine status))
-          #'mevedel--compact-record-token-baseline
+          #'mevedel-compact-estimation-record-token-baseline
           (lambda (machine)
             (mevedel-goal-settle-failure machine status)))
     (and (eq status 'error)

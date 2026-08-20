@@ -67,6 +67,9 @@
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
 
+;; `mevedel-compact-run'
+(defvar mevedel-compact-run-in-flight)
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
                   "mevedel-execution-target" (workspace-root))
@@ -116,7 +119,6 @@
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(defvar mevedel--compaction-in-flight)
 (defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
@@ -955,7 +957,7 @@ permission policy decides whether verifier validation commands may run."
   (with-current-buffer data-buffer
     (when (bound-and-true-p mevedel--current-request)
       (user-error "A request is already active -- wait or abort first"))
-    (when (bound-and-true-p mevedel--compaction-in-flight)
+    (when (bound-and-true-p mevedel-compact-run-in-flight)
       (user-error "Compaction in progress"))
     (when (bound-and-true-p mevedel-session--read-only-mode)
       (user-error "Session is open read-only (another host holds the lock)"))))

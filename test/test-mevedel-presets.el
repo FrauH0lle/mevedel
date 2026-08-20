@@ -89,7 +89,7 @@
     ;; WAIT entry should have deferred inject handler prepended
     (should (memq #'mevedel-tools--handle-deferred-inject
                   (cdr (assq 'WAIT result))))
-    (should (memq #'mevedel--compact-record-token-baseline
+    (should (memq #'mevedel-compact-estimation-record-token-baseline
                   (cdr (assq 'TPRE result))))
     ;; DONE exposes one canonical named transaction; failure cleanup stays
     ;; on ERRS and ABRT without installing the successful entry point.

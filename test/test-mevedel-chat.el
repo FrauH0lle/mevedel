@@ -2369,7 +2369,7 @@
 			  (session (mevedel-session-create "main" workspace))
 			  (outcomes nil))
 		     (setq-local mevedel--session session)
-		     (setq-local mevedel--compaction-cancel
+                     (setq-local mevedel-compact-run-cancel
 		                 (lambda () (push '(compaction . aborted) outcomes)))
 		     (mevedel-request-begin session)
 		     (setf (mevedel-session-permission-queue session)

@@ -132,8 +132,10 @@
 ;; `mevedel-compact'
 (declare-function mevedel--compact-handle-agent-wait
                   "mevedel-compact" (fsm))
-(declare-function mevedel--compact-record-token-baseline
-                  "mevedel-compact" (fsm))
+
+;; `mevedel-compact-estimation'
+(declare-function mevedel-compact-estimation-record-token-baseline
+                  "mevedel-compact-estimation" (fsm))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload
@@ -305,7 +307,7 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
      ,#'mevedel-agent-exec--handle-wait-activity
      ,#'mevedel--compact-handle-agent-wait)
     (TPRE ,#'gptel--handle-token-usage
-          ,#'mevedel--compact-record-token-baseline
+          ,#'mevedel-compact-estimation-record-token-baseline
           ,#'gptel--handle-pre-tool
           ,#'gptel--fsm-transition)
     (TOOL ,#'gptel--update-tool-call
@@ -314,13 +316,13 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
     (TRET ,#'gptel--handle-post-tool
           ,#'gptel--handle-tool-result
           ,#'mevedel-agent-exec--handle-tret-save)
-    (DONE ,#'mevedel--compact-record-token-baseline
+    (DONE ,#'mevedel-compact-estimation-record-token-baseline
           ,#'mevedel-tools--handle-agent-turn-terminal
           ,#'mevedel-agent-exec--handle-done-save)
-    (ABRT ,#'mevedel--compact-record-token-baseline
+    (ABRT ,#'mevedel-compact-estimation-record-token-baseline
           ,#'mevedel-tools--handle-agent-turn-terminal
           ,#'mevedel-agent-exec--handle-abort-save)
-    (ERRS ,#'mevedel--compact-record-token-baseline
+    (ERRS ,#'mevedel-compact-estimation-record-token-baseline
           ,#'mevedel-tools--handle-agent-turn-terminal
           ,#'mevedel-agent-exec--handle-errs-save))
   "Handler table for the mevedel sub-agent FSM.
@@ -448,6 +450,7 @@ it. Terminal events (t, nil, abort) skip the forward step.
 
 Returns the spawned FSM."
   (require 'mevedel-agent-conversation)
+  (require 'mevedel-compact-estimation)
   (unless (mevedel-agent-invocation-p invocation)
     (error "Invalid sub-agent invocation"))
   (unless (buffer-live-p agent-buffer)

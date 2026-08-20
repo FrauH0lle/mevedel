@@ -12,6 +12,8 @@
 (require 'mevedel-agent-exec)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-agents)
+(require 'mevedel-compact-evidence)
+(require 'mevedel-compact-target)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-tools)
@@ -1357,7 +1359,9 @@
        :type 'user-error))))
 
 (mevedel-deftest mevedel-agent-control-spawn
-  (:quiet t :after-each (mevedel-workspace-clear-registry))
+  (:quiet t
+   :before-each (mevedel-tools-register)
+   :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
   :doc "commits a real retained conversation while stubbing only provider start"
@@ -1707,7 +1711,7 @@
           (require 'mevedel-agent-runtime)
           (require 'mevedel-context-summary)
           (cl-letf
-              (((symbol-function 'mevedel-compact-summary-context-evidence)
+              (((symbol-function 'mevedel-compact-evidence-summary-context-evidence)
                 (lambda (tool-use-id)
                   (should (equal "call_agent" tool-use-id))
                   "Frozen parent evidence"))
@@ -1803,15 +1807,15 @@
               (with-current-buffer child-buffer
                 (basic-save-buffer)
                 (let ((target
-                       (mevedel--compact-agent-target followup)))
+                       (mevedel-compact-target-agent-target followup)))
                   (should (string-match-p
                            "task-background"
                            (plist-get
-                            (mevedel--compact-evidence-selection
+                            (mevedel-compact-evidence-select
                              target (point-max) t)
                             :content)))
-                  (mevedel--compact-agent-apply
-                   target "Child continuation summary." nil nil nil)
+                  (mevedel-compact-target-call
+                   target :apply "Child continuation summary." nil nil nil)
                   (should-not (string-match-p "<task-background>"
                                               (buffer-string)))
                   (should (string-match-p "Child continuation summary"
@@ -1837,7 +1841,7 @@
           (require 'mevedel-agent-runtime)
           (require 'mevedel-context-summary)
           (cl-letf
-              (((symbol-function 'mevedel-compact-summary-context-evidence)
+              (((symbol-function 'mevedel-compact-evidence-summary-context-evidence)
                 (lambda (_) "Frozen evidence"))
                ((symbol-function 'mevedel-agent-runtime-prepare-task)
                 (lambda (_agent _description _message _path callback &rest _)
@@ -1874,7 +1878,7 @@
           (require 'mevedel-agent-runtime)
           (require 'mevedel-context-summary)
           (cl-letf
-              (((symbol-function 'mevedel-compact-summary-context-evidence)
+              (((symbol-function 'mevedel-compact-evidence-summary-context-evidence)
                 (lambda (_) "Frozen evidence"))
                ((symbol-function 'mevedel-agent-runtime-prepare-task)
                 (lambda (_agent _description _message _path callback &rest _)
@@ -1911,7 +1915,7 @@
         (progn
           (require 'mevedel-context-summary)
           (cl-letf
-            (((symbol-function 'mevedel-compact-summary-context-evidence)
+            (((symbol-function 'mevedel-compact-evidence-summary-context-evidence)
               (lambda (_) "Frozen evidence"))
              ((symbol-function 'mevedel-agent-runtime-prepare-task)
               (lambda (_agent _description _message _path callback &rest _)

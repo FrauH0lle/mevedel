@@ -13,6 +13,8 @@
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
 (require 'mevedel-compact)
+(require 'mevedel-compact-evidence)
+(require 'mevedel-compact-target)
 (require 'mevedel-goal)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-registry)
@@ -401,10 +403,10 @@
               (funcall (car callbacks) "Initial child result.")
               (with-current-buffer frozen-buffer
                 (let* ((target
-                        (mevedel--compact-agent-target initial-invocation))
+                       (mevedel-compact-target-agent-target initial-invocation))
                        (archive
-                        (mevedel--compact-agent-apply
-                         target "Child work compacted." nil nil nil)))
+                        (mevedel-compact-target-call
+                         target :apply "Child work compacted." nil nil nil)))
                   (should (file-exists-p archive))
                   (should (string-match-p "Child work compacted"
                                           (buffer-string)))
@@ -483,15 +485,16 @@
                     (put-text-property start (point) 'gptel 'response)))
                 (funcall (car callbacks) "Follow-up child result.")
                 (with-current-buffer frozen-buffer
-                  (let ((snapshot (mevedel-compact-context-snapshot 1)))
+                  (let ((snapshot (mevedel-compact-evidence-context-snapshot 1)))
                     (should (string-match-p "\\* Agent Task: frozen" snapshot))
                     (should (string-match-p "Child work compacted" snapshot))
                     (should (string-match-p "Follow-up child task" snapshot))
                     (should (string-match-p "Follow-up child result" snapshot)))
-                  (let* ((target (mevedel--compact-agent-target followup))
+                  (let* ((target (mevedel-compact-target-agent-target followup))
                          (archive
-                          (mevedel--compact-agent-apply
-                           target "Follow-up work compacted." nil nil nil)))
+                          (mevedel-compact-target-call
+                           target :apply "Follow-up work compacted."
+                           nil nil nil)))
                     (should (file-exists-p archive))
                     (should (string-match-p "Initial child task"
                                             (buffer-string)))

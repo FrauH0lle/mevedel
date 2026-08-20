@@ -62,11 +62,11 @@
 (declare-function mevedel-agent-resolve-role "mevedel-agents" (role))
 (declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
 
-;; `mevedel-compact'
-(declare-function mevedel-compact-context-snapshot
-                  "mevedel-compact" (context))
-(declare-function mevedel-compact-summary-context-evidence
-                  "mevedel-compact" (tool-use-id))
+;; `mevedel-compact-evidence'
+(declare-function mevedel-compact-evidence-context-snapshot
+                  "mevedel-compact-evidence" (context))
+(declare-function mevedel-compact-evidence-summary-context-evidence
+                  "mevedel-compact-evidence" (tool-use-id))
 
 ;; `mevedel-context-summary'
 (declare-function mevedel-context-summary-generate
@@ -1179,13 +1179,13 @@ idempotent cancellation thunk for the unpublished preparation transaction."
                (start-provider result)))))
       (condition-case err
           (progn
-            (require 'mevedel-compact)
+            (require 'mevedel-compact-evidence)
             (if (eq context 'summary)
                 (setq summary-evidence
-                      (mevedel-compact-summary-context-evidence
+                      (mevedel-compact-evidence-summary-context-evidence
                        parent-tool-use-id))
               (setq context-snapshot
-                    (mevedel-compact-context-snapshot context)))
+                    (mevedel-compact-evidence-context-snapshot context)))
             (require 'mevedel-agent-runtime)
             (mevedel-agent-runtime-prepare-task
              resolved-agent (or description task-name) message

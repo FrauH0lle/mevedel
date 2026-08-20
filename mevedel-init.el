@@ -21,28 +21,32 @@
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
 
-;; `mevedel-utilities'
-(declare-function mevedel--clear-user-turn-gptel-properties
-                  "mevedel-utilities" (start end))
-
-;; `mevedel-workspace'
-(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-
 ;; `mevedel-chat'
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 
-;; `mevedel-view-composer'
-(declare-function mevedel-view--forward-input
-                  "mevedel-view-composer" (input &rest args))
-(declare-function mevedel-view-history-add "mevedel-view-history" (text))
+;; `mevedel-compact-run'
+(defvar mevedel-compact-run-in-flight)
 
 ;; `mevedel-structs'
-(defvar mevedel--compaction-in-flight)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-utilities'
+(declare-function mevedel--clear-user-turn-gptel-properties
+                  "mevedel-utilities" (start end))
+
+;; `mevedel-view-composer'
+(declare-function mevedel-view--forward-input
+                  "mevedel-view-composer" (input &rest args))
+
+;; `mevedel-view-history'
+(declare-function mevedel-view-history-add "mevedel-view-history" (text))
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 
 ;;
@@ -139,7 +143,7 @@
   "Signal if the current data buffer cannot send an init turn."
   (when (bound-and-true-p mevedel--current-request)
     (user-error "A request is already active -- wait or abort first"))
-  (when (bound-and-true-p mevedel--compaction-in-flight)
+  (when (bound-and-true-p mevedel-compact-run-in-flight)
     (user-error "Compaction in progress"))
   (when (bound-and-true-p mevedel-session--read-only-mode)
     (user-error "Session is open read-only (another host holds the lock)")))

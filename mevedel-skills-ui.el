@@ -64,8 +64,11 @@
                   "mevedel-cockpit" (&optional no-error))
 
 ;; `mevedel-compact'
-(declare-function mevedel--estimate-tokens "mevedel-compact" ())
 (declare-function mevedel-compact "mevedel-compact" (&optional aggressive instructions))
+
+;; `mevedel-compact-estimation'
+(declare-function mevedel-compact-estimation-estimate-tokens
+                  "mevedel-compact-estimation" ())
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-stop-all-user
@@ -253,8 +256,9 @@
 
 (defun mevedel-cmd--tokens (_args)
   "Print the estimated token usage of the current chat buffer."
+  (require 'mevedel-compact-estimation)
   (message "Estimated tokens in this buffer: %d"
-           (mevedel--estimate-tokens)))
+           (mevedel-compact-estimation-estimate-tokens)))
 
 (defun mevedel-skills--open-menu-or-message (area format-string &rest args)
   "Open cockpit AREA, or message FORMAT-STRING with ARGS."

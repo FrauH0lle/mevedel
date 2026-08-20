@@ -50,6 +50,9 @@
 (declare-function mevedel-collaboration--safe-accepted-prompt
                   "mevedel-collaboration" (data-buffer))
 
+;; `mevedel-compact-run'
+(defvar mevedel-compact-run-in-flight)
+
 ;; `mevedel-directive'
 (declare-function mevedel-directive-actions "mevedel-directive" (directive))
 
@@ -289,7 +292,6 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation nil)
-(defvar mevedel--compaction-in-flight nil)
 (defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
@@ -1975,6 +1977,7 @@ Extracts text from the input zone, plans all bound `$skill' mentions,
 renders the original text in the history region, and dispatches either
 one coherent request or one leading fork command.  Slash commands retain
 their local dispatch path."
+  (require 'mevedel-compact-run)
   (require 'mevedel-session-artifacts)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-fork)
@@ -1992,7 +1995,7 @@ their local dispatch path."
     (user-error "A prompt hook is still running -- wait or abort first"))
   (when mevedel-view--pending-skill-submission
     (user-error "Skill preparation is still running -- wait or abort first"))
-  (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
+  (when (buffer-local-value 'mevedel-compact-run-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")
     (user-error "Compaction in progress"))
   (when (buffer-local-value 'mevedel-session--read-only-mode
@@ -2312,8 +2315,9 @@ after the forwarded prompt, where the LLM's response will begin."
 DISPLAY-TEXT is shown in the view instead of INPUT when non-nil.  SUBMISSION
 supplies hook context, audits, and commit ownership.  MODEL-INPUT, when non-nil,
 replaces INPUT only in the temporary request prompt."
+  (require 'mevedel-compact-run)
   (mevedel-view--ensure-interactive-chat-view)
-  (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
+  (when (buffer-local-value 'mevedel-compact-run-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")
     (user-error "Compaction in progress"))
   (mevedel-session-durability-with-transaction
