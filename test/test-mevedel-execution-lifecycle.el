@@ -358,7 +358,59 @@
                          (mevedel-execution--record-spool-path record))))
       (remhash "exec-000001" (mevedel-execution--state-records state))
       (delete-directory old-root t)
-      (delete-directory new-root t))))
+      (delete-directory new-root t)))
+  :doc "retargets target-native remote output without another publication"
+  (let* ((host "execution-relocate")
+         (local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-remote-artifact-" t)))
+         (remote-root (format "/mevedelmock:%s:%s" host local-root))
+         (client-spool (make-temp-file "mevedel-client-spool-"))
+         session state record)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (setq session (test-mevedel-execution--session remote-root)
+                state (mevedel-execution--state-for-session session))
+          (let* ((target (mevedel-session-execution-target session))
+                 (old-root (mevedel-session-save-path session))
+                 (new-root
+                  (file-name-as-directory
+                   (file-name-concat
+                    (file-name-directory (directory-file-name old-root))
+                    "renamed")))
+                 (relative "tool-results/executions/exec-000001.log")
+                 (old-native
+                  (file-name-concat
+                   (mevedel-execution-target-native-path target old-root)
+                   relative))
+                 (new-native
+                  (file-name-concat
+                   (mevedel-execution-target-native-path target new-root)
+                   relative)))
+            (setq record
+                  (mevedel-execution--record-create
+                   :execution-id "exec-000001"
+                   :origin (mevedel-execution--origin-create
+                            :owner "agent-a" :session session)
+                   :recoverable-output-path old-native
+                   :spool-path client-spool))
+            (puthash "exec-000001" record
+                     (mevedel-execution--state-records state))
+            (setf (mevedel-session-save-path session) new-root)
+            (should (= 1 (mevedel-execution-relocate-artifacts
+                          session old-root new-root)))
+            (should (equal client-spool
+                           (mevedel-execution--record-spool-path record)))
+            (should (equal new-native
+                           (mevedel-execution--record-recoverable-output-path
+                            record)))))
+      (when (and state record)
+        (remhash "exec-000001" (mevedel-execution--state-records state)))
+      (when (file-exists-p client-spool)
+        (delete-file client-spool))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
+      (mevedel-workspace-clear-registry))))
 
 (provide 'test-mevedel-execution-lifecycle)
 ;;; test-mevedel-execution-lifecycle.el ends here
