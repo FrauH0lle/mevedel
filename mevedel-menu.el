@@ -203,22 +203,25 @@
 		  "mevedel-view-composer" ())
 (declare-function mevedel-view-send "mevedel-view-composer" ())
 
-;; `mevedel-view'
-(declare-function mevedel-view-next-display "mevedel-view" ())
-(declare-function mevedel-view-next-user-query "mevedel-view" ())
-(declare-function mevedel-view-previous-display "mevedel-view" ())
-(declare-function mevedel-view-previous-user-query "mevedel-view" ())
-(declare-function mevedel-view-toggle-section "mevedel-view" ())
+;; `mevedel-view-disclosure'
+(declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 
 ;; `mevedel-view-render'
-(declare-function mevedel-view-go-to-segment "mevedel-view-render"
-                  (&optional number))
-(declare-function mevedel-view-next-segment "mevedel-view-render" ())
-(declare-function mevedel-view-previous-segment "mevedel-view-render" ())
+(declare-function mevedel-view-next-display "mevedel-view-render" ())
+(declare-function mevedel-view-next-user-query "mevedel-view-render" ())
+(declare-function mevedel-view-previous-display "mevedel-view-render" ())
+(declare-function mevedel-view-previous-user-query "mevedel-view-render" ())
 (declare-function mevedel-view-rewind-at-point "mevedel-view-render" ())
 (declare-function mevedel-view-switch-conversation-variant-at-point
                   "mevedel-view-render" ())
-(defvar mevedel-view--historical-segment-number)
+
+;; `mevedel-view-segments'
+(declare-function mevedel-view-go-to-segment "mevedel-view-segments"
+                  (&optional number))
+(declare-function mevedel-view-next-segment "mevedel-view-segments" ())
+(declare-function mevedel-view-previous-segment "mevedel-view-segments" ())
+(declare-function mevedel-view-segments-current-number
+                  "mevedel-view-segments" ())
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-status-summary "mevedel-worktree"
@@ -559,13 +562,14 @@ unavailable until it changes."
 
 (defun mevedel-menu--navigate-description ()
   "Return the navigation surface header with the projected segment."
+  (require 'mevedel-view-segments)
   (let* ((context (mevedel-menu--context))
          (session (mevedel-cockpit-context-session context))
          (view-buffer (mevedel-cockpit-context-view-buffer context))
          (total (or (and session (mevedel-session-current-segment session)) 1))
          (shown (and view-buffer
-                     (buffer-local-value
-                      'mevedel-view--historical-segment-number view-buffer))))
+                     (with-current-buffer view-buffer
+                       (mevedel-view-segments-current-number)))))
     (concat
      (mevedel-menu--face "Navigate" 'transient-heading)
      "  "

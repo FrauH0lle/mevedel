@@ -374,11 +374,15 @@ conflicting mutations sequential. It does not encode provider pricing.
 stream advice. `mevedel-view-stream.el` owns incremental-render scheduling,
 pending-tool live rows, and foreground request-progress state, while
 `mevedel-execution-transcript.el` owns durable execution render data and
-compaction archive reconciliation. View Stream delegates transcript rendering
-to `mevedel-view-render.el`; `mevedel-view-composer.el` owns the editable input,
-submission hooks, and send/fork dispatch, and `mevedel-pending-inputs.el` owns
-queued follow-ups. `mevedel-view.el` coordinates the view mode, zones, and
-session lifecycle. The authoritative text remains in the gptel data buffer.
+compaction archive reconciliation. View Stream delegates transcript projection
+to `mevedel-view-render.el`; `mevedel-view-disclosure.el` owns source-backed
+fold state and actions, `mevedel-view-composer.el` owns the editable input,
+submission hooks, and send/fork dispatch, `mevedel-view-segments.el` owns
+ephemeral archived-segment projection, and `mevedel-pending-inputs.el` owns
+queued follow-ups. Durable segment bytes remain in
+`mevedel-session-artifacts.el`. `mevedel-view.el` coordinates the view mode,
+zones, and session lifecycle. The authoritative text remains in the gptel data
+buffer.
 
 `mevedel-mention-bindings.el` owns atomic mention identity as validated text
 properties on ordinary prompt strings. Completion or programmatic insertion

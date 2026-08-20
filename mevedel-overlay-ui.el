@@ -168,9 +168,6 @@
                   "mevedel-utilities"
                   (source-color-name tint-color-name &optional intensity))
 
-;; `mevedel-view'
-(declare-function mevedel-view--full-rerender "mevedel-view" ())
-
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-marker-position
                   "mevedel-view-composer" ())
@@ -178,8 +175,11 @@
                   "mevedel-view-composer"
                   (directive action &optional attempt-index workspace))
 
+;; `mevedel-view-disclosure'
+(declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
+
 ;; `mevedel-view-render'
-(declare-function mevedel-view-toggle-section "mevedel-view-render" ())
+(declare-function mevedel-view--full-rerender "mevedel-view-render" ())
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))

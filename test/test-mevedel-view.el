@@ -173,36 +173,31 @@
 (mevedel-deftest mevedel-view--flush-scheduled-render
   (:doc "keeps historical projection fixed while refreshing live chrome")
   (mevedel-view-test--with-buffers
-    (let ((historical (generate-new-buffer " *test-historical*"))
-          (full-count 0)
+    (let ((full-count 0)
           (incremental-count 0)
           (chrome-count 0))
-      (unwind-protect
-          (progn
-            (with-current-buffer view-buf
-              (setq-local mevedel-view--historical-segment-number 1
-                          mevedel-view--historical-segment-buffer historical
-                          mevedel-view--pending-render-kind 'full
-                          mevedel-view--pending-render-data-buffer data-buf))
-            (cl-letf
-                (((symbol-function 'mevedel-view--full-rerender)
-                  (lambda (&rest _) (cl-incf full-count)))
-                 ((symbol-function 'mevedel-view--render-stream-update)
-                  (lambda (&rest _) (cl-incf incremental-count)))
-                 ((symbol-function 'mevedel-view--render-status)
-                  (lambda (&rest _) (cl-incf chrome-count)))
-                 ((symbol-function 'mevedel-view--interaction-rebuild)
-                  (lambda () (cl-incf chrome-count)))
-                 ((symbol-function 'mevedel-view--ensure-request-progress)
-                  (lambda (&rest _) (cl-incf chrome-count))))
-              (mevedel-view--flush-scheduled-render view-buf))
-            (with-current-buffer view-buf
-              (should-not mevedel-view--pending-render-kind))
-            (should (= 0 full-count))
-            (should (= 0 incremental-count))
-            (should (= 3 chrome-count)))
-        (when (buffer-live-p historical)
-          (kill-buffer historical))))))
+      (with-current-buffer view-buf
+        (setq-local mevedel-view--pending-render-kind 'full
+                    mevedel-view--pending-render-data-buffer data-buf))
+      (cl-letf
+          (((symbol-function 'mevedel-view-historical-segment-p)
+            (lambda () t))
+           ((symbol-function 'mevedel-view--full-rerender)
+            (lambda (&rest _) (cl-incf full-count)))
+           ((symbol-function 'mevedel-view--render-stream-update)
+            (lambda (&rest _) (cl-incf incremental-count)))
+           ((symbol-function 'mevedel-view--render-status)
+            (lambda (&rest _) (cl-incf chrome-count)))
+           ((symbol-function 'mevedel-view--interaction-rebuild)
+            (lambda () (cl-incf chrome-count)))
+           ((symbol-function 'mevedel-view--ensure-request-progress)
+            (lambda (&rest _) (cl-incf chrome-count))))
+        (mevedel-view--flush-scheduled-render view-buf))
+      (with-current-buffer view-buf
+        (should-not mevedel-view--pending-render-kind))
+      (should (= 0 full-count))
+      (should (= 0 incremental-count))
+      (should (= 3 chrome-count)))))
 
 (mevedel-deftest mevedel-view--setup ()
   ,test

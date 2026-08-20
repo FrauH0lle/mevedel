@@ -12,6 +12,9 @@
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-decision-reason "mevedel-hooks" (decision))
 
+;; `mevedel-structs'
+(defvar mevedel--data-buffer)
+
 ;; `mevedel-tool-repair'
 (declare-function mevedel-tool-repair-format-path
                   "mevedel-tool-repair" (path))
@@ -29,20 +32,22 @@
 (declare-function mevedel-transcript-audit-spans
                   "mevedel-transcript-audit" (text &optional type))
 
+;; `mevedel-view-disclosure'
+(declare-function mevedel-view-disclosure-data-substring
+                  "mevedel-view-disclosure"
+                  (data-buf start end &optional properties))
+(declare-function mevedel-view-disclosure-record-state
+                  "mevedel-view-disclosure" (source vtype collapsed))
+(declare-function mevedel-view-disclosure-section-bounds
+                  "mevedel-view-disclosure" ())
+(declare-function mevedel-view-disclosure-source-range
+                  "mevedel-view-disclosure" (data-buffer start end))
+(declare-function mevedel-view-disclosure-state-key
+                  "mevedel-view-disclosure" (source vtype))
+
 ;; `mevedel-view-render'
-(declare-function mevedel-view--add-display-region-properties
+(declare-function mevedel-view-render-add-display-properties
                   "mevedel-view-render" (start end &optional default-vtype))
-(declare-function mevedel-view--data-substring
-                  "mevedel-view-render"
-                  (data-buffer start end &optional properties))
-(declare-function mevedel-view--record-source-collapse-state
-                  "mevedel-view-render" (source type collapsed))
-(declare-function mevedel-view--section-bounds "mevedel-view-render" ())
-(declare-function mevedel-view--source-collapse-state-key
-                  "mevedel-view-render" (source kind))
-(declare-function mevedel-view--source-range
-                  "mevedel-view-render" (data-buffer start end))
-(defvar mevedel--data-buffer)
 
 (defun mevedel-view--hook-audit-records-from-text (text &optional type)
   "Return hook audit records parsed from TEXT.
@@ -162,7 +167,7 @@ When EXPANDED is non-nil, include ordered handler details."
               (push (append
                      (plist-get span :record)
                      (list :source
-                           (mevedel-view--source-range
+                           (mevedel-view-disclosure-source-range
                             data-buf
                             (+ start (plist-get span :start))
                             (+ start (plist-get span :end)))))
@@ -293,12 +298,14 @@ EXPANDED means insert the disclosure body expanded."
          mevedel-view-collapsed ,(not expanded)
          mevedel-view-hook-audit-record ,record
          mevedel-view-source ,source
-         mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
+         mevedel-view-source-key ,(mevedel-view-disclosure-state-key
                                    source 'hook-audit))))))
 
-(defun mevedel-view--toggle-hook-audit ()
+(defun mevedel-view-audit-toggle-hook-audit ()
   "Toggle a hook audit disclosure."
-  (let* ((bounds (mevedel-view--section-bounds))
+  (require 'mevedel-view-disclosure)
+  (require 'mevedel-view-render)
+  (let* ((bounds (mevedel-view-disclosure-section-bounds))
          (source (and bounds
                       (get-text-property
                        (car bounds) 'mevedel-view-source)))
@@ -308,7 +315,7 @@ EXPANDED means insert the disclosure body expanded."
                      (and source
                           (buffer-live-p mevedel--data-buffer)
                           (car (mevedel-view--hook-audit-records-from-text
-                                (mevedel-view--data-substring
+                                (mevedel-view-disclosure-data-substring
                                  mevedel--data-buffer
                                  (car source)
                                  (cdr source)))))))
@@ -327,12 +334,12 @@ EXPANDED means insert the disclosure body expanded."
         (goto-char start)
         (delete-region start end)
         (mevedel-view--insert-hook-audit-block record source collapsed)
-        (mevedel-view--record-source-collapse-state source 'hook-audit
-                                                     (not collapsed))
+        (mevedel-view-disclosure-record-state
+         source 'hook-audit (not collapsed))
         (when turn-id
           (put-text-property start (point)
                              'mevedel-view-turn-id turn-id))
-        (mevedel-view--add-display-region-properties
+        (mevedel-view-render-add-display-properties
          start (point) 'hook-audit)))))
 
 (provide 'mevedel-view-audit)

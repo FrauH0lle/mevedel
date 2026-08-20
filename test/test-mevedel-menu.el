@@ -738,10 +738,11 @@
   (mevedel-menu-test--with-buffers
     (setf (mevedel-session-current-segment session) 9)
     (with-current-buffer view-buf
-      (setq-local mevedel-view--historical-segment-number 4)
-      (should (string= "Navigate  main · segment 4/9"
-                       (substring-no-properties
-                        (mevedel-menu--navigate-description)))))))
+      (cl-letf (((symbol-function 'mevedel-view-segments-current-number)
+                 (lambda () 4)))
+        (should (string= "Navigate  main · segment 4/9"
+                         (substring-no-properties
+                          (mevedel-menu--navigate-description))))))))
 
 (mevedel-deftest mevedel-menu--session-info-text ()
   ,test
@@ -1361,12 +1362,12 @@
   (mevedel-menu-test--with-buffers
     (let (called)
       (with-current-buffer view-buf
-        (setq-local mevedel-view--historical-segment-number 1
-                    mevedel-view--historical-segment-buffer data-buf)
-        (should-error
-         (mevedel-menu--call-live-tip-data
-          (lambda () (setq called t)))
-         :type 'user-error))
+        (cl-letf (((symbol-function 'mevedel-view-historical-segment-p)
+                   (lambda () t)))
+          (should-error
+           (mevedel-menu--call-live-tip-data
+            (lambda () (setq called t)))
+           :type 'user-error)))
       (should-not called))))
 
 (mevedel-deftest mevedel-menu--compact ()

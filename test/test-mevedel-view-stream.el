@@ -936,7 +936,7 @@
         (set-marker mevedel-view--status-marker nil)
         (set-marker mevedel-view--interaction-marker (point))
         (set-marker mevedel-view--input-marker (point))
-        (mevedel-view--set-in-flight-turn-start (point-min))
+        (mevedel-view-stream-set-in-flight-turn-start (point-min))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
@@ -974,7 +974,7 @@
         (set-marker mevedel-view--status-marker nil)
         (set-marker mevedel-view--interaction-marker (point))
         (set-marker mevedel-view--input-marker (point))
-        (mevedel-view--set-in-flight-turn-start history-start)
+        (mevedel-view-stream-set-in-flight-turn-start history-start)
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
@@ -1012,7 +1012,7 @@
         (set-marker mevedel-view--status-marker (point-min))
         (set-marker mevedel-view--interaction-marker (point))
         (set-marker mevedel-view--input-marker (point))
-        (mevedel-view--set-in-flight-turn-start (point-min))
+        (mevedel-view-stream-set-in-flight-turn-start (point-min))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
@@ -1232,7 +1232,7 @@
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker nil)
           (set-marker mevedel-view--input-marker (point-min))
-          (mevedel-view--set-in-flight-turn-start (point-min))
+          (mevedel-view-stream-set-in-flight-turn-start (point-min))
           (setq mevedel-view--data-turn-start
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))

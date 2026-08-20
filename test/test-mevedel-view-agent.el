@@ -764,7 +764,7 @@
                 (start (point-min)))
             (goto-char start)
             (mevedel-view--insert-rendered-tool rendering source)
-            (mevedel-view--add-display-region-properties
+            (mevedel-view-render-add-display-properties
              start (point) 'agent-handle))
           (goto-char (point-min))
           (search-forward "Sandbox:")

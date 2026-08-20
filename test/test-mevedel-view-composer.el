@@ -628,6 +628,34 @@
                    #'tab-next)))))
       (tab-bar-mode (if was-enabled 1 -1)))))
 
+(mevedel-deftest mevedel-view-composer-session-fork-armed-p ()
+  ,test
+  (test)
+  :doc "reports only the current view's armed fork"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (should-not (mevedel-view-composer-session-fork-armed-p))
+      (setq-local mevedel-view--armed-session-fork
+                  '(:fork-point-id "stable"))
+      (should (mevedel-view-composer-session-fork-armed-p)))))
+
+(mevedel-deftest mevedel-view-composer-set-historical-visible ()
+  ,test
+  (test)
+  :doc "hides and restores the exact multiline composer draft"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "> exact draft\nsecond line")
+      (mevedel-view-composer-set-historical-visible nil)
+      (should buffer-read-only)
+      (should (invisible-p (mevedel-view--input-start)))
+      (mevedel-view-composer-set-historical-visible t)
+      (should-not buffer-read-only)
+      (should-not (invisible-p (mevedel-view--input-start)))
+      (should (equal "> exact draft\nsecond line"
+                     (mevedel-view--input-text))))))
+
 (mevedel-deftest mevedel-view-arm-conversation-fork ()
   ,test
   (test)
@@ -649,9 +677,9 @@
         (goto-char (mevedel-view--input-start))
         (insert "> existing\nmultiline draft")
         (goto-char (point-min))
-        (setq-local mevedel-view--historical-segment-number 1
-                    mevedel-view--historical-segment-buffer data-buf)
-        (mevedel-view--set-historical-composer-visible nil)
+        (setq-local mevedel-view-segments--number 1
+                    mevedel-view-segments--buffer data-buf)
+        (mevedel-view-composer-set-historical-visible nil)
         (cl-letf
             (((symbol-function 'mevedel-view-fork-point-at-point)
               (lambda () target))
@@ -857,8 +885,8 @@
   :doc "refuses live sends and local commands unless a model fork is armed"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (setq-local mevedel-view--historical-segment-number 1
-                  mevedel-view--historical-segment-buffer data-buf)
+      (setq-local mevedel-view-segments--number 1
+                  mevedel-view-segments--buffer data-buf)
       (goto-char (mevedel-view--input-start))
       (insert "live-tip draft")
       (let ((error (should-error (mevedel-view-send) :type 'user-error)))
