@@ -23,7 +23,7 @@
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-completion-metadata
-                  "mevedel-resource" (context))
+                  "mevedel-resource" (context &optional scheme))
 (declare-function mevedel-resource-encode-component
                   "mevedel-resource" (value))
 (defvar mevedel-resource-supported-schemes)
@@ -92,7 +92,9 @@ name without treating an encoded slash as a path separator."
 
 TAIL is the path below ADDRESS-PREFIX.  Only directory metadata is
 consulted; no candidate file is opened."
-  (when (and root (file-directory-p root))
+  (when (and root
+             (not (file-remote-p root))
+             (file-directory-p root))
     (let* ((trailing (string-suffix-p "/" tail))
            (parts (if (string-empty-p tail)
                       nil
@@ -315,7 +317,7 @@ History candidates are limited to records with retained conversations."
       (let* ((scheme (intern (match-string 1 token)))
              (tail (match-string 2 token))
              (metadata (mevedel-resource-completion-metadata
-                        (list :session session))))
+                        (list :session session) scheme)))
         (setq entries
               (pcase scheme
                 ((or 'local 'artifact)

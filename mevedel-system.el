@@ -32,7 +32,7 @@
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-completion-metadata
-                  "mevedel-resource" (context))
+                  "mevedel-resource" (context &optional scheme))
 
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-prompt-section
