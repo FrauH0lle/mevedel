@@ -143,13 +143,15 @@ lines.")
 (defvar-local mevedel-buddy--pending-old-text nil
   "Whole lines about to be replaced by the change currently being made.")
 
-(defvar-local mevedel-buddy--scope-key-cache nil
-  "This buffer's cached scope key.
+(defvar-local mevedel-buddy--scope-cache nil
+  "This buffer's cached (IDENTITY . SCOPE-KEY).
 
 `project-current' caches its answer only when it finds a project, so a
 buffer outside one would re-walk the directory tree to the filesystem
-root on every keystroke.  The answer cannot change without the buffer
-changing file, so it is computed once.")
+root on every keystroke.  IDENTITY contains the buffer name, visited
+file, and `default-directory' used to derive the key.")
+
+(put 'mevedel-buddy--scope-cache 'permanent-local t)
 
 (defun mevedel-buddy--scope-key ()
   "Return the current buffer's scope key.
@@ -157,10 +159,27 @@ changing file, so it is computed once.")
 Buffers in a project share that project's key so edits made across
 several of its files are reviewed together.  A buffer outside any
 project is its own scope."
-  (or mevedel-buddy--scope-key-cache
-      (setq mevedel-buddy--scope-key-cache
-            (or (cdr (ignore-errors (mevedel-workspace--project-workspace)))
-                (concat "buffer:" (buffer-name))))))
+  (let ((identity (list (buffer-name) buffer-file-name default-directory)))
+    (if (equal identity (car-safe mevedel-buddy--scope-cache))
+        (cdr mevedel-buddy--scope-cache)
+      (when mevedel-buddy--scope-cache
+        (let ((reschedule
+               (and (timerp mevedel-buddy--idle-timer)
+                    (memq #'mevedel-buddy--after-change
+                          after-change-functions))))
+          (mevedel-buddy-forget-buffer
+           (car (car mevedel-buddy--scope-cache)))
+          (mevedel-buddy--cancel-timer)
+          (when reschedule
+            (mevedel-buddy--schedule))))
+      (let ((scope-key
+             (or (cdr (ignore-errors
+                        (mevedel-workspace--project-workspace)))
+                 (concat "buffer:" (buffer-name)))))
+        (setq mevedel-buddy--scope-cache (cons identity scope-key))
+        scope-key))))
+
+(put 'mevedel-buddy--scope-key 'permanent-local-hook t)
 
 (defun mevedel-buddy--changes-for-scope (scope-key)
   "Return the recorded changes for SCOPE-KEY, most recent first."
@@ -300,12 +319,15 @@ shown a diff nobody made."
 
 (defun mevedel-buddy--on-kill-buffer ()
   "Forget the current buffer's recorded changes as it is killed."
+  (when mevedel-buddy--scope-cache
+    (mevedel-buddy-forget-buffer (car (car mevedel-buddy--scope-cache))))
   (mevedel-buddy-forget-buffer (buffer-name)))
 
 (defun mevedel-buddy--track-buffer ()
   "Start recording changes in the current buffer."
   (add-hook 'before-change-functions #'mevedel-buddy--before-change nil t)
   (add-hook 'after-change-functions #'mevedel-buddy--after-change nil t)
+  (add-hook 'after-set-visited-file-name-hook #'mevedel-buddy--scope-key nil t)
   (add-hook 'kill-buffer-hook #'mevedel-buddy--on-kill-buffer nil t))
 
 (defun mevedel-buddy--untrack-buffer ()
@@ -317,8 +339,12 @@ uniquified after a second file of the same name is visited -- would have
 those offsets replayed against unrelated content."
   (remove-hook 'before-change-functions #'mevedel-buddy--before-change t)
   (remove-hook 'after-change-functions #'mevedel-buddy--after-change t)
+  (remove-hook 'after-set-visited-file-name-hook #'mevedel-buddy--scope-key t)
   (remove-hook 'kill-buffer-hook #'mevedel-buddy--on-kill-buffer t)
-  (mevedel-buddy-forget-buffer (buffer-name)))
+  (when mevedel-buddy--scope-cache
+    (mevedel-buddy-forget-buffer (car (car mevedel-buddy--scope-cache))))
+  (mevedel-buddy-forget-buffer (buffer-name))
+  (setq mevedel-buddy--scope-cache nil))
 
 
 ;;
@@ -781,6 +807,8 @@ to happen."
 
 (defvar-local mevedel-buddy--idle-timer nil
   "Idle timer that will review this buffer's scope, or nil.")
+
+(put 'mevedel-buddy--idle-timer 'permanent-local t)
 
 (defvar mevedel-buddy--last-review (make-hash-table :test #'equal)
   "Hash table mapping scope keys to when they were last reviewed.")

@@ -51,6 +51,8 @@
 
 (defun mevedel-test--add-note (buffer line note &optional severity)
   "Add NOTE at LINE of BUFFER with SEVERITY and return its id."
+  (mevedel-buddy-note-capture-markers
+   (list (cons (buffer-name buffer) (list line))))
   (mevedel-buddy-note-add (buffer-name buffer) line note
                           (or severity "significant")))
 
@@ -96,11 +98,49 @@
                (mevedel-buddy-note-add (buffer-name buf) 1 "nope" "trivial")))
       (should (null (mevedel-test--note-overlays buf)))))
 
-  :doc "`mevedel-buddy-note-add' clamps a line past the end of the buffer"
-  (let* ((buf (mevedel-test--note-buffer "note-clamp" "one\ntwo\n"))
-         (id (mevedel-test--add-note buf 99 "past the end")))
-    (should (integerp id))
-    (should (= 1 (length (mevedel-test--note-overlays buf))))))
+  :doc "`mevedel-buddy-note-add' refuses a line the review was not shown"
+  (let ((buf (mevedel-test--note-buffer "note-unshown" "one\ntwo\nthree\n")))
+    (mevedel-buddy-note-capture-markers '(("note-unshown" . (2))))
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (insert "zero\n"))
+    (should (string-match-p
+             "not shown"
+             (mevedel-buddy-note-add
+              (buffer-name buf) 1 "wrong line" "significant")))
+    (should-not (mevedel-test--note-overlays buf)))
+
+  :doc "`mevedel-buddy-note-add' refuses nonpositive and overlarge lines"
+  (let ((buf (mevedel-test--note-buffer "note-range" "one\ntwo\n")))
+    (mevedel-buddy-note-capture-markers '(("note-range" . (1 2))))
+    (dolist (line '(0 -1 99))
+      (should (string-match-p
+               "not shown"
+               (mevedel-buddy-note-add
+                (buffer-name buf) line "wrong line" "significant"))))
+    (should-not (mevedel-test--note-overlays buf)))
+
+  :doc "`mevedel-buddy-note-add' refuses a released marker"
+  (let ((buf (mevedel-test--note-buffer "note-released" "one\n")))
+    (mevedel-buddy-note-capture-markers '(("note-released" . (1))))
+    (mevedel-buddy-note-release-markers)
+    (should (string-match-p
+             "not shown"
+             (mevedel-buddy-note-add
+              (buffer-name buf) 1 "too late" "significant")))
+    (should-not (mevedel-test--note-overlays buf)))
+
+  :doc "`mevedel-buddy-note-add' rejects a captured buffer name reused elsewhere"
+  (let ((original (mevedel-test--note-buffer "note-reused" "original\n")))
+    (mevedel-buddy-note-capture-markers '(("note-reused" . (1))))
+    (with-current-buffer original
+      (rename-buffer "note-renamed"))
+    (let ((replacement (mevedel-test--note-buffer "note-reused" "replacement\n")))
+      (should (string-match-p
+               "not shown"
+               (mevedel-buddy-note-add
+                (buffer-name replacement) 1 "wrong buffer" "significant")))
+      (should-not (mevedel-test--note-overlays replacement)))))
 
 (mevedel-deftest mevedel-buddy-note-update
   (:after-each (mevedel-test--note-cleanup))
@@ -367,12 +407,56 @@
     (with-current-buffer buf
       (goto-char (point-min))
       (insert "zero\n"))
-    (mevedel-test--add-note buf 3 "about three")
+    (mevedel-buddy-note-add (buffer-name buf) 3 "about three" "significant")
     (with-current-buffer buf
       (should (equal "three"
                      (buffer-substring-no-properties
                       (overlay-start (car (mevedel-test--note-overlays buf)))
                       (overlay-end (car (mevedel-test--note-overlays buf))))))))
+
+  :doc "a note follows its text when insertion starts exactly at its marker"
+  (let ((buf (mevedel-test--note-buffer "marker-boundary" "one\ntwo\nthree\n")))
+    (mevedel-buddy-note-capture-markers '(("marker-boundary" . (2))))
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (forward-line 1)
+      (insert "inserted\n"))
+    (mevedel-buddy-note-add
+     (buffer-name buf) 2 "about two" "significant")
+    (with-current-buffer buf
+      (should (equal "two"
+                     (buffer-substring-no-properties
+                      (overlay-start (car (mevedel-test--note-overlays buf)))
+                      (overlay-end (car (mevedel-test--note-overlays buf))))))))
+
+  :doc "a note stays on a shown line when that whole line is replaced"
+  (let ((buf (mevedel-test--note-buffer "marker-replaced" "one\ntwo\nthree\n")))
+    (mevedel-buddy-note-capture-markers '(("marker-replaced" . (2))))
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (forward-line 1)
+      (delete-region (point) (line-beginning-position 2))
+      (insert "changed\n"))
+    (mevedel-buddy-note-add
+     (buffer-name buf) 2 "about the replacement" "significant")
+    (with-current-buffer buf
+      (should (equal "changed"
+                     (buffer-substring-no-properties
+                      (overlay-start (car (mevedel-test--note-overlays buf)))
+                      (overlay-end (car (mevedel-test--note-overlays buf))))))))
+
+  :doc "a note is rejected when its shown line was deleted"
+  (let ((buf (mevedel-test--note-buffer "marker-deleted" "one\ntwo\nthree\n")))
+    (mevedel-buddy-note-capture-markers '(("marker-deleted" . (2))))
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (forward-line 1)
+      (delete-region (point) (line-beginning-position 2)))
+    (should (string-match-p
+             "not shown"
+             (mevedel-buddy-note-add
+              (buffer-name buf) 2 "about two" "significant")))
+    (should-not (mevedel-test--note-overlays buf)))
 
   :doc "`mevedel-buddy-note-capture-markers' marks only the lines it is given"
   (let ((_buf (mevedel-test--note-buffer "marker-few" "one\ntwo\nthree\n")))
@@ -383,7 +467,8 @@
   :doc "`mevedel-buddy-note-release-markers' unsets every marker"
   (let ((_buf (mevedel-test--note-buffer "marker-release" "one\ntwo\n")))
     (mevedel-buddy-note-capture-markers (list (cons "marker-release" '(1 2))))
-    (let ((markers (mapcar #'cdr
+    (let ((markers (mapcan (lambda (entry)
+                             (list (nth 1 entry) (nth 2 entry)))
                            (cdr (assoc "marker-release"
                                        mevedel-buddy-note--markers)))))
       (mevedel-buddy-note-release-markers)

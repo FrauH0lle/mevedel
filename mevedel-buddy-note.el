@@ -114,12 +114,11 @@ still arrive after a review is abandoned or times out, and no scope
 must not then mean every buffer in Emacs.")
 
 (defvar mevedel-buddy-note--markers nil
-  "Alist of (BUFFER-NAME . MARKER-ALIST) captured for the running review.
+  "Alist of captured line boundaries for the running review.
 
-Each MARKER-ALIST maps a line number, as it stood when the request was
-sent, to a marker at that line.  Markers move with the buffer, so a
-note still lands on the text it was written about when the user has
-typed while the request was in flight.")
+Each buffer entry maps a shown line number to advancing start and
+non-advancing end markers.  The boundaries distinguish insertion and
+replacement from deletion.")
 
 (defun mevedel-buddy-note--severities ()
   "Return the accepted severity names, least to most severe."
@@ -177,7 +176,11 @@ make typing lag for as long as the request runs."
                                 (lambda (line)
                                   (goto-char (point-min))
                                   (forward-line (1- (max 1 line)))
-                                  (cons line (copy-marker (point))))
+                                  (let ((start (point))
+                                        (end (line-beginning-position 2)))
+                                    (list line
+                                          (copy-marker start t)
+                                          (copy-marker end))))
                                 (cdr entry))))))))
                shown-lines))))
 
@@ -185,26 +188,26 @@ make typing lag for as long as the request runs."
   "Drop the captured line markers so they stop tracking edits."
   (dolist (entry mevedel-buddy-note--markers)
     (dolist (pair (cdr entry))
-      (set-marker (cdr pair) nil)))
+      (set-marker (nth 1 pair) nil)
+      (set-marker (nth 2 pair) nil)))
   (setq mevedel-buddy-note--markers nil))
 
 (defun mevedel-buddy-note--position (buffer line)
   "Return the position in BUFFER for LINE as the model saw it.
 
-Resolves through the markers captured for the running review when one
-covers LINE, and falls back to counting lines when none does."
-  (or (when-let* ((markers (cdr (assoc (buffer-name buffer)
-                                       mevedel-buddy-note--markers)))
-                  (marker (cdr (assq line markers)))
-                  ((marker-buffer marker)))
-        (marker-position marker))
-      (with-current-buffer buffer
-        (save-excursion
-          (save-restriction
-            (widen)
-            (goto-char (point-min))
-            (forward-line (1- (max 1 line)))
-            (line-beginning-position))))))
+Return nil unless a live marker captured for the running review covers
+LINE.  Raw line counting is not annotation authority."
+  (when-let* ((markers (cdr (assoc (buffer-name buffer)
+                                   mevedel-buddy-note--markers)))
+              (entry (and (integerp line) (assq line markers)))
+              (start (nth 1 entry))
+              (end (nth 2 entry))
+              ((eq (marker-buffer start) buffer))
+              ((eq (marker-buffer end) buffer))
+              (start-pos (marker-position start))
+              (end-pos (marker-position end))
+              ((/= start-pos end-pos)))
+    (min start-pos end-pos)))
 
 
 ;;
@@ -363,29 +366,31 @@ not leave records behind that name it."
   "Attach NOTE to LINE of BUFFER-NAME at SEVERITY.
 
 Return the new note id, or an explanatory string the model can act on."
-  (cond
-   ((not (mevedel-buddy-note--in-scope-p buffer-name))
-    (format "Buffer %s is not in the review scope" buffer-name))
-   ((not (buffer-live-p (get-buffer buffer-name)))
-    (format "Unknown buffer: %s" buffer-name))
-   ((not (member severity (mevedel-buddy-note--severities)))
-    (format "Unknown severity: %s" severity))
-   (t
-    (let* ((buffer (get-buffer buffer-name))
-           (id mevedel-buddy-note--next-id)
-           (overlay (mevedel-buddy-note--make-overlay
-                     buffer line note severity)))
-      (setq mevedel-buddy-note--next-id (1+ id))
-      (push (list :id id
-                  :buffer buffer-name
-                  :line line
-                  :note note
-                  :severity severity
-                  :status 'active
-                  :review-needed nil
-                  :overlay overlay)
-            mevedel-buddy-note--notes)
-      id))))
+  (let ((buffer (get-buffer buffer-name)))
+    (cond
+     ((not (mevedel-buddy-note--in-scope-p buffer-name))
+      (format "Buffer %s is not in the review scope" buffer-name))
+     ((not (buffer-live-p buffer))
+      (format "Unknown buffer: %s" buffer-name))
+     ((not (mevedel-buddy-note--position buffer line))
+      (format "Line %s was not shown in this review" line))
+     ((not (member severity (mevedel-buddy-note--severities)))
+      (format "Unknown severity: %s" severity))
+     (t
+      (let* ((id mevedel-buddy-note--next-id)
+             (overlay (mevedel-buddy-note--make-overlay
+                       buffer line note severity)))
+        (setq mevedel-buddy-note--next-id (1+ id))
+        (push (list :id id
+                    :buffer buffer-name
+                    :line line
+                    :note note
+                    :severity severity
+                    :status 'active
+                    :review-needed nil
+                    :overlay overlay)
+              mevedel-buddy-note--notes)
+        id)))))
 
 (defun mevedel-buddy-note-update (id note)
   "Replace the text of note ID with NOTE, leaving it where it is."
