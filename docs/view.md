@@ -914,7 +914,9 @@ existing draft, reorders entries within their category, converts entries
 between steering and follow-up, marks and deletes selected entries, and clears
 all pending input with `C-c C-q`. Saving an edit updates the entry in place;
 cancelling restores the prior draft. Closing the cockpit resumes eligible
-delivery.
+delivery. Queue and recovery actions recheck session mutation authority before
+restoring reserved submission context or changing session state, so stale,
+foreign, and quiescing surfaces fail closed.
 
 Permission, Ask, Plan, and other user-input overlays do not disable either
 queue. An unresolved interaction merely postpones steering injection and
