@@ -12,16 +12,17 @@
   (require 'cl-lib)
   (require 'mevedel-structs))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-artifact-present-p
-                  "mevedel-session-persistence" (session logical))
-(declare-function mevedel-session-persistence-ensure-files
-		  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence-publish-text
-                  "mevedel-session-persistence"
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifact-present-p
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-ensure-files
+                  "mevedel-session-artifacts" (session buffer))
+(declare-function mevedel-session-artifacts-publish-text
+                  "mevedel-session-artifacts"
                   (session path content &optional coding))
-(declare-function mevedel-session-persistence-read-artifact
-                  "mevedel-session-persistence"
+(declare-function mevedel-session-artifacts-read-artifact
+                  "mevedel-session-artifacts"
                   (session logical &optional committed-only))
 
 ;; `mevedel-structs'
@@ -153,13 +154,15 @@ below `local/plans/'."
   "Return the session-local current plan path for SESSION.
 Materialize the session directory when needed.  BUFFER defaults to the
 current data buffer."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-structs)
   (let* ((session (or session mevedel--session))
          (buffer (or buffer (current-buffer)))
          (save-path (or (mevedel-session-save-path session)
                         (progn
-                          (require 'mevedel-session-persistence)
-                          (mevedel-session-persistence-ensure-files
+                          (mevedel-session-artifacts-ensure-files
                            session buffer)))))
     (unless save-path
       (error "Could not materialize session for plan"))
@@ -183,8 +186,10 @@ path names the logical artifact, never an immutable publication file."
 (defun mevedel-plan--read-path (session relative)
   "Return SESSION artifact RELATIVE decoded as UTF-8 text."
   (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (decode-coding-string
-   (mevedel-session-persistence-read-artifact session relative)
+   (mevedel-session-artifacts-read-artifact session relative)
    'utf-8-unix))
 
 (defun mevedel-plan-read-artifact (session artifact)
@@ -217,14 +222,16 @@ path names the logical artifact, never an immutable publication file."
   "Write PLAN-MARKDOWN to SESSION's current plan artifact for BUFFER.
 RELATIVE-PATH overrides the default path below SESSION's save directory.
 Return an explicit artifact plist containing `:path' and `:hash'."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-structs)
   (let* ((relative-path (or relative-path
                             mevedel-plan--relative-current-path))
          (path (mevedel-plan-current-path session buffer relative-path))
          (plan-markdown (mevedel-plan-validate plan-markdown))
          (hash (mevedel-plan-hash plan-markdown)))
-    (require 'mevedel-session-persistence)
-    (mevedel-session-persistence-publish-text
+    (mevedel-session-artifacts-publish-text
      session path plan-markdown 'utf-8-unix)
     (let* ((turn (or (mevedel-session-turn-count session) 0))
            (previous (mevedel-session-plan-metadata session))
@@ -251,6 +258,9 @@ CURRENT-ARTIFACT is the plist returned by `mevedel-plan-write-current'.
 RELATIVE-PATH names a deterministic immutable destination when non-nil.
 SOURCE-SESSION owns CURRENT-ARTIFACT and defaults to SESSION.
 Return a plist containing `:path' and `:hash'."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-structs)
   (let* ((source-session (or source-session session))
          (plan-relative (plist-get current-artifact :path))
@@ -264,13 +274,13 @@ Return a plist containing `:path' and `:hash'."
             (file-name-concat dir (format "accepted-%s.md" timestamp))))
          (index 1))
       (unless relative-path
-        (while (mevedel-session-persistence-artifact-present-p
+        (while (mevedel-session-artifacts-artifact-present-p
                 session archive-relative)
           (setq archive-relative
                 (file-name-concat dir (format "accepted-%s-%d.md"
                                               timestamp index)))
           (setq index (1+ index))))
-      (if (mevedel-session-persistence-artifact-present-p
+      (if (mevedel-session-artifacts-artifact-present-p
            session archive-relative)
           (unless (and relative-path
                        (equal body
@@ -279,8 +289,7 @@ Return a plist containing `:path' and `:hash'."
                                (list :path archive-relative
                                      :hash plan-hash))))
             (error "Accepted plan artifact already exists with different content"))
-        (require 'mevedel-session-persistence)
-        (mevedel-session-persistence-publish-text
+        (mevedel-session-artifacts-publish-text
          session
          (mevedel-plan-artifact-path
           session (list :path archive-relative))
@@ -289,23 +298,28 @@ Return a plist containing `:path' and `:hash'."
 
 (defun mevedel-plan-current-body (&optional session)
   "Return SESSION's current plan artifact contents, or nil."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-utilities)
   (when-let* ((session (or session mevedel--session)))
     (let* ((metadata (mevedel-session-plan-metadata session))
            (relative (or (plist-get metadata :path)
                          mevedel-plan--relative-current-path)))
-      (when (mevedel-session-persistence-artifact-present-p session relative)
+      (when (mevedel-session-artifacts-artifact-present-p session relative)
         (mevedel--normalize-message-text
          (mevedel-plan--read-path session relative))))))
 
 (defun mevedel-plan-current-exists-p (&optional session)
   "Return non-nil when SESSION has a current plan artifact on disk."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when-let* ((session (or session mevedel--session)))
     (let* ((metadata (mevedel-session-plan-metadata session))
            (relative (or (plist-get metadata :path)
                          mevedel-plan--relative-current-path)))
-      (require 'mevedel-session-persistence)
-      (mevedel-session-persistence-artifact-present-p session relative))))
+      (mevedel-session-artifacts-artifact-present-p session relative))))
 
 (defun mevedel-plan-mark-accepted
     (session current-artifact accepted-artifact &optional skip-verification)

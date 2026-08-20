@@ -370,7 +370,7 @@
   (with-temp-buffer
     (org-mode)
     (insert ":PROPERTIES:\n:GPTEL_BOUNDS: nil\n:END:\n\n" text)
-    (mevedel-session-persistence--stabilize-gptel-bounds)
+    (mevedel-session-artifacts-stabilize-gptel-bounds)
     (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun test-mevedel-execution--restored-audit-records (text type)
@@ -603,7 +603,7 @@
                        path 'execution-archive))))
           (require 'mevedel-session-persistence)
           (cl-letf (((symbol-function
-                      'mevedel-session-persistence--write-current-buffer-atomically)
+                      'mevedel-session-persistence-write-current-buffer-atomically)
                      (lambda (&rest _) (error "Publication failed")))
                     ((symbol-function 'display-warning) #'ignore))
             (mevedel-view-stream-handle-execution-event
@@ -826,8 +826,8 @@
              (list
               :path sidecar
               :content
-              (mevedel-session-persistence--printed-value
-               (mevedel-session-persistence--build-sidecar
+              (mevedel-session-artifacts-printed-value
+               (mevedel-session-artifacts-build-sidecar
                 session root-buffer))
               :commit-marker t))))
           (write-region "poisoned fixed cache" nil transcript nil 'silent)
@@ -843,7 +843,7 @@
            buffer event render-data)
           (let ((published
                  (decode-coding-string
-                  (mevedel-session-persistence-read-artifact
+                  (mevedel-session-artifacts-read-artifact
                    session "agents/remote-call.chat.org" t)
                   'utf-8-unix)))
             (should-not (string-search "poisoned" published))

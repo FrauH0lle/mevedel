@@ -20,9 +20,6 @@
 (require 'mevedel-skills-core)
 (require 'mevedel-turn)
 
-(declare-function mevedel-session-persistence-assert-new-mutation-authority
-                  "mevedel-session-persistence" (session))
-
 ;; `gptel'
 (declare-function gptel--update-status "ext:gptel" (msg &optional face))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
@@ -117,6 +114,10 @@
                   "mevedel-resource" (operation address context))
 (declare-function mevedel-resource-skill-digest
                   "mevedel-resource" (source-file))
+
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority
+                  "mevedel-session-artifacts" (session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-current-origin "mevedel-structs" ())
@@ -2452,6 +2453,9 @@ fork skill suppresses the main `gptel-send'; it records the retained
 agent's final result as the assistant side of that turn and
 runs the normal post-response hooks so the view and persistence layers
 observe the completed response."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-utilities)
   (require 'mevedel-transcript)
   (let* ((render-data (plist-get outcome :render-data))
@@ -2467,8 +2471,7 @@ observe the completed response."
                    result)))
     (unless (bound-and-true-p mevedel--current-request)
       (when (bound-and-true-p mevedel--session)
-        (require 'mevedel-session-persistence)
-        (mevedel-session-persistence-assert-new-mutation-authority
+        (mevedel-session-artifacts-assert-new-mutation-authority
          mevedel--session)
         (mevedel-request-begin mevedel--session
                                (and (boundp 'mevedel--current-directive-uuid)

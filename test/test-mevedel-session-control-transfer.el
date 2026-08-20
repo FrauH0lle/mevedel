@@ -204,7 +204,7 @@
               (lambda (&rest _) (list :head head :sidecar "/sidecar")))
              ((symbol-function 'mevedel-session-persistence-load-sidecar)
               (lambda (&rest _) '(:version 1)))
-             ((symbol-function 'mevedel-session-persistence-deserialize)
+             ((symbol-function 'mevedel-session-codec-deserialize)
               (lambda (&rest _)
                 (list :session (mevedel-session--create :name "follow"))))
              ((symbol-function
@@ -342,20 +342,20 @@
                 (lambda (&rest _) '(:head "new" :sidecar "/sidecar")))
                ((symbol-function 'mevedel-session-persistence-load-sidecar)
                 (lambda (&rest _) '(:version 1)))
-               ((symbol-function 'mevedel-session-persistence-deserialize)
+               ((symbol-function 'mevedel-session-codec-deserialize)
                 (lambda (&rest _)
                   (list
                    :session
                    (mevedel-session--create
                     :name "requester" :working-directory root
                     :turn-count 9 :current-segment 2))))
-               ((symbol-function 'mevedel-session-persistence-read-artifact)
+               ((symbol-function 'mevedel-session-artifacts-read-artifact)
                 (lambda (&rest _)
                   (if (eq failure 'artifact)
                       (error "Injected artifact failure")
                     "new transcript")))
                ((symbol-function
-                 'mevedel-session-persistence--check-target-incarnation)
+                 'mevedel-session-artifacts-check-target-incarnation)
                 (lambda (candidate &rest _)
                   (when (eq failure 'target)
                     (setf
@@ -368,7 +368,7 @@
                   (when (eq failure 'transcript)
                     (error "Injected transcript failure"))))
                ((symbol-function
-                 'mevedel-session-persistence--load-instructions)
+                 'mevedel-session-artifacts-load-instructions)
                 (lambda (&rest _)
                   (if (eq failure 'instructions)
                       (progn

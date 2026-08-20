@@ -82,16 +82,17 @@
 (declare-function mevedel--restore-file-instructions
                   "mevedel-persistence" (file &optional message))
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifact-present-p
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-read-artifact
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
+
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-logical-path-p
                   "mevedel-session-publication" (path))
-
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-artifact-present-p
-                  "mevedel-session-persistence" (session logical))
-(declare-function mevedel-session-persistence-read-artifact
-                  "mevedel-session-persistence"
-                  (session logical &optional committed-only))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
@@ -668,6 +669,9 @@ See `mevedel-mention-handlers' for the INFO plist shape.
 The INFO :captures list for this handler is (WHOLE PATH START END), where
 PATH is either a bare path or a braced token, and START and END are
 optional strings from the `#L<start>[-<end>]' suffix."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((path (mevedel-mentions--file-path-from-captures info))
          (bound-path (plist-get (plist-get info :binding) :path))
          (captures (plist-get info :captures))
@@ -702,8 +706,7 @@ optional strings from the `#L<start>[-<end>]' suffix."
             (and (mevedel-session-publication-logical-path-p
                   artifact-logical)
                  (progn
-                   (require 'mevedel-session-persistence)
-                   (mevedel-session-persistence-artifact-present-p
+                   (mevedel-session-artifacts-artifact-present-p
                     session artifact-logical)))))
          (workspace-root (plist-get info :workspace-root))
          (chat-buffer (or (plist-get info :chat-buffer) (current-buffer)))
@@ -801,7 +804,7 @@ gitignore-filtered):\n\n```\n%s\n```%s"
          ((> (if artifact-logical
                  (string-bytes
                   (setq artifact-bytes
-                        (mevedel-session-persistence-read-artifact
+                        (mevedel-session-artifacts-read-artifact
                          session artifact-logical)))
                (file-attribute-size (file-attributes expanded)))
              mevedel-tool-fs--media-max-bytes)

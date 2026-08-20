@@ -445,7 +445,7 @@
               (setq-local mevedel--session session))
             (with-current-buffer view-buf
               (cl-letf (((symbol-function
-                          'mevedel-session-persistence-artifact-present-p)
+                          'mevedel-session-artifacts-artifact-present-p)
                          (lambda (seen-session logical)
                            (and (eq seen-session session)
                                 (equal logical relative)))))
@@ -458,7 +458,7 @@
               (make-directory (file-name-directory fixed) t)
               (write-region "poisoned cache" nil fixed nil 'silent)
               (cl-letf (((symbol-function
-                          'mevedel-session-persistence-artifact-present-p)
+                          'mevedel-session-artifacts-artifact-present-p)
                          (lambda (&rest _) nil)))
                 (should-error
                  (mevedel-view--resolve-agent-transcript agent-path)
@@ -477,7 +477,7 @@
          seen)
     (unwind-protect
         (cl-letf (((symbol-function
-                    'mevedel-session-persistence-find-artifact-noselect)
+                    'mevedel-session-artifacts-find-artifact-noselect)
                    (lambda (seen-session logical &optional inspection)
                      (setq seen (list seen-session logical inspection))
                      (with-current-buffer data-buffer

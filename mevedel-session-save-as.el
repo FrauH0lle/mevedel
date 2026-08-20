@@ -14,11 +14,38 @@
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-build-sidecar
+                  "mevedel-session-artifacts" (session buffer))
+(declare-function mevedel-session-artifacts-printed-value
+                  "mevedel-session-artifacts" (value))
+(declare-function mevedel-session-artifacts-sidecar-path
+                  "mevedel-session-artifacts" (save-path))
+
+;; `mevedel-session-codec'
+(declare-function mevedel-session-codec-portable-authority-p
+                  "mevedel-session-codec" (session))
+(declare-function mevedel-session-codec-write "mevedel-session-codec"
+                  (path plist))
+
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability-call-with-reserved-lease
                   "mevedel-session-durability" (session function))
 (declare-function mevedel-session-durability-forget-removed-session
                   "mevedel-session-durability" (session))
+
+;; `mevedel-session-fork'
+(declare-function mevedel-session-fork-clone-session
+                  "mevedel-session-fork"
+                  (session policy &rest keys))
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-lock-acquire
+                  "mevedel-session-persistence"
+                  (session-dir buffer-name &optional session))
+(declare-function mevedel-session-persistence-lock-release
+                  "mevedel-session-persistence"
+                  (session-dir &optional session))
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-publish
@@ -27,32 +54,13 @@
 (declare-function mevedel-session-publication-read
                   "mevedel-session-publication" (session-dir))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--build-sidecar
-                  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence--clone-session
-                  "mevedel-session-persistence"
-                  (session policy &rest keys))
-(declare-function mevedel-session-persistence--materialize-publication
-                  "mevedel-session-persistence"
+;; `mevedel-session-rewind'
+(declare-function mevedel-session-rewind-materialize-publication
+                  "mevedel-session-rewind"
                   (session publication staging-path))
-(declare-function mevedel-session-persistence--printed-value
-                  "mevedel-session-persistence" (value))
-(declare-function mevedel-session-persistence--portable-authority-p
-                  "mevedel-session-persistence" (session))
-(declare-function mevedel-session-persistence-write
-                  "mevedel-session-persistence" (path value))
-(declare-function mevedel-session-persistence--rewind-publication-artifacts
-                  "mevedel-session-persistence"
+(declare-function mevedel-session-rewind-rewind-publication-artifacts
+                  "mevedel-session-rewind"
                   (session buffer staging-path &optional state))
-(declare-function mevedel-session-persistence--sidecar-path
-                  "mevedel-session-persistence" (save-path))
-(declare-function mevedel-session-persistence-lock-acquire
-                  "mevedel-session-persistence"
-                  (session-dir buffer-name &optional session))
-(declare-function mevedel-session-persistence-lock-release
-                  "mevedel-session-persistence"
-                  (session-dir &optional session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
@@ -120,7 +128,7 @@ parent identity."
     (error "Portable Save As requires a materialized parent session"))
   (unless (mevedel-session-execution-target session)
     (error "Portable Save As requires an execution target"))
-  (unless (mevedel-session-persistence--portable-authority-p session)
+  (unless (mevedel-session-codec-portable-authority-p session)
     (error "Portable Save As requires portable authority"))
   (unless (buffer-live-p buffer)
     (error "Portable Save As requires a live data buffer"))
@@ -176,7 +184,7 @@ parent identity."
             (expand-file-name ".mevedel-save-as-" parent-directory) t)))
          (now (format-time-string "%FT%H-%M-%S"))
          (child
-          (mevedel-session-persistence--clone-session
+          (mevedel-session-fork-clone-session
            (plist-get transaction :session) 'save-as
            :save-path staging-path
            :session-id (plist-get transaction :new-id)
@@ -203,13 +211,13 @@ parent identity."
   (let ((child (plist-get transaction :child))
         (buffer (plist-get transaction :buffer))
         (staging-path (plist-get transaction :staging-path)))
-    (mevedel-session-persistence--materialize-publication
+    (mevedel-session-rewind-materialize-publication
      (plist-get transaction :session)
      (plist-get transaction :parent-publication)
      staging-path)
-    (mevedel-session-persistence-write
-     (mevedel-session-persistence--sidecar-path staging-path)
-     (mevedel-session-persistence--build-sidecar child buffer))
+    (mevedel-session-codec-write
+     (mevedel-session-artifacts-sidecar-path staging-path)
+     (mevedel-session-artifacts-build-sidecar child buffer))
     (plist-put transaction :stage 'materialized)))
 
 (defun mevedel-session-save-as--publish-child (transaction)
@@ -221,7 +229,7 @@ parent identity."
         (progn
           (mevedel-session-publication-publish
            child
-           (mevedel-session-persistence--rewind-publication-artifacts
+           (mevedel-session-rewind-rewind-publication-artifacts
             child buffer staging-path child))
           (plist-put transaction :stage 'published))
       (error
@@ -412,7 +420,12 @@ are signaled as finalization errors.
 The caller must already have checked live mutation authority.  This module
 rechecks the portable parent head while holding the reserved lease and uses
 the existing lease/publication gates for every child write."
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
   (require 'mevedel-session-durability)
+  (require 'mevedel-session-fork)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-rewind)
   (let ((transaction
          (mevedel-session-save-as--validate
           session buffer new-name new-id new-save-path)))

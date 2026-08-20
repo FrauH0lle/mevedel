@@ -727,7 +727,7 @@
               (setq-local default-directory root
                           mevedel--workspace workspace
                           mevedel--session session)
-              (mevedel-session-persistence--shallow-ensure-files
+              (mevedel-session-persistence-shallow-ensure-files
                session data-buf)
               (let ((local-root
                      (file-name-concat (mevedel-session-save-path session)
@@ -894,7 +894,7 @@
               (setq-local default-directory root
                           mevedel--workspace workspace
                           mevedel--session session)
-              (mevedel-session-persistence--shallow-ensure-files
+              (mevedel-session-persistence-shallow-ensure-files
                session data-buf)
               (setq local-path
                     (file-name-concat (mevedel-session-save-path session)

@@ -179,7 +179,7 @@
             (setq-local default-directory root
                         mevedel--workspace workspace
                         mevedel--session session)
-            (mevedel-session-persistence--shallow-ensure-files
+            (mevedel-session-persistence-shallow-ensure-files
              session buffer))
           (let ((local-root (file-name-concat
                              (mevedel-session-save-path session) "local")))

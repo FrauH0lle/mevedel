@@ -673,7 +673,7 @@
                      (lambda (path &optional _identification _connected)
                        (and (equal path root-dir) "/mock:")))
                     ((symbol-function
-                      'mevedel-session-persistence-artifact-present-p)
+                      'mevedel-session-artifacts-artifact-present-p)
                      (lambda (seen-session logical)
                        (should (eq session seen-session))
                        (should (equal relative logical))

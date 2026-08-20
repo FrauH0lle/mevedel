@@ -1508,12 +1508,12 @@ READ-ONLY sets the data buffer's read-only session mode."
     (cl-letf (((symbol-function
                 'mevedel-session-control-transfer-drain-blocker)
                (lambda (&rest _) blocker))
-              ((symbol-function 'mevedel-session-persistence-save)
+              ((symbol-function 'mevedel-session-artifacts-save)
                (lambda (&rest _) (cl-incf saved)))
               ((symbol-function 'mevedel-session-durability-lease-release)
                (lambda (&rest _) (cl-incf released)))
               ((symbol-function
-                'mevedel-session-persistence--apply-read-only-mode)
+                'mevedel-session-persistence-apply-read-only-mode)
                (lambda (_buffer &optional text) (setq reason text)))
               ((symbol-function 'mevedel-view--interaction-rebuild)
                #'ignore))

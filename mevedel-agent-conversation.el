@@ -112,21 +112,23 @@
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--property-delete-direct
-                  "mevedel-session-persistence" (property))
-(declare-function mevedel-session-persistence--stabilize-gptel-bounds
-                  "mevedel-session-persistence" ())
-(declare-function mevedel-session-persistence--update-transcript-entry
-                  "mevedel-session-persistence" (session agent-id updates))
-(declare-function mevedel-session-persistence--write-sidecar-now
-                  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence-find-artifact-noselect
-                  "mevedel-session-persistence"
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-find-artifact-noselect
+                  "mevedel-session-artifacts"
                   (session logical &optional inspection))
-(declare-function mevedel-session-persistence-publish-text
-                  "mevedel-session-persistence"
+(declare-function mevedel-session-artifacts-property-delete-direct
+                  "mevedel-session-artifacts" (property))
+(declare-function mevedel-session-artifacts-publish-text
+                  "mevedel-session-artifacts"
                   (session path content &optional coding))
+(declare-function mevedel-session-artifacts-stabilize-gptel-bounds
+                  "mevedel-session-artifacts" ())
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-update-transcript-entry
+                  "mevedel-session-persistence" (session agent-id updates))
+(declare-function mevedel-session-persistence-write-sidecar-now
+                  "mevedel-session-persistence" (session buffer))
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-project-evidence
@@ -368,12 +370,14 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
 LOGICAL-PATH is session-relative.  When INSPECTION is non-nil, retain the
 resolver's read-only, no-save buffer contract.
 Return the hydrated conversation buffer."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let ((session (mevedel-agent-invocation-parent-session invocation)))
     (unless session
       (error "Agent conversation has no session"))
-    (require 'mevedel-session-persistence)
     (let ((buffer
-           (mevedel-session-persistence-find-artifact-noselect
+           (mevedel-session-artifacts-find-artifact-noselect
             session logical-path inspection)))
       (condition-case err
           (progn
@@ -388,9 +392,9 @@ Return the hydrated conversation buffer."
                 (mevedel-transcript-restore-gptel-state)
                 (mevedel-transcript-normalize-properties)
                 (mevedel-agent-conversation-configure invocation)
-                (mevedel-session-persistence--property-delete-direct
+                (mevedel-session-artifacts-property-delete-direct
                  "GPTEL_SYSTEM")
-                (mevedel-session-persistence--stabilize-gptel-bounds)
+                (mevedel-session-artifacts-stabilize-gptel-bounds)
                 (set-buffer-modified-p nil)))
             buffer)
         (error
@@ -590,7 +594,7 @@ payload remains authoritative."
       (when activity
         (setq updates (plist-put updates :activity activity)))
       (require 'mevedel-session-persistence)
-      (mevedel-session-persistence--update-transcript-entry
+      (mevedel-session-persistence-update-transcript-entry
        session agent-id updates))))
 
 (defun mevedel-agent-conversation-record-activity
@@ -794,6 +798,9 @@ Return nil when INVOCATION has no live conversation buffer."
 
 (defun mevedel-agent-conversation--write (invocation)
   "Write INVOCATION's retained conversation, returning non-nil on success."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when (mevedel-agent-invocation-p invocation)
     (let ((buffer (mevedel-agent-invocation-buffer invocation))
           (relative
@@ -831,8 +838,7 @@ Return nil when INVOCATION has no live conversation buffer."
                       (if remote
                           (progn
                             (run-hooks 'before-save-hook)
-                            (require 'mevedel-session-persistence)
-                            (mevedel-session-persistence-publish-text
+                            (mevedel-session-artifacts-publish-text
                              session buffer-file-name
                              (buffer-substring-no-properties
                               (point-min) (point-max))
@@ -841,15 +847,14 @@ Return nil when INVOCATION has no live conversation buffer."
                             (set-buffer-modified-p nil)
                             (run-hooks 'after-save-hook))
                         (basic-save-buffer))))
-                  (require 'mevedel-session-persistence)
-                  (mevedel-session-persistence--update-transcript-entry
+                  (mevedel-session-persistence-update-transcript-entry
                    session
                    (mevedel-agent-invocation-agent-id invocation)
                    (list :updated-at (format-time-string "%FT%H-%M-%S")))
                   (when (and
                          (mevedel-agent-invocation-sidecar-dirty invocation)
                          (buffer-live-p parent)
-                         (mevedel-session-persistence--write-sidecar-now
+                         (mevedel-session-persistence-write-sidecar-now
                           session parent))
                     (setf (mevedel-agent-invocation-sidecar-dirty invocation)
                           nil))

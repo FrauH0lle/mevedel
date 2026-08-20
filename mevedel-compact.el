@@ -109,23 +109,26 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--transform "mevedel-reminders" (fsm))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--segment-path
-                  "mevedel-session-persistence" (session-dir segment))
-(declare-function mevedel-session-persistence--segment-summary-bounds
-                  "mevedel-session-persistence" ())
-(declare-function mevedel-session-persistence--strip-summary-handoff-prefix
-                  "mevedel-session-persistence" (summary))
-(declare-function mevedel-session-persistence--summary-block
-                  "mevedel-session-persistence" (summary))
-(declare-function mevedel-session-persistence-artifact-present-p
-                  "mevedel-session-persistence" (session logical))
-(declare-function mevedel-session-persistence-publish-text
-                  "mevedel-session-persistence"
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifact-present-p
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-publish-text
+                  "mevedel-session-artifacts"
                   (session path content &optional coding))
-(declare-function mevedel-session-persistence-rotate-segment
-                  "mevedel-session-persistence" (session buffer summary
-                                                         &rest keys))
+(declare-function mevedel-session-artifacts-rotate-segment
+                  "mevedel-session-artifacts"
+                  (session buffer summary &rest keys))
+(declare-function mevedel-session-artifacts-segment-path
+                  "mevedel-session-artifacts" (save-path n))
+(declare-function mevedel-session-artifacts-segment-summary-bounds
+                  "mevedel-session-artifacts" ())
+(declare-function mevedel-session-artifacts-strip-summary-handoff-prefix
+                  "mevedel-session-artifacts" (summary))
+(declare-function mevedel-session-artifacts-summary-block
+                  "mevedel-session-artifacts" (summary))
+
+;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-structs'
@@ -1197,13 +1200,18 @@ compaction was in flight remain in place."
   "Return plist bounds for the leading summary block, or nil.
 The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
   (require 'mevedel-session-persistence)
-  (mevedel-session-persistence--segment-summary-bounds))
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
+  (mevedel-session-artifacts-segment-summary-bounds))
 
 (defun mevedel--compact-previous-summary ()
   "Return the leading compaction summary body, or nil."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when-let* ((bounds (mevedel--compact-summary-bounds)))
     (require 'mevedel-utilities)
-    (mevedel-session-persistence--strip-summary-handoff-prefix
+    (mevedel-session-artifacts-strip-summary-handoff-prefix
      (string-trim
       (mevedel--strip-hook-audit-blocks
        (buffer-substring
@@ -1218,16 +1226,18 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
 
 (defun mevedel--compact-current-persisted-p ()
   "Return non-nil when current buffer can use segment rotation."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (and (boundp 'mevedel--session)
        mevedel--session
        (mevedel-session-save-path mevedel--session)
        buffer-file-name
        (progn
-         (require 'mevedel-session-persistence)
          (require 'mevedel-utilities)
          (mevedel--same-file-p
           buffer-file-name
-          (mevedel-session-persistence--segment-path
+          (mevedel-session-artifacts-segment-path
            (mevedel-session-save-path mevedel--session)
            (mevedel-session-current-segment mevedel--session))))))
 
@@ -1312,12 +1322,15 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
   "Rotate the current segment with SUMMARY, TAIL-TEXT, and PENDING-TEXT.
 HOOK-AUDITS are persisted next to the summary.  ARCHIVE-TEXT contains
 hidden execution records replacing compacted tool rows."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let ((session (and (boundp 'mevedel--session) mevedel--session)))
     (unless (and session (mevedel--compact-current-persisted-p))
       (user-error "Session is not materialized on disk"))
     (remove-text-properties 0 (length summary) '(gptel nil face nil) summary)
     (setq summary (mevedel--compact-append-hook-audits summary hook-audits))
-    (mevedel-session-persistence-rotate-segment
+    (mevedel-session-artifacts-rotate-segment
      session (current-buffer) summary
      :tail-text tail-text
      :pending-text pending-text
@@ -1424,6 +1437,9 @@ current agent buffer's invocation."
 
 (defun mevedel--compact-agent-target (invocation)
   "Return the private compaction target for persisted INVOCATION, or nil."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-agent-persistence)
   (when-let* (((mevedel-agent-invocation-p invocation))
               (buffer (mevedel-agent-invocation-buffer invocation))
@@ -1439,7 +1455,7 @@ current agent buffer's invocation."
               ((if (file-remote-p save-path)
                    (and (equal (expand-file-name buffer-path)
                                canonical-path)
-                        (mevedel-session-persistence-artifact-present-p
+                        (mevedel-session-artifacts-artifact-present-p
                          session relative-path))
                  (and (mevedel--same-file-p buffer-path canonical-path)
                       (file-regular-p canonical-path)
@@ -1460,7 +1476,7 @@ current agent buffer's invocation."
         (let ((previous-summary
                (when summary-bounds
                  (require 'mevedel-utilities)
-                 (mevedel-session-persistence--strip-summary-handoff-prefix
+                 (mevedel-session-artifacts-strip-summary-handoff-prefix
                   (string-trim
                    (mevedel--strip-hook-audit-blocks
                     (buffer-substring
@@ -1494,6 +1510,8 @@ current agent buffer's invocation."
 (defun mevedel--compact-agent-archive-path (session canonical-path)
   "Return SESSION's next unused archive for CANONICAL-PATH."
   (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((save-path
           (file-name-as-directory (mevedel-session-save-path session)))
          (remote-p (file-remote-p save-path))
@@ -1508,7 +1526,7 @@ current agent buffer's invocation."
              unless logical
              do (error "Archive path escaped session: %s" path)
              unless (if remote-p
-                        (mevedel-session-persistence-artifact-present-p
+                        (mevedel-session-artifacts-artifact-present-p
                          session logical)
                       (file-exists-p path))
              return path)))
@@ -1580,6 +1598,9 @@ pending continuation."
             &optional _auto _preserved-tail-turns)
   "Apply agent TARGET compaction with SUMMARY, TAIL-TEXT, and PENDING-TEXT.
 HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((invocation (plist-get target :invocation))
          (session (plist-get target :session))
          (canonical-path (plist-get target :transcript-path))
@@ -1591,8 +1612,7 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
           (mevedel--compact-execution-row-archive-text target)))
     (unless (mevedel-agent-conversation-save invocation)
       (error "Could not persist agent transcript before compaction"))
-    (require 'mevedel-session-persistence)
-    (mevedel-session-persistence-publish-text
+    (mevedel-session-artifacts-publish-text
      (plist-get target :session) archive-path
      (buffer-substring-no-properties (point-min) (point-max))
      'utf-8-unix)
@@ -1600,7 +1620,7 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
       (erase-buffer)
       (insert (plist-get target :anchor-text))
       (unless (bolp) (insert "\n"))
-      (insert (mevedel-session-persistence--summary-block summary))
+      (insert (mevedel-session-artifacts-summary-block summary))
       (when tail-text (insert tail-text))
       (when execution-archive-text (insert execution-archive-text))
       (when pending-text (insert pending-text))

@@ -90,6 +90,11 @@
 (defvar mevedel-view--prompt-hook-pending)
 (defvar mevedel-session--read-only-mode)
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-save
+                  "mevedel-session-artifacts"
+                  (session buffer &optional settled force))
+
 ;; `mevedel-session-control-transfer'
 (declare-function mevedel-session-control-transfer--follow-published
                   "mevedel-session-control-transfer"
@@ -98,10 +103,10 @@
                   "mevedel-session-control-transfer" (session buffer))
 (declare-function mevedel-session-control-transfer-decide
                   "mevedel-session-control-transfer" (session decision))
-(declare-function mevedel-session-control-transfer-drain-blocker
-                  "mevedel-session-control-transfer" (session))
 (declare-function mevedel-session-control-transfer-descriptor
                   "mevedel-session-control-transfer" (session read-only-p))
+(declare-function mevedel-session-control-transfer-drain-blocker
+                  "mevedel-session-control-transfer" (session))
 (declare-function mevedel-session-control-transfer-poll
                   "mevedel-session-control-transfer"
                   (session buffer read-only-p))
@@ -109,19 +114,19 @@
                   "mevedel-session-control-transfer" (session predicate))
 (declare-function mevedel-session-control-transfer-register-observer
                   "mevedel-session-control-transfer" (session observer))
+(declare-function mevedel-session-control-transfer-register-presentation
+                  "mevedel-session-control-transfer" (session buffer))
+(declare-function mevedel-session-control-transfer-register-root-buffer
+                  "mevedel-session-control-transfer" (session buffer))
 (declare-function mevedel-session-control-transfer-request
                   "mevedel-session-control-transfer" (session))
 (declare-function mevedel-session-control-transfer-unregister-drain
                   "mevedel-session-control-transfer" (session predicate))
 (declare-function mevedel-session-control-transfer-unregister-observer
                   "mevedel-session-control-transfer" (session observer))
-(declare-function mevedel-session-control-transfer-register-root-buffer
-                  "mevedel-session-control-transfer" (session buffer))
-(declare-function mevedel-session-control-transfer-register-presentation
+(declare-function mevedel-session-control-transfer-unregister-presentation
                   "mevedel-session-control-transfer" (session buffer))
 (declare-function mevedel-session-control-transfer-unregister-root-buffer
-                  "mevedel-session-control-transfer" (session buffer))
-(declare-function mevedel-session-control-transfer-unregister-presentation
                   "mevedel-session-control-transfer" (session buffer))
 
 ;; `mevedel-session-durability'
@@ -132,11 +137,8 @@
                   "mevedel-session-durability" (session-dir))
 
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--apply-read-only-mode
-                  "mevedel-session-persistence" (buffer &optional reason))
-(declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence"
-                  (session buffer &optional settled))
+(declare-function mevedel-session-persistence-apply-read-only-mode
+                  "mevedel-session-persistence" (buf &optional reason))
 
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt-framed-body
@@ -416,20 +418,22 @@ The session is saved and published before the lease goes, so whoever takes
 it next starts from the work done here.  Live work blocks the release for
 the same reason a granted transfer waits for it."
   (interactive)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-session-control-transfer)
   (require 'mevedel-session-durability)
-  (require 'mevedel-session-persistence)
   (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
     (when (buffer-local-value 'mevedel-session--read-only-mode data)
       (user-error "This session is already read-only here"))
     (when-let ((blocker
                 (mevedel-session-control-transfer-drain-blocker session)))
       (user-error "Cannot release control while %s is outstanding" blocker))
-    (mevedel-session-persistence-save session data t)
+    (mevedel-session-artifacts-save session data t)
     (mevedel-session-durability-lease-release
      (mevedel-session-save-path session) session)
     ;; One notice per event: applying read-only mode announces it.
-    (mevedel-session-persistence--apply-read-only-mode
+    (mevedel-session-persistence-apply-read-only-mode
      data "control released; following the new owner from here")
     (mevedel-view--interaction-rebuild)))
 

@@ -38,17 +38,19 @@
 (declare-function mevedel-pipeline-update-tool-render-data
                   "mevedel-pipeline" (buffer tool-use-id updates))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--stabilize-gptel-bounds
-                  "mevedel-session-persistence" ())
-(declare-function mevedel-session-persistence--write-current-buffer-atomically
-                  "mevedel-session-persistence" (path))
-(declare-function mevedel-session-persistence-publish-transcript-state
-                  "mevedel-session-persistence"
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-publish-transcript-state
+                  "mevedel-session-artifacts"
                   (session root-buffer transcript-path content &optional coding))
-(declare-function mevedel-session-persistence-read-artifact
-                  "mevedel-session-persistence"
+(declare-function mevedel-session-artifacts-read-artifact
+                  "mevedel-session-artifacts"
                   (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-stabilize-gptel-bounds
+                  "mevedel-session-artifacts" ())
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-write-current-buffer-atomically
+                  "mevedel-session-persistence" (path))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-active-elapsed-seconds
@@ -1141,6 +1143,9 @@ When EXPECTED is non-nil, require the durable record to equal it."
     (data-buffer event render-data)
   "Record terminal EVENT in DATA-BUFFER after its original row was archived.
 RENDER-DATA is retained in the hidden transcript audit record."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (save-restriction
@@ -1167,12 +1172,11 @@ RENDER-DATA is retained in the hidden transcript audit record."
                              mevedel--agent-invocation)
                           data-buffer))
                        (coding (or buffer-file-coding-system 'utf-8-unix)))
-                  (require 'mevedel-session-persistence)
                   (with-temp-buffer
                     (setq buffer-file-coding-system coding)
                     (insert
                      (decode-coding-string
-                      (mevedel-session-persistence-read-artifact
+                      (mevedel-session-artifacts-read-artifact
                        session logical)
                       coding))
                     (let ((org-agenda-file-menu-enabled nil))
@@ -1187,8 +1191,8 @@ RENDER-DATA is retained in the hidden transcript audit record."
                           tool-use-id replacement))
                       (error "Persisted execution record missing: %s"
                              tool-use-id))
-                    (mevedel-session-persistence--stabilize-gptel-bounds)
-                    (mevedel-session-persistence-publish-transcript-state
+                    (mevedel-session-artifacts-stabilize-gptel-bounds)
+                    (mevedel-session-artifacts-publish-transcript-state
                      session root-buffer path
                      (buffer-substring-no-properties (point-min) (point-max))
                      coding)))
@@ -1205,9 +1209,8 @@ RENDER-DATA is retained in the hidden transcript audit record."
                      (mevedel-view-stream--execution-completion-record-p
                       tool-use-id replacement))
                   (error "Persisted execution record missing: %s" tool-use-id))
-                (require 'mevedel-session-persistence)
-                (mevedel-session-persistence--stabilize-gptel-bounds)
-                (mevedel-session-persistence--write-current-buffer-atomically
+                (mevedel-session-artifacts-stabilize-gptel-bounds)
+                (mevedel-session-persistence-write-current-buffer-atomically
                  path)))
             ;; The atomic rename changed the visited file.  Refresh the
             ;; buffer's baseline before applying the same replacement in
@@ -1222,8 +1225,7 @@ RENDER-DATA is retained in the hidden transcript audit record."
                      tool-use-id replacement))
               (error "Archived execution record missing: %s" tool-use-id)))
           (when path
-            (require 'mevedel-session-persistence)
-            (mevedel-session-persistence--stabilize-gptel-bounds))
+            (mevedel-session-artifacts-stabilize-gptel-bounds))
           (set-buffer-modified-p modified-p)
           (when (hash-table-p marker-table)
             (remhash tool-use-id marker-table)))))))

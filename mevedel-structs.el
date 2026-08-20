@@ -47,9 +47,9 @@
 ;; `mevedel-sandbox'
 (defvar mevedel-sandbox-mode)
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-assert-mutation-authority
-                  "mevedel-session-persistence" (session &optional buffer))
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-mutation-authority
+                  "mevedel-session-artifacts" (session &optional buffer))
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record
@@ -1037,9 +1037,11 @@ only call sites that may invoke cancellers."
 If `mevedel--current-request' is already set, log a warning and replace
 it.  Optional DIRECTIVE-UUID sets the directive being processed.  Returns
 the new request struct."
-  (mevedel-request-assert-target-ready session)
   (require 'mevedel-session-persistence)
-  (mevedel-session-persistence-assert-mutation-authority
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
+  (mevedel-request-assert-target-ready session)
+  (mevedel-session-artifacts-assert-mutation-authority
    session (current-buffer))
   (when mevedel--current-request
     (message "mevedel: stale request found, replacing")

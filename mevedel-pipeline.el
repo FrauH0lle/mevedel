@@ -103,14 +103,16 @@
 (defvar mevedel-resource--attempts-cell)
 (defvar mevedel-resource--current-attempts)
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--shallow-ensure-files
-                  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence-publish-text
-                  "mevedel-session-persistence"
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority
+                  "mevedel-session-artifacts" (session))
+(declare-function mevedel-session-artifacts-publish-text
+                  "mevedel-session-artifacts"
                   (session path content &optional coding))
-(declare-function mevedel-session-persistence-assert-new-mutation-authority
-                  "mevedel-session-persistence" (session))
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-shallow-ensure-files
+                  "mevedel-session-persistence" (session buffer))
 
 ;; `mevedel-specialist-nudges'
 (declare-function mevedel-specialist-nudges-apply
@@ -262,7 +264,7 @@ of omitted characters."
   "Return SESSION's tool-results directory, materializing when possible.
 
 When SESSION has no save path yet, use
-`mevedel-session-persistence--shallow-ensure-files' with BUFFER so
+`mevedel-session-persistence-shallow-ensure-files' with BUFFER so
 oversized tool output produced during the first turn can still be
 owned by the session.  REQUEST defaults to BUFFER's active request.
 Ephemeral requests never materialize or reuse a durable directory.
@@ -280,7 +282,7 @@ shallow materialization fails."
       (let ((save-path (or (mevedel-session-save-path session)
                            (when (and buffer (buffer-live-p buffer))
                              (require 'mevedel-session-persistence)
-                             (mevedel-session-persistence--shallow-ensure-files
+                             (mevedel-session-persistence-shallow-ensure-files
                               session buffer)))))
         (when save-path
           (require 'mevedel-workspace)
@@ -296,6 +298,9 @@ SESSION owns the output file through its `tool-results/' directory.
 BUFFER is the chat data buffer used to shallowly materialize SESSION
 when it has not been saved yet.  If no session-owned directory is
 available, falls back to `mevedel-pipeline--truncate-result'."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (setq result (mevedel--normalize-message-text result))
   (require 'mevedel-resource)
   (if-let* ((dir (mevedel-pipeline--tool-results-dir session buffer)))
@@ -305,8 +310,7 @@ available, falls back to `mevedel-pipeline--truncate-result'."
                      (file-name-concat dir (concat name "-")))
                     ".txt"))
              (preview (mevedel-pipeline--head-tail-preview result)))
-        (require 'mevedel-session-persistence)
-        (mevedel-session-persistence-publish-text
+        (mevedel-session-artifacts-publish-text
          session file result 'utf-8-unix)
         (if-let* ((address (mevedel-resource-artifact-address file session)))
             (concat "<persisted-output>\n"
@@ -2720,6 +2724,9 @@ guard, a sync error escaping a step's NEXT recursion (after the
 recursion already delivered a success result to CALLBACK) would
 double-fire.  Errors from the wrapped invocation are caught and
 logged so a misbehaving CALLBACK cannot strand the pipeline."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-telemetry)
   (let* ((dispatch-buffer (current-buffer))
          (session (and (boundp 'mevedel--session) mevedel--session))
@@ -2815,8 +2822,7 @@ delivery: %S"
                        result)
                :warning))))))
     (when (and session (not (mevedel-tool-read-only-p tool)))
-      (require 'mevedel-session-persistence)
-      (mevedel-session-persistence-assert-new-mutation-authority session))
+      (mevedel-session-artifacts-assert-new-mutation-authority session))
     (when request
       (mevedel-request-push-canceller
        request

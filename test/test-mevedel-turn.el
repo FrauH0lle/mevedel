@@ -273,7 +273,7 @@
           (with-current-buffer chat-buf
             (setq-local mevedel--session session)
             (setq-local mevedel-session--read-only-mode nil))
-          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (saved-session saved-buffer &optional settled)
                        (push (list saved-session saved-buffer settled)
                              saved))))

@@ -2386,7 +2386,7 @@
                          (cl-incf prompts)
                          nil)))
               (should-error
-               (mevedel-session-persistence-assert-mutation-authority
+               (mevedel-session-artifacts-assert-mutation-authority
                 session)
                :type 'user-error))
             (should-not
@@ -2396,7 +2396,7 @@
                          (cl-incf prompts)
                          t)))
               (should
-               (mevedel-session-persistence-assert-mutation-authority
+               (mevedel-session-artifacts-assert-mutation-authority
                 session))
               (should
                (mevedel-session-durability-disclose session)))
@@ -2942,7 +2942,7 @@
                  (recovery (plist-get batch :directory)))
             (should (file-directory-p recovery))
             (should-error
-             (mevedel-session-persistence-assert-mutation-authority session)
+             (mevedel-session-artifacts-assert-mutation-authority session)
              :type 'user-error)
             (delete-file blocker-local)
             (make-directory blocker-local)
@@ -2998,7 +2998,7 @@
           (with-temp-buffer
             (setq-local mevedel--session session)
             (should
-             (mevedel-session-persistence-assert-mutation-authority session)))
+             (mevedel-session-artifacts-assert-mutation-authority session)))
           (mevedel-session-persistence-lock-release session-dir session))
       (when (file-directory-p local-root)
         (delete-directory local-root t))))
@@ -3179,7 +3179,7 @@
           (with-temp-buffer
             (setq-local mevedel--session session)
             (insert "initial transcript")
-            (mevedel-session-persistence-save session (current-buffer))
+            (mevedel-session-artifacts-save session (current-buffer))
             (let* ((save-path (mevedel-session-save-path session))
                    (log-path (file-name-concat save-path "hook-log.el"))
                    (entry '(:event Stop :status completed))
@@ -3196,7 +3196,7 @@
                   (((symbol-function 'display-warning)
                     (lambda (_type message &rest _)
                       (setq warning message))))
-                (should (mevedel-session-persistence-save
+                (should (mevedel-session-artifacts-save
                          session (current-buffer)))
                 ;; The diagnostic flush is deferred off the save; drive
                 ;; the timer until its failure warning lands.
@@ -3207,7 +3207,7 @@
               (should (mevedel-session-hook-log-pending session))
               (should-not (mevedel-session-pending-publication session))
               (should
-               (mevedel-session-persistence-assert-mutation-authority session))
+               (mevedel-session-artifacts-assert-mutation-authority session))
               (delete-directory log-path)
               (cl-letf
                   (((symbol-function
@@ -3216,7 +3216,7 @@
                       (when (equal log-path (plist-get artifact :path))
                         (cl-incf diagnostic-publications))
                       (funcall publish-artifact artifact))))
-                (should (mevedel-session-persistence-save
+                (should (mevedel-session-artifacts-save
                          session (current-buffer)))
                 (let ((deadline (+ (float-time) 2)))
                   (while (and (zerop diagnostic-publications)
@@ -3341,7 +3341,7 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
-(mevedel-deftest mevedel-session-persistence-publish-agent-terminal-state
+(mevedel-deftest mevedel-session-artifacts-publish-agent-terminal-state
   ()
   ,test
   (test)
@@ -3457,7 +3457,7 @@
                       (funcall publish-artifact artifact)))))
               (mevedel-test--with-captured-diagnostics nil
                 (should-error
-                 (mevedel-session-persistence-publish-agent-terminal-state
+                 (mevedel-session-artifacts-publish-agent-terminal-state
                   invocation)
                  :type 'file-error))))
           (let* ((pending (mevedel-session-pending-publication session))
@@ -3470,7 +3470,7 @@
                               (plist-get artifact :path))
                             artifacts))))
           (should-error
-           (mevedel-session-persistence-assert-mutation-authority session)
+           (mevedel-session-artifacts-assert-mutation-authority session)
            :type 'user-error)
           (should (mevedel-session-publication-retry session))
           (should-not (mevedel-session-pending-publication session))
@@ -3479,7 +3479,7 @@
                   (with-temp-buffer
                     (insert-file-contents transcript)
                     (buffer-string))))
-          (let* ((saved (mevedel-session-persistence-read sidecar))
+          (let* ((saved (mevedel-session-codec-read sidecar))
                  (saved-record (car (plist-get saved :agent-registry))))
             (should (eq 'idle (plist-get saved-record :activity)))
             (should
@@ -3532,13 +3532,13 @@
                   '(("test-agent" :path "agents/test.chat.org")))
             (cl-letf
                 (((symbol-function
-                   'mevedel-session-persistence--portable-authority-p)
+                   'mevedel-session-codec-portable-authority-p)
                   (lambda (_session) t))
                  ((symbol-function
-                   'mevedel-session-persistence-artifact-present-p)
+                   'mevedel-session-artifacts-artifact-present-p)
                   (lambda (&rest _) t))
                  ((symbol-function
-                   'mevedel-session-persistence-assert-mutation-authority)
+                   'mevedel-session-artifacts-assert-mutation-authority)
                   (lambda (&rest _) t))
                  ((symbol-function 'mevedel-session-publication-publish)
                   (lambda (_session artifacts &optional require-commit)
@@ -3547,7 +3547,7 @@
                     t)))
               (mevedel-test--with-captured-diagnostics nil
                 (should
-                 (mevedel-session-persistence-publish-agent-terminal-state
+                 (mevedel-session-artifacts-publish-agent-terminal-state
                   invocation))))
             (should (= 2 (length published)))
             (should-not
@@ -3560,7 +3560,7 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
-(mevedel-deftest mevedel-session-persistence-save/remote ()
+(mevedel-deftest mevedel-session-artifacts-save/remote ()
   ,test
   (test)
   :doc "canonical remote save publishes segment, snapshots, and sidecar target-side"
@@ -3578,7 +3578,7 @@
           (with-temp-buffer
             (setq-local mevedel--session session)
             (insert "remote transcript")
-            (should (mevedel-session-persistence-save session (current-buffer)))
+            (should (mevedel-session-artifacts-save session (current-buffer)))
             (let* ((save-path (mevedel-session-save-path session))
                    (segment (file-name-concat
                              save-path "segment-0001.chat.org"))
@@ -3597,7 +3597,7 @@
                            (file-name-concat save-path ".lock")))
               (should (file-directory-p
                        (file-name-concat save-path ".lease")))
-              (let* ((saved (mevedel-session-persistence-read sidecar))
+              (let* ((saved (mevedel-session-codec-read sidecar))
                      (workspace (plist-get saved :workspace)))
                 (should-not
                  (file-remote-p (plist-get workspace :target-native-root))))
@@ -3605,7 +3605,7 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
-(mevedel-deftest mevedel-session-persistence-rotate-segment/remote ()
+(mevedel-deftest mevedel-session-artifacts-rotate-segment/remote ()
   ,test
   (test)
   :doc "remote rotation publishes old, new, instructions, and sidecar together"
@@ -3623,7 +3623,7 @@
               (org-mode)
               (setq-local mevedel--session session)
               (insert "Original prompt\nOriginal reply\n")
-              (mevedel-session-persistence-save session (current-buffer))
+              (mevedel-session-artifacts-save session (current-buffer))
               (let* ((save-path (mevedel-session-save-path session))
                      (old (file-name-concat
                            save-path "segment-0001.chat.org"))
@@ -3631,7 +3631,7 @@
                            save-path "segment-0002.chat.org")))
                 (should
                  (equal new
-                        (mevedel-session-persistence-rotate-segment
+                        (mevedel-session-artifacts-rotate-segment
                          session (current-buffer) "Remote handoff.")))
                 (should (equal new buffer-file-name))
                 (should (string-match-p "Remote handoff" (buffer-string)))
@@ -3644,7 +3644,7 @@
                 (should
                  (= 2
                     (plist-get
-                     (mevedel-session-persistence-read
+                     (mevedel-session-codec-read
                       (file-name-concat save-path "session.meta.el"))
                      :current-segment)))
                 (should-not
@@ -3668,7 +3668,7 @@
               (org-mode)
               (setq-local mevedel--session session)
               (insert "Before rotation\n")
-              (mevedel-session-persistence-save session (current-buffer))
+              (mevedel-session-artifacts-save session (current-buffer))
               (let* ((save-path (mevedel-session-save-path session))
                      (instructions
                       (file-name-concat save-path "instructions"))
@@ -3678,7 +3678,7 @@
                 (with-temp-file instructions (insert "blocker"))
                 (mevedel-test--with-captured-diagnostics nil
                   (should-error
-                   (mevedel-session-persistence-rotate-segment
+                   (mevedel-session-artifacts-rotate-segment
                     session (current-buffer) "Pending handoff.")
                    :type 'file-error))
                 (should (mevedel-session-pending-publication session))
@@ -3694,7 +3694,7 @@
                 (should
                  (= 2
                     (plist-get
-                     (mevedel-session-persistence-read
+                     (mevedel-session-codec-read
                       (file-name-concat save-path "session.meta.el"))
                      :current-segment)))
                 (mevedel-session-persistence-lock-release
@@ -3702,7 +3702,7 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
-(mevedel-deftest mevedel-session-persistence-start-fresh-segment/remote ()
+(mevedel-deftest mevedel-session-artifacts-start-fresh-segment/remote ()
   ,test
   (test)
   :doc "remote clear atomically publishes the transition but not its draft"
@@ -3720,13 +3720,13 @@
               (org-mode)
               (setq-local mevedel--session session)
               (insert "Old conversation\n")
-              (mevedel-session-persistence-save session (current-buffer))
+              (mevedel-session-artifacts-save session (current-buffer))
               (let* ((save-path (mevedel-session-save-path session))
                      (new (file-name-concat
                            save-path "segment-0002.chat.org")))
                 (should
                  (equal new
-                        (mevedel-session-persistence-start-fresh-segment
+                        (mevedel-session-artifacts-start-fresh-segment
                          session (current-buffer)
                          :initial-text "Unsent draft")))
                 (should (string-match-p "Unsent draft" (buffer-string)))
@@ -3739,7 +3739,7 @@
                 (should
                  (= 2
                     (plist-get
-                     (mevedel-session-persistence-read
+                     (mevedel-session-codec-read
                       (file-name-concat save-path "session.meta.el"))
                      :current-segment)))
                 (mevedel-session-persistence-lock-release
@@ -3747,7 +3747,7 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
-(mevedel-deftest mevedel-session-persistence--publish-fork/remote ()
+(mevedel-deftest mevedel-session-fork--publish-fork/remote ()
   ,test
   (test)
   :doc "fork staging owns its child lease first and releases it on failure"
@@ -3779,7 +3779,7 @@
                         (mevedel-session-session-id child) "child")
                   (cl-letf
                       (((symbol-function
-                         'mevedel-session-persistence--stage-fork)
+                         'mevedel-session-fork--stage-fork)
                         (lambda (&rest _)
                           (setq lease-before-stage
                                 (file-directory-p
@@ -3787,7 +3787,7 @@
                           (with-temp-file marker (insert "started"))
                           (error "Staging failed"))))
                     (should-error
-                     (mevedel-session-persistence--publish-fork
+                     (mevedel-session-fork--publish-fork
                       child buffer staging-buffer staging staging published
                       1 0 nil)
                      :type 'error))
@@ -3887,7 +3887,7 @@
                   (with-temp-buffer
                     (setq-local mevedel--session session)
                     (should-error
-                     (mevedel-session-persistence-assert-mutation-authority
+                     (mevedel-session-artifacts-assert-mutation-authority
                       session (current-buffer))
                      :type 'user-error))))
               ;; Simulate client loss rather than a clean release: the marker
@@ -3916,7 +3916,7 @@
                       (with-temp-buffer
                         (setq-local mevedel--session restored)
                         (should-error
-                         (mevedel-session-persistence-assert-mutation-authority
+                         (mevedel-session-artifacts-assert-mutation-authority
                           restored (current-buffer))
                          :type 'user-error)))
                     (mevedel-test--with-captured-diagnostics nil
@@ -3935,7 +3935,7 @@
                       (with-temp-buffer
                         (setq-local mevedel--session restored)
                         (should
-                         (mevedel-session-persistence-assert-mutation-authority
+                         (mevedel-session-artifacts-assert-mutation-authority
                           restored (current-buffer)))))
                     (mevedel-session-durability-lease-release
                      session-dir restored)))))))

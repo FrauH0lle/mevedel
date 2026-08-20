@@ -144,7 +144,7 @@
          (body "# Accepted")
          (artifact
           (list :path "plans/accepted.md" :hash (mevedel-plan-hash body))))
-    (cl-letf (((symbol-function 'mevedel-session-persistence-read-artifact)
+    (cl-letf (((symbol-function 'mevedel-session-artifacts-read-artifact)
                (lambda (seen-session logical &optional _committed-only)
                  (should (eq session seen-session))
                  (should (equal "plans/accepted.md" logical))
@@ -272,12 +272,12 @@
                   :name "test" :save-path save-dir
                   :plan-metadata '(:path "current.md"))))
             (cl-letf (((symbol-function
-                        'mevedel-session-persistence-artifact-present-p)
+                        'mevedel-session-artifacts-artifact-present-p)
                        (lambda (_session logical)
                          (should (equal "current.md" logical))
                          t))
                       ((symbol-function
-                        'mevedel-session-persistence-read-artifact)
+                        'mevedel-session-artifacts-read-artifact)
                        (lambda (seen-session logical &optional _committed-only)
                          (should (eq session seen-session))
                          (should (equal "current.md" logical))
@@ -300,7 +300,7 @@
     (unwind-protect
         (progn
           (cl-letf (((symbol-function
-                      'mevedel-session-persistence-artifact-present-p)
+                      'mevedel-session-artifacts-artifact-present-p)
                      (lambda (seen-session logical)
                        (should (eq session seen-session))
                        (should (equal "local/plans/current.md" logical))
@@ -309,7 +309,7 @@
           (make-directory (file-name-directory path) t)
           (write-region "# Poisoned cache" nil path nil 'silent)
           (cl-letf (((symbol-function
-                      'mevedel-session-persistence-artifact-present-p)
+                      'mevedel-session-artifacts-artifact-present-p)
                      (lambda (_session _logical) nil)))
             (should-not (mevedel-plan-current-exists-p session))))
       (delete-directory save-dir t))))

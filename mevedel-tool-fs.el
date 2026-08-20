@@ -77,9 +77,9 @@
 (declare-function mevedel-reminders-queue-turn-event
                   "mevedel-reminders" (buffer key body &optional commit))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-read-artifact
-                  "mevedel-session-persistence" (session logical
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-read-artifact
+                  "mevedel-session-artifacts" (session logical
                                                   &optional committed-only))
 
 ;; `mevedel-structs'
@@ -1487,12 +1487,14 @@ wrap in `condition-case'."
 
 OFFSET and LIMIT select the requested line range.  Remote fixed-path caches
 are deliberately ignored."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when (mevedel-tool-fs--binary-extension-p path)
     (error "Cannot read binary session artifact: %s"
            (mevedel-tool-fs--model-path path)))
   (let* ((bytes (progn
-                  (require 'mevedel-session-persistence)
-                  (mevedel-session-persistence-read-artifact
+                  (mevedel-session-artifacts-read-artifact
                    session logical)))
          (suffix (when-let ((extension (file-name-extension path)))
                    (concat "." extension)))

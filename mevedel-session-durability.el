@@ -31,19 +31,19 @@
                   (path content &optional coding-system))
 (declare-function mevedel-session-control-fs-delete-file
                   "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-directory-p
+                  "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-list-directory
                   "mevedel-session-control-fs" (directory regexp))
 (declare-function mevedel-session-control-fs-make-directory
                   "mevedel-session-control-fs" (path &optional parents))
-(declare-function mevedel-session-control-fs-physical-path
-                  "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-path-exists-p
+                  "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-physical-path
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-read-file
                   "mevedel-session-control-fs"
                   (path &optional coding-system))
-(declare-function mevedel-session-control-fs-directory-p
-                  "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-target-time
                   "mevedel-session-control-fs" (directory))
 (declare-function mevedel-session-control-fs-write-file

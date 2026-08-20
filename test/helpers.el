@@ -207,6 +207,7 @@ connection."
   (dolist (timer (append timer-list timer-idle-list))
     (when (memq (timer--function timer)
                 '(mevedel-session-durability-lease-renew
+                  mevedel-transport-run-when-idle
                   mevedel-transport--retry))
       (cancel-timer timer)))
   (when (fboundp 'mevedel-transport-cancel-pending)
@@ -451,6 +452,7 @@ only report a failure the test never asked for."
   (declare (indent 0) (debug t))
   `(let ((data-buf (generate-new-buffer " *test-data*"))
          (view-buf (generate-new-buffer " *test-view*"))
+         (mevedel-permission-mode 'ask)
          (mevedel-user-dir (file-name-as-directory
                             (make-temp-file "mevedel-view-user-" t)))
          (mevedel-plugin-extra-roots nil))

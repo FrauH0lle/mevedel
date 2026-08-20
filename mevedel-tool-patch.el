@@ -64,7 +64,7 @@
                   "mevedel-reminders" (buffer path))
 
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--shallow-ensure-files
+(declare-function mevedel-session-persistence-shallow-ensure-files
                   "mevedel-session-persistence" (session buffer))
 
 ;; `mevedel-structs'
@@ -141,7 +141,7 @@ PROPOSAL is the prepared proposal whose physical fields are private."
       (error "Ephemeral requests cannot own local resources"))
     (unless (mevedel-session-save-path session)
       (require 'mevedel-session-persistence)
-      (unless (mevedel-session-persistence--shallow-ensure-files
+      (unless (mevedel-session-persistence-shallow-ensure-files
                session (current-buffer))
         (error "Could not materialize the local resource session")))
     (make-directory

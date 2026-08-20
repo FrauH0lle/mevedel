@@ -22,7 +22,7 @@
   (let* ((saved nil)
          (session (mevedel-session--create :name "main"))
          (goal
-          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (&rest _) (setq saved t))))
             (with-temp-buffer
               (setq-local mevedel--session session)
@@ -64,7 +64,7 @@
          saved scheduled)
     (with-temp-buffer
       (setq-local mevedel--session session)
-      (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                  (lambda (&rest _) (setq saved t)))
                 ((symbol-function 'run-at-time)
                  (lambda (&rest _) (setq scheduled t)))
@@ -108,16 +108,16 @@
           (with-temp-buffer
             (setq-local mevedel--session session)
             (cl-letf (((symbol-function
-                        'mevedel-session-persistence-artifact-present-p)
+                        'mevedel-session-artifacts-artifact-present-p)
                        (lambda (seen-session logical)
                          (should (eq session seen-session))
                          (should (equal "accepted-plan.md" logical))
                          t))
                       ((symbol-function
-                        'mevedel-session-persistence-read-artifact)
+                        'mevedel-session-artifacts-read-artifact)
                        (lambda (_session _logical &optional _committed-only)
                          (encode-coding-string "accepted" 'utf-8-unix)))
-                      ((symbol-function 'mevedel-session-persistence-save)
+                      ((symbol-function 'mevedel-session-artifacts-save)
                        (lambda (&rest _) (setq saved t))))
               (should-error (mevedel-goal-active-context session))))
           (should saved)
@@ -392,7 +392,7 @@
           (setf (mevedel-session-goal session) goal)
           (with-current-buffer buffer
             (setq-local mevedel--session session))
-          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (&rest _) (setq saved t))))
             (should (eq goal (mevedel-goal-pause-runtime-failure
                               buffer "Compaction failed: boom"))))
@@ -433,7 +433,7 @@
           '(:status accepted :implementation-goal-id "goal-1"))
     (with-temp-buffer
       (setq-local mevedel--session session)
-      (cl-letf (((symbol-function 'mevedel-session-persistence-save) #'ignore)
+      (cl-letf (((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                 ((symbol-function 'run-at-time)
                  (lambda (&rest args) (setq scheduled args))))
         (mevedel-goal-resume "  steer first  ")))
@@ -470,7 +470,7 @@
             (setq-local mevedel--session session
                         mevedel--current-request
                         (mevedel-request--create :session session)))
-          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (&rest _) (cl-incf saved)))
                     ((symbol-function 'run-at-time)
                      (lambda (&rest _) (cl-incf scheduled))))
@@ -538,7 +538,7 @@
           (with-current-buffer buffer
             (should-error (mevedel-goal-edit "  ") :type 'user-error))
           (should (equal "goal-1" (mevedel-goal-id goal)))
-          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                      (lambda (&rest _) (setq saved t)))
                     ((symbol-function 'mevedel-goal-new-id)
                      (lambda () "goal-2"))

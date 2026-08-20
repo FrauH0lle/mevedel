@@ -15,12 +15,12 @@
 (declare-function gptel--model-mime-capable-p "ext:gptel-request"
                   (mime &optional model))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-publish-text
-                  "mevedel-session-persistence"
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-publish-text
+                  "mevedel-session-artifacts"
                   (session path content &optional coding))
-(declare-function mevedel-session-persistence-read-artifact
-                  "mevedel-session-persistence" (session logical
+(declare-function mevedel-session-artifacts-read-artifact
+                  "mevedel-session-artifacts" (session logical
                                                   &optional committed-only))
 
 ;; `mevedel-structs'
@@ -58,6 +58,9 @@
 
 TOOL-USE-ID records the tool call that owns the media.  When SESSION is
 non-nil, publish through its durability seam."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when (stringp tool-results-dir)
     (let* ((dir (file-name-concat tool-results-dir "media"))
            (file (file-name-concat dir (concat "media-" id ".el")))
@@ -71,8 +74,7 @@ non-nil, publish through its durability seam."
                      :items items)))))
       (if session
           (progn
-            (require 'mevedel-session-persistence)
-            (mevedel-session-persistence-publish-text
+            (mevedel-session-artifacts-publish-text
              session file content 'utf-8-unix))
         (make-directory dir t)
         (let ((coding-system-for-write 'utf-8-unix))
@@ -84,6 +86,9 @@ non-nil, publish through its durability seam."
   "Return media items for ID from TOOL-RESULTS-DIR.
 EXPECTED-TOOL-USE-ID rejects stale records when non-nil.  SESSION resolves
 remote session artifacts through their committed publication."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when-let* ((id (and (stringp id) id))
               ((string-match-p (rx string-start (+ hex) string-end) id))
               (dir (if session
@@ -96,8 +101,7 @@ remote session artifacts through their committed publication."
           (let* ((bytes
                   (if session
                       (progn
-                        (require 'mevedel-session-persistence)
-                        (mevedel-session-persistence-read-artifact
+                        (mevedel-session-artifacts-read-artifact
                          session
                          (file-relative-name
                           file (mevedel-session-save-path session))))

@@ -38,13 +38,15 @@
 (declare-function mevedel-plan-resource-address "mevedel-plan"
                   (relative-path))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-artifact-present-p
-                  "mevedel-session-persistence" (session logical))
-(declare-function mevedel-session-persistence-assert-mutation-authority
-                  "mevedel-session-persistence" (session &optional buffer))
-(declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence" (session buffer))
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifact-present-p
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-assert-mutation-authority
+                  "mevedel-session-artifacts" (session &optional buffer))
+(declare-function mevedel-session-artifacts-save
+                  "mevedel-session-artifacts"
+                  (session buffer &optional settled force))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-enqueue-pending-input
@@ -105,7 +107,9 @@
   "Require SESSION mutation authority before changing Goal state.
 BUFFER defaults to the current buffer."
   (require 'mevedel-session-persistence)
-  (mevedel-session-persistence-assert-mutation-authority
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
+  (mevedel-session-artifacts-assert-mutation-authority
    session (or buffer (current-buffer))))
 
 (defun mevedel-goal-new-id ()
@@ -130,6 +134,9 @@ BUFFER defaults to the current buffer."
   "Create and persist a lifecycle-neutral Goal for OBJECTIVE.
 SESSION defaults to the current session.  PLAN-REFERENCE is an optional
 session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (setq objective (mevedel-goal--validate-objective objective)
         session (or session mevedel--session))
   (unless session
@@ -154,8 +161,7 @@ session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
                 :created-at now
                 :updated-at now)))
     (setf (mevedel-session-goal session) goal)
-    (require 'mevedel-session-persistence)
-    (mevedel-session-persistence-save session (current-buffer))
+    (mevedel-session-artifacts-save session (current-buffer))
     (when (fboundp 'mevedel-telemetry-record)
       (mevedel-telemetry-record session 'goal-start :goal-id (mevedel-goal-id goal)))
     goal))
@@ -215,10 +221,12 @@ reactivated without scheduling because its caller owns the prepared kickoff."
 
 (defun mevedel-goal--persist (session buffer)
   "Persist SESSION from BUFFER when both remain live."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when (and session (buffer-live-p buffer))
     (with-current-buffer buffer
-      (require 'mevedel-session-persistence)
-      (mevedel-session-persistence-save session buffer))))
+      (mevedel-session-artifacts-save session buffer))))
 
 
 ;;
@@ -238,6 +246,9 @@ reactivated without scheduling because its caller owns the prepared kickoff."
 The artifact is validated through its private session-owned path, but the
 returned value is the model-facing `local://plans/...' address so Goal context
 never discloses session storage paths."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-plan)
   (when-let* ((reference (mevedel-goal-plan-reference goal)))
     (unless (mevedel-goal--valid-plan-reference-p reference)
@@ -252,8 +263,7 @@ never discloses session storage paths."
         (mevedel-goal--pause-for-integrity
          goal session
          "Accepted-plan artifact is missing or no longer owned by this session"))
-      (require 'mevedel-session-persistence)
-      (unless (mevedel-session-persistence-artifact-present-p
+      (unless (mevedel-session-artifacts-artifact-present-p
                session reference)
         (mevedel-goal--pause-for-integrity
          goal session

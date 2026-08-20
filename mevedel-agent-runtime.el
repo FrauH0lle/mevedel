@@ -144,19 +144,22 @@
                   (event event-plist callback
                          &optional session workspace request invocation))
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifact-present-p
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-publish-agent-terminal-state
+                  "mevedel-session-artifacts" (invocation))
+
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--record-running-transcript
+(declare-function mevedel-session-persistence-record-running-transcript
                   "mevedel-session-persistence" (session entry))
-(declare-function mevedel-session-persistence--shallow-ensure-files
+(declare-function mevedel-session-persistence-shallow-ensure-files
                   "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence--update-transcript-entry
+(declare-function mevedel-session-persistence-update-transcript-entry
                   "mevedel-session-persistence" (session agent-id updates))
-(declare-function mevedel-session-persistence--write-sidecar-now
+(declare-function mevedel-session-persistence-write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence-artifact-present-p
-                  "mevedel-session-persistence" (session logical))
-(declare-function mevedel-session-persistence-publish-agent-terminal-state
-                  "mevedel-session-persistence" (invocation))
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-structs'
@@ -230,6 +233,9 @@
 
 (defun mevedel-agent-runtime--setup-transcript (invocation agent-buffer)
   "Create and register INVOCATION's transcript for AGENT-BUFFER."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let ((session (mevedel-agent-invocation-parent-session invocation))
         (parent-buffer
          (mevedel-agent-invocation-parent-data-buffer invocation))
@@ -242,8 +248,7 @@
       (condition-case err
           (when-let* ((save-path
                        (progn
-                         (require 'mevedel-session-persistence)
-                         (mevedel-session-persistence--shallow-ensure-files
+                         (mevedel-session-persistence-shallow-ensure-files
                           session parent-buffer))))
             (let* ((agent
                     (mevedel-agent-invocation-agent invocation))
@@ -262,7 +267,7 @@
                        agent-type timestamp suffix
                        (if (= n 1) "" (format "-%d" n)))
                for path = (expand-file-name candidate save-path)
-               while (mevedel-session-persistence-artifact-present-p
+               while (mevedel-session-artifacts-artifact-present-p
                       session candidate)
                finally (setq relative candidate absolute path))
               (with-current-buffer agent-buffer
@@ -272,7 +277,7 @@
                relative
                (mevedel-agent-invocation-sidecar-dirty invocation) t)
               (let ((now (format-time-string "%FT%H-%M-%S")))
-                (mevedel-session-persistence--record-running-transcript
+                (mevedel-session-persistence-record-running-transcript
                  session
                  (cons agent-id
                        (list :agent-type agent-type
@@ -316,6 +321,9 @@
 
 (defun mevedel-agent-runtime--transcript-path (invocation)
   "Return INVOCATION's qualified logical transcript path when published."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when-let* ((relative
                (mevedel-agent-invocation-transcript-relative-path invocation))
               (session (mevedel-agent-invocation-parent-session invocation))
@@ -326,7 +334,7 @@
           (when (and
                  (mevedel-agent-persistence-transcript-path-p
                   relative save-path)
-                 (mevedel-session-persistence-artifact-present-p
+                 (mevedel-session-artifacts-artifact-present-p
                   session relative))
             (expand-file-name relative save-path)))
       (error
@@ -422,7 +430,7 @@
        (lambda ()
          (when session
            (require 'mevedel-session-persistence)
-           (mevedel-session-persistence--update-transcript-entry
+           (mevedel-session-persistence-update-transcript-entry
             session (mevedel-agent-invocation-agent-id invocation)
             (list :status status
                   :updated-at (format-time-string "%FT%H-%M-%S"))))))
@@ -441,7 +449,7 @@
        invocation 'transcript-activity
        (lambda ()
          (when session
-           (mevedel-session-persistence--update-transcript-entry
+           (mevedel-session-persistence-update-transcript-entry
             session (mevedel-agent-invocation-agent-id invocation)
             (list :activity
                   (mevedel-agent-conversation-final-activity invocation))))))
@@ -464,7 +472,7 @@
          invocation 'sidecar
          (lambda ()
            (when (and session (buffer-live-p parent-buffer))
-             (mevedel-session-persistence--write-sidecar-now
+             (mevedel-session-persistence-write-sidecar-now
               session parent-buffer)))))
       (setf (mevedel-agent-invocation-activity invocation) nil)
       (mevedel-agent-runtime--finalize-step
@@ -478,6 +486,9 @@
 
 (defun mevedel-agent-runtime--settle (invocation response &optional event)
   "Finalize INVOCATION and deliver RESPONSE and EVENT exactly once."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (unless (mevedel-agent-invocation-runtime-settled-p invocation)
     (let* ((pending
             (mevedel-agent-invocation-runtime-pending-response invocation))
@@ -526,8 +537,7 @@
                 (and session
                      save-path
                      (progn
-                       (require 'mevedel-session-persistence)
-                       (mevedel-session-persistence-artifact-present-p
+                       (mevedel-session-artifacts-artifact-present-p
                         session "session.meta.el"))
                      (mevedel-agent-invocation-transcript-relative-path
                       invocation)
@@ -549,8 +559,7 @@
           (condition-case err
               (if remote-terminal-publication-p
                   (progn
-                    (require 'mevedel-session-persistence)
-                    (mevedel-session-persistence-publish-agent-terminal-state
+                    (mevedel-session-artifacts-publish-agent-terminal-state
                      invocation))
                 (when (consp transaction)
                   (mevedel-agent-control--commit-session session)))

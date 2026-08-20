@@ -1152,7 +1152,7 @@
                                  (mevedel-session-plan-metadata saved-session)
                                  :implementation-retry)
                                 :goal-id)))))
-                    ((symbol-function 'mevedel-session-persistence-save)
+                    ((symbol-function 'mevedel-session-artifacts-save)
                      #'ignore)
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (action) (setq implementation action))))

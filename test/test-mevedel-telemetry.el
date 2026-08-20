@@ -186,7 +186,7 @@
                                                     "telemetry-log.el"))))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-session-persistence--flush-diagnostic-logs
+(mevedel-deftest mevedel-session-persistence-flush-diagnostic-logs
   ()
   ,test
   (test)
@@ -201,13 +201,13 @@
                    (lambda (_session) (cl-incf flushes))))
           ;; Local: inline.
           (setf (mevedel-session-save-path session) root)
-          (mevedel-session-persistence--flush-diagnostic-logs session)
+          (mevedel-session-persistence-flush-diagnostic-logs session)
           (should (= 1 flushes))
           ;; Remote: nothing runs inside the caller's extent; the zero
           ;; timer hands the flush to the idle transport afterwards.
           (setf (mevedel-session-save-path session)
                 "/mevedelmock:flush-host:/tmp/flush/")
-          (mevedel-session-persistence--flush-diagnostic-logs session)
+          (mevedel-session-persistence-flush-diagnostic-logs session)
           (should (= 1 flushes))
           (let ((deadline (+ (float-time) 2)))
             (while (and (= 1 flushes) (< (float-time) deadline))

@@ -57,9 +57,9 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-assert-new-mutation-authority
-                  "mevedel-session-persistence" (session))
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority
+                  "mevedel-session-artifacts" (session))
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-forwarded-audit-p
@@ -223,6 +223,9 @@ ENTRY plist keys:
   :granted-additional-permissions -- previously granted additive profile
   :justification         -- user-facing reason (`sandbox' only)
   :callback              -- function: (lambda (outcome) ...)"
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let ((origin (plist-get entry :origin)))
     (unless (mevedel-agent-path-p origin)
       (error "Invalid permission queue origin: %S" origin)))
@@ -233,8 +236,7 @@ ENTRY plist keys:
     (when (and session
                (plist-get (mevedel-session-control-transfer session) :state)
                (not (plist-get entry :request-id)))
-      (require 'mevedel-session-persistence)
-      (mevedel-session-persistence-assert-new-mutation-authority session))
+      (mevedel-session-artifacts-assert-new-mutation-authority session))
     (mevedel-permission-queue--log 'permission-enqueued entry session)
     (let* ((release
             (and session

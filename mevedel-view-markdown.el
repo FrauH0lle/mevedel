@@ -16,16 +16,17 @@
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifact-present-p
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-find-artifact-noselect
+                  "mevedel-session-artifacts"
+                  (session logical &optional inspection))
+
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-publication-logical-path-p
                   "mevedel-session-durability" (path))
-
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-artifact-present-p
-                  "mevedel-session-persistence" (session logical))
-(declare-function mevedel-session-persistence-find-artifact-noselect
-                  "mevedel-session-persistence"
-                  (session logical &optional inspection))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
@@ -103,6 +104,9 @@ buffer."
 An ordinary existing file returns t.  An artifact in the active remote
 session returns `(SESSION . LOGICAL)' only when that logical path is staged
 or committed; fixed session-cache existence is ignored."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when (stringp path)
     (let* ((session (bound-and-true-p mevedel--session))
            (target (and session
@@ -119,13 +123,16 @@ or committed; fixed session-cache existence is ignored."
           (let ((logical (substring expanded (length root))))
             (require 'mevedel-session-durability)
             (when (and (mevedel-session-publication-logical-path-p logical)
-                       (mevedel-session-persistence-artifact-present-p
+                       (mevedel-session-artifacts-artifact-present-p
                         session logical))
               (cons session logical)))
         (and (file-exists-p path) t)))))
 
 (defun mevedel-view--linkify-path-action (button)
   "Open the file or published session artifact referenced by BUTTON."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let ((path (button-get button 'mevedel-view-path))
         (line (button-get button 'mevedel-view-line))
         (session (button-get button 'mevedel-view-session))
@@ -134,7 +141,7 @@ or committed; fixed session-cache existence is ignored."
                 (cond
                  ((and session logical)
                   (pop-to-buffer
-                   (mevedel-session-persistence-find-artifact-noselect
+                   (mevedel-session-artifacts-find-artifact-noselect
                     session logical t)))
                  ((and path (file-exists-p path))
                   (find-file-other-window path)))))

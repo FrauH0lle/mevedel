@@ -242,7 +242,7 @@
       (cl-letf (((symbol-function 'mevedel--workspace-sessions)
                  (lambda (_) nil))
                 ((symbol-function
-                  'mevedel-session-persistence-rewind-checkpoint)
+                  'mevedel-session-rewind-rewind-checkpoint)
                  (lambda (&rest args) (setq captured args))))
         (mevedel-directive-activity-rewind))
       (should (equal (list 'workspace '(:session-id "main" :turn 2) nil)

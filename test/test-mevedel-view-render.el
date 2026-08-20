@@ -125,10 +125,10 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
      (unwind-protect
          (progn
            (mevedel-view-render-test--write-segment
-            (mevedel-session-persistence--segment-path directory 1)
+            (mevedel-session-artifacts-segment-path directory 1)
             "First prompt" "Archived answer one" "fork-1" 1)
            (mevedel-view-render-test--write-segment
-            (mevedel-session-persistence--segment-path directory 2)
+            (mevedel-session-artifacts-segment-path directory 2)
             "Second prompt" "Archived answer two" "fork-2" 2)
            (mevedel-view-test--with-buffers
              (with-current-buffer data-buf
@@ -436,7 +436,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
 
   :doc "a missing adjacent segment leaves the current projection unchanged"
   (let* ((directory (make-temp-file "mevedel-view-segment-gap-" t))
-         (missing (mevedel-session-persistence--segment-path directory 2))
+         (missing (mevedel-session-artifacts-segment-path directory 2))
          (session
           (mevedel-session--create
            :authority-mode 'pid-lock
@@ -450,7 +450,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (unwind-protect
         (progn
           (mevedel-view-render-test--write-segment
-           (mevedel-session-persistence--segment-path directory 1)
+           (mevedel-session-artifacts-segment-path directory 1)
            "First prompt" "Archived answer one" "fork-1" 1)
           (mevedel-view-test--with-buffers
             (with-current-buffer data-buf
@@ -484,7 +484,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (unwind-protect
         (progn
           (mevedel-view-render-test--write-segment
-           (mevedel-session-persistence--segment-path directory 1)
+           (mevedel-session-artifacts-segment-path directory 1)
            "Archived prompt" "Complete archived answer."
            "fork-1" 1 (length "Complete"))
           (mevedel-view-test--with-buffers
@@ -537,7 +537,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (unwind-protect
         (progn
           (mevedel-view-render-test--write-segment
-           (mevedel-session-persistence--segment-path directory 1)
+           (mevedel-session-artifacts-segment-path directory 1)
            "First prompt" "Archived answer one" "fork-1" 1)
           (mevedel-view-test--with-buffers
             (with-current-buffer data-buf
@@ -668,7 +668,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
         (goto-char (point-min))
         (search-forward "Assistant")
         (cl-letf
-            (((symbol-function 'mevedel-session-persistence-rewind)
+            (((symbol-function 'mevedel-session-rewind-rewind)
               (lambda (buffer target)
                 (setq called-buffer buffer
                       called-target target)
@@ -779,7 +779,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (with-current-buffer view-buf
       (cl-letf
           (((symbol-function
-             'mevedel-session-persistence-fork-point-at-source)
+             'mevedel-session-artifacts-fork-point-at-source)
             (lambda (&rest _)
               (ert-fail "Incremental render scanned fork points"))))
         (mevedel-view--render-turn
@@ -5300,7 +5300,7 @@ state of its inner sections"
                 ((symbol-function 'read-multiple-choice)
                  (lambda (&rest _) '(?w "rewind")))
                 ((symbol-function
-                  'mevedel-session-persistence-rewind-checkpoint)
+                  'mevedel-session-rewind-rewind-checkpoint)
                  (lambda (&rest args) (setq captured args))))
         (mevedel-view-directive-actions
          '(:activity-kind attempt :sequence 1))

@@ -3151,7 +3151,7 @@ spanning lines")))
                         :recipient "/root" :outcome completed
                         :payload "agent finished"))
                      #'ignore))
-                  ((symbol-function 'mevedel-session-persistence-save)
+                  ((symbol-function 'mevedel-session-artifacts-save)
                    (lambda (session buffer &optional settled)
                      (setq save-called (list session buffer settled))
                      "saved"))

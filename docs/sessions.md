@@ -67,6 +67,14 @@ flowchart TD
 
 ## Session persistence
 
+Persistence is split by ownership. `mevedel-session-codec.el` owns the closed
+sidecar schema and validation; `mevedel-session-artifacts.el` owns paths,
+artifacts, snapshots, and segment writes; `mevedel-session-rewind.el` owns
+restore plans and the Rewind transaction; and `mevedel-session-fork.el` owns
+Fork/Worktree projection, publication, and rename.
+`mevedel-session-persistence.el` remains the lifecycle, resume, listing,
+locking, and cleanup facade used by callers.
+
 Sessions auto-save lazily and per-completed-turn under
 `<workspace-root>/.mevedel/sessions/<name>-<timestamp>-<short-uuid>/`.
 Ordinary model turns and awaited fork-skill turns share one

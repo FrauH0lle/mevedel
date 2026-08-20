@@ -2,11 +2,11 @@
 
 ;;; Commentary:
 
-;; Shared helpers that do not belong to any single mevedel module:
-;; colour tinting for overlay styling, tag-query prefix/infix
-;; conversion, serialized ediff-based patch review glue, environment-info
-;; string assembly for system prompts, and various text and path
-;; manipulation utilities.
+;; Owns the package-version command and shared helpers that do not belong to
+;; any single mevedel module: colour tinting for overlay styling, tag-query
+;; prefix/infix conversion, serialized ediff-based patch review glue,
+;; environment-info string assembly for system prompts, and various text and
+;; path manipulation utilities.
 
 ;;; Code:
 
@@ -72,6 +72,24 @@
 
 ;; `subr'
 (defvar read-eval)
+
+
+;;
+;;; Package metadata
+
+;;;###autoload
+(defun mevedel-version (&optional here message)
+  "Return the current version of mevedel.
+
+Interactively, or when MESSAGE is non-nil, show it in echo area.  With
+prefix argument, or when HERE is non-nil, insert it at point."
+  (interactive (list (or current-prefix-arg 'interactive)))
+  (let ((version "v0.5.0"))
+    (cond
+     ((or message (called-interactively-p 'any))
+      (message "mevedel %s" version))
+     (here (insert (format "mevedel %s" version)))
+     (t version))))
 
 
 ;;
