@@ -10,6 +10,7 @@
 (require 'cl-lib)
 (require 'gptel-request)
 (require 'mevedel-execution-target)
+(require 'mevedel-goal)
 (require 'mevedel-structs)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-tool-registry)
@@ -408,6 +409,45 @@
                      :session session
                      :refresh-buffer (current-buffer))))
         (should-not (string-match-p "## Skills" prompt)))))
+
+  :doc "renders active Goal context only for the matching workspace and cwd"
+  (let* ((other-root (file-name-as-directory
+                      (make-temp-file "mevedel-sys-other-" t)))
+         (subdir (file-name-concat root-dir "sub"))
+         (workspace (mevedel-workspace-get-or-create
+                     'project root-dir root-dir "sysproj"))
+         (other-workspace (mevedel-workspace-get-or-create
+                           'project other-root other-root "other"))
+         (session (mevedel-session-create "main" workspace root-dir))
+         (other-session
+          (mevedel-session-create "other" other-workspace other-root))
+         (cwd-session (mevedel-session-create "cwd" workspace subdir))
+         (profile '(:workspace-aware nil :components (active-goal))))
+    (unwind-protect
+        (progn
+          (make-directory subdir t)
+          (dolist (owned-session (list session other-session cwd-session))
+            (setf (mevedel-session-goal owned-session)
+                  (mevedel-goal--create
+                   :id "goal" :objective "PRIVATE GOAL" :status 'active
+                   :tokens-used 0 :time-used-seconds 0 :turns-run 0
+                   :created-at "now" :updated-at "now")))
+          (should (string-match-p
+                   "PRIVATE GOAL"
+                   (mevedel-system-build-prompt
+                    profile :workspace workspace :working-directory root-dir
+                    :session session)))
+          (should-not (string-match-p
+                       "PRIVATE GOAL"
+                       (mevedel-system-build-prompt
+                        profile :workspace workspace
+                        :working-directory root-dir :session other-session)))
+          (should-not (string-match-p
+                       "PRIVATE GOAL"
+                       (mevedel-system-build-prompt
+                        profile :workspace workspace
+                        :working-directory root-dir :session cwd-session))))
+      (delete-directory other-root t)))
 
   :doc "ignores CLAUDE.md when AGENTS.md is absent"
   (let* ((claude-md (file-name-concat root-dir "CLAUDE.md"))

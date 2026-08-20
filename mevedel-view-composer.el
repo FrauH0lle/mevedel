@@ -475,6 +475,7 @@ Nil and unknown modes are treated as `ask'."
   "Return the read-only input prompt string for permission MODE.
 The prompt starts with a blank separator line so status and interaction
 rows remain visually distinct from the editable composer."
+  (require 'mevedel-pending-inputs)
   (let ((mode (or mode (mevedel-view--effective-permission-mode))))
     (if mevedel-view--composer-scope
         (let* ((record (plist-get mevedel-view--composer-scope :record))

@@ -219,6 +219,99 @@
 				 (should-not menu-called))
 		     (delete-directory root t))))
 
+(mevedel-deftest mevedel--chat-buffer
+  (:before-each (mevedel-workspace-clear-registry)
+   :vars* ((root-dir (file-name-as-directory
+                      (make-temp-file "mevedel-chat-transaction-" t)))
+           (workspace (mevedel-workspace-get-or-create
+                       'project root-dir root-dir "transaction"))
+           (data-name "*mevedel:main@transaction*")
+           (view-name "*mevedel:main@transaction:view*")
+           (chat-buffer nil))
+   :after-each
+   (progn
+     (dolist (name (list data-name view-name))
+       (when-let* ((buffer (get-buffer name))
+                   ((buffer-live-p buffer)))
+         (with-current-buffer buffer
+           (let ((kill-buffer-query-functions nil))
+             (kill-buffer buffer)))))
+     (mevedel-workspace-clear-registry)
+     (delete-directory root-dir t))
+   :quiet t
+   :doc "first-time setup failure leaves no published session and retry succeeds")
+  (let ((session-create (symbol-function 'mevedel-session-create))
+        (init-common (symbol-function 'mevedel--chat-buffer-init-common))
+        (view-ensure (symbol-function 'mevedel-view--ensure))
+        (start-hooks (symbol-function 'mevedel--run-session-start-hooks)))
+    (dolist (scenario '(before-session after-session after-view session-start))
+      (let* ((fail-once t)
+             (session-end-calls 0)
+             (cleanup-calls 0)
+             (mevedel-session-end-hook
+              (and (eq scenario 'after-view)
+                   (list (lambda ()
+                           (cl-incf session-end-calls)
+                           (error "Injected SessionEnd failure"))))))
+        (cl-letf (((symbol-function 'mevedel-session-create)
+                   (lambda (&rest args)
+                     (when (and fail-once (eq scenario 'before-session))
+                       (setq fail-once nil)
+                       (error "Injected pre-session failure"))
+                     (apply session-create args)))
+                  ((symbol-function 'mevedel--chat-buffer-init-common)
+                   (lambda (&rest args)
+                     (when (and fail-once (eq scenario 'after-session))
+                       (setq fail-once nil)
+                       (should (buffer-local-value 'mevedel--session
+                                                   (car args)))
+                       (error "Injected post-session failure"))
+                     (apply init-common args)))
+                  ((symbol-function 'mevedel-view--ensure)
+                   (lambda (&rest args)
+                     (let ((view (apply view-ensure args)))
+                       (when (and fail-once (eq scenario 'after-view))
+                         (with-current-buffer (car args)
+                           (add-hook 'kill-buffer-hook
+                                     (lambda () (cl-incf cleanup-calls))
+                                     nil t))
+                         (setq fail-once nil)
+                         (error "Injected post-view failure"))
+                       view)))
+                  ((symbol-function 'mevedel--run-session-start-hooks)
+                   (lambda (&rest args)
+                     (when (and fail-once (eq scenario 'session-start))
+                       (setq fail-once nil)
+                       (error "Injected SessionStart failure"))
+                     (apply start-hooks args))))
+          (let ((setup-error
+                 (should-error
+                  (mevedel--chat-buffer "main" t workspace root-dir))))
+            (should (string-match-p
+                     (pcase scenario
+                       ('before-session "pre-session")
+                       ('after-session "post-session")
+                       ('after-view "post-view")
+                       (_ "SessionStart"))
+                     (error-message-string setup-error))))
+          (when (eq scenario 'after-view)
+            (should (= 1 session-end-calls))
+            (should (= 1 cleanup-calls)))
+          (should-not (get-buffer data-name))
+          (should-not (get-buffer view-name))
+          (should-not (mevedel--workspace-sessions workspace))
+          (setq mevedel-session-end-hook nil)
+          (setq chat-buffer
+                (mevedel--chat-buffer "main" t workspace root-dir))
+          (should (buffer-live-p chat-buffer))
+          (should (buffer-local-value 'mevedel--session chat-buffer))
+          (should (buffer-live-p
+                   (buffer-local-value 'mevedel--view-buffer chat-buffer)))
+          (with-current-buffer chat-buffer
+            (let ((kill-buffer-query-functions nil))
+              (kill-buffer chat-buffer)))
+          (setq chat-buffer nil))))))
+
 (mevedel-deftest mevedel--probe-session-target ()
                  ,test
                  (test)

@@ -25,10 +25,12 @@ cannot dispatch work without an explicit `/goal resume`.
 Immediately before every active root request, mevedel generates request-local
 Goal context from the durable record. It contains the objective, accounting,
 remaining budget, and any accepted-plan reference. It is never inserted into
-the visible or persisted transcript. Ordinary user messages that start a turn
-during a Goal receive the same context and accounting as automatic turns.
-Same-turn steering instead joins the already-running Goal turn at its next
-model interaction boundary and does not create or charge another turn.
+the visible or persisted transcript. The Goal's session must match the
+request's workspace and working directory; stale ambient sessions contribute
+no Goal context. Ordinary user messages that start a turn during a Goal receive
+the same context and accounting as automatic turns. Same-turn steering instead
+joins the already-running Goal turn at its next model interaction boundary and
+does not create or charge another turn.
 
 `/goal edit <objective>` revises the live objective and rotates the Goal ID
 while retaining status, budget, accounting, accepted-plan reference, and

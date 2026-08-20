@@ -634,7 +634,7 @@ present."
 (mevedel-define-prompt-component active-goal
   :producer (lambda (context)
               (when (fboundp 'mevedel-goal-active-context)
-                (when-let* ((session (mevedel-system-context-session context)))
+                (when-let* ((session (mevedel-system--context-session context)))
                   (mevedel-goal-active-context session)))))
 
 (mevedel-define-prompt-component main-role
