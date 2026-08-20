@@ -163,7 +163,71 @@
           (search-forward file)
           (let ((display (get-text-property (match-beginning 0) 'display)))
             (should (equal (list 'image :file file) display))))
-      (delete-file file))))
+      (delete-file file)))
+
+  :doc "renders remote session images from verified publication bytes"
+  (let* ((host "view-image-artifact")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-view-image-artifact-" t)))
+         (remote-root (format "/mevedelmock:%s:%s" host local-root))
+         (save-path (concat remote-root "session/"))
+         (logical "tool-results/image.png")
+         (fixed (file-name-concat save-path logical))
+         (native-fixed (file-name-concat local-root "session" logical))
+         (published (file-name-concat
+                     save-path ".publications" "generation" "000001.data"))
+         (staged (file-name-concat local-root "staged-image"))
+         (content "verified image bytes")
+         (target (mevedel-execution-target-create remote-root))
+         (session (mevedel-session--create
+                   :authority-mode 'portable
+                   :name "remote-view" :execution-target target
+                   :save-path save-path))
+         created)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (make-directory (file-name-directory fixed) t)
+          (write-region "poisoned fixed cache" nil fixed nil 'silent)
+          (make-directory (file-name-directory published) t)
+          (write-region content nil published nil 'silent)
+          (write-region "uncommitted image bytes" nil staged nil 'silent)
+          (setf (mevedel-session-publication session)
+                (list :head ".publications/generation/manifest.el"
+                      :sidecar nil
+                      :artifacts
+                      (list (list logical :published published
+                                  :sha256 (secure-hash 'sha256 content))))
+                (mevedel-session-publication-uncommitted-batches session)
+                (list (list :directory local-root
+                            :artifacts
+                            (list (list :logical logical :source staged)))))
+          (cl-letf (((symbol-function
+                      'mevedel-session-durability-lease-owned-p)
+                     (lambda (_session) t))
+                    ((symbol-function 'display-images-p)
+                     (lambda (&optional _display) t))
+                    ((symbol-function 'create-image)
+                     (lambda (source &optional _type data-p &rest _)
+                       (setq created (list source data-p))
+                       'image)))
+            (with-temp-buffer
+              (setq-local mevedel--session session)
+              (insert (format "![shot](%s)\n" native-fixed))
+              (mevedel-view--decorate-local-images-in-range
+               (point-min) (point-max))
+              (should (equal (list content t) created)))
+            (setf (mevedel-session-publication session)
+                  (list :head ".publications/generation/manifest.el"
+                        :sidecar nil :artifacts nil))
+            (setq created nil)
+            (with-temp-buffer
+              (setq-local mevedel--session session)
+              (insert (format "![shot](%s)\n" native-fixed))
+              (mevedel-view--decorate-local-images-in-range
+               (point-min) (point-max))
+              (should-not created))))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-view--decorate-markdown-in-range
   (:doc "`mevedel-view--decorate-markdown-in-range' leaves raw pipe tables visible")

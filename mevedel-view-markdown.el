@@ -23,6 +23,9 @@
 (declare-function mevedel-session-artifacts-find-artifact-noselect
                   "mevedel-session-artifacts"
                   (session logical &optional inspection))
+(declare-function mevedel-session-artifacts-read-artifact
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-publication-logical-path-p
@@ -302,9 +305,8 @@ True for linkify-exempt text and for positions inside RANGES."
   "Image filename extensions rendered inline in the view.")
 
 (defun mevedel-view--image-file-p (path)
-  "Return non-nil when PATH names a supported local image file."
+  "Return non-nil when PATH names a supported image file."
   (and (stringp path)
-       (file-exists-p path)
        (member (downcase (or (file-name-extension path) ""))
                mevedel-view--image-extensions)))
 
@@ -338,9 +340,16 @@ True for linkify-exempt text and for positions inside RANGES."
   "Return an image display spec for PATH, or nil."
   (when (and (display-images-p)
              (mevedel-view--image-file-p path))
-    (condition-case nil
-        (create-image path nil nil :max-width mevedel-view-inline-image-max-width)
-      (error nil))))
+    (when-let* ((target (mevedel-view--path-target path)))
+      (condition-case nil
+          (if (consp target)
+              (create-image
+               (mevedel-session-artifacts-read-artifact
+                (car target) (cdr target) t)
+               nil t :max-width mevedel-view-inline-image-max-width)
+            (create-image
+             path nil nil :max-width mevedel-view-inline-image-max-width))
+        (error nil)))))
 
 (defun mevedel-view--put-image-display (start end path)
   "Display PATH as an image over START..END when possible."

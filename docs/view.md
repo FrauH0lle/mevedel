@@ -685,8 +685,11 @@ Markdown rendering adds small view-only affordances:
   only the code body. A source panel adds no left inset of its own and
   inherits any inset from its containing disclosure;
 - incomplete streaming fences stay raw until the closing fence arrives;
-- local Markdown image links and bare local image paths render inline
-  when Emacs can display images;
+- supported local image references render inline when Emacs can display
+  images; remote portable session-artifact images are decoded only from
+  resolver-verified committed publication bytes rather than owned staged
+  writes or the mutable fixed-path cache, while PID-lock sessions read their
+  authoritative fixed logical file;
 - rendered `@file` mentions, Markdown file links, and bare file paths
   are clickable open-file buttons, including `:LINE`, `:L<line>`,
   `:#L<line>`, comma-separated line lists, and `#L<line>` targets. A path
