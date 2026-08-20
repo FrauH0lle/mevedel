@@ -18,13 +18,6 @@
 (declare-function file-notify-rm-watch "filenotify" (descriptor))
 (declare-function file-notify-valid-p "filenotify" (descriptor))
 
-;; `gptel-agent'
-(declare-function gptel-agent-parse-markdown-frontmatter
-                  "gptel-agent"
-                  (file-path &optional validator templates metadata-only))
-(declare-function gptel-agent-read-file
-                  "gptel-agent" (agent-file &optional templates metadata-only))
-
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-capability
                   "mevedel-execution-target" (target name))
@@ -41,6 +34,8 @@
                   (rules source &optional source-file source-root))
 (declare-function mevedel-hooks-normalize-rules
                   "mevedel-hooks" (rules &optional scope))
+(declare-function mevedel-hooks-project-file-snapshot
+                  "mevedel-hooks" (workspace file))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--parse-rule-string
@@ -52,6 +47,9 @@
 
 ;; `subr'
 (defvar read-eval)
+
+;; `yaml'
+(declare-function yaml-parse-string "yaml" (string &rest args))
 
 
 ;;
@@ -391,17 +389,41 @@ For `/path/to/grill-me/SKILL.md' returns `grill-me'."
   (file-name-nondirectory
    (directory-file-name (file-name-directory skill-file))))
 
-(defun mevedel-skills--parse-frontmatter (skill-file)
-  "Parse SKILL-FILE's YAML frontmatter and return a plist.
-Unlike `gptel-agent-read-file', preserves the `:name' key in the
-plist so callers can decide whether to honor it or fall back to
-the directory name.  Returns nil on read/parse failure; emits a
-warning when YAML parsing fails."
-  (require 'gptel-agent)
-  (when (and (file-readable-p skill-file)
-             (file-regular-p skill-file))
+(defun mevedel-skills--parse-frontmatter (skill-file &optional content)
+  "Parse SKILL-FILE's YAML frontmatter and body from CONTENT.
+When CONTENT is nil, read SKILL-FILE once.  Preserve `:name' so callers
+can decide whether to honor it or use the directory name.  Frontmatter
+values remain inert data.  Return nil on read/parse failure and warn when
+YAML parsing fails."
+  (require 'yaml)
+  (when (or content
+            (and (file-readable-p skill-file)
+                 (file-regular-p skill-file)))
     (condition-case err
-        (gptel-agent-parse-markdown-frontmatter skill-file nil nil t)
+        (with-temp-buffer
+          (if content
+              (insert content)
+            (insert-file-contents skill-file))
+          (goto-char (point-min))
+          (when (looking-at-p "^---[ \t]*$")
+            (forward-line 1)
+            (let ((frontmatter-start (point)))
+              (unless (re-search-forward "^---[ \t]*$" nil t)
+                (error "Malformed frontmatter"))
+              (let* ((frontmatter-end (match-beginning 0))
+                     (plist
+                      (yaml-parse-string
+                       (buffer-substring-no-properties
+                        frontmatter-start frontmatter-end)
+                       :object-type 'plist
+                       :object-key-type 'keyword
+                       :sequence-type 'list)))
+                (forward-line 1)
+                (when-let* ((body (buffer-substring-no-properties
+                                   (point) (point-max)))
+                            ((not (string-blank-p body))))
+                  (setq plist (plist-put plist :system body)))
+                plist))))
       (error
        (display-warning
         'mevedel
@@ -411,10 +433,12 @@ warning when YAML parsing fails."
        nil))))
 
 (defun mevedel-skills--from-plist
-    (name plist source-file source &optional source-family)
+    (name plist source-file source
+          &optional source-family project-hooks-trusted-p)
   "Build a `mevedel-skill' from NAME and PLIST parsed from SOURCE-FILE.
-SOURCE is the origin tag symbol.  SOURCE-FAMILY is `mevedel',
-`agents', or nil.  NAME is the resolved invocation identifier (already
+SOURCE is the origin tag symbol.  SOURCE-FAMILY is `mevedel', `agents',
+or nil.  PROJECT-HOOKS-TRUSTED-P authorizes executable hooks from a
+project manifest.  NAME is the resolved invocation identifier (already
 validated by the caller).  Description fallback from the body is the
 caller's responsibility -- anything in PLIST's `:description' wins over
 the fallback."
@@ -431,14 +455,21 @@ the fallback."
          (arguments (plist-get plist :arguments))
          (paths (plist-get plist :paths))
          (shell (plist-get plist :shell))
-         (hooks (plist-get plist :hooks))
+         (declared-hooks (plist-get plist :hooks))
+         (hooks (and (or (not (eq source 'project))
+                         project-hooks-trusted-p)
+                     declared-hooks))
          (warnings
-          (when (and (eq context 'inline)
-                     (stringp agent)
-                     (not (string-blank-p agent)))
-            (list
-             (format "Agent %s is ignored for inline skills; use context: fork to select an agent"
-                     agent)))))
+          (append
+           (when (and (eq context 'inline)
+                      (stringp agent)
+                      (not (string-blank-p agent)))
+             (list
+              (format "Agent %s is ignored for inline skills; use context: fork to select an agent"
+                      agent)))
+           (when (and declared-hooks (eq source 'project)
+                      (not project-hooks-trusted-p))
+             (list "Project skill hooks are ignored until the manifest is trusted")))))
     (mevedel-skill--create
      :name name
      :display-name (or (and (stringp display-name) display-name) name)
@@ -455,7 +486,6 @@ the fallback."
      :allowed-tool-rules
      (mevedel-skills--parse-allowed-tool-rules
       (mevedel-skills--coerce-list allowed-tools) source-file)
-     ;; gptel-agent normalizes Markdown `model' values to symbols.
      :model (and model
                  (cond
                   ((stringp model) model)
@@ -506,12 +536,16 @@ relative and WORKSPACE-ROOT is nil."
       (cons (file-name-as-directory (expand-file-name dir))
             (if family (cons 'user family) 'user))))
    (workspace-root
-    (let ((family (mevedel-skills--source-family-from-dir dir)))
-      (cons (file-name-as-directory
-             (expand-file-name dir workspace-root))
-            (if family (cons 'project family) 'project))))))
+    (let* ((family (mevedel-skills--source-family-from-dir dir))
+           (resolved (file-name-as-directory
+                      (expand-file-name dir workspace-root))))
+      (when (condition-case nil
+                (file-in-directory-p resolved workspace-root)
+              (file-error nil))
+        (cons resolved
+              (if family (cons 'project family) 'project)))))))
 
-(defun mevedel-skills--scan-resolved-dir (dir source)
+(defun mevedel-skills--scan-resolved-dir (dir source &optional workspace)
   "Scan DIR with SOURCE, applying plugin namespacing when requested."
   (let* ((plugin-name (and (consp source)
                            (eq (car source) 'plugin)
@@ -522,12 +556,27 @@ relative and WORKSPACE-ROOT is nil."
                              (cdr source)))
          skills)
     (dolist (skill (mevedel-skills--scan-dir
-                    dir source-tag source-family)
+                    dir source-tag source-family workspace)
                    (nreverse skills))
       (push (if plugin-name
                 (mevedel-skills--namespace-plugin-skill plugin-name skill)
               skill)
             skills))))
+
+(defun mevedel-skills-project-files (workspace-root)
+  "Return SKILL.md files under configured project roots in WORKSPACE-ROOT."
+  (let (files)
+    (dolist (raw mevedel-skill-dirs)
+      (when-let* ((resolved (mevedel-skills--resolve-dir raw workspace-root))
+                  (source (cdr resolved))
+                  ((eq (if (consp source) (car source) source) 'project))
+                  (dir (car resolved))
+                  ((file-directory-p dir)))
+        (setq files
+              (append files
+                      (directory-files-recursively
+                       dir "\\`SKILL\\.md\\'" nil nil nil)))))
+    (delete-dups files)))
 
 (defun mevedel-skills--plugin-skill-dir-entries (&optional workspace)
   "Return (PLUGIN-NAME . DIR) entries from plugins enabled in WORKSPACE."
@@ -547,23 +596,20 @@ relative and WORKSPACE-ROOT is nil."
     (setf (mevedel-skill-display-name skill) name)
     skill))
 
-(defun mevedel-skills--load-body-string (skill-file)
-  "Return the markdown body of SKILL-FILE as a string, or nil.
-Used during scan to compute the description fallback when frontmatter
-omits `description'."
-  (require 'gptel-agent)
-  (let ((parsed (ignore-errors (gptel-agent-read-file skill-file))))
-    (plist-get (cdr parsed) :system)))
-
 (defun mevedel-skills--build-skill
-    (skill-file source &optional source-family)
+    (skill-file source &optional source-family workspace)
   "Build a `mevedel-skill' for SKILL-FILE with SOURCE origin tag.
 SOURCE-FAMILY distinguishes `.mevedel' and `.agents' resource roots.
 Performs name resolution (frontmatter `:name' > directory name) and
-validation.  Returns nil with a warning when the skill is invalid
-\\(bad name, etc.).  Computes description fallback from the body when
-frontmatter omits `description'."
-  (let ((plist (mevedel-skills--parse-frontmatter skill-file)))
+validation.  WORKSPACE owns project hook trust.  Returns nil with a
+warning when the skill is invalid \\(bad name, etc.).  Computes
+description fallback from the body when frontmatter omits `description'."
+  (let* ((snapshot
+          (when (eq source 'project)
+            (require 'mevedel-hooks)
+            (mevedel-hooks-project-file-snapshot workspace skill-file)))
+         (plist (mevedel-skills--parse-frontmatter
+                 skill-file (plist-get snapshot :content))))
     (when plist
       (let* ((dir-name (mevedel-skills--directory-name skill-file))
              (frontmatter-name (plist-get plist :name))
@@ -580,28 +626,31 @@ frontmatter omits `description'."
            :warning)
           nil)
          (t
-          ;; Description fallback: read body if frontmatter omits it.
+          ;; Description fallback uses the body from the same parse.
           (unless (and (stringp (plist-get plist :description))
                        (not (string-empty-p (plist-get plist :description))))
-            (when-let* ((body (mevedel-skills--load-body-string skill-file))
+            (when-let* ((body (plist-get plist :system))
                         (fallback (mevedel-skills--first-paragraph body)))
               (setq plist (plist-put plist :description fallback))))
           (mevedel-skills--from-plist
-           raw-name plist skill-file source source-family)))))))
+           raw-name plist skill-file source source-family
+           (plist-get snapshot :trusted-p))))))))
 
-(defun mevedel-skills--scan-dir (dir source &optional source-family)
+(defun mevedel-skills--scan-dir
+    (dir source &optional source-family workspace)
   "Return a list of `mevedel-skill' structs found under DIR.
 SOURCE is the origin tag applied to every skill scanned from DIR.
 SOURCE-FAMILY distinguishes `.mevedel' and `.agents' resource roots.
+WORKSPACE owns project hook trust.
 Each SKILL.md is wrapped in `condition-case' so a single bad skill
 does not abort the whole scan."
   (when (file-directory-p dir)
     (let (result)
       (dolist (skill-file (directory-files-recursively
-                           dir "\\`SKILL\\.md\\'" nil nil t))
+                           dir "\\`SKILL\\.md\\'" nil nil nil))
         (let ((skill (condition-case err
                          (mevedel-skills--build-skill
-                          skill-file source source-family)
+                          skill-file source source-family workspace)
                        (error
                         (display-warning
                          'mevedel
@@ -721,7 +770,8 @@ explicit scans for tests and internal callers."
       (when-let* ((resolved (mevedel-skills--resolve-dir raw workspace-root))
                   (dir (car resolved))
                   (source (cdr resolved)))
-        (dolist (skill (mevedel-skills--scan-resolved-dir dir source))
+        (dolist (skill (mevedel-skills--scan-resolved-dir
+                        dir source workspace))
           (push skill result))))
     (when (and mevedel-skills-include-bundled
                (file-directory-p mevedel-skills--bundled-dir))
@@ -734,7 +784,7 @@ explicit scans for tests and internal callers."
         (when-let* ((resolved (mevedel-skills--resolve-dir
                                entry workspace-root)))
           (dolist (skill (mevedel-skills--scan-resolved-dir
-                          (car resolved) (cdr resolved)))
+                          (car resolved) (cdr resolved) workspace))
             (push skill result)))))
     (mevedel-skills--qualify-conflicting-names (nreverse result))))
 
@@ -745,15 +795,14 @@ explicit scans for tests and internal callers."
 (defun mevedel-skill-load-body (skill)
   "Populate SKILL's body slot from its SKILL.md and return the body.
 
-Reads the full markdown body (frontmatter stripped) on first call via
-`gptel-agent-read-file' and caches the result on the struct.  Subsequent
-calls return the cached string without touching the filesystem.  Returns
-nil if the file has no body text or cannot be read."
-  (require 'gptel-agent)
+Reads the full markdown body through the canonical skill frontmatter parser
+on first call and caches the result on the struct.  Subsequent calls return
+the cached string without touching the filesystem.  Returns nil if the file
+has no body text or cannot be read."
   (or (mevedel-skill-body skill)
       (when-let* ((file (mevedel-skill-source-file skill))
-                  (parsed (ignore-errors (gptel-agent-read-file file)))
-                  (body (plist-get (cdr parsed) :system))
+                  (parsed (mevedel-skills--parse-frontmatter file))
+                  (body (plist-get parsed :system))
                   ((not (string-blank-p body))))
         (setf (mevedel-skill-body skill) body)
         body)))

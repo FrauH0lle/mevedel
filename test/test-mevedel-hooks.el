@@ -552,6 +552,44 @@
 		     (delete-directory root t)
 		     (delete-directory user-dir t))))
 
+(mevedel-deftest mevedel-hooks-project-file-snapshot ()
+  ,test
+  (test)
+  :doc "binds project skill trust to workspace, path, and exact content"
+  (let* ((root (make-temp-file "mevedel-hook-skill-root-" t))
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-hook-skill-user-" t)))
+         (workspace (mevedel-hooks-test--workspace root))
+         (mevedel-user-dir user-dir)
+         (mevedel-hooks-require-project-trust t)
+         messages
+         (file (file-name-concat root ".mevedel" "skills" "demo"
+                                 "SKILL.md")))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (insert "---\ndescription: Demo\n---\nBody"))
+          (let ((snapshot
+                 (mevedel-hooks-project-file-snapshot workspace file)))
+            (should-not (plist-get snapshot :trusted-p))
+            (should (string-match-p "description: Demo"
+                                    (plist-get snapshot :content))))
+          (mevedel-test--with-captured-messages messages
+            (mevedel-hooks-trust-project workspace))
+          (should (equal "mevedel: trusted 1 project file(s)\n" messages))
+          (should
+           (plist-get (mevedel-hooks-project-file-snapshot workspace file)
+                      :trusted-p))
+          (with-temp-file file
+            (insert "---\ndescription: Changed\n---\nBody"))
+          (should-not
+           (plist-get (mevedel-hooks-project-file-snapshot workspace file)
+                      :trusted-p)))
+      (clrhash mevedel-hooks--config-rules-cache)
+      (delete-directory root t)
+      (delete-directory user-dir t))))
+
 (mevedel-deftest mevedel-hooks--config-rules
   ()
   ,test

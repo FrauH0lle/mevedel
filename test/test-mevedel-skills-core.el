@@ -1,4 +1,4 @@
-;;; test-mevedel-skills-core.el --- Skill core tests -*- lexical-binding: t -*-
+;;; test-mevedel-skills-core.el -- Skill core tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -23,6 +23,7 @@
   ,test
   (test)
   (dolist (symbol '(mevedel-skills-scan
+                    mevedel-skills-project-files
                     mevedel-skills-install
                     mevedel-skills--ensure-fresh
                     mevedel-skills--maybe-activate))
@@ -103,7 +104,7 @@ argument-hint: \"[path]\"
             (should-not (mevedel-skill-body skill))))
       (delete-directory dir t)))
 
-  :doc "preserves model and effort metadata normalized by gptel-agent"
+  :doc "preserves model and effort metadata normalized from YAML"
   (let* ((mevedel-skills-include-bundled nil)
          (dir (make-temp-file "mevedel-skills-policy-" t)))
     (unwind-protect
@@ -116,6 +117,21 @@ argument-hint: \"[path]\"
             (should (equal "OpenAI:gpt-5-mini"
                            (mevedel-skill-model skill)))
             (should (eq 'high (mevedel-skill-effort skill)))))
+      (delete-directory dir t)))
+
+  :doc "treats unused executable frontmatter fields as inert data"
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-inert-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "inert"
+           "description: Inert
+pre: \"(error 'frontmatter-executed)\"
+" "Body")
+          (should (equal '("inert")
+                         (mapcar #'mevedel-skill-name
+                                 (mevedel-skills-scan dir '("."))))))
       (delete-directory dir t)))
 
   :doc "records inline-agent diagnostics during discovery"
@@ -208,6 +224,46 @@ description: present
   (let* ((mevedel-skills-include-bundled nil)
          (skills (mevedel-skills-scan nil '(".mevedel/skills/"))))
     (should (null skills)))
+
+  :doc "does not discover skills through escaping directory symlinks"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-skills-root-" t))
+         (outside (make-temp-file "mevedel-skills-outside-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           outside "escaped" "description: Escaped\n" "Body")
+          (make-symbolic-link outside (file-name-concat root "linked"))
+          (should-not (mevedel-skills-scan root '("."))))
+      (delete-directory root t)
+      (delete-directory outside t)))
+
+  :doc "rejects a configured project root symlink that escapes the workspace"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-skills-root-link-" t))
+         (outside (make-temp-file "mevedel-skills-linked-root-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           outside "escaped" "description: Escaped\n" "Body")
+          (make-symbolic-link outside (file-name-concat root "skills"))
+          (should-not (mevedel-skills-scan root '("skills"))))
+      (delete-directory root t)
+      (delete-directory outside t)))
+
+  :doc "does not recurse through an ancestor directory symlink"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-skills-loop-" t))
+         (skill-dir (file-name-concat root "kept")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           root "kept" "description: Kept\n" "Body")
+          (make-symbolic-link root (file-name-concat skill-dir "loop"))
+          (should (equal '("kept")
+                         (mapcar #'mevedel-skill-name
+                                 (mevedel-skills-scan root '("."))))))
+      (delete-directory root t)))
 
   :doc "ccs-compatible fields populate their slots"
   (let* ((mevedel-skills-include-bundled nil)
@@ -846,13 +902,20 @@ allowed-tools:
 	                             warnings))))
       (delete-directory dir t)))
 
-  :doc "hooks frontmatter is normalized and usable as request hooks"
+  :doc "project skill hooks require exact trusted manifest bytes"
   (let* ((mevedel-skills-include-bundled nil)
-         (dir (make-temp-file "mevedel-skills-test-" t)))
+         (root (make-temp-file "mevedel-skills-hook-root-" t))
+         (skill-dir (file-name-concat root ".mevedel" "skills"))
+         (user-dir (make-temp-file "mevedel-skills-hook-user-" t))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (mevedel-hooks-require-project-trust t)
+         (snapshot-function
+          (symbol-function 'mevedel-hooks-project-file-snapshot)))
     (unwind-protect
         (progn
           (mevedel-skills-test--write-skill
-           dir "hooked"
+           skill-dir "hooked"
            "name: hooked
 description: ok
 hooks:
@@ -862,9 +925,31 @@ hooks:
         - type: elisp
           function: mevedel-skills-test--hook-fn
 " "Body")
-          (let* ((skill (car (mevedel-skills-scan dir '("."))))
+          (should-not
+           (mevedel-skill-hooks
+            (car (mevedel-skills-scan
+                  root '(".mevedel/skills") workspace))))
+          (mevedel-test--with-captured-messages nil
+            (mevedel-hooks-trust-project workspace))
+          (let* ((skill
+                  (cl-letf
+                      (((symbol-function
+                         'mevedel-hooks-project-file-snapshot)
+                        (lambda (ws file)
+                          (let ((snapshot
+                                 (funcall snapshot-function ws file)))
+                            (with-temp-file file
+                              (insert "---\nname: hooked\n"
+                                      "description: replacement\n"
+                                      "hooks:\n  PreToolUse:\n"
+                                      "    - matcher: Bash\n      hooks:\n"
+                                      "        - type: elisp\n"
+                                      "          function: ignore\n"
+                                      "---\nReplacement"))
+                            snapshot))))
+                    (car (mevedel-skills-scan
+                          root '(".mevedel/skills") workspace))))
                  (hooks (mevedel-skill-hooks skill))
-                 (workspace (mevedel-skills-test--make-workspace dir))
                  (session (mevedel-session-create "main" workspace))
                  (request (mevedel-request--create
                            :session session
@@ -875,8 +960,11 @@ hooks:
                    (car (mevedel-hooks--matching-handlers
                          'PreToolUse '(:tool-name "Bash") hooks))))
               (should (eq 'project-file (plist-get handler :source)))
+              (should (eq 'mevedel-skills-test--hook-fn
+                          (plist-get handler :function)))
               (should (equal (mevedel-skill-source-file skill)
                              (plist-get handler :source-file))))
+            (should (equal "ok" (mevedel-skill-description skill)))
             (mevedel-hooks-run-event
              'PreToolUse
              (mevedel-hooks-event-plist
@@ -887,8 +975,14 @@ hooks:
             (while (null decision)
               (accept-process-output nil 0.01))
             (should (equal '("skill hook ran")
-                           (plist-get decision :additional-context)))))
-	  (delete-directory dir t)))
+                           (plist-get decision :additional-context))))
+          (should-not
+           (mevedel-skill-hooks
+            (car (mevedel-skills-scan
+                  root '(".mevedel/skills") workspace)))))
+      (clrhash mevedel-hooks--config-rules-cache)
+      (delete-directory root t)
+      (delete-directory user-dir t)))
 
   :doc "fork skill Stop hooks normalize to SubagentStop"
   (let* ((mevedel-skills-include-bundled nil)
@@ -908,7 +1002,7 @@ hooks:
         - type: elisp
           function: mevedel-skills-test--hook-fn
 " "Body")
-          (let* ((skill (car (mevedel-skills-scan dir '("."))))
+          (let* ((skill (car (mevedel-skills-scan nil (list dir))))
                  (hooks (mevedel-skill-hooks skill)))
             (should (eq 'SubagentStop (caar hooks)))))
       (delete-directory dir t)))
@@ -937,6 +1031,30 @@ display-name: Friendly Label
                            (mevedel-skill-display-name with-d)))))
       (delete-directory dir t))))
 
+(mevedel-deftest mevedel-skills-project-files ()
+  ,test
+  (test)
+  :doc "returns configured project manifests without user or linked trees"
+  (let* ((root (make-temp-file "mevedel-skill-files-root-" t))
+         (outside (make-temp-file "mevedel-skill-files-outside-" t))
+         (project-dir (file-name-concat root "project-skills"))
+         (linked-root (file-name-concat root "linked-root"))
+         (mevedel-skill-dirs
+          (list "project-skills" "linked-root" outside)))
+    (unwind-protect
+        (progn
+          (let ((project-file
+                 (mevedel-skills-test--write-skill
+                  project-dir "project" "description: Project\n" "Body")))
+            (mevedel-skills-test--write-skill
+             outside "user" "description: User\n" "Body")
+            (make-symbolic-link outside linked-root)
+            (make-symbolic-link outside
+                                (file-name-concat project-dir "linked"))
+            (should (equal (list project-file)
+                           (mevedel-skills-project-files root)))))
+      (delete-directory root t)
+      (delete-directory outside t))))
 
 (mevedel-deftest mevedel-skills--qualify-conflicting-names ()
   ,test
