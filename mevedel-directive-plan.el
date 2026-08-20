@@ -75,9 +75,9 @@
                   "mevedel-session-artifacts"
                   (session buffer &optional settled force))
 
-;; `mevedel-skills-invoke'
-(declare-function mevedel-skills-prepare-user-input
-                  "mevedel-skills-invoke" (text session))
+;; `mevedel-skills-input'
+(declare-function mevedel-skills-input-prepare-user-input
+                  "mevedel-skills-input" (text session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
@@ -222,9 +222,9 @@ card's selection stays authoritative once retained."
          (implementation-input
           (mevedel-directive-plan--implementation-prompt plan selection)))
     (with-current-buffer (plist-get plan :chat-buffer)
-      (require 'mevedel-skills-invoke)
+      (require 'mevedel-skills-input)
       (setq implementation-input
-            (mevedel-skills-prepare-user-input implementation-input session))
+            (mevedel-skills-input-prepare-user-input implementation-input session))
       (mevedel-plan-handoff--validate-skill-bindings
        implementation-input session))
     (plist-put plan :status 'accepted)

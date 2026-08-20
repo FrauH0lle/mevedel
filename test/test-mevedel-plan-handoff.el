@@ -895,7 +895,7 @@
                 (lambda (_) view-buffer))
                ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
                 #'ignore)
-               ((symbol-function 'mevedel-skills-prepare-user-input)
+               ((symbol-function 'mevedel-skills-input-prepare-user-input)
                 (lambda (input _) input))
                ((symbol-function
                  'mevedel-plan-handoff--validate-skill-bindings)

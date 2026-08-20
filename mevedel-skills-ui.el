@@ -16,7 +16,6 @@
 (require 'mevedel-models)
 (require 'mevedel-permissions)
 (require 'mevedel-skills-core)
-(require 'mevedel-skills-invoke)
 (require 'mevedel-structs)
 
 ;; `gptel'
@@ -141,24 +140,32 @@
 (declare-function mevedel-side-conversation-open
                   "mevedel-side-conversation" (&optional initial-prompt))
 
-;; `mevedel-skills-invoke'
-(declare-function mevedel-skills--clear-pending-inline-attachments
-                  "mevedel-skills-invoke" ())
-(declare-function mevedel-skills--command-delete-context
-                  "mevedel-skills-invoke" (command-pos))
-(declare-function mevedel-skills--dispatch-inline-attachments
-                  "mevedel-skills-invoke"
+;; `mevedel-skills-input'
+(declare-function mevedel-skills-input-clear-pending
+                  "mevedel-skills-input" ())
+(declare-function mevedel-skills-input-command-delete-context
+                  "mevedel-skills-input" (command-pos))
+(declare-function mevedel-skills-input-current-prompt-region
+                  "mevedel-skills-input" ())
+(declare-function mevedel-skills-input-dispatch-command
+                  "mevedel-skills-input" (&optional continue-fn))
+(declare-function mevedel-skills-input-dispatch-inline-attachments
+                  "mevedel-skills-input"
                   (&optional continue-fn allow-root))
-(declare-function mevedel-skills--dispatch-skill-command
-                  "mevedel-skills-invoke" (&optional continue-fn))
-(declare-function mevedel-skills--ensure-fresh-line
-                  "mevedel-skills-invoke" ())
-(declare-function mevedel-skills--parse-prefixed-line
-                  "mevedel-skills-invoke" (text prefix))
-(declare-function mevedel-skills--scan-skill-tokens
-                  "mevedel-skills-invoke" (text lookup &optional allow-root))
-(declare-function mevedel-skills-prepare-user-input
-                  "mevedel-skills-invoke" (text session))
+(declare-function mevedel-skills-input-ensure-fresh-line
+                  "mevedel-skills-input" ())
+(declare-function mevedel-skills-input-escaped-position-p
+                  "mevedel-skills-input" (text pos))
+(declare-function mevedel-skills-input-parse-prefixed-line
+                  "mevedel-skills-input" (text prefix))
+(declare-function mevedel-skills-input-prepare-user-input
+                  "mevedel-skills-input" (text session))
+(declare-function mevedel-skills-input-scan-tokens
+                  "mevedel-skills-input" (text resolver &optional allow-root))
+
+;; `mevedel-skills-preparation'
+(declare-function mevedel-skills-preparation-parse-arguments
+                  "mevedel-skills-preparation" (arguments))
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
@@ -795,19 +802,21 @@ Handlers have access to the buffer-local `mevedel--session'.")
 Local slash commands (`/model', `/mode', etc.) parse only the first
 whitespace-separated token from ARGS and ignore the rest, so extending
 ARGS to include subsequent lines does not change their behavior."
-  (mevedel-skills--parse-prefixed-line text ?/))
+  (require 'mevedel-skills-input)
+  (mevedel-skills-input-parse-prefixed-line text ?/))
 
 (defun mevedel-skills--text-after-local-command-delete
     (delete-start region-end after-prefix)
   "Return buffer text after deleting a local slash command region.
 DELETE-START and REGION-END bound the command text.  AFTER-PREFIX means
 the deleted command followed the prompt prefix."
+  (require 'mevedel-skills-input)
   (let ((text (buffer-substring-no-properties (point-min) (point-max))))
     (with-temp-buffer
       (insert text)
       (delete-region delete-start region-end)
       (unless after-prefix
-        (mevedel-skills--ensure-fresh-line))
+        (mevedel-skills-input-ensure-fresh-line))
       (buffer-string))))
 
 (defun mevedel-skills--refresh-visited-file-before-local-edit
@@ -833,7 +842,8 @@ Returns:
 - `unknown' a `/' line was present but matched nothing; caller
             should abort the send.
 - nil       no `/command' present; caller should proceed as usual."
-  (when-let* ((region (mevedel-skills--current-prompt-region))
+  (require 'mevedel-skills-input)
+  (when-let* ((region (mevedel-skills-input-current-prompt-region))
               (text (buffer-substring-no-properties (car region) (cdr region)))
               (parsed (mevedel-skills--parse-slash-line text)))
     (let* ((name (nth 0 parsed))
@@ -841,7 +851,7 @@ Returns:
            (slash-pos (+ (car region) (nth 2 parsed)))
            (local (assoc name mevedel-slash-commands))
            (delete-context
-            (mevedel-skills--command-delete-context slash-pos))
+            (mevedel-skills-input-command-delete-context slash-pos))
            (delete-start (plist-get delete-context :delete-start))
            (after-prefix (plist-get delete-context :after-prefix)))
       (cond
@@ -850,7 +860,7 @@ Returns:
          delete-start (cdr region) after-prefix)
         (delete-region delete-start (cdr region))
         (unless after-prefix
-          (mevedel-skills--ensure-fresh-line))
+          (mevedel-skills-input-ensure-fresh-line))
         (when-let* ((result (funcall (cdr local) args))
                     ((stringp result)))
           (message "%s" result))
@@ -878,6 +888,7 @@ the advice must not rescan their derived prompt text.  Pending-stash cleanup
 is tied to the continuation that actually resumes ORIG-FN so async shell
 preparation does not clear the stash before the request begin handler can
 drain it."
+  (require 'mevedel-skills-input)
   (if (or (not (bound-and-true-p mevedel--session))
           (and (boundp 'mevedel--view-buffer)
                (buffer-live-p mevedel--view-buffer)))
@@ -886,14 +897,14 @@ drain it."
         ((continue ()
            (unwind-protect
                (apply orig-fn args)
-             (mevedel-skills--clear-pending-inline-attachments))))
-      (when-let* ((region (mevedel-skills--current-prompt-region)))
+             (mevedel-skills-input-clear-pending))))
+      (when-let* ((region (mevedel-skills-input-current-prompt-region)))
         (require 'mevedel-mention-bindings)
         (require 'mevedel-mentions)
         (let* ((text (buffer-substring (car region) (cdr region)))
                (prepared
                 (mevedel-mentions-prepare-user-input
-                 (mevedel-skills-prepare-user-input
+                 (mevedel-skills-input-prepare-user-input
                   text mevedel--session)
                  mevedel--session)))
           (dolist (range (mevedel-mention-bindings-ranges prepared))
@@ -904,10 +915,10 @@ drain it."
       (pcase (mevedel-skills--dispatch-slash-command)
         ((or 'local 'unknown) nil)
         (_
-         (pcase (mevedel-skills--dispatch-skill-command #'continue)
+         (pcase (mevedel-skills-input-dispatch-command #'continue)
            ((or 'unknown 'skill) nil)
            (_
-            (pcase (mevedel-skills--dispatch-inline-attachments
+            (pcase (mevedel-skills-input-dispatch-inline-attachments
                     #'continue t)
               ((or 'unknown 'skill) nil)
               (_ (continue))))))))))
@@ -936,9 +947,10 @@ is available."
 Explicit `argument-hint' text is shown only before the user starts
 typing arguments.  Named `arguments' frontmatter is shown as the
 remaining positional slots after shell-style tokenization."
+  (require 'mevedel-skills-preparation)
   (let ((hint (mevedel-skill-argument-hint skill))
         (names (mevedel-skill-argument-names skill))
-        (tokens (mevedel-skills--parse-arguments arguments)))
+        (tokens (mevedel-skills-preparation-parse-arguments arguments)))
     (cond
      ((and (stringp hint)
            (not (string-empty-p hint))
@@ -1291,6 +1303,7 @@ completed arguments before point."
 INPUT-START constrains completion to the first view-composer line.  The
 return value is a plist with :kind `root', :start, :end, and
 :inline-only."
+  (require 'mevedel-skills-input)
   (catch 'context
     (let* ((command-start (mevedel-skills--slash-command-start input-start))
            (line-start (line-beginning-position))
@@ -1329,7 +1342,7 @@ return value is a plist with :kind `root', :start, :end, and
               (require 'mevedel-mention-bindings)
               (when (and (mevedel-mention-bindings-skill-token-start-p
                           line-text relative-dollar)
-                         (not (mevedel-skills--escaped-position-p
+                         (not (mevedel-skills-input-escaped-position-p
                                line-text relative-dollar)))
                 (throw 'context
                        (list :kind 'root
@@ -1416,6 +1429,7 @@ is active for slash commands that declare finite argument choices."
 
 (defun mevedel-skills--fontify-dollar-keyword (end)
   "Find a known `$skill' mention before END for font-lock."
+  (require 'mevedel-skills-input)
   (when-let* ((session (and (bound-and-true-p mevedel--session)
                             mevedel--session)))
     (let* ((origin (point-min))
@@ -1424,7 +1438,7 @@ is active for slash commands that declare finite argument choices."
            (token
             (cl-find-if
              (lambda (candidate) (>= (plist-get candidate :start) scan))
-             (mevedel-skills--scan-skill-tokens
+             (mevedel-skills-input-scan-tokens
               text
               (lambda (name _start _end)
                 (mevedel-session-get-skill session name))

@@ -77,7 +77,7 @@
                      (lambda () 'session))
                     ((symbol-function 'mevedel-skills-plan-user-input)
                      (lambda (&rest _) (setq planned t) nil))
-                    ((symbol-function 'mevedel-skills-refresh-bound-input)
+                    ((symbol-function 'mevedel-skills-input-refresh-bound-input)
                      (lambda (&rest _) nil))
                     ((symbol-function 'mevedel-view--forward-input)
                      (lambda (input &rest _) (setq forwarded input))))

@@ -219,19 +219,21 @@
 (declare-function mevedel-skill-user-invocable-p "mevedel-skills-core"
 		  (cl-x) t)
 
+;; `mevedel-skills-input'
+(declare-function mevedel-skills-input-insert-fork-result
+                  "mevedel-skills-input" (outcome))
+(declare-function mevedel-skills-input-parse-skill-line
+                  "mevedel-skills-input" (text))
+(declare-function mevedel-skills-input-prepare-user-input
+                  "mevedel-skills-input" (text session))
+(declare-function mevedel-skills-input-refresh-bound-input
+                  "mevedel-skills-input" (text session))
+
 ;; `mevedel-skills-invoke'
-(declare-function mevedel-skills--insert-fork-result
-		  "mevedel-skills-invoke" (outcome))
-(declare-function mevedel-skills--parse-skill-line
-		  "mevedel-skills-invoke" (text))
 (declare-function mevedel-skills-commit-invoked-records
 		  "mevedel-skills-invoke" (session records))
 (declare-function mevedel-skills-dispatch-prepared-fork
 		  "mevedel-skills-invoke" t t)
-(declare-function mevedel-skills-prepare-user-input
-		  "mevedel-skills-invoke" (text session))
-(declare-function mevedel-skills-refresh-bound-input
-		  "mevedel-skills-invoke" (text session))
 
 ;; `mevedel-skills-plan'
 (declare-function mevedel-skill-invocation-plan-fork-p
@@ -1247,6 +1249,7 @@ follows `mevedel-view--input-marker'."
 The visible text is unchanged.  Binding before asynchronous preparation
 means a failed attempt leaves the exact source attached for a retry."
   (require 'mevedel-mention-bindings)
+  (require 'mevedel-skills-input)
   (let* ((input-start (mevedel-view--input-start))
          (raw-input
           (mevedel-mention-bindings-copy-text
@@ -1254,7 +1257,7 @@ means a failed attempt leaves the exact source attached for a retry."
          (bound-input
           (with-current-buffer mevedel--data-buffer
             (mevedel-mentions-prepare-user-input
-             (mevedel-skills-prepare-user-input raw-input session)
+             (mevedel-skills-input-prepare-user-input raw-input session)
              session))))
     (with-silent-modifications
       (remove-text-properties
@@ -1430,13 +1433,14 @@ When FORCE is non-nil, replace the current draft unconditionally."
 
 (defun mevedel-view--skill-argument-hint ()
   "Return display-only skill argument hint for the current composer."
+  (require 'mevedel-skills-input)
   (when-let* ((session (mevedel-view--session))
               (input-start (and (markerp mevedel-view--input-marker)
                                 (marker-buffer mevedel-view--input-marker)
                                 (mevedel-view--input-start)))
               ((>= (point) input-start))
               (text (buffer-substring-no-properties input-start (point-max)))
-              (parsed (mevedel-skills--parse-skill-line text))
+              (parsed (mevedel-skills-input-parse-skill-line text))
               (name (nth 0 parsed))
               (skill (mevedel-session-get-skill session name))
               ((mevedel-skill-user-invocable-p skill)))
@@ -1539,6 +1543,7 @@ in the view when present."
 (defun mevedel-view--finish-fork-skill-outcome
     (name outcome view-buffer data-buffer &optional skill)
   "Handle fork skill OUTCOME for NAME."
+  (require 'mevedel-skills-input)
   (when (and (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
     (when (and (fboundp 'mevedel-review-command-skill-p)
@@ -1552,7 +1557,7 @@ in the view when present."
        (pcase (plist-get outcome :kind)
          ('fork
           (with-current-buffer data-buffer
-            (mevedel-skills--insert-fork-result outcome)))
+            (mevedel-skills-input-insert-fork-result outcome)))
          (_
           (message "Skill '%s' returned unsupported outcome: %S"
                    name outcome))))
@@ -1771,6 +1776,7 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded.
 When INERT-SKILLS is non-nil, skip skill planning entirely: any skill token in
 INPUT stays literal text.  External input -- a collaboration guest's prompt --
 carries prompting authority only, never skill invocation."
+  (require 'mevedel-skills-input)
   (let ((view-buffer (current-buffer))
         (data-buffer mevedel--data-buffer)
         (session (mevedel-view--session)))
@@ -1778,7 +1784,7 @@ carries prompting authority only, never skill invocation."
     (let* ((plan
             (unless inert-skills
               (with-current-buffer data-buffer
-                (mevedel-skills-refresh-bound-input input session)
+                (mevedel-skills-input-refresh-bound-input input session)
                 (mevedel-skills-plan-user-input input session)))))
       (if (or inert-skills
               (null (mevedel-skill-invocation-plan-occurrences plan)))

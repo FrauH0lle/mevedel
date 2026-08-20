@@ -101,9 +101,9 @@
 (declare-function mevedel-skill-p "mevedel-skills-core" (object))
 (declare-function mevedel-skill-source "mevedel-skills-core" (cl-x) t)
 
-;; `mevedel-skills-invoke'
-(declare-function mevedel-skills--insert-fork-result
-                  "mevedel-skills-invoke" (outcome))
+;; `mevedel-skills-input'
+(declare-function mevedel-skills-input-insert-fork-result
+                  "mevedel-skills-input" (outcome))
 
 ;; `mevedel-skills-ui'
 (defvar mevedel-slash-commands)
@@ -1225,13 +1225,14 @@ parent request has accepted the review turn."
 
 (defun mevedel-review--handle-direct-outcome (outcome data-buffer &optional command)
   "Handle OUTCOME for COMMAND direct dispatch targeting DATA-BUFFER."
+  (require 'mevedel-skills-input)
   (when (buffer-live-p data-buffer)
     (pcase (plist-get outcome :status)
       ('ok
        (pcase (plist-get outcome :kind)
          ('fork
           (with-current-buffer data-buffer
-            (mevedel-skills--insert-fork-result
+            (mevedel-skills-input-insert-fork-result
              (mevedel-review--transform-command-outcome outcome command))))
          (_
           (mevedel-review--end-direct-request data-buffer)
@@ -1247,6 +1248,7 @@ parent request has accepted the review turn."
 (defun mevedel-review--handle-view-outcome
     (outcome view-buffer data-buffer &optional command)
   "Handle OUTCOME for COMMAND dispatch from VIEW-BUFFER to DATA-BUFFER."
+  (require 'mevedel-skills-input)
   (when (and (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
     (pcase (plist-get outcome :status)
@@ -1254,7 +1256,7 @@ parent request has accepted the review turn."
        (pcase (plist-get outcome :kind)
          ('fork
           (with-current-buffer data-buffer
-            (mevedel-skills--insert-fork-result
+            (mevedel-skills-input-insert-fork-result
              (mevedel-review--transform-command-outcome outcome command))))
          (_
           (mevedel-review--end-direct-request data-buffer)

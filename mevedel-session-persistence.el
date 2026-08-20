@@ -453,6 +453,7 @@ known to have been reused.  A nil value disables auto-cleanup entirely."
 
 (defun mevedel-session-persistence-write-current-buffer-atomically (path)
   "Write the current buffer to PATH through a same-directory rename."
+  (require 'mevedel-session-control-fs)
   (mevedel-session-control-fs-write-file
    (mevedel-session-control-fs-physical-path path)
    (buffer-substring-no-properties (point-min) (point-max))))

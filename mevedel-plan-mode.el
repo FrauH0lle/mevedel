@@ -70,9 +70,9 @@
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
 
-;; `mevedel-skills-invoke'
-(declare-function mevedel-skills-prepare-user-input
-                  "mevedel-skills-invoke" (text session))
+;; `mevedel-skills-input'
+(declare-function mevedel-skills-input-prepare-user-input
+                  "mevedel-skills-input" (text session))
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills--refresh-view-input-prompt
@@ -428,8 +428,8 @@ opening an editable draft."
          (instructions
           (unless (string-empty-p instructions)
             (with-current-buffer (plist-get entry :chat-buffer)
-              (require 'mevedel-skills-invoke)
-              (mevedel-skills-prepare-user-input
+              (require 'mevedel-skills-input)
+              (mevedel-skills-input-prepare-user-input
                instructions session)))))
     (plist-put selection :instructions
                instructions)

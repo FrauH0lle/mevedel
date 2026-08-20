@@ -439,7 +439,7 @@
                 (lambda (&rest _) '(:backend backend :model model)))
                ((symbol-function 'mevedel-model-validate-effort)
                 (lambda (_model effort) effort))
-               ((symbol-function 'mevedel-skills-prepare-user-input)
+               ((symbol-function 'mevedel-skills-input-prepare-user-input)
                 (lambda (input _) input))
                ((symbol-function
                  'mevedel-plan-handoff--validate-skill-bindings)

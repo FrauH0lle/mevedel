@@ -881,7 +881,7 @@
         (setq-local mevedel-session--read-only-mode nil))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4))
-      (cl-letf (((symbol-function 'mevedel-skills--insert-fork-result)
+      (cl-letf (((symbol-function 'mevedel-skills-input-insert-fork-result)
                  (lambda (_outcome)
                    (with-current-buffer view-buf
                      (mevedel-view--full-rerender)))))
@@ -899,7 +899,7 @@
         (setq-local mevedel--session
                     (mevedel-session--create :name "review"))
         (mevedel-request-begin mevedel--session))
-      (cl-letf (((symbol-function 'mevedel-skills--insert-fork-result)
+      (cl-letf (((symbol-function 'mevedel-skills-input-insert-fork-result)
                  (lambda (outcome)
                    (should (equal raw (plist-get outcome :result)))
                    (mevedel-request-end))))
@@ -1033,7 +1033,7 @@
                        (funcall callback
                                 '(:status ok :kind fork
                                   :result "review result"))))
-                    ((symbol-function 'mevedel-skills--insert-fork-result)
+                    ((symbol-function 'mevedel-skills-input-insert-fork-result)
                      (lambda (outcome)
                        (insert (plist-get outcome :result)))))
             (mevedel-review--dispatch "prompt" "target" "/tmp/")
@@ -1086,7 +1086,7 @@
   (let ((data (generate-new-buffer " *mevedel-review-error-data*"))
         message-text inserted)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-skills--insert-fork-result)
+        (cl-letf (((symbol-function 'mevedel-skills-input-insert-fork-result)
                    (lambda (_outcome)
                      (setq inserted t)))
                   ((symbol-function 'message)
@@ -1103,7 +1103,7 @@
   :doc "inserts successful direct fork outcomes"
   (let ((data (generate-new-buffer " *mevedel-review-ok-data*")))
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-skills--insert-fork-result)
+        (cl-letf (((symbol-function 'mevedel-skills-input-insert-fork-result)
                    (lambda (outcome)
                      (insert (plist-get outcome :result)))))
           (mevedel-review--handle-direct-outcome
@@ -1121,7 +1121,7 @@
           (setq-local mevedel--session
                       (mevedel-session--create :name "review"))
           (mevedel-request-begin mevedel--session)
-          (cl-letf (((symbol-function 'mevedel-skills--insert-fork-result)
+          (cl-letf (((symbol-function 'mevedel-skills-input-insert-fork-result)
                      (lambda (outcome)
                        (should (equal raw (plist-get outcome :result)))
                        (mevedel-request-end))))

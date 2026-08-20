@@ -111,8 +111,10 @@
 (require 'mevedel-reminders)
 (require 'mevedel-skills-core)
 (require 'mevedel-mention-bindings)
+(require 'mevedel-skills-input)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-plan)
+(require 'mevedel-skills-preparation)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-skills-ui)
 (require 'mevedel-cockpit)
@@ -205,10 +207,12 @@
 (declare-function mevedel-skills-uninstall-hot-reload
                   "mevedel-skills-core" ())
 
+;; `mevedel-skills-input'
+(declare-function mevedel-skills-input-transform-inline-attachments
+                  "mevedel-skills-input" (fsm))
+
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--transform-apply-request-model-policy
-                  "mevedel-skills-invoke" (fsm))
-(declare-function mevedel-skills--transform-expand-inline-attachments
                   "mevedel-skills-invoke" (fsm))
 
 ;; `mevedel-structs'
@@ -703,7 +707,7 @@ always prompt for the session name."
   ;; mevedel views prepare complete plans before `gptel-send', so their stash
   ;; is empty and this transform is a no-op.
   (add-hook 'gptel-prompt-transform-functions
-            #'mevedel-skills--transform-expand-inline-attachments -89)
+            #'mevedel-skills-input-transform-inline-attachments -89)
 
   ;; Inject system reminders after mention expansion but before the request fires
   (add-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform -80)
@@ -770,7 +774,7 @@ always prompt for the session name."
 
   ;; Remove inline skill attachment expansion from gptel
   (remove-hook 'gptel-prompt-transform-functions
-               #'mevedel-skills--transform-expand-inline-attachments)
+               #'mevedel-skills-input-transform-inline-attachments)
 
   ;; Remove root request model policy transform
   (remove-hook 'gptel-prompt-transform-functions

@@ -27,17 +27,19 @@
 (declare-function mevedel-skills--source-key
                   "mevedel-skills-core" (source-file))
 
+;; `mevedel-skills-input'
+(declare-function mevedel-skills-input-attachment-reminder
+                  "mevedel-skills-input" (attachment))
+(declare-function mevedel-skills-input-resolve-mention
+                  "mevedel-skills-input"
+                  (text session start end name))
+(declare-function mevedel-skills-input-scan-tokens
+                  "mevedel-skills-input" (text resolver &optional allow-root))
+
 ;; `mevedel-skills-invoke'
-(declare-function mevedel-skills--inline-attachment-reminder
-                  "mevedel-skills-invoke" (attachment))
-(declare-function mevedel-skills--scan-skill-tokens
-                  "mevedel-skills-invoke" (text resolver &optional allow-root))
 (declare-function mevedel-skills-prepare
                   "mevedel-skills-invoke"
                   (skill arguments callback &rest keys))
-(declare-function mevedel-skills-resolve-user-mention-outcome
-                  "mevedel-skills-invoke"
-                  (text session start end name))
 
 
 ;;
@@ -84,16 +86,15 @@
   "Resolve live skill tokens in TEXT against SESSION.
 Return available tokens and unavailable bound occurrences separately.
 Unknown and intentionally literal tokens remain unresolved."
-  (unless (fboundp 'mevedel-skills--scan-skill-tokens)
-    (require 'mevedel-skills-invoke))
+  (require 'mevedel-skills-input)
   (let (available unavailable)
     (dolist
         (token
-         (mevedel-skills--scan-skill-tokens
+         (mevedel-skills-input-scan-tokens
           text
           (lambda (name start end)
             (let ((outcome
-                   (mevedel-skills-resolve-user-mention-outcome
+                   (mevedel-skills-input-resolve-mention
                     text session start end name)))
               (when (or (eq (plist-get outcome :status) 'unavailable)
                         (plist-get outcome :skill))
@@ -324,6 +325,7 @@ function uses recorded extents and never scans TEXT."
 
 (defun mevedel-skills-plan--aggregate-prepared (pairs)
   "Aggregate ordered prepared entry PAIRS into prompt components and policy."
+  (require 'mevedel-skills-input)
   (let ((command-count
          (cl-count-if
           (lambda (pair)
@@ -361,7 +363,7 @@ function uses recorded extents and never scans TEXT."
               (when (= command-count 1)
                 (setq single-command-context context)))
           (push
-           (mevedel-skills--inline-attachment-reminder
+           (mevedel-skills-input-attachment-reminder
             (list :name (mevedel-skill-plan-entry-name entry)
                   :body (or (plist-get outcome :body) "")))
            instruction-reminders))))
