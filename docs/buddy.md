@@ -65,6 +65,12 @@ brand-new unsaved buffer in a project still gets `AGENTS.md` and persistent
 memory in its prompt. That matters most for guidance, where "what should this
 module need" depends on project conventions.
 
+The cached scope is bound to the buffer name, visited file, and
+`default-directory` that produced it. Changing any of them discards that
+buffer's old edit records and resets its pending review timer before deriving
+the new scope. A buffer cannot carry one project's edits or prompt context into
+another project merely by changing what it visits.
+
 ## Everything is ephemeral
 
 Notes, dismissals, recorded edits, note ids, and the last-reviewed time live in
@@ -192,8 +198,10 @@ Only the lines the model was actually shown are marked. Emacs walks a buffer's
 marker list on every insertion, so marking every line of a large file would
 make typing lag for as long as the request runs.
 
-A note on the wrong line is worse than no note, so this is not an optional
-refinement.
+A new note requires the live captured boundaries for that shown line. Unshown,
+deleted, nonpositive, out-of-range, and already released line numbers are
+rejected rather than falling back to current raw line counting. A note on the
+wrong line is worse than no note, so this is not an optional refinement.
 
 ## Model selection
 

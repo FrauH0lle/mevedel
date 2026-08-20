@@ -72,9 +72,87 @@
     (mevedel-buddy--format-changes
      (mevedel-buddy--changes-for-scope (mevedel-buddy--scope-key)))))
 
+(defun mevedel-test--buddy-project (root name)
+  "Create and return a real project NAME under ROOT."
+  (let ((directory (file-name-concat root name)))
+    (make-directory (file-name-concat directory ".git") t)
+    directory))
+
 
 ;;
 ;;; Change recording and coalescing
+
+(mevedel-deftest mevedel-buddy--scope-key
+  (:after-each (mevedel-test--buddy-cleanup))
+  ,test
+  (test)
+
+  :doc "a visited buffer changing projects drops old records and resets its timer"
+  (let* ((root (make-temp-file "mevedel-buddy-scope-" t))
+         (project-a (mevedel-test--buddy-project root "a"))
+         (project-b (mevedel-test--buddy-project root "b"))
+         (file-a (file-name-concat project-a "source.el"))
+         (file-b (file-name-concat project-b "source.el"))
+         (buffer (mevedel-test--buddy-buffer "buddy-scope.el" "alpha\n")))
+    (unwind-protect
+        (progn
+          (with-temp-file file-a (insert "alpha\n"))
+          (with-temp-file file-b (insert "beta\n"))
+          (with-current-buffer buffer
+            (mevedel-buddy--untrack-buffer)
+            (setq default-directory project-a)
+            (set-visited-file-name file-a t)
+            (mevedel-buddy--track-buffer)
+            (let ((scope-a (mevedel-buddy--scope-key)))
+              (goto-char (point-max))
+              (insert "change\n")
+              (should (mevedel-buddy--changes-for-scope scope-a))
+              (let ((old-timer (run-at-time 60 nil #'ignore)))
+                (setq mevedel-buddy--idle-timer old-timer
+                      default-directory project-b)
+                (set-visited-file-name file-b t)
+                (should-not (equal scope-a (mevedel-buddy--scope-key)))
+                (should-not (mevedel-buddy--changes-for-scope scope-a))
+                (should mevedel-buddy--idle-timer)
+                (should-not (eq old-timer mevedel-buddy--idle-timer))))))
+      (delete-directory root t)))
+
+  :doc "an unsaved buffer becoming visited drops records from its old identity"
+  (let* ((root (make-temp-file "mevedel-buddy-unsaved-" t))
+         (project (mevedel-test--buddy-project root "project"))
+         (file (file-name-concat project "source.el"))
+         (buffer (mevedel-test--buddy-buffer "buddy-unsaved" "alpha\n")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq default-directory project)
+          (let ((scope (mevedel-buddy--scope-key)))
+            (goto-char (point-max))
+            (insert "change\n")
+            (should (mevedel-buddy--changes-for-scope scope))
+            (let ((old-timer (run-at-time 60 nil #'ignore)))
+              (setq mevedel-buddy--idle-timer old-timer)
+              (set-visited-file-name file t)
+              (should-not (mevedel-buddy--changes-for-scope scope))
+              (should-not mevedel-buddy--idle-timer)
+              (should-not (memq old-timer timer-list)))))
+      (delete-directory root t)))
+
+  :doc "changing default-directory moves an unsaved buffer to the new project"
+  (let* ((root (make-temp-file "mevedel-buddy-directory-" t))
+         (project-a (mevedel-test--buddy-project root "a"))
+         (project-b (mevedel-test--buddy-project root "b"))
+         (buffer (mevedel-test--buddy-buffer "buddy-directory" "alpha\n")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq default-directory project-a)
+          (let ((scope-a (mevedel-buddy--scope-key)))
+            (goto-char (point-max))
+            (insert "change\n")
+            (should (mevedel-buddy--changes-for-scope scope-a))
+            (setq default-directory project-b)
+            (should-not (equal scope-a (mevedel-buddy--scope-key)))
+            (should-not (mevedel-buddy--changes-for-scope scope-a))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-buddy--record-change
   (:after-each (mevedel-test--buddy-cleanup))
