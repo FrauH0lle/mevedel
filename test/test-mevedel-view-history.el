@@ -542,8 +542,11 @@ Binds `data-buf' and `view-buf'."
             (when (buffer-live-p buf-one) (kill-buffer buf-one))
             (when (buffer-live-p buf-two) (kill-buffer buf-two))))))))
 
-(mevedel-deftest mevedel-view-history--persistence-corrupt
-  (:quiet t :doc "rejects malformed binding persistence through the corrupt-history path")
+(mevedel-deftest mevedel-view-history-load
+  (:quiet t :doc "loads valid history and isolates confirmed corruption")
+  ,test
+  (test)
+  :doc "rejects malformed binding persistence through the corrupt-history path"
   (mevedel-view-history-test--with-temp-dir dir
     (let* ((path (mevedel-view-history-test--path dir))
            (session (mevedel-view-history-test--session dir))
@@ -608,7 +611,43 @@ Binds `data-buf' and `view-buf'."
           (setq-local mevedel--session session)
           (mevedel-view-history-load session)
           (should (equal nil (mevedel-view-history--entries))))
-        (should (file-exists-p (concat path ".bad")))))))
+        (should (file-exists-p (concat path ".bad"))))))
+  :doc "keeps valid history outside parse and schema failures"
+  (mevedel-view-history-test--with-temp-dir dir
+    (let* ((path (mevedel-view-history-test--path dir))
+           (session (mevedel-view-history-test--session dir)))
+      (make-directory (file-name-directory path) t)
+      (dolist (failure '(probe read install))
+        (mevedel-session-codec-write
+         path '(:version 2 :entries ("kept")))
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (pcase failure
+            ('probe
+             (let ((exists-p (symbol-function 'file-exists-p)))
+               (cl-letf (((symbol-function 'file-exists-p)
+                          (lambda (candidate)
+                            (if (equal candidate path)
+                                (error "Target unavailable")
+                              (funcall exists-p candidate)))))
+                 (mevedel-view-history-load session))))
+            ('read
+             (cl-letf (((symbol-function
+                         'mevedel-session-control-fs-read-file)
+                        (lambda (&rest _) (error "Target unavailable"))))
+               (mevedel-view-history-load session)))
+            ('install
+             (cl-letf (((symbol-function 'mevedel-view-history--set-entries)
+                        (lambda (&rest _) (error "View unavailable"))))
+               (should-error (mevedel-view-history-load session)))))
+          (should (equal nil (mevedel-view-history--entries))))
+        (should (file-exists-p path))
+        (should-not (file-exists-p (concat path ".bad")))
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (mevedel-view-history-load session)
+          (should (equal '("kept")
+                         (mevedel-view-history--entries))))))))
 
 (mevedel-deftest mevedel-view-history--no-workspace
   (:doc "keeps history in memory only when no workspace is available")

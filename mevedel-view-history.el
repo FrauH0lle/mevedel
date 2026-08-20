@@ -28,6 +28,12 @@
 (declare-function mevedel-session-codec-write
                   "mevedel-session-codec" (path plist))
 
+;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-physical-path
+                  "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-read-file
+                  "mevedel-session-control-fs" (path &optional coding-system))
+
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
 
@@ -80,7 +86,7 @@
   "Newest-first input history entries last loaded or saved in this view.")
 
 (defvar-local mevedel-view-history--load-warned nil
-  "Non-nil after warning about a corrupt input-history file.")
+  "Non-nil after warning about an input-history load failure.")
 
 
 ;;
@@ -192,13 +198,10 @@ does not substitute its own navigation behavior there."
                   path (error-message-string err))
           :warning))))))
 
-(defun mevedel-view-history--read-entries (path)
-  "Return newest-first history entries from PATH.
-Signal an error when PATH exists but does not contain the expected
-input-history plist."
-  (require 'mevedel-session-codec)
-  (let* ((plist (mevedel-session-codec-read path))
-         (entries (plist-get plist :entries)))
+(defun mevedel-view-history--validate-entries (plist)
+  "Return newest-first history entries from PLIST.
+Signal an error when PLIST is not valid input-history data."
+  (let ((entries (plist-get plist :entries)))
     (require 'mevedel-mention-bindings)
     (unless (and (equal 2 (plist-get plist :version))
                  (listp entries)
@@ -275,27 +278,43 @@ their first occurrence and the result is capped to
 
 (defun mevedel-view-history-load (&optional session)
   "Load SESSION's workspace input history into the current view buffer.
-Missing history files are normal and produce an empty ring.  Corrupt
-files are renamed to `.bad', warned about once, and ignored."
+Missing history files are normal and produce an empty ring.  Read failures
+warn once and leave the file in place for retry.  Malformed files are renamed
+to `.bad' and ignored."
   (setq mevedel-view-history--ring
         (make-ring (max 1 mevedel-view-input-history-size))
         mevedel-view-history--index nil
         mevedel-view-history--stored-incomplete nil
         mevedel-view-history--loaded-entries nil)
   (when-let* ((path (mevedel-view-history--path session)))
-    (when (file-exists-p path)
+    (let (contents entries problem malformed-p)
       (condition-case err
-          (mevedel-view-history--set-entries
-           (mevedel-view-history--read-entries path))
-        (error
-         (unless mevedel-view-history--load-warned
-           (setq mevedel-view-history--load-warned t)
-           (display-warning
-            'mevedel
-            (format "Input history unreadable at %s: %s; starting empty"
-                    path (error-message-string err))
-            :warning))
-         (mevedel-view-history--rename-bad-file path))))))
+          (when (file-exists-p path)
+            (require 'mevedel-session-control-fs)
+            (setq contents
+                  (mevedel-session-control-fs-read-file
+                   (mevedel-session-control-fs-physical-path path))))
+        (error (setq problem err)))
+      (when contents
+        (condition-case err
+            (setq entries
+                  (mevedel-view-history--validate-entries
+                   (car (read-from-string contents))))
+          (error
+           (setq problem err
+                 malformed-p t)))
+        (unless problem
+          (mevedel-view-history--set-entries entries)))
+      (when problem
+        (unless mevedel-view-history--load-warned
+          (setq mevedel-view-history--load-warned t)
+          (display-warning
+           'mevedel
+           (format "Input history unreadable at %s: %s; starting empty"
+                   path (error-message-string problem))
+           :warning))
+        (when malformed-p
+          (mevedel-view-history--rename-bad-file path))))))
 
 (defun mevedel-view-history-save (&optional view-buffer)
   "Persist VIEW-BUFFER input history."
@@ -327,8 +346,8 @@ files are renamed to `.bad', warned about once, and ignored."
                  (mevedel-session-workspace session))
                 (let* ((current (mevedel-view-history--entries))
                        (existing (and (file-exists-p path)
-                                      (mevedel-view-history--read-entries
-                                       path)))
+                                      (mevedel-view-history--validate-entries
+                                       (mevedel-session-codec-read path))))
                        (merged (mevedel-view-history--merge-entries
                                 current existing
                                 mevedel-view-history--loaded-entries)))
