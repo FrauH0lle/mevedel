@@ -1471,38 +1471,115 @@ wrap in `condition-case'."
                  1 (and line-truncated-p (1+ num-lines))))))
         (let* ((file-size (file-attribute-size (file-attributes path)))
                (chunk-size (min file-size (* 512 1024)))
+               (coding
+                (with-temp-buffer
+                  (insert-file-contents path nil 0 chunk-size)
+                  last-coding-system-used))
+               (text-coding
+                (coding-system-change-eol-conversion coding 'unix))
+               (signature (encode-coding-string "" text-coding))
+               (encoded-newlines
+                (mapcar
+                 (lambda (newline)
+                   (substring (encode-coding-string newline text-coding)
+                              (length signature)))
+                 (if (eq (coding-system-eol-type coding) 2)
+                     '("\r" "\n")
+                   '("\n"))))
+               (newline-width
+                (apply #'max (mapcar #'length encoded-newlines)))
                (byte-offset 0)
+               (buffer-start-offset 0)
                (lines-to-skip (1- start-line))
                (lines-to-read num-lines)
                line-truncated-next)
           (with-temp-buffer
-            (while (and (> lines-to-skip 0)
-                        (< byte-offset file-size))
-              (insert-file-contents
-               path nil byte-offset (+ byte-offset chunk-size))
-              (setq byte-offset (+ byte-offset chunk-size))
-              (setq lines-to-skip (forward-line lines-to-skip))
-              (when (eobp)
-                (when (/= (line-beginning-position) (line-end-position))
-                  (cl-incf lines-to-skip))
-                (delete-region (point-min) (line-beginning-position))))
-            (delete-region (point-min) (point))
-            (cl-block nil
-              (while (> lines-to-read 0)
-                (setq lines-to-read (forward-line lines-to-read))
-                (when (and (eobp)
-                           (/= (line-beginning-position) (line-end-position)))
-                  (cl-incf lines-to-read))
-                (if (= lines-to-read 0)
-                    (progn
-                      (when (or (not (eobp)) (< byte-offset file-size))
-                        (setq line-truncated-next (+ start-line num-lines)))
-                      (delete-region (point) (point-max)))
-                  (if (>= byte-offset file-size)
-                      (cl-return)
-                    (insert-file-contents
-                     path nil byte-offset (+ byte-offset chunk-size))
-                    (setq byte-offset (+ byte-offset chunk-size))))))
+            (set-buffer-multibyte nil)
+            (cl-labels
+                ((insert-chunk
+                  ()
+                  (let ((chunk-end
+                         (min file-size (+ byte-offset chunk-size))))
+                    (goto-char (point-max))
+                    (insert-file-contents-literally
+                     path nil byte-offset chunk-end)
+                    (setq byte-offset chunk-end)))
+                 (next-newline
+                  ()
+                  (catch 'found
+                    (while t
+                      (let ((start (point)) found)
+                        (dolist (newline encoded-newlines)
+                          (goto-char start)
+                          (let (candidate match)
+                            (while
+                                (and (setq match
+                                           (search-forward newline nil t))
+                                     (not
+                                      (zerop
+                                       (mod
+                                        (- (+ buffer-start-offset
+                                              (- (match-beginning 0)
+                                                 (point-min)))
+                                           (length signature))
+                                        newline-width))))
+                              (goto-char (1+ (match-beginning 0)))
+                              (setq match nil))
+                            (when match
+                              (setq candidate match))
+                            (when (and candidate
+                                       (or (null found)
+                                           (< candidate found)))
+                              (setq found candidate))))
+                        (when found
+                          (goto-char found)
+                          (throw 'found found)))
+                      (when (>= byte-offset file-size)
+                        (throw 'found nil))
+                      (let ((resume
+                             (max (point-min)
+                                  (- (point-max)
+                                     (1- newline-width)))))
+                        (insert-chunk)
+                        (goto-char resume))))))
+              (let ((range-found t))
+                (cl-block skip
+                  (dotimes (_ lines-to-skip)
+                    (unless (next-newline)
+                      (setq range-found nil)
+                      (cl-return-from skip))
+                    (let ((deleted (- (point) (point-min))))
+                      (delete-region (point-min) (point))
+                      (cl-incf buffer-start-offset deleted))
+                    (goto-char (point-min))))
+                (if (not range-found)
+                    (erase-buffer)
+                  (let (selected-end)
+                    (cl-block read
+                      (while (> lines-to-read 0)
+                        (if (next-newline)
+                            (progn
+                              (cl-decf lines-to-read)
+                              (setq selected-end (point)))
+                          (when (> (point-max) (point-min))
+                            (setq selected-end (point-max)))
+                          (cl-return-from read))))
+                    (if selected-end
+                        (progn
+                          (when (or (< selected-end (point-max))
+                                    (< byte-offset file-size))
+                            (setq line-truncated-next
+                                  (+ start-line num-lines)))
+                          (delete-region selected-end (point-max)))
+                      (erase-buffer))))))
+            (when (> (point-max) (point-min))
+              (goto-char (point-min))
+              (unless (= start-line 1)
+                (insert signature))
+              (set-buffer-multibyte t)
+              (let ((coding-system-for-read coding))
+                (decode-coding-inserted-region
+                 (point-min) (point-max) path)))
             (mevedel-tool-fs--finalize-read-buffer
              (or display-path path)
              start-line line-truncated-next)))))))
