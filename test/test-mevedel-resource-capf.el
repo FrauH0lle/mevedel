@@ -7,7 +7,6 @@
 (require 'cl-lib)
 (require 'mevedel-structs)
 (require 'mevedel-agent-control)
-(require 'mevedel-plan)
 (require 'mevedel-resource)
 (require 'mevedel-resource-capf)
 (require 'mevedel-skills-core)
@@ -72,9 +71,10 @@
             (insert "nested"))
           (with-temp-file (file-name-concat artifact-root "batch" "result.txt")
             (insert "artifact"))
-          (with-temp-buffer
-            (mevedel-plan-write-current
-             "# Managed plan" session (current-buffer)))
+          (make-directory (file-name-concat local-root "plans") t)
+          (with-temp-file
+              (file-name-concat local-root "plans" "current.md")
+            (insert "# Managed plan"))
           (with-temp-buffer
             (setq mevedel--session session)
             (insert "local://")
@@ -104,7 +104,22 @@
             (should
              (member "artifact://batch/result.txt"
                      (mevedel-resource-capf-test--candidates
-                      (mevedel-resource-capf))))))
+                      (mevedel-resource-capf)))))
+          (let ((remote-session
+                 (mevedel-resource-capf-test--session
+                  "/ssh:example.invalid:/tmp/resource-capf")))
+            (cl-letf (((symbol-function 'file-directory-p)
+                       (lambda (path)
+                         (when (file-remote-p path)
+                           (error "Remote root was probed"))
+                         nil))
+                      ((symbol-function 'directory-files)
+                       (lambda (&rest _)
+                         (error "Remote directory was listed"))))
+              (with-temp-buffer
+                (setq mevedel--session remote-session)
+                (insert "local://")
+                (should-not (mevedel-resource-capf))))))
       (delete-directory save-path t))))
 
 (mevedel-deftest mevedel-resource-capf-skills
@@ -170,9 +185,11 @@
          (workspace (mevedel-workspace--create
                      :type 'test :id root :root root :name "memory-capf"))
          (session (mevedel-resource-capf-test--session nil))
-         (mevedel-memory-dirs (list root))
+         (remote-root "/ssh:example.invalid:/tmp/resource-memory")
+         (mevedel-memory-dirs (list root remote-root))
          (key (mevedel-resource-memory-root-key
-               (list :dir (file-name-as-directory root)))))
+               (list :dir (file-name-as-directory root))))
+         (file-truename-function (symbol-function 'file-truename)))
     (setf (mevedel-session-workspace session) workspace)
     (unwind-protect
         (progn
@@ -184,16 +201,22 @@
           (with-temp-buffer
             (setq mevedel--session session)
             (insert "memory://")
-            (let ((candidates
-                   (mevedel-resource-capf-test--candidates
-                    (mevedel-resource-capf))))
-              (should (member "memory://root" candidates))
-              (should (member (format "memory://%s/topic.md" key)
-                              candidates))
-              (should (member (format "memory://%s/nested" key)
-                              candidates))
-              (should-not (member (format "memory://%s/nested/deep.md" key)
-                                  candidates))))
+            (cl-letf (((symbol-function 'file-truename)
+                       (lambda (path &rest args)
+                         (when (file-remote-p path)
+                           (error "Remote memory root was canonicalized"))
+                         (apply file-truename-function path args))))
+              (let ((candidates
+                     (mevedel-resource-capf-test--candidates
+                      (mevedel-resource-capf))))
+                (should (member "memory://root" candidates))
+                (should (member (format "memory://%s/topic.md" key)
+                                candidates))
+                (should (member (format "memory://%s/nested" key)
+                                candidates))
+                (should-not
+                 (member (format "memory://%s/nested/deep.md" key)
+                         candidates)))))
           (with-temp-buffer
             (setq mevedel--session session)
             (insert (format "memory://%s/nested/" key))

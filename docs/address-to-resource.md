@@ -247,6 +247,9 @@ text. Completion does not read content, bind a mention, attach context, invoke
 a skill, delegate an agent, make a network request, materialize a session, or
 change durable state. MCP completion uses metadata already held by the current
 connection and never starts or refreshes a connection.
+Once a scheme prefix is present, completion constructs only that scheme's
+metadata. Remote backing roots are not enumerated during completion; their
+bare prefix remains usable until an explicit resource operation resolves it.
 
 ## Execution target and Plan mode
 

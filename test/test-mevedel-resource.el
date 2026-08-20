@@ -127,6 +127,85 @@
     (should (equal "" (plist-get empty :fragment)))
     (should-not (plist-get empty :pointer))))
 
+(mevedel-deftest mevedel-resource-completion-metadata ()
+  ,test
+  (test)
+  :doc "loads only the provider selected by each completion scheme"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "completion" :root default-directory
+                     :name "completion"))
+         (session (mevedel-session--create
+                   :authority-mode 'pid-lock :save-path default-directory
+                   :workspace workspace))
+         (resource-root-function
+          (symbol-function 'mevedel-resource--root)))
+    (dolist (scheme '(local artifact skill agent history memory mcp))
+      (cl-letf (((symbol-function 'mevedel-resource--root)
+                 (lambda (root-scheme owner)
+                   (unless (eq root-scheme scheme)
+                     (error "Unrelated path root ran"))
+                   (funcall resource-root-function root-scheme owner)))
+                ((symbol-function 'mevedel-resource--skill-list)
+                 (lambda (&rest _)
+                   (error "Skill discovery ran during completion")))
+                ((symbol-function 'mevedel-agent-control-list-agents)
+                 (lambda (&rest _)
+                   (unless (memq scheme '(agent history))
+                     (error "Unrelated agent provider ran"))))
+                ((symbol-function 'mevedel-resource--memory-roots)
+                 (lambda (&rest _)
+                   (unless (eq scheme 'memory)
+                     (error "Unrelated memory provider ran"))))
+                ((symbol-function 'mcp-hub-get-servers)
+                 (lambda (&rest _)
+                   (unless (eq scheme 'mcp)
+                     (error "Unrelated MCP provider ran")))))
+        (let ((metadata
+               (mevedel-resource-completion-metadata
+                (list :session session) scheme)))
+          (should
+           (equal (mapcar #'car (plist-get metadata :roots))
+                  (pcase scheme
+                    ('local '(local))
+                    ('artifact '(artifact)))))))))
+  :doc "drops remote skill and memory roots before identity lookup"
+  (let* ((remote "/ssh:example.invalid:/tmp/resource")
+         (mevedel-memory-dirs (list remote))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id "remote" :root remote
+                     :name "remote"))
+         (skill (mevedel-skill--create
+                 :name "remote" :source-file (concat remote "/SKILL.md")
+                 :source-dir remote))
+         (session (mevedel-session--create
+                   :authority-mode 'pid-lock :skills (list skill)
+                   :workspace workspace)))
+    (cl-letf (((symbol-function 'mevedel-skills--skill-enabled-p)
+               (lambda (&rest _)
+                 (error "Remote skill identity was inspected")))
+              ((symbol-function 'mevedel-skills-scan)
+               (lambda (&rest _)
+                 (error "Remote workspace skills were scanned")))
+              ((symbol-function 'file-truename)
+               (lambda (&rest _)
+                 (error "Remote root was canonicalized"))))
+      (should-not
+       (plist-get
+        (mevedel-resource-completion-metadata
+         (list :session session) 'skill)
+        :skills))
+      (setf (mevedel-session-skills session) nil)
+      (should-not
+       (plist-get
+        (mevedel-resource-completion-metadata
+         (list :session session) 'skill)
+        :skills))
+      (should-not
+       (plist-get
+        (mevedel-resource-completion-metadata
+         (list :session session) 'memory)
+        :memory-roots)))))
+
 (mevedel-deftest mevedel-resource-prepare ()
   ,test
   (test)

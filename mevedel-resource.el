@@ -465,30 +465,49 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
   (mevedel-system--memory-roots
    (mevedel-resource--workspace context session)))
 
-(defun mevedel-resource-completion-metadata (context)
-  "Return resource-owned metadata for completion in CONTEXT.
+(defun mevedel-resource-completion-metadata (context &optional scheme)
+  "Return resource-owned metadata for completion in CONTEXT and SCHEME.
 
 The returned plist keeps scheme-specific lookup and path safety inside this
-  module.  Function-valued slots are intentionally opaque operations for the
-  completion consumer; they do not expose backing roots as candidates."
+module.  Function-valued slots are intentionally opaque operations for the
+completion consumer; they do not expose backing roots as candidates.  When
+SCHEME is nil, include metadata for every scheme."
   (let* ((session (mevedel-resource--session context))
-         (skills (and session
+         (skills (and (memq scheme '(nil skill))
+                      session
                       (cl-remove-if-not
                        (lambda (skill)
-                         (or (not (fboundp 'mevedel-skills--skill-enabled-p))
-                             (mevedel-skills--skill-enabled-p skill)))
-                       (mevedel-resource--skill-list session context))))
-         (agents (and session (mevedel-agent-control-list-agents session)))
-         (memory-roots (and session
+                         (let ((source (mevedel-skill-source-file skill)))
+                           (and source
+                                (or (null scheme)
+                                    (not (file-remote-p source)))
+                                (or (not (fboundp
+                                          'mevedel-skills--skill-enabled-p))
+                                    (mevedel-skills--skill-enabled-p skill)))))
+                       (if scheme
+                           (mevedel-session-skills session)
+                         (mevedel-resource--skill-list session context)))))
+         (agents (and (memq scheme '(nil agent history))
+                      session
+                      (mevedel-agent-control-list-agents session)))
+         (memory-roots (and (memq scheme '(nil memory))
+                            session
                             (mevedel-resource--workspace context session)
                             (mevedel-resource--memory-roots context session)))
-         (servers (and (fboundp 'mcp-hub-get-servers)
+         (servers (and (memq scheme '(nil mcp))
+                       (fboundp 'mcp-hub-get-servers)
                        (condition-case nil
                            (mcp-hub-get-servers)
                          (error nil)))))
-    (list :roots (list (cons 'local (mevedel-resource--root 'local session))
-                       (cons 'artifact
-                             (mevedel-resource--root 'artifact session)))
+    (list :roots
+          (delq nil
+                (list
+                 (and (memq scheme '(nil local))
+                      (cons 'local
+                            (mevedel-resource--root 'local session)))
+                 (and (memq scheme '(nil artifact))
+                      (cons 'artifact
+                            (mevedel-resource--root 'artifact session)))))
           :decode-component #'mevedel-resource--decode-component
           :safe-path #'mevedel-resource--safe-path
           :skills
@@ -510,10 +529,15 @@ The returned plist keeps scheme-specific lookup and path safety inside this
                     (plist-get item :path) session)))
            agents)
           :memory-roots
-          (mapcar (lambda (root)
-                    (list :root root
-                          :key (mevedel-resource--memory-root-key root)))
-                  memory-roots)
+          (delq nil
+                (mapcar (lambda (root)
+                          (when (or (null scheme)
+                                    (not (file-remote-p
+                                          (plist-get root :dir))))
+                            (list
+                             :root root
+                             :key (mevedel-resource--memory-root-key root))))
+                        memory-roots))
           :mcp-servers servers)))
 
 (defun mevedel-resource--memory-root-for-key (key context session)
