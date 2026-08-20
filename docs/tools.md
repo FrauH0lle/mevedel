@@ -490,7 +490,11 @@ latency does not silently disable best-effort confinement.
 All operating-system children receive deterministic defaults for UTF-8 locale,
 no color, terminal mode, and pagers, plus `MEVEDEL_EXECUTION=1`. An invocation
 can still override these variables inside its own command. Ordinary one-shot
-stdin is closed immediately.
+stdin is closed immediately. For local Unix execution, a normal main-process
+exit drains any remaining process-group descendants through the same bounded
+TERM/KILL path before the one-shot callback runs. Local Windows execution
+remains limited to the direct child; remote execution retains the target-side
+wrapper behavior described below.
 
 The current external-helper inventory is `diff`; `rg` for Read directory
 listings, Glob, and Grep; `pdfinfo` and `pdftoppm`; and ImageMagick's `magick`

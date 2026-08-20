@@ -592,19 +592,27 @@ connection charges for, so the program path is proved here too."
   (let* ((root (make-temp-file "mevedel-remote-execution-" t))
          (remote-root
           (format "/mevedelmock:%s:%s/" (system-name) root))
-         (mevedel-sandbox-mode 'off))
+         (mevedel-sandbox-mode 'off)
+         (probes 0))
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (let ((result
-                 (mevedel-execution-run-one-shot
-                  :name "mevedel-test-remote-dispatch"
-                  :command '("sh" "-c" "printf '%s' \"$PWD\"")
-                  :workdir remote-root
-                  :writable-roots (list remote-root))))
-            (should-not (plist-get result :error))
-            (should (= 0 (plist-get result :exit-code)))
-            (should (equal (directory-file-name root)
-                           (plist-get result :output)))))
+          (cl-letf (((symbol-function
+                      'mevedel-execution--remote-group-status)
+                     (lambda (_record)
+                       (cl-incf probes)
+                       (error "Transient probe failure"))))
+            (let ((result
+                   (mevedel-execution-run-one-shot
+                    :name "mevedel-test-remote-dispatch"
+                    :command '("sh" "-c" "printf '%s' \"$PWD\"")
+                    :workdir remote-root
+                    :writable-roots (list remote-root))))
+              (should-not (plist-get result :error))
+              (should (= 0 (plist-get result :exit-code)))
+              (should-not (plist-get result :termination))
+              (should (= 0 probes))
+              (should (equal (directory-file-name root)
+                             (plist-get result :output))))))
       (delete-directory root t)))
   :doc "preserves target environment without forwarding client variables"
   (let* ((root (make-temp-file "mevedel-remote-environment-" t))

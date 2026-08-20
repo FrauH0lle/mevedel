@@ -83,7 +83,7 @@
                   ((and (equal time 0.1) (equal repeat 0.1))
                    (setq watch (lambda () (apply function args)))
                    (funcall original-run-at-time 3600 nil #'ignore))
-                  ((eq function #'mevedel-execution--finish-record)
+                  ((eq function #'mevedel-execution--settle-main-exit)
                    (setq settle (lambda () (apply function args)))
                    (funcall original-run-at-time 3600 nil #'ignore))
                   (t
@@ -337,6 +337,33 @@
           (with-timeout (1 (error "Descendant process survived timeout"))
             (while (not (test-mevedel-execution--process-gone-p pid))
               (accept-process-output nil 0.02))))
+      (delete-directory root t)))
+  :doc "drains local descendants after the main process exits normally"
+  (let* ((root (make-temp-file "mevedel-execution-normal-exit-" t))
+         (pid-file (file-name-concat root "child.pid"))
+         (mevedel-sandbox-mode 'off)
+         (mevedel-execution--child-kill-delay 0.05)
+         result pid)
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (unwind-protect
+        (progn
+          (setq result
+                (mevedel-execution-run-one-shot
+                 :name "mevedel-test-normal-exit"
+                 :command
+                 (list "sh" "-c"
+                       (concat
+                        "trap '' HUP; sleep 30 </dev/null >/dev/null 2>&1 & "
+                        "child=$!; printf '%s' \"$child\" > \"$1\"; exit 0")
+                       "mevedel-test-normal-exit" pid-file)
+                 :workdir root
+                 :writable-roots (list root)))
+          (should (= 0 (plist-get result :exit-code)))
+          (should (file-readable-p pid-file))
+          (setq pid (test-mevedel-execution--read-pid pid-file))
+          (should (test-mevedel-execution--process-gone-p pid)))
+      (when (and pid (not (test-mevedel-execution--process-gone-p pid)))
+        (ignore-errors (signal-process pid 'KILL)))
       (delete-directory root t)))
   :doc "spools large output without retaining a process buffer"
   (let ((mevedel-sandbox-mode 'off)
