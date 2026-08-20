@@ -568,6 +568,9 @@ from spawn. Explicit `tty=true` instead allocates a PTY and retains writable
 stdin without changing the captured owner, workdir, confinement, or resource
 grants. Native Windows Emacs exposes only pipe subprocesses, so mevedel rejects
 PTY and Interrupt requests there; Stop remains available for the direct child.
+If the managed spool cannot be written, mevedel records the file error,
+settles with `output-write-failed`, and starts the same bounded TERM/KILL path;
+unwritten chunks never advance output counters or previews.
 Empty `WriteStdin` polls default to 5000ms and clamp positive shorter waits to
 5000ms; the maximum is 300000ms. `WriteStdin` sends ordinary input only to
 PTYs. Unconfined Ctrl-C is

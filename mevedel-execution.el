@@ -1540,24 +1540,30 @@ run."
   (let* ((path (mevedel-execution--record-spool-path record))
          (current (mevedel-execution--record-output-bytes record))
          (remaining (max 0 (- mevedel-execution-output-limit current)))
-         (written-text (mevedel-execution--utf8-prefix text remaining)))
+         (written-text (mevedel-execution--utf8-prefix text remaining))
+         write-error)
     (unless (string-empty-p written-text)
-      (when (zerop current)
-        (mevedel-execution--telemetry
-         record 'execution-first-output
-         :chunk-bytes (string-bytes written-text)))
       (let ((coding-system-for-write 'utf-8-unix))
-        (condition-case nil
+        (condition-case err
             (write-region written-text nil path t 'silent)
-          (file-error nil)))
-      (mevedel-execution--retain-output record written-text)
-      (cl-incf (mevedel-execution--record-newline-count record)
-               (cl-count ?\n written-text))
-      (setf (mevedel-execution--record-last-byte-newline-p record)
-            (eq (aref written-text (1- (length written-text))) ?\n)))
-    (when (< (length written-text) (length text))
-      (setf (mevedel-execution--record-output-limit-p record) t)
-      (mevedel-execution--begin-stop record 'output-limit))))
+          (file-error (setq write-error err))))
+      (unless write-error
+        (when (zerop current)
+          (mevedel-execution--telemetry
+           record 'execution-first-output
+           :chunk-bytes (string-bytes written-text)))
+        (mevedel-execution--retain-output record written-text)
+        (cl-incf (mevedel-execution--record-newline-count record)
+                 (cl-count ?\n written-text))
+        (setf (mevedel-execution--record-last-byte-newline-p record)
+              (eq (aref written-text (1- (length written-text))) ?\n))))
+    (if write-error
+        (progn
+          (setf (mevedel-execution--record-error-data record) write-error)
+          (mevedel-execution--begin-stop record 'output-write-failed))
+      (when (< (length written-text) (length text))
+        (setf (mevedel-execution--record-output-limit-p record) t)
+        (mevedel-execution--begin-stop record 'output-limit)))))
 
 (defun mevedel-execution--managed-append (record chunk)
   "Remove RECORD's private sandbox marker and spool CHUNK."
