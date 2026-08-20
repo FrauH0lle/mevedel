@@ -49,6 +49,7 @@
                   (session buffer &optional settled force))
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-enqueue-pending-input
                   "mevedel-structs" (session category entry))
 (declare-function mevedel-session-pending-follow-ups
@@ -499,10 +500,19 @@ The string `none' removes the limit."
   (interactive "sNew Goal objective: ")
   (setq objective (mevedel-goal--validate-objective objective))
   (let* ((session mevedel--session)
-         (goal (mevedel-goal--current)))
+         (goal (mevedel-goal--current))
+         (old-id (mevedel-goal-id goal))
+         (new-id (mevedel-goal-new-id)))
     (mevedel-goal--assert-mutation-authority session)
-    (setf (mevedel-goal-id goal) (mevedel-goal-new-id)
+    (setf (mevedel-goal-id goal) new-id
           (mevedel-goal-objective goal) objective)
+    (when-let* ((request mevedel--current-request)
+                (fsm (mevedel-request-fsm request))
+                (info (gptel-fsm-info fsm))
+                ((equal old-id
+                        (plist-get info :mevedel-goal-accounting-id))))
+      (plist-put info :mevedel-goal-accounting-id new-id)
+      (setf (gptel-fsm-info fsm) info))
     (mevedel-goal--touch goal)
     (mevedel-session-enqueue-pending-reminder
      session
@@ -557,6 +567,8 @@ The string `none' removes the limit."
                     ((eq (mevedel-goal-status goal) 'active)))
           (let ((plan-path (mevedel-goal--resolve-plan-reference goal session)))
             (plist-put info :mevedel-goal-id (mevedel-goal-id goal))
+            (plist-put info :mevedel-goal-accounting-id
+                       (mevedel-goal-id goal))
             (plist-put info :mevedel-goal-started-at (float-time))
             (plist-put info :mevedel-goal-estimated-tokens
                        (max 1 (/ (+ (length (prin1-to-string
@@ -628,8 +640,9 @@ BEFORE is the durable usage before the charge."
 (defun mevedel-goal-tool-result-budget-warning (session fsm)
   "Return and record the one-shot 100% tool warning for SESSION's FSM."
   (when-let* ((info (gptel-fsm-info fsm))
-              ((plist-get info :mevedel-goal-id))
               (goal (mevedel-session-goal session))
+              ((equal (plist-get info :mevedel-goal-accounting-id)
+                      (mevedel-goal-id goal)))
               (budget (mevedel-goal-token-budget goal))
               (current (mevedel-goal--known-token-count info))
               (before (mevedel-goal-tokens-used goal))
@@ -649,11 +662,13 @@ BEFORE is the durable usage before the charge."
   "Charge FSM and return its session, Goal, and prior usage, or nil."
   (let* ((info (gptel-fsm-info fsm))
          (captured-id (plist-get info :mevedel-goal-id))
+         (accounting-id (plist-get info :mevedel-goal-accounting-id))
          (buffer (plist-get info :buffer)))
-    (when (and captured-id (buffer-live-p buffer))
+    (when (and captured-id accounting-id (buffer-live-p buffer))
       (with-current-buffer buffer
         (when-let* ((goal (and mevedel--session
-                               (mevedel-session-goal mevedel--session))))
+                               (mevedel-session-goal mevedel--session)))
+                    ((equal accounting-id (mevedel-goal-id goal))))
           (let ((before (mevedel-goal-tokens-used goal)))
             (cl-incf (mevedel-goal-tokens-used goal)
                      (mevedel-goal--request-token-count info))

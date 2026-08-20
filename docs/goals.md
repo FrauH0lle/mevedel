@@ -35,10 +35,12 @@ while retaining status, budget, accounting, accepted-plan reference, and
 creation time. The revised objective has highest authority; an accepted Plan
 remains binding only where consistent with it. Stale `UpdateGoal` calls from an
 already-running turn are rejected, but that turn is still charged to the
-revised Goal. At a supported in-flight steering boundary, mevedel also sends
-the refreshed Goal context on a best-effort basis. The next prompt consumes one
-objective-updated reminder, and an active Goal schedules continuation behind
-the current request gate.
+revised Goal through a separate request-local accounting identity. Only edit
+rotates that identity with the Goal; clearing the Goal and starting an
+unrelated replacement establishes no accounting lineage. At a supported
+in-flight steering boundary, mevedel also sends the refreshed Goal context on
+a best-effort basis. The next prompt consumes one objective-updated reminder,
+and an active Goal schedules continuation behind the current request gate.
 
 When a Goal references an accepted Plan, each turn validates the reference
 against the session's accepted-path metadata, immutable artifact, and stored

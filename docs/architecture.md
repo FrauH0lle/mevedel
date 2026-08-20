@@ -162,6 +162,9 @@ Terminal settlement keeps the complete turn in the transcript and writes the
 immutable attempt or discussion turn to the workspace record even if the source
 overlay detached while the request was in flight; this bounded duplication
 keeps chronological presentation separate from durable follow-up context.
+The FSM terminal transition captures the final patch before publishing the
+request outcome, including on abort; the provider's earlier raw abort callback
+does not settle the directive.
 Overlay updates remain optional presentation work. A successful implementation
 records immutable snapshots of, then consumes, exactly the subdirectives present
 at dispatch. Failure and abort consume none; details authored while a request is

@@ -29,6 +29,7 @@
 ;; `gptel-request'
 (declare-function gptel--handle-wait "ext:gptel-request" (fsm))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (defvar gptel-request--transitions)
 (defvar gptel-tools)
 
@@ -640,7 +641,9 @@ alist with mevedel-specific handlers added:
                        (request-callback
                         (plist-get info :mevedel-request-callback)))
              (when (functionp request-callback)
-               (funcall request-callback nil fsm))))
+               (funcall request-callback
+                        (and (eq (gptel-fsm-state fsm) 'ABRT) 'abort)
+                        fsm))))
          handlers))
   ;; Record API-reported token usage at TPRE so tool-using turns retain
   ;; their latest intermediate baseline.  Terminal recording belongs to
@@ -690,26 +693,8 @@ The HANDLER will receive one argument when the request terminates:
 - FSM: the `gptel-fsm' struct for the request
 
 The request is considered to have terminated when the FSM reaches a
-state with no possible transitions to another state."
-  (let* (;; An alist of states mapped to potential next states. See
-         ;; 'gptel-request--transitions'.
-         (transitions (or transitions gptel-request--transitions))
-         ;; Find all potential next states in one of the rules
-         (all-states
-          (cl-remove-duplicates
-           (append
-            (mapcar #'car transitions)
-            (cl-mapcan (lambda (entry) (mapcar #'cdr (cdr entry))) transitions))))
-         ;; Collect states that either don't appear as keys, or appear as keys
-         ;; but have no possible next states. These are states which can't
-         ;; transition to any other states.
-         (terminal-states
-          (cl-remove-if-not
-           (lambda (state)
-             (let ((entry (assq state transitions)))
-               ;; If no entry exists or entry exists but has no transitions
-               (or (null entry) (null (cdr entry)))))
-           all-states))
+state with no possible transition, or an explicit ABRT handler."
+  (let* ((terminal-states (mevedel--terminal-states handlers transitions))
          ;; Alist whose keys are the terminal states, and values are their new
          ;; lists of handlers
          (terminal-state-handlers

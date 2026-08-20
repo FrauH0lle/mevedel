@@ -175,6 +175,17 @@
           (mevedel-request-end))
         (kill-buffer buffer)))))
 
+(mevedel-deftest mevedel--add-termination-handler
+  (:doc "adds a terminal handler to graph terminals and explicit abort")
+  (let* ((gptel-request--transitions
+          '((INIT . ((t . WAIT)))
+            (WAIT . ((t . DONE)))))
+         (result
+          (mevedel--add-termination-handler
+           #'ignore '((DONE done) (ABRT abort)))))
+    (should (equal '(done ignore) (cdr (assq 'DONE result))))
+    (should (equal '(abort ignore) (cdr (assq 'ABRT result))))))
+
 
 
 ;;
