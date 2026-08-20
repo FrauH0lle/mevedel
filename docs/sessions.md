@@ -988,7 +988,8 @@ fails, the created branch and worktree remain intact and the error reports
 their names plus an exact `git worktree remove`/`git branch -D` cleanup
 command. The armed composer keeps the same reservation, draft, and grants;
 retry reports the existing-artifact conflict instead of allocating another
-suffix.
+suffix. Creation rejects symbolic links at the `.worktrees/` boundary and
+revalidates resolved workspace containment immediately before Git mutation.
 
 Renaming a materialized session preserves live execution ownership. Retained
 artifact paths are retargeted immediately after the session directory moves,

@@ -946,6 +946,35 @@ branch-name grammar before any mutating Git command runs."
   "Return the final path component for BRANCH."
   (file-name-nondirectory (directory-file-name branch)))
 
+(defun mevedel-worktree--validate-destination (workspace-root directory)
+  "Return DIRECTORY after proving it is safe under WORKSPACE-ROOT."
+  (let* ((workspace-root
+          (file-name-as-directory (expand-file-name workspace-root)))
+         (worktrees-directory
+          (file-name-as-directory
+           (file-name-concat workspace-root ".worktrees")))
+         (directory (file-name-as-directory (expand-file-name directory)))
+         (parent (file-name-directory (directory-file-name directory))))
+    (unless (equal parent worktrees-directory)
+      (user-error "Worktree destination is outside the workspace .worktrees directory: %s"
+                  directory))
+    (when (or (file-symlink-p
+               (directory-file-name worktrees-directory))
+              (file-symlink-p (directory-file-name directory)))
+      (user-error "Worktree destination must not use a symbolic link: %s"
+                  directory))
+    (let ((resolved-root
+           (file-name-as-directory (file-truename workspace-root)))
+          (resolved-parent
+           (file-name-as-directory (file-truename worktrees-directory)))
+          (resolved-directory
+           (file-name-as-directory (file-truename directory))))
+      (unless (and (file-in-directory-p resolved-parent resolved-root)
+                   (file-in-directory-p resolved-directory resolved-root))
+        (user-error "Worktree destination resolves outside the workspace: %s"
+                    directory)))
+    directory))
+
 (defun mevedel-worktree-fork-preflight (session)
   "Return immutable Git context for a Worktree Fork of SESSION."
   (let* ((source-directory
@@ -1009,6 +1038,8 @@ Use PREFLIGHT when it already describes SESSION's immutable Git state."
                  (file-name-concat
                   workspace-root ".worktrees"
                   (format "%s-fork-%d" slug number))))
+          (mevedel-worktree--validate-destination
+           workspace-root directory)
           (if (or (file-exists-p directory)
                   (eq 0
                       (mevedel-worktree--git-exit
@@ -1039,6 +1070,7 @@ Use PREFLIGHT when it already describes SESSION's immutable Git state."
 (defun mevedel-worktree-fork-create (reservation)
   "Create the linked worktree described by RESERVATION."
   (let* ((source-directory (plist-get reservation :source-directory))
+         (workspace-root (plist-get reservation :workspace-root))
          (directory (plist-get reservation :directory))
          (branch (plist-get reservation :branch))
          (base-commit (plist-get reservation :base-commit))
@@ -1046,11 +1078,13 @@ Use PREFLIGHT when it already describes SESSION's immutable Git state."
           (mevedel-worktree--native-path directory source-directory)))
     (mevedel-worktree--ensure-git source-directory)
     (mevedel-worktree--ensure-worktree source-directory)
+    (mevedel-worktree--validate-destination workspace-root directory)
     (make-directory (file-name-directory
                      (directory-file-name directory))
                     t)
     (mevedel-worktree--ensure-local-exclude
      (plist-get reservation :common-git-dir))
+    (mevedel-worktree--validate-destination workspace-root directory)
     (let ((result
            (mevedel-worktree--git-result
             source-directory
@@ -1065,14 +1099,17 @@ Use PREFLIGHT when it already describes SESSION's immutable Git state."
 (defun mevedel-worktree-fork-validate-reservation (session reservation)
   "Validate that SESSION can still create its exact RESERVATION."
   (let ((source-directory (plist-get reservation :source-directory))
+        (workspace-root (plist-get reservation :workspace-root))
         (directory (plist-get reservation :directory))
         (branch (plist-get reservation :branch))
         (cleanup-command (plist-get reservation :cleanup-command)))
     (unless (and (stringp source-directory)
+                 (stringp workspace-root)
                  (stringp directory)
                  (stringp branch)
                  (stringp cleanup-command))
       (user-error "Worktree Fork reservation is incomplete; cancel and arm it again"))
+    (mevedel-worktree--validate-destination workspace-root directory)
     (when
         (or (file-exists-p directory)
             (eq 0
@@ -1194,11 +1231,15 @@ RECOVERY names the exact prepared session or authorizes unique discovery."
     (unless (and session workspace source-directory)
       (user-error "Worktree creation must run from a mevedel session"))
     (mevedel-worktree--validate-branch-name branch source-directory)
-    (file-name-as-directory
-     (file-name-concat
-      (file-name-as-directory
-       (expand-file-name (mevedel-workspace-root workspace)))
-      ".worktrees" (mevedel-worktree--branch-leaf branch)))))
+    (let* ((workspace-root
+            (file-name-as-directory
+             (expand-file-name (mevedel-workspace-root workspace))))
+           (directory
+            (file-name-as-directory
+             (file-name-concat
+              workspace-root ".worktrees"
+              (mevedel-worktree--branch-leaf branch)))))
+      (mevedel-worktree--validate-destination workspace-root directory))))
 
 (defun mevedel-worktree--format-stub
     (source-session source-dir worktree-directory branch purpose warnings)
@@ -1337,9 +1378,13 @@ The return value is a plist with `:buffer', `:branch', `:directory', and
             (when (plist-get recovery :target-session-id)
               (user-error "Prepared Worktree checkout is missing: %s"
                           worktree-directory))
+            (mevedel-worktree--validate-destination
+             workspace-root worktree-directory)
             (make-directory worktrees-dir t)
             (mevedel-worktree--ensure-local-exclude
              (plist-get status :git-common-dir))
+            (mevedel-worktree--validate-destination
+             workspace-root worktree-directory)
             (let ((result (mevedel-worktree--git-result
                            source-directory
                            "worktree" "add" "-b" branch
