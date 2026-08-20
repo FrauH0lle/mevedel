@@ -169,15 +169,20 @@ place, but change when a later rewrite reuses the same numeric start."
              (and in-flight-p '(in-flight))
              (md5 (buffer-substring-no-properties start end)))))))))
 
-(defun mevedel-view-disclosure-state-key (source vtype)
-  "Return the source-backed collapse-state key for SOURCE and VTYPE."
+(defun mevedel-view-disclosure-state-key (source vtype &optional previous-key)
+  "Return the source-backed collapse-state key for SOURCE and VTYPE.
+Preserve any discriminator from PREVIOUS-KEY while rebasing its source."
   (when (and source
              (consp source)
              (mevedel-view-disclosure-source-start source)
              (mevedel-view-disclosure--vtype-p vtype))
-    (list 'source vtype
-          (mevedel-view-disclosure-source-start source)
-          (mevedel-view-disclosure--source-anchor source))))
+    (append
+     (list 'source vtype
+           (mevedel-view-disclosure-source-start source)
+           (mevedel-view-disclosure--source-anchor source))
+     (and (eq (car-safe previous-key) 'source)
+          (eq (cadr previous-key) vtype)
+          (nthcdr 4 previous-key)))))
 
 (defun mevedel-view-disclosure--in-flight-key-p (key)
   "Return non-nil when KEY has the temporary in-flight anchor."
@@ -282,11 +287,11 @@ caller scans the render span in display order."
 Source-backed keys use the segment vtype, the car of
 `mevedel-view-source', and the render-time source anchor.  Values are t
 when collapsed, nil when expanded.  Identity is keyed on the data-start
-only (not the full source cons) plus that anchor so thinking-summary and
-tool-summary segments keep their saved state when streaming extends the
-segment's end position, but rewritten data at the same numeric start does
-not inherit stale state.  Locally decorated mailbox cards use their
-rendered kind, agent id, body hash, and ordinal."
+only (not the full source cons) plus that anchor and any owner discriminator.
+Thus thinking-summary and tool-summary segments keep their saved state when
+streaming extends the segment's end position, but rewritten data at the same
+numeric start does not inherit stale state.  Locally decorated mailbox cards
+use their rendered kind, agent id, body hash, and ordinal."
   (let ((mailbox-counts (make-hash-table :test 'equal))
         (states nil)
         (pos from))
@@ -304,13 +309,13 @@ rendered kind, agent id, body hash, and ordinal."
              (key
               (cond
                ((mevedel-view-disclosure--in-flight-source-p source)
-                (mevedel-view-disclosure-state-key source vtype))
+                (mevedel-view-disclosure-state-key source vtype source-key))
                ((mevedel-view-disclosure--in-flight-key-p source-key)
-                (mevedel-view-disclosure-state-key source vtype))
+                (mevedel-view-disclosure-state-key source vtype source-key))
                ((and (markerp (car-safe source))
                      (not (equal (nth 2 source-key)
                                  (mevedel-view-disclosure-source-start source))))
-                (mevedel-view-disclosure-state-key source vtype))
+                (mevedel-view-disclosure-state-key source vtype source-key))
                (source-key)
                ((mevedel-view-disclosure-state-key source vtype))
                (mailbox-bounds
@@ -356,15 +361,18 @@ a marker so toggles that change buffer length do not invalidate the walk."
                          (key
                           (cond
                            ((mevedel-view-disclosure--in-flight-source-p source)
-                            (mevedel-view-disclosure-state-key source vtype))
+                            (mevedel-view-disclosure-state-key
+                             source vtype source-key))
                            ((mevedel-view-disclosure--in-flight-key-p source-key)
-                            (mevedel-view-disclosure-state-key source vtype))
+                            (mevedel-view-disclosure-state-key
+                             source vtype source-key))
                            ((and (markerp (car-safe source))
                                  (not (equal
                                        (nth 2 source-key)
                                        (mevedel-view-disclosure-source-start
                                         source))))
-                            (mevedel-view-disclosure-state-key source vtype))
+                            (mevedel-view-disclosure-state-key
+                             source vtype source-key))
                            (source-key)
                            ((mevedel-view-disclosure-state-key source vtype))
                            (mailbox-bounds
@@ -641,6 +649,8 @@ from signalling `args-out-of-range' on stale source coordinates."
              (view-end (cdr bounds))
              (header (unless (eq vtype 'response)
                        (buffer-substring view-start view-end)))
+             (source-key
+              (get-text-property view-start 'mevedel-view-source-key))
              (turn-id (get-text-property view-start 'mevedel-view-turn-id))
              (in-flight-after-section-p
               (when-let* ((pos
@@ -659,7 +669,8 @@ from signalling `args-out-of-range' on stale source coordinates."
                  view-start (point)
                  `(mevedel-view-source ,source
                    mevedel-view-source-key
-                   ,(mevedel-view-disclosure-state-key source vtype)
+                   ,(mevedel-view-disclosure-state-key
+                     source vtype source-key)
                    mevedel-view-type ,vtype
                    mevedel-view-collapsed nil))
                 (mevedel-view-disclosure-record-state source vtype nil)
@@ -688,6 +699,8 @@ from signalling `args-out-of-range' on stale source coordinates."
              (view-start (car bounds))
              (view-end (cdr bounds))
              (turn-id (get-text-property view-start 'mevedel-view-turn-id))
+             (source-key
+              (get-text-property view-start 'mevedel-view-source-key))
              (in-flight-after-section-p
               (when-let* ((pos
                            (mevedel-view-stream-in-flight-turn-start-position)))
@@ -709,7 +722,8 @@ from signalling `args-out-of-range' on stale source coordinates."
                      mevedel-view-collapsed t
                      mevedel-view-source ,source
                      mevedel-view-source-key
-                     ,(mevedel-view-disclosure-state-key source vtype)))
+                     ,(mevedel-view-disclosure-state-key
+                       source vtype source-key)))
                   (mevedel-view-render-add-display-properties
                    ins-start (point) vtype)
                   (mevedel-view-disclosure-record-state source vtype t)

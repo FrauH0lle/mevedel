@@ -25,6 +25,18 @@
 ;;
 ;;; Disclosure
 
+(mevedel-deftest mevedel-view-disclosure-state-key ()
+  ,test
+  (test)
+  :doc "rebases source coordinates while preserving a record discriminator"
+  (let ((key (mevedel-view-disclosure-state-key
+              '(10 . 20) 'hook-audit
+              '(source hook-audit 1 old-anchor record-id))))
+    (should (equal 'source (nth 0 key)))
+    (should (equal 'hook-audit (nth 1 key)))
+    (should (= 10 (nth 2 key)))
+    (should (equal '(record-id) (nthcdr 4 key)))))
+
 (mevedel-deftest mevedel-view-toggle-section ()
   ,test
   (test)

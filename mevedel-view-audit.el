@@ -27,8 +27,6 @@
 (declare-function mevedel--hook-prompt-rewrite-audit-record
                   "mevedel-transcript-audit"
                   (event original submitted &optional reason))
-(declare-function mevedel-transcript-audit-records
-                  "mevedel-transcript-audit" (text &optional type))
 (declare-function mevedel-transcript-audit-spans
                   "mevedel-transcript-audit" (text &optional type))
 
@@ -43,25 +41,36 @@
 (declare-function mevedel-view-disclosure-source-range
                   "mevedel-view-disclosure" (data-buffer start end))
 (declare-function mevedel-view-disclosure-state-key
-                  "mevedel-view-disclosure" (source vtype))
+                  "mevedel-view-disclosure"
+                  (source vtype &optional previous-key))
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view-render-add-display-properties
                   "mevedel-view-render" (start end &optional default-vtype))
 
-(defun mevedel-view--hook-audit-records-from-text (text &optional type)
+(defun mevedel-view--hook-audit-records-from-text
+    (text &optional type data-buf source-start)
   "Return hook audit records parsed from TEXT.
-When TYPE is non-nil, return only records with matching `:type'."
+When TYPE is non-nil, return only records with matching `:type'.
+DATA-BUF and SOURCE-START attach each record's exact source range."
   (require 'mevedel-transcript-audit)
-  (let ((records (mevedel-transcript-audit-records text type)))
-    (if type
-        records
-      (delq nil
-            (mapcar
-             (lambda (record)
-               (unless (eq (plist-get record :type) 'fork-point)
-                 record))
-             records)))))
+  (require 'mevedel-view-disclosure)
+  (delq nil
+        (mapcar
+         (lambda (span)
+           (let ((record (plist-get span :record)))
+             (unless (and (null type)
+                          (eq (plist-get record :type) 'fork-point))
+               (if (and (buffer-live-p data-buf) source-start)
+                   (append
+                    record
+                    (list :source
+                          (mevedel-view-disclosure-source-range
+                           data-buf
+                           (+ source-start (plist-get span :start))
+                           (+ source-start (plist-get span :end)))))
+                 record))))
+         (mevedel-transcript-audit-spans text type))))
 
 (defun mevedel-view--hook-audit-key (record)
   "Return RECORD without view-local source metadata."
@@ -298,8 +307,10 @@ EXPANDED means insert the disclosure body expanded."
          mevedel-view-collapsed ,(not expanded)
          mevedel-view-hook-audit-record ,record
          mevedel-view-source ,source
-         mevedel-view-source-key ,(mevedel-view-disclosure-state-key
-                                   source 'hook-audit))))))
+         mevedel-view-source-key
+         ,(append
+           (mevedel-view-disclosure-state-key source 'hook-audit)
+           (list (mevedel-view--hook-audit-key record))))))))
 
 (defun mevedel-view-audit-toggle-hook-audit ()
   "Toggle a hook audit disclosure."
