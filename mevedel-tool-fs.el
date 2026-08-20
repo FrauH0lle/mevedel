@@ -1351,9 +1351,9 @@ already truncated the buffer, or nil.  Return the model-visible string."
 (defun mevedel-tool-fs--list-directory (path &optional max-entries)
   "List files under directory PATH, respecting .gitignore.
 
-Uses `rg --files --hidden' (and follows links for ordinary paths) so the
-listing is gitignore-aware
-and stable across runs (entries are sorted by path).  Returns a cons
+Uses `rg --files --hidden' without following descendant symbolic links, so the
+listing is gitignore-aware and stays within PATH.  Entries are sorted by path.
+Returns a cons
 cell (ENTRIES . TRUNCATED-P) where ENTRIES is a list of paths relative
 to PATH and TRUNCATED-P is non-nil if the listing was capped at
 MAX-ENTRIES (defaulting to 1000).  Signals an error if rg is missing,
@@ -1368,8 +1368,6 @@ PATH is not a readable directory, or rg exits with an unexpected code."
                   (mevedel-tool-fs--call-process-capturing-output
                    "mevedel-list-directory"
                    (append (list "rg" "--files" "--hidden")
-                           (unless mevedel-tool-fs--resource-address
-                             '("--follow"))
                            (mevedel-tool-fs--resource-rg-exclusions
                             mevedel-tool-fs--resource-address)
                            (list "--sort" "path" path))

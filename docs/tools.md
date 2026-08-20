@@ -499,6 +499,8 @@ wrapper behavior described below.
 The current external-helper inventory is `diff`; `rg` for Read directory
 listings, Glob, and Grep; `pdfinfo` and `pdftoppm`; and ImageMagick's `magick`
 or `convert`. Their sandbox facts stay out of successful model-visible results.
+Directory Read does not follow descendant symbolic links beyond its authorized
+root.
 Materially non-default facts are aggregated per owning tool invocation and
 persisted in its hidden render-data as a durable warning; additional read-only
 mounts stay silent.
