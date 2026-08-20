@@ -142,14 +142,6 @@
 (declare-function mevedel--serialize-instructions "mevedel-persistence" (&optional base-directory include-original-content))
 (declare-function mevedel--write-instructions-file "mevedel-persistence" (path &optional base-directory write-empty quiet include-original-content))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--render-data-blocks "mevedel-pipeline" (string))
-(declare-function mevedel-pipeline--render-data-call-range-p "mevedel-pipeline" (data beg end))
-(declare-function mevedel-pipeline--render-data-without-owner "mevedel-pipeline" (data))
-(declare-function mevedel-pipeline-reconcile-lost-executions "mevedel-pipeline" (buffer &optional successor-execution-ids))
-(defvar mevedel-pipeline--render-data-close)
-(defvar mevedel-pipeline--render-data-open)
-
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders" (reminders))
 
@@ -349,6 +341,19 @@
 ;; `mevedel-tool-repair'
 (declare-function mevedel-tool-repair-flush-log "mevedel-tool-repair-diagnostics" (session))
 
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-blocks
+                  "mevedel-tool-render-data" (string))
+(declare-function mevedel-tool-render-data-call-range-p
+                  "mevedel-tool-render-data" (data beg end))
+(declare-function mevedel-tool-render-data-reconcile-lost-executions
+                  "mevedel-tool-render-data"
+                  (buffer &optional successor-execution-ids))
+(declare-function mevedel-tool-render-data-without-owner
+                  "mevedel-tool-render-data" (data))
+(defvar mevedel-tool-render-data-close)
+(defvar mevedel-tool-render-data-open)
+
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record "mevedel-transcript-audit" (record))
 (declare-function mevedel-transcript-audit-records "mevedel-transcript-audit" (text &optional type))
@@ -464,7 +469,7 @@ known to have been reused.  A nil value disables auto-cleanup entirely."
     (with-temp-buffer
       (insert-file-contents path)
       (delay-mode-hooks (org-mode))
-      (require 'mevedel-pipeline)
+      (require 'mevedel-tool-render-data)
       (require 'mevedel-transcript-audit)
       (require 'mevedel-transcript-restore)
       (mevedel-transcript-restore-properties)
@@ -478,15 +483,15 @@ known to have been reused.  A nil value disables auto-cleanup entirely."
                                        :execution-id)))
               (cl-pushnew id ids :test #'equal))))
         (dolist (block
-                 (mevedel-pipeline--render-data-blocks
+                 (mevedel-tool-render-data-blocks
                   (buffer-substring-no-properties (point-min) (point-max))))
           (when-let* ((stored (caddr block))
                       (begin (+ (point-min) (car block)))
                       (end (+ (point-min) (cadr block)))
-                      ((mevedel-pipeline--render-data-call-range-p
+                      ((mevedel-tool-render-data-call-range-p
                         stored begin end))
                       (data
-                       (mevedel-pipeline--render-data-without-owner stored))
+                       (mevedel-tool-render-data-without-owner stored))
                       (id (plist-get data :execution-id)))
             (cl-pushnew id ids :test #'equal)))
         ids))))
@@ -502,11 +507,11 @@ of writing PATH directly."
     (with-temp-buffer
       (insert-file-contents path)
       (delay-mode-hooks (org-mode))
-      (require 'mevedel-pipeline)
+      (require 'mevedel-tool-render-data)
       (require 'mevedel-transcript-restore)
       (mevedel-transcript-restore-properties)
       (let ((count
-              (mevedel-pipeline-reconcile-lost-executions
+              (mevedel-tool-render-data-reconcile-lost-executions
               (current-buffer) successor-execution-ids)))
         (when (> count 0)
           (mevedel-session-artifacts-stabilize-gptel-bounds)
@@ -1298,8 +1303,8 @@ ARTIFACT-CALLBACK collects remote transcript replacements for one batch."
     (mevedel-transcript-restore-gptel-state)
     (when acquired
       (mevedel-session-artifacts-check-target-incarnation session buf)
-      (require 'mevedel-pipeline)
-      (when (> (mevedel-pipeline-reconcile-lost-executions buf) 0)
+      (require 'mevedel-tool-render-data)
+      (when (> (mevedel-tool-render-data-reconcile-lost-executions buf) 0)
         (if artifact-callback
             (funcall
              artifact-callback

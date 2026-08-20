@@ -16,10 +16,6 @@
 (declare-function mevedel-mention-bindings-valid-p
                   "mevedel-mention-bindings" (text))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--format-render-data-block
-                  "mevedel-pipeline" (render-data &optional tool-use-id))
-
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-context "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
@@ -40,6 +36,10 @@
 (declare-function mevedel-skills-prepare
                   "mevedel-skills-invoke"
                   (skill arguments callback &rest keys))
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-format
+                  "mevedel-tool-render-data" (render-data &optional tool-use-id))
 
 
 ;;
@@ -498,9 +498,9 @@ transaction fails or is cancelled, later callbacks have no effect."
 
 (defun mevedel-skills-plan-render-data (plan expanded-prompt)
   "Return hidden render data for PLAN and exact EXPANDED-PROMPT."
-  (unless (fboundp 'mevedel-pipeline--format-render-data-block)
-    (require 'mevedel-pipeline))
-  (mevedel-pipeline--format-render-data-block
+  (unless (fboundp 'mevedel-tool-render-data-format)
+    (require 'mevedel-tool-render-data))
+  (mevedel-tool-render-data-format
    (list :kind 'inline-skill
          :display-text (mevedel-skill-invocation-plan-text plan)
          :expanded-prompt expanded-prompt)))

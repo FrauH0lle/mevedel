@@ -138,10 +138,6 @@
 		  "mevedel-permissions" (mode))
 (defvar mevedel-permission-mode)
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--render-data-blocks
-		  "mevedel-pipeline" (string))
-
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-reserved-goal-id
 		  "mevedel-plan-handoff" (&optional session))
@@ -302,6 +298,10 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 (defvar mevedel--workspace)
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-blocks
+                  "mevedel-tool-render-data" (string))
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
@@ -2344,6 +2344,7 @@ DISPLAY-TEXT is shown in the view instead of INPUT when non-nil.  SUBMISSION
 supplies hook context, audits, and commit ownership.  MODEL-INPUT, when non-nil,
 replaces INPUT only in the temporary request prompt."
   (require 'mevedel-compact-run)
+  (require 'mevedel-tool-render-data)
   (require 'mevedel-turn)
   (mevedel-view--ensure-interactive-chat-view)
   (when (buffer-local-value 'mevedel-compact-run-in-flight mevedel--data-buffer)
@@ -2396,7 +2397,7 @@ replaces INPUT only in the temporary request prompt."
            (when-let* ((prompt-summary-body)
                        (block
 			(car (last
-                              (mevedel-pipeline--render-data-blocks input)))))
+                              (mevedel-tool-render-data-blocks input)))))
              (setq prompt-summary-source
                    (mevedel-view-disclosure-source-range
                     data-buffer

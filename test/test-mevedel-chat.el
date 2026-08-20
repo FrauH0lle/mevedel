@@ -12,6 +12,7 @@
 (require 'mevedel-permission-queue)
 (require 'mevedel-goal)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-view-zone)
 (require 'helpers
          (file-name-concat
@@ -123,7 +124,7 @@
                (lambda () (setq called t)))
               ((symbol-function 'mevedel-skills-uninstall-slash-commands)
                #'ignore)
-              ((symbol-function 'mevedel-pipeline-uninstall-tool-result-scrubber)
+              ((symbol-function 'mevedel-tool-render-data-uninstall-provider-adapter)
                #'ignore)
               ((symbol-function 'mevedel-gptel-stream-bridge-uninstall)
                #'ignore))
@@ -140,7 +141,7 @@
                (lambda () (setq torn-down t)))
               ((symbol-function 'mevedel-skills-uninstall-hot-reload) #'ignore)
               ((symbol-function 'mevedel-skills-uninstall-slash-commands) #'ignore)
-              ((symbol-function 'mevedel-pipeline-uninstall-tool-result-scrubber) #'ignore)
+              ((symbol-function 'mevedel-tool-render-data-uninstall-provider-adapter) #'ignore)
               ((symbol-function 'mevedel-gptel-stream-bridge-uninstall) #'ignore))
       (mevedel-test--with-captured-diagnostics nil
                                                (mevedel-uninstall)))
@@ -172,7 +173,7 @@
                  'mevedel-skills-uninstall-slash-commands)
                 #'ignore)
                ((symbol-function
-                 'mevedel-pipeline-uninstall-tool-result-scrubber)
+                 'mevedel-tool-render-data-uninstall-provider-adapter)
                 #'ignore)
                ((symbol-function
                  'mevedel-gptel-stream-bridge-uninstall)
@@ -811,7 +812,7 @@
 			       (should
 				(equal
 				 '(:kind user-display :text "Show setup")
-				 (cdr (mevedel-pipeline-extract-render-data
+                                 (cdr (mevedel-tool-render-data-extract
 				       (buffer-substring
 					(point-min) (point-max)))))))))
 			 (should (equal "Show setup" displayed))
@@ -2726,7 +2727,6 @@
 
 (mevedel-deftest mevedel--directive-discussion-transcript
   (:doc "renders only current-request local messages and replies in order")
-  (require 'mevedel-pipeline)
   (let ((record
          (mevedel-directive--create
           :id "directive" :request "Request" :anchor '(:state attached)
@@ -2741,7 +2741,7 @@
             :message "One" :request "Hidden request one"
             :result (concat
                      "Answer one\n\n"
-                     (mevedel-pipeline-format-render-data
+                     (mevedel-tool-render-data-format
                       '(:kind request-summary :elapsed-seconds 1.0)))
             :outcome 'success)
            (mevedel-directive-discussion-turn--create

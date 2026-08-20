@@ -19,6 +19,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-tool-task)
+(require 'mevedel-tool-permission)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -375,7 +376,7 @@
                                :id "child-request"
                                :session session
                                :origin "/root/worker")))
-                (mevedel-pipeline--step-permission
+                (mevedel-tool-permission-step
                  (list :tool tool :args nil :session session :request request)
                  (lambda (_context) (setq next-called t))
                  #'ignore)))

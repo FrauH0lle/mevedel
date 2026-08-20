@@ -26,6 +26,7 @@
 (require 'mevedel-skills-ui)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-media)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-chat)
 (require 'mevedel-goal)
 (require 'mevedel-tool-registry)
@@ -207,7 +208,7 @@
         (insert "#+begin_tool (Bash :command \"printf run\")\n")
         (let ((start (point))
               (block
-               (mevedel-pipeline--format-render-data-block
+               (mevedel-tool-render-data-format
                 '(:status success :state running :live-execution-p t)
                 "call-live")))
           (insert
@@ -247,7 +248,7 @@
             (should (zerop rerenders))
             (let* ((bounds
                     (with-current-buffer data-buf
-                      (mevedel-pipeline--tool-segment-bounds "call-live")))
+                      (mevedel-tool-render-data-segment-bounds "call-live")))
                    (rendering
                     (mevedel-view--compute-segment-rendering
                      data-buf (car bounds) (cdr bounds))))
@@ -297,7 +298,7 @@
             (should-not (gethash "call-live" mevedel-view--execution-events))
             (let ((parsed
                    (with-current-buffer data-buf
-                     (mevedel-pipeline-extract-render-data
+                     (mevedel-tool-render-data-extract
                       (buffer-substring-no-properties
                        (point-min) (point-max))
                       nil "call-live"))))
@@ -347,9 +348,9 @@
             (should (= point-offset
                        (- (point) (mevedel-view--input-start)))))))
       (with-current-buffer data-buf
-        (should (equal (mevedel-pipeline--strip-render-data-blocks
+        (should (equal (mevedel-tool-render-data-strip
                         data-before "call-live")
-                       (mevedel-pipeline--strip-render-data-blocks
+                       (mevedel-tool-render-data-strip
                         (buffer-string) "call-live"))))))
   :doc "retains a terminal event until its parallel tool row is inserted"
   (mevedel-view-stream-test--with-buffers
@@ -381,7 +382,7 @@
                    "call-late"
                    mevedel-execution-transcript--pending-terminals))
       (let ((parsed
-             (mevedel-pipeline-extract-render-data
+             (mevedel-tool-render-data-extract
               (buffer-substring-no-properties (point-min) (point-max))
               nil "call-late")))
         (should (equal "late terminal output"
@@ -417,7 +418,7 @@
               "call-headless"
               mevedel-execution-transcript--pending-terminals))
             (let ((parsed
-                   (mevedel-pipeline-extract-render-data
+                   (mevedel-tool-render-data-extract
                     (buffer-substring-no-properties
                      (point-min) (point-max))
                     nil "call-headless")))
@@ -2413,7 +2414,7 @@
        'response)
       (mevedel-view-stream-test--insert-data
        data-buf
-       (mevedel-pipeline--format-render-data-block
+       (mevedel-tool-render-data-format
         '(:kind request-summary :elapsed-seconds 4))
        'ignore)
       (mevedel-view-stream-test--insert-data
@@ -3274,7 +3275,7 @@
     (with-current-buffer data-buf
       (let ((start (point)))
         (insert
-         (mevedel-pipeline--format-render-data-block
+         (mevedel-tool-render-data-format
           '(:kind inline-skill
                   :name "emacs-context-snapshot"
                   :arguments "Say hi!"
@@ -3307,7 +3308,7 @@
      data-buf
      (concat
       "*** # Green Loop\n\nRun the loop.\n\nARGUMENTS: current changes"
-      (mevedel-pipeline--format-render-data-block
+      (mevedel-tool-render-data-format
        '(:kind inline-skill
                :name "green-loop"
                :arguments "current changes"
@@ -3337,7 +3338,7 @@
     (mevedel-view-stream-test--insert-data data-buf "Previous answer.\n" 'response)
     (mevedel-view-stream-test--insert-data
      data-buf
-     (mevedel-pipeline--format-render-data-block
+     (mevedel-tool-render-data-format
       '(:kind request-summary :elapsed-seconds 120))
      'ignore)
     (mevedel-view-stream-test--insert-data
@@ -3346,7 +3347,7 @@
      nil)
     (mevedel-view-stream-test--insert-data
      data-buf
-     (mevedel-pipeline--format-render-data-block
+     (mevedel-tool-render-data-format
       '(:kind inline-skill
               :name "green-loop"
               :arguments "current changes"
@@ -3373,7 +3374,7 @@
     (with-current-buffer data-buf
       (let ((start (point)))
         (insert
-         (mevedel-pipeline--format-render-data-block
+         (mevedel-tool-render-data-format
           '(:kind inline-skill
                   :name "green-loop"
                   :arguments "commits a b"

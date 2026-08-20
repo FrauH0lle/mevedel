@@ -20,9 +20,6 @@
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-native-path "mevedel-execution-target" (target path))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-reconcile-lost-executions "mevedel-pipeline" (buffer &optional successor-execution-ids))
-
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders" (reminders))
 
@@ -111,6 +108,11 @@
 (declare-function mevedel-session-worktree-directory "mevedel-structs" (cl-x))
 (declare-function mevedel-session-worktree-source-root "mevedel-structs" (cl-x))
 (defvar mevedel--session)
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-reconcile-lost-executions
+                  "mevedel-tool-render-data"
+                  (buffer &optional successor-execution-ids))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text "mevedel-utilities" (text))
@@ -481,8 +483,8 @@ caches never become fork authority."
             (mevedel-session-artifacts-segment-path
              staging-path picked-segment)
             buffer-file-truename nil)
-      (require 'mevedel-pipeline)
-      (mevedel-pipeline-reconcile-lost-executions staging-buffer)
+      (require 'mevedel-tool-render-data)
+      (mevedel-tool-render-data-reconcile-lost-executions staging-buffer)
       (set-buffer-modified-p t)
       (save-buffer))
     (mevedel-session-persistence-reconcile-lost-execution-segments

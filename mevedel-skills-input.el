@@ -46,10 +46,6 @@
 (declare-function mevedel-mentions-replace-with-placeholder
                   "mevedel-mentions" (start end placeholder))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--format-render-data-block
-                  "mevedel-pipeline" (render-data &optional tool-use-id))
-
 ;; `mevedel-resource'
 (declare-function mevedel-resource-encode-component
                   "mevedel-resource" (value))
@@ -99,6 +95,10 @@
 (defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-format
+                  "mevedel-tool-render-data" (render-data &optional tool-use-id))
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
@@ -167,8 +167,8 @@ original `$skill' invocation compactly."
                       name arguments)
                      :expanded-prompt expanded-prompt))
          (block (progn
-                  (require 'mevedel-pipeline)
-                  (mevedel-pipeline--format-render-data-block data))))
+                  (require 'mevedel-tool-render-data)
+                  (mevedel-tool-render-data-format data))))
     block))
 
 (defun mevedel-skills-input--insert-inline-user-skill-render-data
@@ -184,8 +184,8 @@ original `$skill' invocation compactly."
                              (lambda (attachment)
                                (list :name (plist-get attachment :name)))
                              attachments))))
-    (require 'mevedel-pipeline)
-    (mevedel-pipeline--format-render-data-block data)))
+    (require 'mevedel-tool-render-data)
+    (mevedel-tool-render-data-format data)))
 
 (defun mevedel-skills-input-attachment-reminder (attachment)
   "Return system-reminder body for prepared inline skill ATTACHMENT."
@@ -641,9 +641,9 @@ observe the completed response."
                      "Fork skill produced no result."))
          (result (if render-data
                      (progn
-                       (require 'mevedel-pipeline)
+                       (require 'mevedel-tool-render-data)
                        (concat result
-                               (mevedel-pipeline--format-render-data-block
+                               (mevedel-tool-render-data-format
                                 render-data)))
                    result)))
     (unless (bound-and-true-p mevedel--current-request)

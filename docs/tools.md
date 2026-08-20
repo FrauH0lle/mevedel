@@ -32,7 +32,7 @@ flowchart TD
 
 Synchronous handlers receive `(args)` and asynchronous handlers receive
 `(callback args)`, where args is a keyword plist. The
-pipeline handles all cross-cutting concerns; handlers contain no
+pipeline sequences the standard cross-cutting steps; handlers contain no
 boilerplate for validation, hooks, permissions, snapshots, or
 persistence.
 
@@ -53,6 +53,11 @@ The transcript reference contains only an opaque record id and its owning tool
 use id. Replay never rereads the original filesystem path. Remote records are
 published and replayed through the session artifact manifest; a fixed-path
 cache is never an authority fallback.
+
+`mevedel-tool-render-data.el` owns render-data serialization, provider
+scrubbing, transcript mutation, and stale execution reconciliation. The
+Pipeline owns only the render-transform and final attachment steps and their
+ordering.
 
 Important tool metadata:
 
@@ -400,7 +405,7 @@ includes `:render-data DATA` or
 explicit status, the pipeline writes `:result` to the data buffer and appends a
 hidden block wrapped in `<!-- mevedel-render-data -->` delimiters, propertized
 `'gptel 'mevedel-render-data` and `'invisible t`. Parser:
-`mevedel-pipeline-extract-render-data`.
+`mevedel-tool-render-data-extract`.
 Tool-result blocks carry the owning tool-use ID. Provider scrubbing, view
 extraction, and live metadata updates accept only the block whose owner matches
 the surrounding tool call; other valid marker-shaped blocks remain literal

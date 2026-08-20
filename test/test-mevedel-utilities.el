@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-tool-render-data)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -337,12 +338,12 @@
                           'invisible t
                           'front-sticky '(gptel)))
       (setq block-start (point))
-      (insert (mevedel-pipeline--format-render-data-block
+      (insert (mevedel-tool-render-data-format
                '(:kind inline-skill :name "demo")))
       (setq block-end (point))
       (setq literal-start (point))
       (insert (substring-no-properties
-               (mevedel-pipeline--format-render-data-block
+               (mevedel-tool-render-data-format
                 '(:kind inline-skill :name "literal"))))
       (setq literal-end (point))
       (set-text-properties literal-start literal-end nil)
@@ -364,7 +365,7 @@
       (should-not (text-properties-at (match-beginning 0)))
       (should (string-search
                ":name \"literal\""
-               (mevedel-pipeline--strip-render-data-blocks
+               (mevedel-tool-render-data-strip
                 (buffer-string)))))))
 
 (mevedel-deftest mevedel--hook-audit-helpers ()

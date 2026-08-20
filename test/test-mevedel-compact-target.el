@@ -21,6 +21,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-system)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-utilities)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
@@ -634,7 +635,7 @@
             (insert "Running Bash\n")
             (insert
              (propertize
-              (mevedel-pipeline--format-render-data-block
+              (mevedel-tool-render-data-format
                '(:execution-id "exec-000001" :state running
                  :live-execution-p t)
                "archived-call")

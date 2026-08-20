@@ -102,20 +102,6 @@
                   "mevedel-execution-transcript"
                   (data-buffer event render-data))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--find-render-data-block-by-agent-id
-                  "mevedel-pipeline" (agent-id))
-(declare-function mevedel-pipeline--patch-render-data-block
-                  "mevedel-pipeline" (beg end new-plist))
-(declare-function mevedel-pipeline-extract-render-data
-                  "mevedel-pipeline"
-                  (result-string &optional session expected-tool-use-id
-                                 allow-payload-tool-use-id))
-(declare-function mevedel-pipeline-tool-render-data
-                  "mevedel-pipeline" (buffer tool-use-id))
-(declare-function mevedel-pipeline-update-tool-render-data
-                  "mevedel-pipeline" (buffer tool-use-id updates))
-
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-find-artifact-noselect
                   "mevedel-session-artifacts"
@@ -156,6 +142,20 @@
                   "mevedel-tool-repair" (&rest args))
 (declare-function mevedel-tool-repair-pre-tool-call
                   "mevedel-tool-repair" (&rest args))
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-extract
+                  "mevedel-tool-render-data"
+                  (result-string &optional session expected-tool-use-id
+                                 allow-payload-tool-use-id))
+(declare-function mevedel-tool-render-data-find-agent-block
+                  "mevedel-tool-render-data" (agent-id))
+(declare-function mevedel-tool-render-data-for-tool
+                  "mevedel-tool-render-data" (buffer tool-use-id))
+(declare-function mevedel-tool-render-data-patch-block
+                  "mevedel-tool-render-data" (beg end new-plist))
+(declare-function mevedel-tool-render-data-update
+                  "mevedel-tool-render-data" (buffer tool-use-id updates))
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-normalize-properties
@@ -471,6 +471,7 @@ payload remains authoritative."
 (defun mevedel-agent-conversation--cached-render-data-bounds
     (invocation parent-buffer agent-id)
   "Return valid cached bounds for AGENT-ID in PARENT-BUFFER."
+  (require 'mevedel-tool-render-data)
   (when (mevedel-agent-invocation-p invocation)
     (let ((beg (mevedel-agent-invocation-render-data-start-marker invocation))
           (end (mevedel-agent-invocation-render-data-end-marker invocation)))
@@ -481,7 +482,7 @@ payload remains authoritative."
                  (< (marker-position beg) (marker-position end)))
         (let* ((raw (buffer-substring beg end))
                (parsed
-                (mevedel-pipeline-extract-render-data
+                (mevedel-tool-render-data-extract
                  raw nil
                  (mevedel-agent-invocation-parent-tool-use-id invocation))))
           (if (and (stringp (car parsed))
@@ -498,10 +499,11 @@ payload remains authoritative."
 (defun mevedel-agent-conversation--render-data-bounds
     (invocation agent-id)
   "Return current render-data bounds for INVOCATION and AGENT-ID."
+  (require 'mevedel-tool-render-data)
   (or (mevedel-agent-conversation--cached-render-data-bounds
        invocation (current-buffer) agent-id)
       (when-let* ((bounds
-                   (mevedel-pipeline--find-render-data-block-by-agent-id
+                   (mevedel-tool-render-data-find-agent-block
                     agent-id)))
         (mevedel-agent-conversation--cache-render-data-bounds
          invocation (car bounds) (cdr bounds)))))
@@ -620,6 +622,7 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
 
 (defun mevedel-agent-conversation-refresh (invocation)
   "Persist and redraw INVOCATION's live conversation presentation."
+  (require 'mevedel-tool-render-data)
   (let ((parent (mevedel-agent-invocation-parent-data-buffer invocation))
         (agent-id (mevedel-agent-invocation-agent-id invocation))
         patched-summary-p
@@ -642,13 +645,13 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                           (equal
                            summary
                            (plist-get
-                            (mevedel-pipeline-tool-render-data
+                            (mevedel-tool-render-data-for-tool
                              parent tool-use-id)
                             :sandbox-summary)))))
               (let ((updates
                      (list :sandbox-summary (copy-tree summary))))
                 (setq patched-summary-p
-                      (mevedel-pipeline-update-tool-render-data
+                      (mevedel-tool-render-data-update
                        parent tool-use-id updates))
                 (unless patched-summary-p
                   (require 'mevedel-execution-transcript)
@@ -660,7 +663,7 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
               (let* ((beg (car bounds))
                      (end (cdr bounds))
                      (parsed
-                      (mevedel-pipeline-extract-render-data
+                      (mevedel-tool-render-data-extract
                        (buffer-substring beg end)
                        nil
                        (mevedel-agent-invocation-parent-tool-use-id
@@ -697,7 +700,7 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                             (plist-put updated (car pair) (cdr pair)))))
                   (let ((inhibit-read-only t)
                         (inhibit-modification-hooks t))
-                    (mevedel-pipeline--patch-render-data-block
+                    (mevedel-tool-render-data-patch-block
                      beg end updated)
                     (setq patched-render-data-p t)))))
             (when-let* ((view (and (boundp 'mevedel--view-buffer)

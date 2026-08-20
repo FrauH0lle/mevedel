@@ -15,6 +15,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-structs)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-view)
 (require 'mevedel-view-render)
@@ -31,7 +32,7 @@ SEGMENT.  RESPONSE-BOUND-LENGTH may simulate a stale persisted response end."
     (insert prompt "\n")
     (let ((response-start (point)) render-start render-end audit-start audit-end)
       (insert response "\n")
-      (insert (mevedel-pipeline--format-render-data-block
+      (insert (mevedel-tool-render-data-format
                '(:kind request-summary)))
       (insert
        (mevedel--format-hook-audit-record
