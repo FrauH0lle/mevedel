@@ -769,13 +769,37 @@ PARENT-VIEW is the session view that opened the transcript."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
-  (let* ((live-p (plist-get info :live-buffer))
+  (let* ((session (plist-get info :session))
+         (session-key
+          (or (mevedel-session-session-id session)
+              (when (buffer-live-p parent-view)
+                (when-let* ((parent-data
+                             (buffer-local-value 'mevedel--data-buffer
+                                                 parent-view))
+                            ((buffer-live-p parent-data)))
+                  (buffer-name parent-data)))
+              (error "Agent transcript session identity is unavailable")))
+         (live-p (plist-get info :live-buffer))
          (agent-data (or (plist-get info :buffer)
                          (mevedel-session-artifacts-find-artifact-noselect
-                          (plist-get info :session)
+                          session
                           (plist-get info :relative-path)
                           t)))
-         (view-name (format "*mevedel-agent:%s*" agent-path))
+         (view-name (format "*mevedel-agent:%s:%s*"
+                            session-key agent-path))
+         (existing (get-buffer view-name))
+         (view-name
+          (if (and existing
+                   (not (with-current-buffer existing
+                          (and mevedel-view--agent-transcript-p
+                               (eq mevedel--data-buffer agent-data)
+                               (equal mevedel-view--agent-path agent-path)
+                               (eq (plist-get
+                                    mevedel-view--agent-transcript-info
+                                    :session)
+                                   session)))))
+              (generate-new-buffer-name view-name)
+            view-name))
          (agent-view
           (mevedel-view--ensure
            agent-data view-name
