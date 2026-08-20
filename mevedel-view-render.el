@@ -54,9 +54,9 @@
 (declare-function mevedel-directive-frame-refresh-filter
                   "mevedel-directive-frame" ())
 
-;; `mevedel-execution'
-(declare-function mevedel-execution-sandbox-summary-class
-                  "mevedel-execution" (summary))
+;; `mevedel-execution-telemetry'
+(declare-function mevedel-execution-telemetry-sandbox-summary-class
+                  "mevedel-execution-telemetry" (summary))
 
 ;; `mevedel-execution-transcript'
 (declare-function mevedel-execution-transcript-pending-render-data
@@ -1818,8 +1818,8 @@ Return nil when HEADER is not a `Tool: argument' style line."
   "Return a durable warning line for material sandbox SUMMARY."
   (when (and summary
              (progn
-               (require 'mevedel-execution)
-               (mevedel-execution-sandbox-summary-class summary)))
+               (require 'mevedel-execution-telemetry)
+               (mevedel-execution-telemetry-sandbox-summary-class summary)))
     (let* ((attempts (or (plist-get summary :attempt-count) 0))
            (started (or (plist-get summary :started-count) 0))
            (refused (or (plist-get summary :refused-count) 0))

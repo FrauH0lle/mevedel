@@ -15,9 +15,9 @@
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x))
 
-;; `mevedel-execution'
-(declare-function mevedel-execution-sandbox-summary-class
-                  "mevedel-execution" (summary))
+;; `mevedel-execution-telemetry'
+(declare-function mevedel-execution-telemetry-sandbox-summary-class
+                  "mevedel-execution-telemetry" (summary))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-publish-transcript-state
@@ -94,8 +94,8 @@
                  (copy-sequence (or (plist-get event :whole-output) ""))))))
     (if (and summary
              (progn
-               (require 'mevedel-execution)
-               (mevedel-execution-sandbox-summary-class summary)))
+               (require 'mevedel-execution-telemetry)
+               (mevedel-execution-telemetry-sandbox-summary-class summary)))
         (plist-put render-data :sandbox-summary summary)
       render-data)))
 

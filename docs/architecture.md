@@ -96,7 +96,9 @@ invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
   remain side-owned. The transient
   `execution-state` slot is opaque outside
   `mevedel-execution.el`; process records, timers, spools, and process groups
-  never enter the general session model or persisted sidecar. Portable lease
+  never enter the general session model or persisted sidecar. Execution
+  telemetry receives only immutable identities and privacy-safe fact plists
+  through `mevedel-execution-telemetry.el`. Portable lease
   generations persist only the boolean unsettled-mutation safety latch needed
   when those transient records disappear.
 - **`mevedel-goal`**: identity, objective, lifecycle status and reason,
@@ -260,6 +262,10 @@ execution module's confined one-shot helper interface without entering the
 Bash scheduler. The Bash adapter also captures its analyzed exit-outcome
 resolver at spawn, so later observations derive the same canonical facts
 without moving command semantics into the process module.
+
+`mevedel-execution-telemetry.el` owns privacy-safe execution event projection,
+sandbox attempt summaries, Eask workload recognition, and optional GNU time
+resource capture. It never receives a live execution record.
 
 `mevedel-transport.el` answers one question: is this Emacs already inside a
 remote operation?  Durable target I/O started from a timer, a process

@@ -31,10 +31,10 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (defvar gptel-backend)
 
-;; `mevedel-execution'
-(declare-function mevedel-execution-sandbox-summary-class
-                  "mevedel-execution" (summary))
-(defvar mevedel-execution--sandbox-summary-cell)
+;; `mevedel-execution-telemetry'
+(declare-function mevedel-execution-telemetry-sandbox-summary-class
+                  "mevedel-execution-telemetry" (summary))
+(defvar mevedel-execution-telemetry-summary-cell)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-expand-path
@@ -1154,7 +1154,7 @@ buffer."
                    (plist-get context :patch-proposal))
                   (mevedel-pipeline--canonical-path-map
                    (plist-get context :canonical-path-map))
-                  (mevedel-execution--sandbox-summary-cell
+                  (mevedel-execution-telemetry-summary-cell
                    (plist-get context :sandbox-summary-cell)))
               (mevedel-tool-repair-mark-executed repair-entry)
               (mevedel-pipeline--record-use tool)
@@ -1275,8 +1275,8 @@ When neither was produced, passes CONTEXT through unchanged."
          (render-data
           (if (and sandbox-summary
                    (progn
-                     (require 'mevedel-execution)
-                     (mevedel-execution-sandbox-summary-class
+                     (require 'mevedel-execution-telemetry)
+                     (mevedel-execution-telemetry-sandbox-summary-class
                       sandbox-summary)))
               (plist-put (copy-sequence render-data)
                          :sandbox-summary (copy-tree sandbox-summary))

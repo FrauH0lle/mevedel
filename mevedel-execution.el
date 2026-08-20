@@ -4,9 +4,9 @@
 
 ;; Owns model-triggered operating-system processes: stable environments,
 ;; process groups, optional PTYs, confinement, timeouts, bounded disk spooling,
-;; and private process records.  During an explicit telemetry profiler run it
-;; also wraps one full Eask suite with GNU time for native peak-resource data.
-;; Callers receive result plists and never process objects.
+;; and private process records.  Callers receive result plists and never
+;; process objects.  `mevedel-execution-telemetry.el' owns safe event
+;; projection, sandbox summaries, and optional profiler resource capture.
 
 ;;; Code:
 
@@ -33,6 +33,25 @@
 (declare-function mevedel-execution-scheduler-submit
                   "mevedel-execution-scheduler"
                   (scheduler mode start &optional admit-p reject))
+
+;; `mevedel-execution-telemetry'
+(declare-function mevedel-execution-telemetry-agent-summary-cell
+                  "mevedel-execution-telemetry" (invocation))
+(declare-function mevedel-execution-telemetry-command-properties
+                  "mevedel-execution-telemetry" (command))
+(declare-function mevedel-execution-telemetry-mark-direct-fallback
+                  "mevedel-execution-telemetry" (session facts))
+(declare-function mevedel-execution-telemetry-prepare-resource-capture
+                  "mevedel-execution-telemetry" (session command-text command))
+(declare-function mevedel-execution-telemetry-record
+                  "mevedel-execution-telemetry"
+                  (session execution-id tool-use-id owner event props))
+(declare-function mevedel-execution-telemetry-record-sandbox-attempt
+                  "mevedel-execution-telemetry"
+                  (facts started-p refused-p &rest cells))
+(declare-function mevedel-execution-telemetry-safe-facts
+                  "mevedel-execution-telemetry" (facts))
+(defvar mevedel-execution-telemetry-summary-cell)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
@@ -140,18 +159,6 @@ the complete spool remains at the path in the execution facts."
   :type 'integer
   :group 'mevedel)
 
-(defconst mevedel-execution--audit-prop-keys
-  '(:additional-read-count :additional-write-count
-    :after-confined-launch-failure :cache-identity :chunk-bytes :command-hash
-    :duration-ms :exit-code :fallback-offered :fallback-possible :filesystem
-    :full-execution-approval-offered :lane :launch-failure-reason-class
-    :launch-failure-stage :native-resource-capture
-    :native-resource-report-bytes :network :output-bytes :output-limit
-    :overlap-count :preparation-state :proc :protected-path-count :queue-depth
-    :queue-duration-ms :reason-class :sandbox :termination :test-scope
-    :timed-out :tty :workload :yield-time-ms)
-  "Execution properties allowed in a side conversation's durable audit.")
-
 (defcustom mevedel-execution-progress-delay 2
   "Seconds before a managed Bash execution publishes live progress."
   :type 'number
@@ -221,7 +228,6 @@ cd-and-env prefix.  A longer command falls back to the classic spawn.")
   "Opaque per-session execution state."
   next-id
   records
-  sandbox-fallback-warned-p
   scheduler
   unknown-outcome)
 
@@ -308,10 +314,6 @@ cd-and-env prefix.  A longer command falls back to the classic spawn.")
   (make-hash-table :test #'eq :weakness 'key)
   "Weak set of sessions that have created execution state.")
 
-(defvar mevedel-execution--resource-capture-claims
-  (make-hash-table :test #'equal :weakness 'key)
-  "Weak set of native resource report paths claimed by live runs.")
-
 (defvar mevedel-execution-event-functions nil
   "Functions notified of immutable managed execution event plists.
 
@@ -329,9 +331,6 @@ are contained by the execution module.")
 The function receives an immutable event plist and its private owner context,
 then returns non-nil only after durable delivery.  This is deliberately
 separate from passive event hooks; the context is never published to them.")
-
-(defvar mevedel-execution--sandbox-summary-cell nil
-  "Dynamically bound cell collecting child confinement for one tool call.")
 
 (defconst mevedel-execution--remote-group-script
   (string-join
@@ -480,18 +479,6 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
           (signal 'mevedel-execution-error
                   (list "Could not arm remote mutation authority")))
         (setf (mevedel-execution--record-mutation-armed-p record) t)))))
-
-(defun mevedel-execution--mark-direct-fallback (session facts)
-  "Mark and warn for SESSION's first direct fallback in FACTS."
-  (let ((state (mevedel-execution--state-for-session session)))
-    (if (mevedel-execution--state-sandbox-fallback-warned-p state)
-        facts
-      (setf (mevedel-execution--state-sandbox-fallback-warned-p state) t)
-      (display-warning
-       'mevedel
-       "Sandbox unavailable; this session is falling back to direct execution"
-       :warning)
-      (plist-put (copy-sequence facts) :first-direct-fallback t))))
 
 (defun mevedel-execution--mark-unknown (record error-data)
   "Record ERROR-DATA when RECORD's target process outcome cannot be proved."
@@ -1286,200 +1273,18 @@ watchdog checks list membership, not just the slot."
      (mevedel-execution--state-records state))
     count))
 
-(defun mevedel-execution--telemetry-facts (facts)
-  "Return the non-sensitive confinement subset of sandbox FACTS."
-  (list :sandbox (plist-get facts :sandbox)
-        :filesystem (plist-get facts :filesystem)
-        :network (plist-get facts :network)
-        :proc (plist-get facts :proc)
-        :protected-path-count (plist-get facts :protected-paths)
-        :additional-read-count (plist-get facts :additional-filesystem-read)
-        :additional-write-count (plist-get facts :additional-filesystem-write)))
-
-(defun mevedel-execution--sandbox-summary-merge
-    (summary facts started-p refused-p)
-  "Merge one logical child attempt into SUMMARY.
-FACTS contains non-sensitive confinement facts.  STARTED-P records whether the
-requested command started, and REFUSED-P records a policy refusal."
-  (let* ((attempts (1+ (or (plist-get summary :attempt-count) 0)))
-         (started (+ (or (plist-get summary :started-count) 0)
-                     (if started-p 1 0)))
-         (refused (+ (or (plist-get summary :refused-count) 0)
-                     (if refused-p 1 0)))
-         (sandbox (plist-get facts :sandbox))
-         (filesystem (plist-get facts :filesystem))
-         (network (plist-get facts :network))
-         (proc (plist-get facts :proc))
-         (current-sandbox (plist-get summary :sandbox))
-         (current-filesystem (plist-get summary :filesystem))
-         (current-network (plist-get summary :network)))
-    (list
-     :attempt-count attempts
-     :started-count started
-     :refused-count refused
-     :sandbox
-     (cond
-      ((eq current-sandbox 'refused) current-sandbox)
-      ((eq sandbox 'refused) sandbox)
-      ((and current-sandbox (not (eq current-sandbox 'bubblewrap)))
-       current-sandbox)
-      (sandbox sandbox)
-      (t current-sandbox))
-     :filesystem
-     (cond
-      ((or (eq current-filesystem 'unrestricted)
-           (eq filesystem 'unrestricted))
-       'unrestricted)
-      ((or (eq current-filesystem 'unavailable)
-           (eq filesystem 'unavailable))
-       'unavailable)
-      (filesystem filesystem)
-      (t current-filesystem))
-     :network
-     (cond
-      ((or (eq current-network 'unrestricted)
-           (eq network 'unrestricted))
-       'unrestricted)
-      ((or (eq current-network 'unavailable)
-           (eq network 'unavailable))
-       'unavailable)
-      (network network)
-      (t current-network))
-     :proc (if (or (eq (plist-get summary :proc) 'host)
-                   (eq proc 'host))
-               'host
-             (or proc (plist-get summary :proc)))
-     :additional-read-count
-     (+ (or (plist-get summary :additional-read-count) 0)
-        (or (plist-get facts :additional-filesystem-read) 0))
-     :additional-write-count
-     (+ (or (plist-get summary :additional-write-count) 0)
-        (or (plist-get facts :additional-filesystem-write) 0)))))
-
-(defun mevedel-execution--record-sandbox-attempt
-    (facts started-p refused-p &rest cells)
-  "Record one logical child attempt in each unique mutable cell in CELLS."
-  (let (seen)
-    (dolist (cell cells)
-      (when (and (consp cell) (not (memq cell seen)))
-        (push cell seen)
-        (setcar cell
-                (mevedel-execution--sandbox-summary-merge
-                 (car cell) facts started-p refused-p))))))
-
-(defun mevedel-execution-sandbox-summary-class (summary)
-  "Return `warning' when SUMMARY describes a material deviation."
-  (and summary
-       (let ((attempts (or (plist-get summary :attempt-count) 0)))
-         (when
-             (or (> (or (plist-get summary :additional-write-count) 0) 0)
-                 (> (or (plist-get summary :refused-count) 0) 0)
-                 (< (or (plist-get summary :started-count) 0) attempts)
-                 (not (eq (plist-get summary :sandbox) 'bubblewrap))
-                 (not (eq (plist-get summary :filesystem) 'workspace-write))
-                 (not (eq (plist-get summary :network) 'isolated))
-                 (eq (plist-get summary :proc) 'host))
-           'warning))))
-
-(defun mevedel-execution--agent-sandbox-summary-cell (invocation)
-  "Return INVOCATION's direct-child summary cell, or nil."
-  (and invocation
-       (fboundp 'mevedel-agent-invocation-p)
-       (mevedel-agent-invocation-p invocation)
-       (mevedel-agent-invocation-sandbox-summary-cell invocation)))
-
-(defun mevedel-execution--eask-command-p (command)
-  "Return non-nil when COMMAND invokes Eask directly or through npx."
-  (and (stringp command)
-       (string-match-p
-        (concat
-         "\\(?:^\\|[;&|][[:space:]]*\\)"
-         "\\(?:[[:alpha:]_][[:alnum:]_]*=[^[:space:]]+[[:space:]]+\\)*"
-         "\\(?:npx[ ]+@emacs-eask/cli\\|eask\\)\\(?:[ ]\\|$\\)")
-        command)))
-
-(defun mevedel-execution--eask-targets (command)
-  "Return bounded test file targets named by Eask COMMAND.
-Only repository-relative Emacs Lisp test paths are retained; the rest of the
-command remains represented solely by its hash."
-  (let ((start 0)
-        targets)
-    (while (and (< (length targets) 16)
-                (string-match "test/[[:alnum:]_./*-]+\\.el" command start))
-      (push (match-string 0 command) targets)
-      (setq start (match-end 0)))
-    (nreverse (delete-dups targets))))
-
-(defun mevedel-execution--cache-identity ()
-  "Return a hash identifying the parent package-cache environment."
-  (secure-hash
-   'sha256
-   (mapconcat (lambda (name) (or (getenv name) ""))
-              '("HOME" "XDG_CACHE_HOME" "XDG_CONFIG_HOME" "EASK_HOME")
-              "\0")))
-
-(defun mevedel-execution--full-eask-command-p (command)
-  "Return non-nil when COMMAND appears to run the full Eask ERT suite."
-  (and (mevedel-execution--eask-command-p command)
-       (string-match-p "\\btest[ ]+ert\\b" command)
-       (null (mevedel-execution--eask-targets command))))
-
-(defun mevedel-execution--resource-capture (session command-text command)
-  "Return native resource capture for SESSION, COMMAND-TEXT, and COMMAND argv.
-The result is a plist containing a wrapped command and report path.  Capture
-is enabled only for one full Eask suite during an active telemetry profiler
-run."
-  (let* ((target (mevedel-session-execution-target session))
-         (remote (and target
-                      (mevedel-execution-target-remote-p target))))
-    (when-let* ((target target)
-                (directory
-                 (and (fboundp 'mevedel-telemetry-profiler-directory)
-                      (mevedel-telemetry-profiler-directory session)))
-                ((mevedel-execution--full-eask-command-p command-text))
-                (time-program
-                 (if remote
-                     (executable-find
-                      "time" (mevedel-execution-target-prefix target))
-                   (executable-find "time")))
-                ((equal
-                  (mevedel-execution-target-native-path
-                   target (file-truename time-program))
-                  "/usr/bin/time"))
-                (report (file-name-concat directory "full-suite-time.txt"))
-                ((not (or (file-exists-p report)
-                          (gethash report
-                                   mevedel-execution--resource-capture-claims)))))
-      (make-directory directory t)
-      (puthash report t mevedel-execution--resource-capture-claims)
-      (list :command
-            (append (list time-program "-v" "-o" report "--") command)
-            :report report))))
-
 (defun mevedel-execution--telemetry (record event &rest props)
   "Record safe execution EVENT and PROPS for RECORD."
-  (require 'mevedel-telemetry)
+  (require 'mevedel-execution-telemetry)
   (let* ((origin (mevedel-execution--record-origin record))
          (session (and (mevedel-execution--origin-p origin)
-                       (mevedel-execution--origin-session origin)))
-         (props
-          (if (not (mevedel-telemetry-forwarded-audit-p session))
-              props
-            (let ((safe nil))
-              (dolist (key mevedel-execution--audit-prop-keys)
-                (when (plist-member props key)
-                  (setq safe (plist-put safe key (plist-get props key)))))
-              safe))))
-    (when session
-      (apply #'mevedel-telemetry-record-audit
-             session event
-             (append
-              (list :execution-id
-                    (mevedel-execution--record-execution-id record)
-                    :tool-use-id
-                    (mevedel-execution--origin-tool-use-id origin)
-                    :owner (mevedel-execution--origin-owner origin))
-              props)))))
+                       (mevedel-execution--origin-session origin))))
+    (mevedel-execution-telemetry-record
+     session
+     (mevedel-execution--record-execution-id record)
+     (and origin (mevedel-execution--origin-tool-use-id origin))
+     (and origin (mevedel-execution--origin-owner origin))
+     event props)))
 
 (defun mevedel-execution--next-id (state)
   "Return the next opaque execution id in STATE."
@@ -1990,19 +1795,19 @@ it briefly so repeated owner polls return the same result."
          (session
           (mevedel-execution--origin-session
            (mevedel-execution--record-origin record)))
-         (facts (mevedel-execution--mark-direct-fallback session facts)))
+         (facts (mevedel-execution-telemetry-mark-direct-fallback session facts)))
     (apply #'mevedel-execution--telemetry
            record 'sandbox-fallback
            :launch-failure-stage 'before-command-start
            :launch-failure-reason-class 'sandbox-launch-failure
            :fallback-offered t
            :full-execution-approval-offered nil
-           (mevedel-execution--telemetry-facts facts))
+           (mevedel-execution-telemetry-safe-facts facts))
     (apply #'mevedel-execution--telemetry
            record 'execution-unrestricted
            :reason-class 'sandbox-launch-failure
            :after-confined-launch-failure t
-           (mevedel-execution--telemetry-facts facts))
+           (mevedel-execution-telemetry-safe-facts facts))
     (mevedel-execution--release-runtime record)
     (mevedel-sandbox-cleanup preparation)
     (let ((coding-system-for-write 'no-conversion))
@@ -2077,11 +1882,11 @@ it briefly so repeated owner polls return the same result."
                      (not launch-failed)
                      (processp (mevedel-execution--record-process record))))
                (origin (mevedel-execution--record-origin record)))
-          (mevedel-execution--record-sandbox-attempt
+          (mevedel-execution-telemetry-record-sandbox-attempt
            facts started-p refused-p
            (mevedel-execution--record-sandbox-summary-cell record)
            (mevedel-execution--origin-sandbox-summary-cell origin)
-           (mevedel-execution--agent-sandbox-summary-cell
+           (mevedel-execution-telemetry-agent-summary-cell
             (mevedel-execution--origin-owner-context origin))))
         (apply #'mevedel-execution--telemetry
                record 'execution-finished
@@ -2103,7 +1908,7 @@ it briefly so repeated owner polls return the same result."
                              record))
                            ((file-readable-p report)))
                  (file-attribute-size (file-attributes report)))
-               (mevedel-execution--telemetry-facts
+               (mevedel-execution-telemetry-safe-facts
                 (mevedel-execution--record-sandbox-facts record)))
         (mevedel-execution--notify-state-change record)
         (mevedel-execution--release-runtime record)
@@ -2190,7 +1995,7 @@ process-filter appends use the published path."
         (when (process-live-p (mevedel-execution--record-process record))
           (apply #'mevedel-execution--telemetry
                  record 'execution-started
-                 (mevedel-execution--telemetry-facts
+                 (mevedel-execution-telemetry-safe-facts
                   (mevedel-execution--record-sandbox-facts record)))))
     (error
      (if (and (mevedel-execution--record-mutation-armed-p record)
@@ -2208,7 +2013,7 @@ process-filter appends use the published path."
                  'unavailable))
     (plist-put
      preparation :facts
-     (mevedel-execution--mark-direct-fallback
+     (mevedel-execution-telemetry-mark-direct-fallback
       (mevedel-execution--origin-session
        (mevedel-execution--record-origin record))
       (plist-get preparation :facts))))
@@ -2220,14 +2025,14 @@ process-filter appends use the published path."
                       (mevedel-execution--record-started-at record))))
          :preparation-state (plist-get preparation :state)
          :fallback-possible (and (plist-get preparation :fallback-p) t)
-         (mevedel-execution--telemetry-facts
+         (mevedel-execution-telemetry-safe-facts
           (plist-get preparation :facts)))
   (when (eq (plist-get preparation :state) 'unrestricted)
     (apply #'mevedel-execution--telemetry
            record 'execution-unrestricted
            :reason-class (plist-get (plist-get preparation :facts) :sandbox)
            :after-confined-launch-failure nil
-           (mevedel-execution--telemetry-facts
+           (mevedel-execution-telemetry-safe-facts
             (plist-get preparation :facts))))
   (pcase (plist-get preparation :state)
     ('refused
@@ -2308,6 +2113,7 @@ terminal settlement."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
+  (require 'mevedel-execution-telemetry)
   (require 'mevedel-sandbox)
   (require 'mevedel-turn)
   (unless session
@@ -2331,10 +2137,14 @@ terminal settlement."
               (list "A session may have at most 64 live Bash processes")))
     (let* ((raw-command (plist-get tool-args :command))
            (command-text (and (stringp raw-command) raw-command))
+           (command-properties
+            (and command-text
+                 (mevedel-execution-telemetry-command-properties
+                  command-text)))
            (resource-capture
             (and command-text
                  (listp command)
-                 (mevedel-execution--resource-capture
+                 (mevedel-execution-telemetry-prepare-resource-capture
                   session command-text command)))
            (command (or (plist-get resource-capture :command) command))
            (id (mevedel-execution--next-id state))
@@ -2353,7 +2163,7 @@ terminal settlement."
               :data-buffer data-buffer
               :owner (or owner "/root")
               :owner-context owner-context
-              :sandbox-summary-cell mevedel-execution--sandbox-summary-cell
+              :sandbox-summary-cell mevedel-execution-telemetry-summary-cell
               :session session
               :tool-args tool-args
               :tool-use-id tool-use-id)
@@ -2371,34 +2181,27 @@ terminal settlement."
              :tty-p (and tty t) :workdir workdir
              :yield-time-ms yield-time-ms)))
       (puthash id record (mevedel-execution--state-records state))
-      (mevedel-execution--telemetry
-       record 'execution-enqueued
-       :lane (if read-only-p 'read 'exclusive)
-       :queue-depth (mevedel-execution--managed-count state)
-       :overlap-count (max 0 (1- (mevedel-execution--managed-count state)))
-       :workload (and (mevedel-execution--eask-command-p command-text)
-                      'eask)
-       :test-targets (and (mevedel-execution--eask-command-p command-text)
-                          (mevedel-execution--eask-targets command-text))
-       :test-scope (and (mevedel-execution--eask-command-p command-text)
-                        (if (mevedel-execution--eask-targets command-text)
-                            'focused
-                          'full))
-       :cache-identity (and (mevedel-execution--eask-command-p command-text)
-                            (mevedel-execution--cache-identity))
-       :native-resource-capture (and resource-capture t)
-       :resource-report-relative-path
-       (and resource-capture
-            (file-name-concat "diagnostics"
-                              (file-name-nondirectory
-                               (directory-file-name
-                                (file-name-directory
-                                 (plist-get resource-capture :report))))
-                              "full-suite-time.txt"))
-       :command-hash (and command-text
-                          (secure-hash 'sha256 command-text))
-       :tty (and tty t)
-       :yield-time-ms yield-time-ms)
+      (apply #'mevedel-execution--telemetry
+             record 'execution-enqueued
+             :lane (if read-only-p 'read 'exclusive)
+             :queue-depth (mevedel-execution--managed-count state)
+             :overlap-count
+             (max 0 (1- (mevedel-execution--managed-count state)))
+             :native-resource-capture (and resource-capture t)
+             :resource-report-relative-path
+             (and resource-capture
+                  (file-name-concat
+                   "diagnostics"
+                   (file-name-nondirectory
+                    (directory-file-name
+                     (file-name-directory
+                      (plist-get resource-capture :report))))
+                   "full-suite-time.txt"))
+             :command-hash (and command-text
+                                (secure-hash 'sha256 command-text))
+             :tty (and tty t)
+             :yield-time-ms yield-time-ms
+             command-properties)
       (mevedel-execution--notify-state-change record)
       (let ((lease
              (mevedel-execution-scheduler-submit
@@ -2900,14 +2703,15 @@ seconds.  ADDITIONAL-PERMISSIONS and SANDBOX-PERMISSIONS are already-authorized
 confinement inputs.  SESSION and OWNER fix the transient ownership boundary.
 TEARDOWN-FUNCTION releases caller-owned resources when lifecycle destruction
 discards the process without invoking CALLBACK."
+  (require 'mevedel-execution-telemetry)
   (require 'mevedel-sandbox)
   (let* ((summary-cell (list nil))
-         (pipeline-summary-cell mevedel-execution--sandbox-summary-cell)
+         (pipeline-summary-cell mevedel-execution-telemetry-summary-cell)
          (invocation
           (and (boundp 'mevedel--agent-invocation)
                mevedel--agent-invocation))
          (agent-summary-cell
-          (mevedel-execution--agent-sandbox-summary-cell invocation))
+          (mevedel-execution-telemetry-agent-summary-cell invocation))
          (attempt-recorded-p nil)
          (started-p nil)
          (current-facts nil)
@@ -2929,13 +2733,13 @@ discards the process without invoking CALLBACK."
                          'unavailable))
             (plist-put
              preparation :facts
-             (mevedel-execution--mark-direct-fallback
+             (mevedel-execution-telemetry-mark-direct-fallback
               session (plist-get preparation :facts))))))
     (cl-labels
         ((record-attempt ()
            (unless attempt-recorded-p
              (setq attempt-recorded-p t)
-             (mevedel-execution--record-sandbox-attempt
+             (mevedel-execution-telemetry-record-sandbox-attempt
               current-facts started-p
               (plist-get current-facts :refused)
               summary-cell pipeline-summary-cell agent-summary-cell)))
@@ -2952,7 +2756,7 @@ discards the process without invoking CALLBACK."
                     :exit-code (plist-get child-result :exit-code)
                     :output-bytes (plist-get child-result :output-bytes)
                     :timed-out (and (plist-get child-result :timed-out-p) t)
-                    (mevedel-execution--telemetry-facts facts)))
+                    (mevedel-execution-telemetry-safe-facts facts)))
            (funcall callback
                     (let ((result (copy-sequence child-result)))
                       (setq result (plist-put result :sandbox-facts facts))
@@ -2970,7 +2774,7 @@ discards the process without invoking CALLBACK."
          (when telemetry-span
            (apply #'mevedel-telemetry-finish
                   telemetry-span :outcome 'refused
-                  (mevedel-execution--telemetry-facts
+                  (mevedel-execution-telemetry-safe-facts
                    (plist-get preparation :facts))))
          (funcall
           callback
@@ -2993,7 +2797,7 @@ discards the process without invoking CALLBACK."
                   :reason-class
                   (plist-get (plist-get preparation :facts) :sandbox)
                   :after-confined-launch-failure nil
-                  (mevedel-execution--telemetry-facts
+                  (mevedel-execution-telemetry-safe-facts
                    (plist-get preparation :facts))))
          (setq started-p
                (processp
@@ -3014,7 +2818,7 @@ discards the process without invoking CALLBACK."
                       preparation child-result)))
                 (if (and (plist-get preparation :fallback-p) launch-failed)
                     (let ((facts
-                           (mevedel-execution--mark-direct-fallback
+                           (mevedel-execution-telemetry-mark-direct-fallback
                             session
                             (mevedel-sandbox--record-launch-failure
                              child-result workdir))))
@@ -3030,7 +2834,7 @@ discards the process without invoking CALLBACK."
                                'sandbox-launch-failure
                                :fallback-offered t
                                :full-execution-approval-offered nil
-                               (mevedel-execution--telemetry-facts facts)))
+                               (mevedel-execution-telemetry-safe-facts facts)))
                       (when (and session
                                  (fboundp 'mevedel-telemetry-record))
                         (apply #'mevedel-telemetry-record
@@ -3038,7 +2842,7 @@ discards the process without invoking CALLBACK."
                                :name name :owner owner
                                :reason-class 'sandbox-launch-failure
                                :after-confined-launch-failure t
-                               (mevedel-execution--telemetry-facts facts)))
+                               (mevedel-execution-telemetry-safe-facts facts)))
                       (mevedel-sandbox-cleanup preparation)
                       (setq
                        started-p
