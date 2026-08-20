@@ -650,6 +650,63 @@
       (should (equal '(:result "ok") result))
       (should (equal '(:safe nil nil) captured))))
 
+  :doc "wrapped tool rejects replacement schema drift before dispatch"
+  (let ((gptel--known-tools nil)
+        called result)
+    (mevedel-define-tool
+     :wrap
+     (gptel-make-tool
+      :name "WrappedSchemaDrift"
+      :function #'ignore
+      :description "Wrapped source"
+      :args '((:name "left" :type string :description "Left")
+              (:name "right" :type string :description "Right"))
+      :category "test-schema-drift"))
+    (gptel-make-tool
+     :name "WrappedSchemaDrift"
+     :function (lambda (&rest _args) (setq called t))
+     :description "Wrapped replacement"
+     :args '((:name "right" :type string :description "Right")
+             (:name "left" :type string :description "Left"))
+     :category "test-schema-drift")
+    (funcall
+     (mevedel-tool-handler
+      (mevedel-tool-get "WrappedSchemaDrift"
+                        "mevedel-test-schema-drift"))
+     (lambda (value) (setq result value))
+     '(:left "L" :right "R"))
+    (should-not called)
+    (should (string-match-p "contract changed; re-wrap"
+                            (plist-get result :result))))
+
+  :doc "wrapped tool rejects replacement async drift before dispatch"
+  (let ((gptel--known-tools nil)
+        called result)
+    (mevedel-define-tool
+     :wrap
+     (gptel-make-tool
+      :name "WrappedAsyncDrift"
+      :function #'ignore
+      :description "Wrapped source"
+      :args nil
+      :category "test-async-drift"))
+    (gptel-make-tool
+     :name "WrappedAsyncDrift"
+     :function (lambda (_callback) (setq called t))
+     :description "Wrapped replacement"
+     :args nil
+     :async t
+     :category "test-async-drift")
+    (funcall
+     (mevedel-tool-handler
+      (mevedel-tool-get "WrappedAsyncDrift"
+                        "mevedel-test-async-drift"))
+     (lambda (value) (setq result value))
+     nil)
+    (should-not called)
+    (should (string-match-p "contract changed; re-wrap"
+                            (plist-get result :result))))
+
   :doc ":summary keyword reaches the mevedel-tool struct"
   (progn
     (mevedel-define-tool
