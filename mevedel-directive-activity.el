@@ -51,9 +51,9 @@
 (declare-function mevedel-archive-directive
                   "mevedel-overlays" (record workspace))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-rewind-checkpoint
-                  "mevedel-session-persistence"
+;; `mevedel-session-rewind'
+(declare-function mevedel-session-rewind-rewind-checkpoint
+                  "mevedel-session-rewind"
                   (workspace checkpoint &optional buffer))
 
 ;; `mevedel-structs'
@@ -551,6 +551,11 @@
 (defun mevedel-directive-activity-rewind ()
   "Rewind the shared execution session before the attempt at point."
   (interactive)
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-fork)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-rewind)
   (let* ((attempt (mevedel-directive-activity--attempt-at-point))
          (checkpoint
           (and attempt (mevedel-directive-attempt-checkpoint attempt))))
@@ -567,7 +572,7 @@
                    (mevedel-session-session-id
                     (buffer-local-value 'mevedel--session candidate)))
              return candidate)))
-      (mevedel-session-persistence-rewind-checkpoint
+      (mevedel-session-rewind-rewind-checkpoint
        mevedel-directive-activity--workspace checkpoint buffer))))
 
 (defun mevedel-directive-activity-reattach (file start end)

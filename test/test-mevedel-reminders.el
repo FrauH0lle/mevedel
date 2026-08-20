@@ -688,8 +688,8 @@
   :doc "does not fire when session permission mode is `ask'"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-mode-constraints))
-         (mevedel-permission-mode 'ask))
+         (r (mevedel-reminders-make-mode-constraints)))
+    (setf (mevedel-session-permission-mode session) 'ask)
     (should-not (mevedel-reminders--should-fire-p r 0 session)))
 
   :doc "fires when session permission mode is not `ask'"
@@ -1017,9 +1017,9 @@
     ;; A portable session reads its plan through the publication, never
     ;; the fixed cache, so the artifact has to be served here.
     (cl-letf (((symbol-function
-                'mevedel-session-persistence-artifact-present-p)
+                'mevedel-session-artifacts-artifact-present-p)
                (lambda (&rest _) t))
-              ((symbol-function 'mevedel-session-persistence-read-artifact)
+              ((symbol-function 'mevedel-session-artifacts-read-artifact)
                (lambda (&rest _)
                  (encode-coding-string "# Plan\n\nDo it." 'utf-8-unix))))
       (should-not (funcall (mevedel-reminder-trigger r) session))

@@ -3264,7 +3264,7 @@ cover, so the permission step's warning about it is captured here."
             (setq-local default-directory remote-root)
             (setq-local mevedel--workspace workspace)
             (setq-local mevedel--session session)
-            (mevedel-session-persistence-assert-mutation-authority
+            (mevedel-session-artifacts-assert-mutation-authority
              session (current-buffer))
             (should
              (mevedel-session-durability-set-unsettled-mutation
@@ -4931,7 +4931,7 @@ cover, so the permission step's warning about it is captured here."
 				(tool (mevedel-tool--create :name "TestTool"))
 				(result (make-string 500 ?x)))
 			   (cl-letf (((symbol-function
-					'mevedel-session-persistence-publish-text)
+                                        'mevedel-session-artifacts-publish-text)
 				       (lambda (seen-session path content
 						&optional coding)
 					 (should-not

@@ -22,11 +22,13 @@
 (declare-function mevedel-mention-bindings-valid-p
                   "mevedel-mention-bindings" (text))
 
+;; `mevedel-session-codec'
+(declare-function mevedel-session-codec-read
+                  "mevedel-session-codec" (path))
+(declare-function mevedel-session-codec-write
+                  "mevedel-session-codec" (path plist))
+
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-read
-                  "mevedel-session-persistence" (path))
-(declare-function mevedel-session-persistence-write
-                  "mevedel-session-persistence" (path plist))
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-structs'
@@ -193,7 +195,8 @@ does not substitute its own navigation behavior there."
   "Return newest-first history entries from PATH.
 Signal an error when PATH exists but does not contain the expected
 input-history plist."
-  (let* ((plist (mevedel-session-persistence-read path))
+  (require 'mevedel-session-codec)
+  (let* ((plist (mevedel-session-codec-read path))
          (entries (plist-get plist :entries)))
     (require 'mevedel-mention-bindings)
     (unless (and (equal 2 (plist-get plist :version))
@@ -295,6 +298,7 @@ files are renamed to `.bad', warned about once, and ignored."
 
 (defun mevedel-view-history-save (&optional view-buffer)
   "Persist VIEW-BUFFER input history."
+  (require 'mevedel-session-codec)
   (let ((buf (or view-buffer (current-buffer))))
     (when (buffer-live-p buf)
       (with-current-buffer buf
@@ -326,7 +330,7 @@ files are renamed to `.bad', warned about once, and ignored."
                        (merged (mevedel-view-history--merge-entries
                                 current existing
                                 mevedel-view-history--loaded-entries)))
-                  (mevedel-session-persistence-write
+                  (mevedel-session-codec-write
                    path
                    (list :version 2 :entries merged))
                   (mevedel-view-history--set-entries merged)

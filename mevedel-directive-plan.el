@@ -66,9 +66,10 @@
 ;; `mevedel-presets'
 (defvar mevedel-action-preset-alist)
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence" (session buffer &optional settled))
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-save
+                  "mevedel-session-artifacts"
+                  (session buffer &optional settled force))
 
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills-prepare-user-input
@@ -131,7 +132,9 @@
 (defun mevedel-directive-plan--persist (session chat-buffer)
   "Persist SESSION from CHAT-BUFFER."
   (require 'mevedel-session-persistence)
-  (mevedel-session-persistence-save session chat-buffer))
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
+  (mevedel-session-artifacts-save session chat-buffer))
 
 (defun mevedel-directive-plan--planning-prompt
     (implementation-prompt &optional feedback proposal)

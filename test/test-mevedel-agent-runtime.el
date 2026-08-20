@@ -693,7 +693,7 @@
           (cl-letf (((symbol-function 'mevedel-execution-target-remote-p)
                      (lambda (candidate) (eq candidate target)))
                     ((symbol-function
-                      'mevedel-session-persistence-artifact-present-p)
+                      'mevedel-session-artifacts-artifact-present-p)
                      (lambda (seen-session logical)
                        (push (list 'presence logical) events)
                        (and (eq seen-session session)
@@ -708,7 +708,7 @@
                        (setf (mevedel-agent-invocation-transcript-status inv)
                              status)))
                     ((symbol-function
-                      'mevedel-session-persistence-publish-agent-terminal-state)
+                      'mevedel-session-artifacts-publish-agent-terminal-state)
                      (lambda (&rest _)
                        (push 'publication events)
                        t))
@@ -750,16 +750,16 @@
           (cl-letf (((symbol-function 'format-time-string)
                      (lambda (&rest _) "2026-01-02T03-04-05"))
                     ((symbol-function
-                      'mevedel-session-persistence--shallow-ensure-files)
+                      'mevedel-session-persistence-shallow-ensure-files)
                      (lambda (&rest _) save-path))
                     ((symbol-function
-                      'mevedel-session-persistence-artifact-present-p)
+                      'mevedel-session-artifacts-artifact-present-p)
                      (lambda (seen-session logical)
                        (should (eq seen-session session))
                        (push logical checked)
                        (equal logical first)))
                     ((symbol-function
-                      'mevedel-session-persistence--record-running-transcript)
+                      'mevedel-session-persistence-record-running-transcript)
                      (lambda (_session entry) (setq recorded entry))))
             (mevedel-agent-runtime--setup-transcript invocation child))
           (should (equal second
@@ -809,12 +809,12 @@
     (cl-letf (((symbol-function 'mevedel-execution-target-remote-p)
                (lambda (&rest _) t))
               ((symbol-function
-                'mevedel-session-persistence-artifact-present-p)
+                'mevedel-session-artifacts-artifact-present-p)
                (lambda (&rest _) t))
               ((symbol-function 'mevedel-agent-runtime--finalize)
                (lambda (&rest _) (push 'finalize events)))
               ((symbol-function
-                'mevedel-session-persistence-publish-agent-terminal-state)
+                'mevedel-session-artifacts-publish-agent-terminal-state)
                (lambda (&rest _)
                  (push 'publication events)
                  (error "Commit unavailable"))))
@@ -852,11 +852,11 @@
     (cl-letf (((symbol-function 'mevedel-execution-target-remote-p)
                (lambda (&rest _) t))
               ((symbol-function
-                'mevedel-session-persistence-artifact-present-p)
+                'mevedel-session-artifacts-artifact-present-p)
                (lambda (&rest _) t))
               ((symbol-function 'mevedel-agent-runtime--finalize) #'ignore)
               ((symbol-function
-                'mevedel-session-persistence-publish-agent-terminal-state)
+                'mevedel-session-artifacts-publish-agent-terminal-state)
                (lambda (&rest _)
                  (cl-incf publications)
                  t)))
@@ -886,7 +886,7 @@
           (mevedel-agent-invocation-transcript-relative-path invocation)
           "agents/explorer.chat.org")
     (cl-letf (((symbol-function
-                'mevedel-session-persistence-artifact-present-p)
+                'mevedel-session-artifacts-artifact-present-p)
                (lambda (seen-session logical)
                  (setq seen (list seen-session logical))
                  t)))
@@ -895,7 +895,7 @@
               (mevedel-agent-runtime--transcript-path invocation)))
       (should (equal (list session "agents/explorer.chat.org") seen))
       (cl-letf (((symbol-function
-                  'mevedel-session-persistence-artifact-present-p)
+                  'mevedel-session-artifacts-artifact-present-p)
                  (lambda (&rest _) nil)))
         (should-not
          (mevedel-agent-runtime--transcript-path invocation))))))
@@ -988,7 +988,7 @@
                     ((symbol-function 'mevedel-execution-stop-owner)
                      (lambda (&rest _) (push 'executions calls)))
                     ((symbol-function
-                      'mevedel-session-persistence--update-transcript-entry)
+                      'mevedel-session-persistence-update-transcript-entry)
                      (lambda (&rest _) (push 'transcript calls)))
                     ((symbol-function
                       'mevedel-agent-conversation-save)
@@ -1005,7 +1005,7 @@
                     ((symbol-function 'mevedel-agent-conversation-refresh)
                      (lambda (&rest _) (push 'handle calls)))
                     ((symbol-function
-                      'mevedel-session-persistence--write-sidecar-now)
+                      'mevedel-session-persistence-write-sidecar-now)
                      (lambda (&rest _) (push 'sidecar calls)))
                     ((symbol-function 'mevedel-agent-runtime--run-stop-hook)
                      (lambda (&rest _) (push 'hook calls)))
@@ -1040,7 +1040,7 @@
                      (lambda (&rest _)
                        (error "Injected execution failure")))
                     ((symbol-function
-                      'mevedel-session-persistence--update-transcript-entry)
+                      'mevedel-session-persistence-update-transcript-entry)
                      (lambda (&rest _) (push 'transcript calls))))
             (should-error
              (mevedel-agent-runtime--finalize invocation 'completed)))
@@ -1179,7 +1179,7 @@
             (while (not (file-exists-p active-path))
               (accept-process-output nil 0.01)))
           (cl-letf (((symbol-function
-                      'mevedel-session-persistence--update-transcript-entry)
+                      'mevedel-session-persistence-update-transcript-entry)
                      #'ignore)
                     ((symbol-function 'mevedel-agent-conversation-save)
                      #'ignore)
@@ -1192,7 +1192,7 @@
                     ((symbol-function 'mevedel-agent-conversation-refresh)
                      #'ignore)
                     ((symbol-function
-                      'mevedel-session-persistence--write-sidecar-now)
+                      'mevedel-session-persistence-write-sidecar-now)
                      #'ignore)
                     ((symbol-function 'mevedel-agent-runtime--run-stop-hook)
                      #'ignore))

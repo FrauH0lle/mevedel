@@ -60,10 +60,10 @@
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-publication-head
                   "mevedel-session-durability" (session-dir))
+(declare-function mevedel-session-recovery-refresh
+                  "mevedel-session-durability" (session))
 (defvar mevedel-session-durability--asserted-directories)
 (defvar mevedel-session-durability--transaction-clock)
-(declare-function mevedel-session-recovery-refresh
-                  "mevedel-session-recovery" (session))
 
 ;; `mevedel-session-recovery'
 (declare-function mevedel-session-recovery--abandon

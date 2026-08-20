@@ -39,9 +39,9 @@
 (require 'tabulated-list)
 
 (defvar mevedel-plugin-extra-roots)
-(declare-function mevedel-session-persistence--sidecar-path
+(declare-function mevedel-session-artifacts-sidecar-path
                   "mevedel-session-persistence" (save-path))
-(declare-function mevedel-session-persistence-read
+(declare-function mevedel-session-codec-read
                   "mevedel-session-persistence" (file))
 
 (defun test-mevedel-skills-ui--materialize-workspace (session tempdir)
@@ -530,7 +530,7 @@ spanning lines")))
                            (setq asked prompt)
                            t))
                         ((symbol-function
-	                          'mevedel-session-persistence-start-fresh-segment)
+                                  'mevedel-session-artifacts-start-fresh-segment)
 	                         (lambda (&rest _args)
 	                           (error "Should not rotate preview buffer"))))
                 (insert "Rewound transcript\n### /clear")
@@ -565,7 +565,7 @@ spanning lines")))
               (setq mevedel--session session)
               (setq buffer-file-name seg1)
               (cl-letf (((symbol-function
-                          'mevedel-session-persistence--save-instructions)
+                          'mevedel-session-artifacts-save-instructions)
                          (lambda (&rest _args) nil))
                         ((symbol-function 'mevedel-version)
                          (lambda (&rest _args) "test-version"))
@@ -587,8 +587,8 @@ spanning lines")))
                   (insert-file-contents seg1)
                   (should-not (string-match-p "###" (buffer-string))))
                 (let* ((sidecar
-                        (mevedel-session-persistence--sidecar-path save-path))
-                       (plist (mevedel-session-persistence-read sidecar))
+                        (mevedel-session-artifacts-sidecar-path save-path))
+                       (plist (mevedel-session-codec-read sidecar))
                        (seg1-index
                         (cdr (assoc 1 (plist-get plist :prompt-index)))))
                   (should-not seg1-index))))))
@@ -624,7 +624,7 @@ spanning lines")))
               (set-file-times buffer-file-name (time-add (current-time) 5))
               (should-not (verify-visited-file-modtime (current-buffer)))
               (cl-letf (((symbol-function
-                          'mevedel-session-persistence--save-instructions)
+                          'mevedel-session-artifacts-save-instructions)
                          (lambda (&rest _args) nil))
                         ((symbol-function 'mevedel-version)
                          (lambda (&rest _args) "test-version"))
@@ -673,7 +673,7 @@ spanning lines")))
               (set-file-times seg1 (time-add (current-time) 5))
               (should-not (verify-visited-file-modtime (current-buffer)))
               (cl-letf (((symbol-function
-                          'mevedel-session-persistence--save-instructions)
+                          'mevedel-session-artifacts-save-instructions)
                          (lambda (&rest _args) nil))
                         ((symbol-function 'mevedel-version)
                          (lambda (&rest _args) "test-version"))

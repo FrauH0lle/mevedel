@@ -81,15 +81,21 @@
 (declare-function mevedel-prompt-submission-outcome
                   "mevedel-prompt-submission" (cl-x) t)
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-save
+                  "mevedel-session-artifacts"
+                  (session buffer &optional settled force))
+(declare-function mevedel-session-artifacts-start-fresh-segment
+                  "mevedel-session-artifacts"
+                  (session buffer &rest keys))
+(declare-function mevedel-session-artifacts-summary-block
+                  "mevedel-session-artifacts" (summary))
+
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--summary-block
-                  "mevedel-session-persistence" (summary))
 (declare-function mevedel-session-persistence-restore
-                  "mevedel-session-persistence" (session-dir))
-(declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence-start-fresh-segment
-                  "mevedel-session-persistence" (session buffer &rest args))
+                  "mevedel-session-persistence"
+                  (session-dir &optional lifecycle-source
+                               session-override workspace))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill-by-source
@@ -263,7 +269,9 @@ needs no session."
 (defun mevedel-plan-handoff--persist (session chat-buffer)
   "Persist SESSION from CHAT-BUFFER."
 (require 'mevedel-session-persistence)
-  (mevedel-session-persistence-save session chat-buffer))
+(require 'mevedel-session-codec)
+(require 'mevedel-session-artifacts)
+  (mevedel-session-artifacts-save session chat-buffer))
 
 (defun mevedel-plan-handoff--apply-model-policy
     (selection session buffer)
@@ -389,6 +397,9 @@ needs no session."
 (defun mevedel-plan-handoff--prepare-worktree-target
     (session chat-buffer record)
   "Prepare RECORD's target artifact, settings, and Mode for SESSION."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((selection (plist-get record :selection))
          (mode (plist-get selection :mode))
          (target-buffer (mevedel-plan-handoff--worktree-target-buffer record))
@@ -446,7 +457,7 @@ needs no session."
                 (goto-char (point-max))
                 (unless (bolp) (insert "\n"))
                 (insert
-                 (mevedel-session-persistence--summary-block summary)))))))
+                 (mevedel-session-artifacts-summary-block summary)))))))
         (mevedel-plan-handoff--persist target-session target-buffer)))
     (setq prepared (plist-put prepared :step 'submit))
     (setq prepared (plist-put prepared :target-accepted accepted))
@@ -715,15 +726,17 @@ the durable retry was retained"
 
 (defun mevedel-plan-handoff--prepare-context (session chat-buffer record)
   "Rotate CHAT-BUFFER once and return RECORD advanced to submission."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let ((prepared (plist-put record :step 'submit)))
     ;; The segment transaction persists the advanced retry step, so recovery
     ;; cannot repeat a completed rotation.
     (mevedel-plan--metadata-put session :implementation-retry prepared)
     (condition-case err
         (with-current-buffer chat-buffer
-          (require 'mevedel-session-persistence)
           (unless
-              (mevedel-session-persistence-start-fresh-segment
+              (mevedel-session-artifacts-start-fresh-segment
                session chat-buffer
                :initial-text
                (or (and (boundp 'gptel-prompt-prefix-alist)

@@ -350,7 +350,7 @@ Binds `data-buf' and `view-buf'."
           (mevedel-view-history-save (current-buffer)))
         (should (file-exists-p path))
         (should-not (file-exists-p session-path))
-        (let ((persisted (mevedel-session-persistence-read path)))
+        (let ((persisted (mevedel-session-codec-read path)))
           (should (equal 2 (plist-get persisted :version)))
           (should-not
            (string-match-p
@@ -431,7 +431,7 @@ Binds `data-buf' and `view-buf'."
       (with-temp-buffer
         (setq-local mevedel--session session)
         (mevedel-view-history-add bound-input)
-        (cl-letf (((symbol-function 'mevedel-session-persistence-write)
+        (cl-letf (((symbol-function 'mevedel-session-codec-write)
                    (lambda (&rest _) (error "Disk unavailable"))))
           (should-not (mevedel-view-history-save (current-buffer))))
         (should mevedel-view-history--save-failed)
@@ -479,7 +479,7 @@ Binds `data-buf' and `view-buf'."
               (progn
                 (when initial
                   (make-directory (file-name-directory path) t)
-                  (mevedel-session-persistence-write
+                  (mevedel-session-codec-write
                    path (list :version 2 :entries initial)))
                 (with-current-buffer buf-one
                   (setq-local mevedel--session session-one)
@@ -565,7 +565,7 @@ Binds `data-buf' and `view-buf'."
         (if (eq contents 'raw-reader-failure)
             (with-temp-file path
               (insert "not a plist"))
-          (mevedel-session-persistence-write path contents))
+          (mevedel-session-codec-write path contents))
         (with-temp-buffer
           (setq-local mevedel--session session)
           (mevedel-view-history-load session)

@@ -3,7 +3,7 @@
 Compaction reduces model-visible history while keeping the persisted
 conversation recoverable. The implementation lives in
 `mevedel-compact.el`; persisted segment rotation is handled by
-`mevedel-session-persistence.el`. Model generation is delegated to the
+`mevedel-session-artifacts.el`. Model generation is delegated to the
 stateless `mevedel-context-summary.el` generator after
 `mevedel-transcript.el` projects the consumer-selected ranges into neutral
 evidence.

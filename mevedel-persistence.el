@@ -17,8 +17,8 @@
 (require 'mevedel-overlays)
 (require 'mevedel-utilities)
 
-;; `mevedel'
-(declare-function mevedel-version "mevedel" (&optional here message))
+;; `mevedel-utilities'
+(declare-function mevedel-version "mevedel-utilities" (&optional here message))
 
 ;; `mevedel-directive-persistence'
 (declare-function mevedel--deserialize-directives

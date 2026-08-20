@@ -77,6 +77,11 @@
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-save
+                  "mevedel-session-artifacts"
+                  (session buffer &optional settled force))
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-list-sessions
                   "mevedel-session-persistence" (workspace &optional cached))
@@ -84,8 +89,6 @@
                   "mevedel-session-persistence"
                   (session-dir &optional lifecycle-source session-override
                                workspace))
-(declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence" (session buffer))
 
 ;; `mevedel-skills'
 (defvar mevedel-slash-commands)
@@ -1227,10 +1230,12 @@ new session."
 
 (defun mevedel-worktree--save-stub (chat-buffer)
   "Persist CHAT-BUFFER after a setup stub was inserted."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (with-current-buffer chat-buffer
-    (require 'mevedel-session-persistence)
     (condition-case err
-        (mevedel-session-persistence-save mevedel--session chat-buffer)
+        (mevedel-session-artifacts-save mevedel--session chat-buffer)
       (error
        (display-warning
         'mevedel

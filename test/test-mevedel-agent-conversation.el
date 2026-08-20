@@ -607,14 +607,14 @@
 			   (setq-local mevedel--session session)
 			   (setq-local mevedel--workspace workspace))
 			 (setf (mevedel-session-save-path session) transcript-dir)
-			 (mevedel-session-persistence--install-gptel-save-state-advice)
+                         (mevedel-session-artifacts-install-gptel-save-state-advice)
 			 (let ((original
 				(symbol-function
-				 'mevedel-session-persistence-find-artifact-noselect))
+                                 'mevedel-session-artifacts-find-artifact-noselect))
 			       seen)
 			   (cl-letf
 			       (((symbol-function
-				  'mevedel-session-persistence-find-artifact-noselect)
+                                  'mevedel-session-artifacts-find-artifact-noselect)
 				 (lambda (seen-session logical &optional inspection)
 				   (setq seen (list seen-session logical inspection))
 				   (funcall original seen-session logical inspection))))
@@ -880,7 +880,7 @@
 			     (add-text-properties start (point) '(gptel response)))
 			   (set-visited-file-name absolute t t)
 			   (set-buffer-modified-p t))
-			 (mevedel-session-persistence--install-gptel-save-state-advice)
+                         (mevedel-session-artifacts-install-gptel-save-state-advice)
 			 (should (mevedel-agent-conversation-save invocation))
 			 (with-temp-buffer
 			   (insert-file-contents absolute)

@@ -399,26 +399,38 @@
   ,test
   (test)
   :doc "creates session with correct defaults"
-  (let* ((ws (mevedel-workspace-get-or-create
-              'project "/tmp/p1/" "/tmp/p1/" "p1"))
-         (session (mevedel-session-create "main" ws)))
-    (should (equal "main" (mevedel-session-name session)))
-    (should (eq ws (mevedel-session-workspace session)))
-    (should (hash-table-p (mevedel-session-touched-files session)))
-    (should (= 0 (mevedel-session-turn-count session)))
-    (should (null (mevedel-session-agent-registry session)))
-    (should (null (mevedel-session-agent-reservations session)))
-    (should (eq 'idle (mevedel-session-agent-root-activity session)))
-    (should (= 3 (mevedel-session-agent-turn-capacity session)))
-    (should (null (mevedel-session-tasks session)))
-    (should (null (mevedel-session-reminders session)))
-    (should (null (mevedel-session-deferred-pending session)))
-    (should (null (mevedel-session-deferred-injected session)))
-    (should (eq 'ask (mevedel-session-permission-mode session)))
-    (should (eq 'best-effort (mevedel-session-sandbox-mode session)))
-    (should-not
-     (mevedel-execution-target-remote-p
-      (mevedel-session-execution-target session))))
+  (let ((saved-permission-mode
+         (default-toplevel-value 'mevedel-permission-mode))
+        (saved-sandbox-mode
+         (default-toplevel-value 'mevedel-sandbox-mode)))
+    (unwind-protect
+        (progn
+          (set-default-toplevel-value 'mevedel-permission-mode 'ask)
+          (set-default-toplevel-value 'mevedel-sandbox-mode 'best-effort)
+          (let* ((ws (mevedel-workspace-get-or-create
+                      'project "/tmp/p1/" "/tmp/p1/" "p1"))
+                 (session (mevedel-session-create "main" ws)))
+            (should (equal "main" (mevedel-session-name session)))
+            (should (eq ws (mevedel-session-workspace session)))
+            (should (hash-table-p (mevedel-session-touched-files session)))
+            (should (= 0 (mevedel-session-turn-count session)))
+            (should (null (mevedel-session-agent-registry session)))
+            (should (null (mevedel-session-agent-reservations session)))
+            (should (eq 'idle (mevedel-session-agent-root-activity session)))
+            (should (= 3 (mevedel-session-agent-turn-capacity session)))
+            (should (null (mevedel-session-tasks session)))
+            (should (null (mevedel-session-reminders session)))
+            (should (null (mevedel-session-deferred-pending session)))
+            (should (null (mevedel-session-deferred-injected session)))
+            (should (eq 'ask (mevedel-session-permission-mode session)))
+            (should (eq 'best-effort
+                        (mevedel-session-sandbox-mode session)))
+            (should-not
+             (mevedel-execution-target-remote-p
+              (mevedel-session-execution-target session)))))
+      (set-default-toplevel-value
+       'mevedel-permission-mode saved-permission-mode)
+      (set-default-toplevel-value 'mevedel-sandbox-mode saved-sandbox-mode)))
 
   :doc "binds one immutable target and qualifies its working directory"
   (let* ((ws (mevedel-workspace--create
@@ -770,7 +782,7 @@
                    (setf (mevedel-execution-target-readiness probed)
                          '(:status ready))))
                 ((symbol-function
-                  'mevedel-session-persistence-assert-mutation-authority)
+                  'mevedel-session-artifacts-assert-mutation-authority)
                  (lambda (&rest _) t)))
         (should (mevedel-request-p (mevedel-request-begin session))))
       (should (= 1 probe-count))))
@@ -798,17 +810,17 @@
                    (push 'probe calls)
                    '(:status ready)))
                 ((symbol-function
-                  'mevedel-session-persistence-assert-mutation-authority)
+                  'mevedel-session-artifacts-assert-mutation-authority)
                  (lambda (checked &optional buffer)
                    (push 'lease calls)
-                   (mevedel-session-persistence--check-target-incarnation
+                   (mevedel-session-artifacts-check-target-incarnation
                     checked (or buffer (current-buffer)))
                    t))
                 ((symbol-function
                   'mevedel-permission-invalidate-target-grants)
                  (lambda (_session) (push 'invalidate calls) t))
                 ((symbol-function
-                  'mevedel-session-persistence-publish-sidecar-state)
+                  'mevedel-session-artifacts-publish-sidecar-state)
                  (lambda (_session _root-buffer) (push 'publish calls) t)))
         (should (mevedel-request-p (mevedel-request-begin session))))
       (should (equal '(probe lease invalidate)
@@ -895,7 +907,7 @@
                         (print-circle t)
                         (print-quoted t))
                     (prin1-to-string
-                     (mevedel-session-persistence-serialize session)))
+                     (mevedel-session-codec-serialize session)))
                   :commit-marker t))))
               (cl-letf (((symbol-function 'executable-find)
                          (lambda (name &optional _remote)
@@ -919,7 +931,7 @@
               ;; Anything persisting reentrantly after the probe still sees
               ;; the old baseline paired with the old exact grant.
               (let ((pre-ack
-                     (mevedel-session-persistence-serialize session)))
+                     (mevedel-session-codec-serialize session)))
                 (should
                  (equal "old-incarnation"
                         (plist-get pre-ack :target-incarnation)))
@@ -938,7 +950,7 @@
                 (should (mevedel-request-p
                          (mevedel-request-begin session))))
               (let* ((sidecar-text
-                      (mevedel-session-persistence-read-artifact
+                      (mevedel-session-artifacts-read-artifact
                        session "session.meta.el" t))
                      (sidecar
                       (with-temp-buffer
@@ -947,7 +959,7 @@
                         (read (current-buffer))))
                      (reloaded
                       (plist-get
-                       (mevedel-session-persistence-deserialize
+                       (mevedel-session-codec-deserialize
                         sidecar workspace)
                        :session)))
                 (should
@@ -971,7 +983,7 @@
               (mevedel-execution-target--record-incarnation
                target "second-incarnation")
               (with-current-buffer buffer
-                (mevedel-session-persistence-assert-new-mutation-authority
+                (mevedel-session-artifacts-assert-new-mutation-authority
                  session))
               (should-not (mevedel-session-resource-grants session))
               (should (equal "second-incarnation"
@@ -1017,14 +1029,14 @@
       (cl-letf
           (((symbol-function 'mevedel-execution-target-probe) #'ignore)
            ((symbol-function
-             'mevedel-session-persistence-artifact-present-p)
+             'mevedel-session-artifacts-artifact-present-p)
             (lambda (&rest _) t))
            ((symbol-function
-             'mevedel-session-persistence-assert-mutation-authority)
+             'mevedel-session-artifacts-assert-mutation-authority)
             (lambda (checked &optional _buffer)
               (when (mevedel-session-pending-publication checked)
                 (user-error "Session has pending publication"))
-              (mevedel-session-persistence--check-target-incarnation
+              (mevedel-session-artifacts-check-target-incarnation
                checked (current-buffer))
               t))
            ((symbol-function 'mevedel-permission-invalidate-target-grants)
@@ -1032,7 +1044,7 @@
               (setf (mevedel-session-resource-grants checked) nil)
               t))
            ((symbol-function
-             'mevedel-session-persistence-publish-sidecar-state)
+             'mevedel-session-artifacts-publish-sidecar-state)
             (lambda (checked _root-buffer)
               (if fail-publication
                   (progn
@@ -1078,9 +1090,9 @@
       (cl-letf (((symbol-function 'mevedel-execution-target-probe)
                  #'ignore)
                 ((symbol-function
-                  'mevedel-session-persistence-assert-mutation-authority)
+                  'mevedel-session-artifacts-assert-mutation-authority)
                  (lambda (checked &optional buffer)
-                   (mevedel-session-persistence--check-target-incarnation
+                   (mevedel-session-artifacts-check-target-incarnation
                     checked (or buffer (current-buffer)))
                    t))
                 ((symbol-function
@@ -1152,12 +1164,12 @@
             (cl-letf (((symbol-function
                         'mevedel-execution-target--local-incarnation)
                        (lambda () "old-incarnation")))
-              (mevedel-session-persistence-save session buffer))
+              (mevedel-session-artifacts-save session buffer))
             (setq save-path (mevedel-session-save-path session))
             (let ((sidecar
                    (with-temp-buffer
                      (insert
-                      (mevedel-session-persistence-read-artifact
+                      (mevedel-session-artifacts-read-artifact
                        session "session.meta.el" t))
                      (goto-char (point-min))
                      (read (current-buffer)))))
@@ -1175,7 +1187,7 @@
               (let ((sidecar
                      (with-temp-buffer
                        (insert
-                        (mevedel-session-persistence-read-artifact
+                        (mevedel-session-artifacts-read-artifact
                          session "session.meta.el" t))
                        (goto-char (point-min))
                        (read (current-buffer)))))

@@ -47,19 +47,19 @@
 (declare-function mevedel-reminders-make-full-auto-mode-exit
                   "mevedel-reminders" ())
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-mutation-authority
+                  "mevedel-session-artifacts" (session &optional buffer))
+(declare-function mevedel-session-artifacts-publish-text
+                  "mevedel-session-artifacts"
+                  (session path content &optional coding))
+
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-make-directory
                   "mevedel-session-control-fs" (path &optional parents))
 (declare-function mevedel-session-control-fs-write-file
                   "mevedel-session-control-fs"
                   (path content &optional coding-system))
-
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-assert-mutation-authority
-                  "mevedel-session-persistence" (session &optional buffer))
-(declare-function mevedel-session-persistence-publish-text
-                  "mevedel-session-persistence"
-                  (session path content &optional coding))
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills--refresh-view-input-prompt
@@ -335,6 +335,9 @@ SESSION defaults to the current data buffer's session."
 (defun mevedel-permission-mode-transition (mode)
   "Transition the current session to permission MODE.
 Runs mode-specific lifecycle hooks."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((target (mevedel-permission-mode-normalize mode))
          (data-buf (mevedel-permission--current-data-buffer))
          (session (and data-buf
@@ -342,8 +345,7 @@ Runs mode-specific lifecycle hooks."
     (if (not session)
         (set-default-toplevel-value 'mevedel-permission-mode target)
       (with-current-buffer data-buf
-        (require 'mevedel-session-persistence)
-        (mevedel-session-persistence-assert-mutation-authority
+        (mevedel-session-artifacts-assert-mutation-authority
          session data-buf)
         (when (and (fboundp 'mevedel-plan-mode-active-p)
                    (mevedel-plan-mode-active-p session))
@@ -1516,7 +1518,9 @@ mode, and native-resource tail."
 (defun mevedel-permission-add-session-resource-grant (session path access)
   "Grant SESSION exact PATH access at READ or WRITE level."
   (require 'mevedel-session-persistence)
-  (mevedel-session-persistence-assert-mutation-authority session)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
+  (mevedel-session-artifacts-assert-mutation-authority session)
   (let ((grant (mevedel-permission--resource-grant path access)))
     (setf (mevedel-session-resource-grants session)
           (mevedel-permission--merge-resource-grant
@@ -1527,7 +1531,9 @@ mode, and native-resource tail."
     (session path access)
   "Revoke SESSION's exact PATH ACCESS resource grant."
   (require 'mevedel-session-persistence)
-  (mevedel-session-persistence-assert-mutation-authority session)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
+  (mevedel-session-artifacts-assert-mutation-authority session)
   (let ((grant (mevedel-permission--resource-grant path access)))
     (setf (mevedel-session-resource-grants session)
           (cl-remove grant (mevedel-session-resource-grants session)
@@ -1536,7 +1542,9 @@ mode, and native-resource tail."
 (defun mevedel-permission-remove-session-rule (session rule)
   "Revoke exact permission RULE from SESSION."
   (require 'mevedel-session-persistence)
-  (mevedel-session-persistence-assert-mutation-authority session)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
+  (mevedel-session-artifacts-assert-mutation-authority session)
   (setf (mevedel-session-permission-rules session)
         (cl-remove rule (mevedel-session-permission-rules session)
                    :test #'equal)))
@@ -1584,7 +1592,9 @@ rule recorded inside any sub-agent's permission prompt, such as
 and to every other live sub-agent sharing the same session struct.  This
 is a deliberate contract, not an accident of the buffer-local plumbing."
   (require 'mevedel-session-persistence)
-  (mevedel-session-persistence-assert-mutation-authority session)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
+  (mevedel-session-artifacts-assert-mutation-authority session)
   (let* ((key (or spec-key (and path :path)))
          (value (or spec-value path))
          (rule (mevedel-permission--build-rule
@@ -1890,6 +1900,9 @@ TARGET restores portable target paths when non-nil."
 
 (defun mevedel-permission--write-store-file (file store &optional target)
   "Write permission STORE plist to FILE."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((store (if target
                     (mevedel-permission-serialize-authority
                      (plist-get store :rules)
@@ -1910,8 +1923,7 @@ TARGET restores portable target paths when non-nil."
                              (buffer-local-value 'mevedel--session data-buf))))
           (unless session
             (user-error "Remote permission changes require a live session"))
-          (require 'mevedel-session-persistence)
-          (mevedel-session-persistence-publish-text
+          (mevedel-session-artifacts-publish-text
            session file content 'utf-8-unix))
       (require 'mevedel-session-control-fs)
       (mevedel-session-control-fs-make-directory
@@ -2022,7 +2034,9 @@ is created if it does not exist."
 (defun mevedel-permission-invalidate-target-grants (session)
   "Revoke SESSION's exact authority after target replacement."
   (require 'mevedel-session-persistence)
-  (mevedel-session-persistence-assert-mutation-authority session)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
+  (mevedel-session-artifacts-assert-mutation-authority session)
   (setf (mevedel-session-resource-grants session) nil
         (mevedel-session-dropped-file-grants session) nil
         (mevedel-session-active-dropped-file-grants session) nil)

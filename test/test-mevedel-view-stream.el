@@ -40,6 +40,7 @@
   (declare (indent 0) (debug t))
   `(let ((data-buf (generate-new-buffer " *mevedel-stream-data*"))
          (view-buf (generate-new-buffer " *mevedel-stream-view*"))
+         (mevedel-permission-mode 'ask)
          (mevedel-user-dir
           (file-name-as-directory
            (make-temp-file "mevedel-view-stream-user-" t)))

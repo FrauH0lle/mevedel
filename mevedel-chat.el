@@ -216,22 +216,25 @@
 (defvar mevedel--session)
 (defvar mevedel-permission-mode)
 
-;; `mevedel-session-persistence'
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority
+                  "mevedel-session-artifacts" (session))
+(declare-function mevedel-session-artifacts-ensure-files
+                  "mevedel-session-artifacts" (session buffer))
 (declare-function
- mevedel-session-persistence--install-gptel-save-state-advice
- "mevedel-session-persistence" nil)
-(declare-function mevedel-session-persistence--release-on-kill
-		  "mevedel-session-persistence" nil)
-(declare-function mevedel-session-persistence-ensure-files
-                  "mevedel-session-persistence" (session buffer))
+ mevedel-session-artifacts-install-gptel-save-state-advice
+ "mevedel-session-artifacts" nil)
+(declare-function mevedel-session-artifacts-save
+                  "mevedel-session-artifacts"
+                  (session buffer &optional settled force))
+
+;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-header-segment
 		  "mevedel-session-persistence" nil)
+(declare-function mevedel-session-persistence-release-on-kill
+                  "mevedel-session-persistence" nil)
 (declare-function mevedel-session-persistence-resume-id
                   "mevedel-session-persistence" (workspace session-id))
-(declare-function mevedel-session-persistence-save
-		  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence-assert-new-mutation-authority
-                  "mevedel-session-persistence" (session))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills--release-on-kill
@@ -676,6 +679,9 @@ Both `mevedel--chat-buffer-setup' (fresh path) and restore paths
 session struct. SOURCE is \"startup\", \"resume\", or \"fork\".  When
 INSPECTION-P is non-nil, skip lifecycle hooks because the client has no
 mutation lease."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (with-current-buffer buf
     (when (derived-mode-p 'org-mode)
       (mevedel--chat-buffer-disable-org-element-cache))
@@ -723,15 +729,14 @@ mutation lease."
     ;; transaction by `mevedel-preset--build-handlers'.  Loading the module
     ;; here pulls in `kill-buffer-hook' and
     ;; ensures handlers can reach the save function.
-    (require 'mevedel-session-persistence)
     (require 'mevedel-view-stream)
     ;; gptel owns its `before-save-hook'; mevedel advises the save
     ;; function so dynamic preset system prompts are not serialized as
     ;; frozen `GPTEL_SYSTEM' strings.
-    (mevedel-session-persistence--install-gptel-save-state-advice)
+    (mevedel-session-artifacts-install-gptel-save-state-advice)
     ;; Release the session lock when the chat buffer is killed.
     (add-hook 'kill-buffer-hook
-              #'mevedel-session-persistence--release-on-kill nil t)
+              #'mevedel-session-persistence-release-on-kill nil t)
     (unless inspection-p
       (add-hook 'kill-buffer-hook
                 #'mevedel--run-session-end-hooks nil t))
@@ -1669,6 +1674,9 @@ CALLBACK is called with (err fsm) when processing completes.
 
 Updates directive status and overlay, handles success/failure states.
 OPTIONS carries local discussion metadata for read-only discussion turns."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (setq directive
         (or (mevedel--topmost-instruction directive 'directive)
             directive))
@@ -1793,8 +1801,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 		  (overlay-get directive 'mevedel-uuid)
                   mevedel--directive-read-only-request-p
                   (or discussion-p planning-p))
-	    (require 'mevedel-session-persistence)
-	    (mevedel-session-persistence-ensure-files mevedel--session chat-buffer)
+            (mevedel-session-artifacts-ensure-files mevedel--session chat-buffer)
 	    (setq execution-session-id
 		  (mevedel-session-session-id mevedel--session)))
 
@@ -1822,8 +1829,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 	       (display-buffer view gptel-display-buffer-action))))
 
 	(with-current-buffer chat-buffer
-	  (require 'mevedel-session-persistence)
-	  (mevedel-session-persistence-assert-new-mutation-authority
+          (mevedel-session-artifacts-assert-new-mutation-authority
 	   mevedel--session)
 	    (mevedel-preset-apply
 	     (alist-get mevedel-default-chat-preset mevedel-action-preset-alist))
@@ -2005,6 +2011,9 @@ with the \\='abort symbol as the error parameter.
 
 BUF defaults to the current buffer if not specified."
   (interactive)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (with-current-buffer (or buf (current-buffer))
     (when-let* ((chat-buffer (mevedel--active-chat-buffer))
                 (_ (buffer-live-p chat-buffer)))
@@ -2069,9 +2078,8 @@ BUF defaults to the current buffer if not specified."
                    (mevedel-session-workspace mevedel--session)
                    (not (bound-and-true-p
                          mevedel-session--read-only-mode)))
-          (require 'mevedel-session-persistence)
           (condition-case err
-              (mevedel-session-persistence-save mevedel--session chat-buffer)
+              (mevedel-session-artifacts-save mevedel--session chat-buffer)
             (error
              (display-warning
               'mevedel

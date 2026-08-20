@@ -17,9 +17,6 @@
 (require 'mevedel-skills-ui)
 (require 'mevedel-structs)
 
-(declare-function mevedel-session-persistence-assert-new-mutation-authority
-                  "mevedel-session-persistence" (session))
-
 ;; `gptel'
 (declare-function gptel--update-status
                   "ext:gptel" (status &optional face))
@@ -89,6 +86,10 @@
                   "mevedel-prompt-submission" (cl-x) t)
 (declare-function mevedel-prompt-submission-input
                   "mevedel-prompt-submission" (cl-x) t)
+
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority
+                  "mevedel-session-artifacts" (session))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-agent "mevedel-skills-core" (cl-x) t)
@@ -961,11 +962,13 @@ permission policy decides whether verifier validation commands may run."
 
 (defun mevedel-review--record-direct-turn (display data-buffer)
   "Record direct no-view review DISPLAY in DATA-BUFFER."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-utilities)
   (with-current-buffer data-buffer
     (when mevedel--session
-      (require 'mevedel-session-persistence)
-      (mevedel-session-persistence-assert-new-mutation-authority
+      (mevedel-session-artifacts-assert-new-mutation-authority
        mevedel--session)
       (mevedel-request-begin mevedel--session
                              (and (boundp 'mevedel--current-directive-uuid)

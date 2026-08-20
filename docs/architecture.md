@@ -253,8 +253,8 @@ authority profile on local and TRAMP targets: a renewable `.lease/` and an
 immutable publication head.  File-workspace sessions use the explicit
 `pid-lock` profile and `.lock` instead.  The persisted session profile, not
 `file-remote-p`, selects every acquire, release, sweep, and cleanup path;
-mixed control artifacts fail closed.  `mevedel-session-persistence.el`
-remains the session codec and workflow layer above that boundary.
+mixed control artifacts fail closed.  The persistence facade and its codec,
+artifact, Rewind, and Fork owners form the workflow layer above that boundary.
 
 Before a mutating managed Bash child can start on a portable project target, the execution module
 asserts the durable parent's current lease and commits its unsettled-mutation
@@ -490,5 +490,5 @@ child task-background span before the authoritative task.
 
 View rendering, session prompt indexing/rewind, and compaction all read
 these shared spans. They keep their own policies: the view groups and
-renders turns, session persistence builds prompt previews and fork state,
-and compaction chooses response boundaries and preserved-tail policy.
+renders turns, session artifacts build prompt previews, Fork owns projection
+state, and compaction chooses response boundaries and preserved-tail policy.

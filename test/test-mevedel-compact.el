@@ -57,7 +57,7 @@
          (with-current-buffer ,buffer
            (org-mode)
            (setq-local mevedel--session ,session)
-           (mevedel-session-persistence-ensure-files ,session ,buffer)
+           (mevedel-session-artifacts-ensure-files ,session ,buffer)
            ,@body)
        ;; Release through the session: a bare directory has no authority
        ;; profile of its own.
@@ -92,7 +92,7 @@
            (with-current-buffer ,parent-buffer
              (org-mode)
              (setq-local mevedel--session ,session)
-             (mevedel-session-persistence-ensure-files
+             (mevedel-session-artifacts-ensure-files
               ,session parent-buffer))
            (let ((relative-path "agents/explorer-test.chat.org"))
              (setq ,canonical-path
@@ -163,7 +163,7 @@
   :doc "strips the persisted handoff prefix before reusing a summary"
   (with-temp-buffer
     (insert "#+begin_summary\n"
-            mevedel-session-persistence--summary-handoff-prefix
+            mevedel-session-artifacts--summary-handoff-prefix
             "## Goal\n- Continue\n"
             (mevedel--format-hook-audit-record
              '(:type compact-context
@@ -1568,7 +1568,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                  (lambda (path &rest _)
                    (and (equal path save-path) "/mock:")))
                 ((symbol-function
-                  'mevedel-session-persistence-artifact-present-p)
+                  'mevedel-session-artifacts-artifact-present-p)
                  (lambda (seen-session logical)
                    (setq seen (list seen-session logical))
                    t)))
@@ -1581,7 +1581,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                  (lambda (path &rest _)
                    (and (equal path save-path) "/mock:")))
                 ((symbol-function
-                  'mevedel-session-persistence-artifact-present-p)
+                  'mevedel-session-artifacts-artifact-present-p)
                  (lambda (&rest _) nil)))
         (should-not (mevedel--compact-agent-target invocation))))))
 
@@ -1611,7 +1611,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                        (lambda (path &rest _)
                          (and (equal path save-path) "/mock:")))
                       ((symbol-function
-                        'mevedel-session-persistence-artifact-present-p)
+                        'mevedel-session-artifacts-artifact-present-p)
                        (lambda (&rest _) nil)))
               (should
                (equal first
@@ -1623,7 +1623,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                          (lambda (path &rest _)
                            (and (equal path save-path) "/mock:")))
                         ((symbol-function
-                          'mevedel-session-persistence-artifact-present-p)
+                          'mevedel-session-artifacts-artifact-present-p)
                          (lambda (_seen-session logical)
                            (push logical seen-logicals)
                            (equal logical
@@ -1708,12 +1708,12 @@ missing or zero prompt-side usage cannot become the active baseline"
                     (list (cons "/root/explorer" record))))
            (original (buffer-string))
            (original-publish
-            (symbol-function 'mevedel-session-persistence-publish-text))
+            (symbol-function 'mevedel-session-artifacts-publish-text))
            published
            (target (mevedel--compact-agent-target invocation))
            (archive
             (cl-letf (((symbol-function
-                        'mevedel-session-persistence-publish-text)
+                        'mevedel-session-artifacts-publish-text)
                        (lambda (seen-session path content &optional coding)
                          (setq published
                                (list seen-session path content coding))
@@ -3589,12 +3589,12 @@ missing or zero prompt-side usage cannot become the active baseline"
           (setf (mevedel-session-current-segment session) 2)
           (with-temp-buffer
             (setq buffer-file-name
-                  (mevedel-session-persistence--segment-path tempdir 2))
+                  (mevedel-session-artifacts-segment-path tempdir 2))
             (setq-local mevedel--session session)
             (should (mevedel--compact-current-persisted-p)))
           (with-temp-buffer
             (setq buffer-file-name
-                  (mevedel-session-persistence--segment-path tempdir 1))
+                  (mevedel-session-artifacts-segment-path tempdir 1))
             (setq-local mevedel--session session)
             (should-not (mevedel--compact-current-persisted-p)))
           (with-temp-buffer
@@ -3645,7 +3645,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                  :turns-run 0))
           (mevedel-session-set-pending-input-paused session t)
           (mevedel-session-set-pending-input-failure-paused session t)
-          (mevedel-session-persistence-ensure-files session buffer)
+          (mevedel-session-artifacts-ensure-files session buffer)
           (let* ((plan
                   (mevedel-view-stream-prepare-execution-row-archive
                    buffer '("archived-call")))
@@ -3708,7 +3708,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                         (mevedel-transcript-audit-records
                          (buffer-string) 'execution-completion)))))
           (let ((segment-path
-                 (mevedel-session-persistence--segment-path
+                 (mevedel-session-artifacts-segment-path
                   (mevedel-session-save-path session) 3)))
             (should (file-exists-p segment-path))
             (with-temp-buffer

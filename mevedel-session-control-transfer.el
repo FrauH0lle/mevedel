@@ -23,6 +23,26 @@
 (declare-function mevedel--instruction-state-rollback
                   "mevedel-overlays" (workspace))
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-check-target-incarnation
+                  "mevedel-session-artifacts" (session buffer))
+(declare-function mevedel-session-artifacts-load-instructions
+                  "mevedel-session-artifacts"
+                  (session buffer &optional turn directive-records
+                           preserve-directives-p))
+(declare-function mevedel-session-artifacts-read-artifact
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-save
+                  "mevedel-session-artifacts"
+                  (session buffer &optional settled force))
+(declare-function mevedel-session-artifacts-segment-path
+                  "mevedel-session-artifacts" (save-path n))
+
+;; `mevedel-session-codec'
+(declare-function mevedel-session-codec-deserialize
+                  "mevedel-session-codec" (plist workspace))
+
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability-lease-acquire
                   "mevedel-session-durability"
@@ -34,32 +54,18 @@
                   "mevedel-session-durability" (session-dir))
 
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--apply-read-only-mode
-                  "mevedel-session-persistence" (buffer &optional reason))
-(declare-function mevedel-session-persistence--check-target-incarnation
-                  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence--copy-session-state
-                  "mevedel-session-persistence" (from to))
-(declare-function mevedel-session-persistence--load-instructions
-                  "mevedel-session-persistence"
-                  (session buffer &optional turn directive-records
-                           preserve-directives-p))
-(declare-function mevedel-session-persistence--segment-path
-                  "mevedel-session-persistence" (save-path segment))
-(declare-function mevedel-session-persistence-deserialize
-                  "mevedel-session-persistence" (plist workspace))
+(declare-function mevedel-session-persistence-apply-read-only-mode
+                  "mevedel-session-persistence" (buf &optional reason))
 (declare-function mevedel-session-persistence-load-sidecar
                   "mevedel-session-persistence" (path))
-(declare-function mevedel-session-persistence-read-artifact
-                  "mevedel-session-persistence"
-                  (session logical &optional committed-only))
-(declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence"
-                  (session buffer &optional settled force))
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-read
                   "mevedel-session-publication" (session-dir))
+
+;; `mevedel-session-rewind'
+(declare-function mevedel-session-rewind-copy-session-state
+                  "mevedel-session-rewind" (from to))
 
 ;; `mevedel-session-transfer'
 (declare-function mevedel-session-transfer-decide
@@ -68,10 +74,10 @@
                   "mevedel-session-transfer" (session request))
 (declare-function mevedel-session-transfer-poll
                   "mevedel-session-transfer" (session))
-(declare-function mevedel-session-transfer-request
-                  "mevedel-session-transfer" (session &optional label))
 (declare-function mevedel-session-transfer-release
                   "mevedel-session-transfer" (session))
+(declare-function mevedel-session-transfer-request
+                  "mevedel-session-transfer" (session &optional label))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-active-p
@@ -367,15 +373,17 @@ releases the owner's session."
 (defun mevedel-session-control-transfer--poll-owner (session)
   "Poll owner-side state, save drained work, and release the granted lease."
   (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-session-transfer)
   (let ((state (mevedel-session-transfer-poll session)))
     (when (and (eq (plist-get state :state) 'quiescing)
                (mevedel-session-control-transfer-drained-p session))
       (let ((buffer (mevedel-session-control-transfer-root-buffer session)))
         (when (buffer-live-p buffer)
-          (mevedel-session-persistence-save session buffer t)
+          (mevedel-session-artifacts-save session buffer t)
           (mevedel-session-transfer-release session)
-          (mevedel-session-persistence--apply-read-only-mode
+          (mevedel-session-persistence-apply-read-only-mode
            buffer
            (format "control transferred to %s; this session is read-only here"
                    (or (plist-get (plist-get state :request)
@@ -391,14 +399,17 @@ The buffer is left unmodified and read-only-neutral: the caller decides
 whether the result is a writable owner buffer or a read-only follower.  The
 segment number comes from the committed session state, so a rotation on the
 owner's side repoints the visited file here too."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((save-path (mevedel-session-save-path session))
          (logical
           (file-name-nondirectory
-           (mevedel-session-persistence--segment-path
+           (mevedel-session-artifacts-segment-path
             save-path (mevedel-session-current-segment session))))
          (segment-path (expand-file-name logical save-path))
          (content
-          (mevedel-session-persistence-read-artifact session logical t)))
+          (mevedel-session-artifacts-read-artifact session logical t)))
     (with-current-buffer buffer
       (setq buffer-file-name segment-path
             buffer-file-truename nil
@@ -511,6 +522,11 @@ artifact reads at all.
 A locally modified buffer is left alone.  Those edits are exactly what the
 transfer path refuses to discard, and a follow tick must not resolve that
 conflict on the user's behalf."
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-fork)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-rewind)
   (when (and (buffer-live-p buffer)
              (or force
                  (buffer-local-value 'mevedel-session-follow-published buffer))
@@ -533,7 +549,7 @@ conflict on the user's behalf."
                (refreshed
                 (and sidecar
                      (plist-get
-                      (mevedel-session-persistence-deserialize
+                      (mevedel-session-codec-deserialize
                        sidecar workspace)
                       :session)))
                (staging-buffer
@@ -548,7 +564,7 @@ conflict on the user's behalf."
                    refreshed staging-buffer)
                   (mevedel-session-control-transfer--install-staged-segment
                    buffer staging-buffer)
-                  (mevedel-session-persistence--copy-session-state
+                  (mevedel-session-rewind-copy-session-state
                    refreshed session)
                   (mevedel-session-set-root-buffer session buffer)
                   t)
@@ -566,6 +582,11 @@ must not keep other clients out.
 
 The target incarnation, transcript, and instruction restore are staged before
 the live session or buffer changes."
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-fork)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-rewind)
   (require 'mevedel-overlays)
   (condition-case err
       (let* ((save-path (mevedel-session-save-path session))
@@ -579,7 +600,7 @@ the live session or buffer changes."
                (plist-get publication :sidecar)))
              (refreshed
               (plist-get
-               (mevedel-session-persistence-deserialize sidecar workspace)
+               (mevedel-session-codec-deserialize sidecar workspace)
                :session))
              (staging-buffer
               (generate-new-buffer " *mevedel-transfer-staging*"))
@@ -595,12 +616,12 @@ the live session or buffer changes."
                refreshed staging-buffer)
               (mevedel-session-control-transfer-register-root-buffer
                refreshed staging-buffer)
-              (mevedel-session-persistence--check-target-incarnation
+              (mevedel-session-artifacts-check-target-incarnation
                refreshed staging-buffer)
               (condition-case install-error
                   (progn
                     (unless
-                        (mevedel-session-persistence--load-instructions
+                        (mevedel-session-artifacts-load-instructions
                          refreshed staging-buffer)
                       (error "Transferred instruction snapshot is invalid"))
                     (mevedel-session-control-transfer--install-staged-segment
@@ -608,7 +629,7 @@ the live session or buffer changes."
                 (error
                  (funcall instruction-rollback)
                  (signal (car install-error) (cdr install-error))))
-              (mevedel-session-persistence--copy-session-state
+              (mevedel-session-rewind-copy-session-state
                refreshed session)
               (mevedel-session-control-transfer-register-root-buffer
                session buffer)

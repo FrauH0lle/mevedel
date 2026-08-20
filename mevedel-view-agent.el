@@ -51,11 +51,12 @@
 (declare-function mevedel-agent-invocation-verdict "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-artifact-present-p
-                  "mevedel-session-persistence" (session logical))
-(declare-function mevedel-session-persistence-find-artifact-noselect
-                  "mevedel-session-persistence"
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifact-present-p
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-find-artifact-noselect
+                  "mevedel-session-artifacts"
                   (session logical &optional inspection))
 
 ;; `mevedel-structs'
@@ -651,6 +652,9 @@ usual.  Keyboard invocation outside an attribution signals a user error."
 Retained agents resolve through their conversation buffer when it is resident;
 otherwise their validated transcript file is opened.
 Signals `user-error' when no transcript source can be opened."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-agent-persistence)
   (let* ((data-buf (and (boundp 'mevedel--data-buffer)
                         mevedel--data-buffer))
@@ -701,7 +705,7 @@ Signals `user-error' when no transcript source can be opened."
                rel-path save-path)
         (user-error "Transcript path failed validation: %s" rel-path))
       (let ((logical-path (expand-file-name rel-path save-path)))
-        (unless (mevedel-session-persistence-artifact-present-p
+        (unless (mevedel-session-artifacts-artifact-present-p
                  session rel-path)
           (user-error "Transcript artifact missing: %s" logical-path))
         (append (list :agent-path agent-path
@@ -762,9 +766,12 @@ Signals `user-error' when no transcript source can be opened."
 (defun mevedel-view--ensure-agent-transcript-view (agent-path info parent-view)
   "Return a rendered transcript inspection view for AGENT-PATH and INFO.
 PARENT-VIEW is the session view that opened the transcript."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((live-p (plist-get info :live-buffer))
          (agent-data (or (plist-get info :buffer)
-                         (mevedel-session-persistence-find-artifact-noselect
+                         (mevedel-session-artifacts-find-artifact-noselect
                           (plist-get info :session)
                           (plist-get info :relative-path)
                           t)))

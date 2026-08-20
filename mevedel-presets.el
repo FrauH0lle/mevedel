@@ -16,9 +16,6 @@
 (require 'cl-lib)
 (require 'mevedel-turn)
 
-(declare-function mevedel-session-persistence-assert-new-mutation-authority
-                  "mevedel-session-persistence" (session))
-
 (eval-when-compile
   (require 'mevedel-structs)
   ;; Needed for `setf' on `gptel-fsm' struct slots (native comp)
@@ -64,6 +61,10 @@
 ;; `mevedel-overlays'
 (declare-function mevedel--find-directive-by-uuid
                   "mevedel-overlays" (uuid))
+
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority
+                  "mevedel-session-artifacts" (session))
 
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--drain-pending-context
@@ -543,6 +544,9 @@ alist with mevedel-specific handlers added:
   4.  Canonical successful-turn transaction (DONE state handler only)
   5.  Failure and abort cleanup"
   ;; 1. Add the pre-sample WAIT handlers in execution order.
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
       (setcdr wait-entry
@@ -573,8 +577,7 @@ alist with mevedel-specific handlers added:
                                    (buffer-live-p chat-buffer))
                           (with-current-buffer chat-buffer
                             (when mevedel--session
-                              (require 'mevedel-session-persistence)
-                              (mevedel-session-persistence-assert-new-mutation-authority
+                              (mevedel-session-artifacts-assert-new-mutation-authority
                                mevedel--session)
                               (unless mevedel--current-request
                                 (mevedel-request-begin

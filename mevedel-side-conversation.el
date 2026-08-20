@@ -13,9 +13,6 @@
   (require 'gptel-request nil t)
   (require 'mevedel-structs))
 
-(declare-function mevedel-session-persistence-assert-new-mutation-authority
-                  "mevedel-session-persistence" (session))
-
 ;; `gptel'
 (declare-function gptel-abort "ext:gptel-request" (buf))
 (declare-function gptel-context--collect "ext:gptel-context"
@@ -86,6 +83,10 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-format-block
                   "mevedel-reminders" (content))
+
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority
+                  "mevedel-session-artifacts" (session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-begin
@@ -576,14 +577,16 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 
 (defun mevedel-side-conversation--handle-wait (fsm)
   "Begin the transient side request owned by FSM on its first WAIT."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((info (gptel-fsm-info fsm))
          (data-buffer (plist-get info :buffer)))
     (when (and (not (plist-get info :mevedel-request-begun))
                (buffer-live-p data-buffer))
       (with-current-buffer data-buffer
         (when mevedel--session
-          (require 'mevedel-session-persistence)
-          (mevedel-session-persistence-assert-new-mutation-authority
+          (mevedel-session-artifacts-assert-new-mutation-authority
            mevedel--session)
           (let ((request (mevedel-request-begin mevedel--session)))
             (setf (mevedel-request-fsm request) fsm

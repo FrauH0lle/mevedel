@@ -180,12 +180,16 @@ Chat / view
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-directive-persistence.el  workspace directive record codec
   mevedel-persistence.el      save/load instructions
+  mevedel-session-codec.el    closed session sidecar codec and validation
+  mevedel-session-artifacts.el  paths, artifacts, snapshots, and segment writes
   mevedel-session-durability.el lease and storage primitives
   mevedel-session-recovery.el  specialized recovery protocol and markers
   mevedel-session-transfer.el  durable cooperative control transfer protocol
   mevedel-session-publication.el immutable publication and diagnostics
   mevedel-session-save-as.el portable Save As transaction and adoption
-  mevedel-session-persistence.el  session save/resume/rewind/fork
+  mevedel-session-persistence.el  lifecycle/resume/listing/locking/cleanup facade
+  mevedel-session-rewind.el   restore plans and transactional Rewind
+  mevedel-session-fork.el     Fork/Worktree projection, publication, and rename
   mevedel-session-control-fs.el   pinned target-side session control filesystem
   mevedel-session-control-transfer.el  control-transfer state, drains, descriptors
   mevedel-compact.el          conversation compaction (split-on-compact)
@@ -224,7 +228,7 @@ Tools (each dispatches through mevedel-pipeline)
 Support
   mevedel-file-state.el       LRU file cache
   mevedel-diff-apply.el       transactional unified diff staging/application
-  mevedel-utilities.el        shared helpers (tinting, ediff glue, env info)
+  mevedel-utilities.el        package version + shared tinting/ediff/env helpers
 ```
 
 ## External dependencies

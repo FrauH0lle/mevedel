@@ -84,32 +84,37 @@
 (declare-function mevedel-review-strip-user-action-blocks
 		  "mevedel-review" (text))
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-fork-point-at-source
+                  "mevedel-session-artifacts"
+                  (buffer source-start source-end))
+(declare-function mevedel-session-artifacts-fork-point-spans
+                  "mevedel-session-artifacts" (buffer))
+(declare-function mevedel-session-artifacts-read-segment
+                  "mevedel-session-artifacts" (session number))
+(declare-function mevedel-session-artifacts-segments
+                  "mevedel-session-artifacts" (session live-buffer))
+
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--fork-point-spans
-                  "mevedel-session-persistence" (buffer))
 (declare-function mevedel-session-persistence-choose-conversation-variant
                   "mevedel-session-persistence"
                   (variants current-session-id))
 (declare-function mevedel-session-persistence-conversation-variants
                   "mevedel-session-persistence"
                   (session fork-point-id &optional sessions))
-(declare-function mevedel-session-persistence-fork-point-at-source
-		  "mevedel-session-persistence"
-		  (buffer source-start source-end))
 (declare-function mevedel-session-persistence-list-sessions
                   "mevedel-session-persistence" (workspace &optional cached))
-(declare-function mevedel-session-persistence-read-segment
-                  "mevedel-session-persistence" (session number))
 (declare-function mevedel-session-persistence-restore
                   "mevedel-session-persistence"
-                  (session-dir &optional lifecycle-source session-override))
-(declare-function mevedel-session-persistence-rewind
-		  "mevedel-session-persistence" (buffer target))
-(declare-function mevedel-session-persistence-rewind-checkpoint
-                  "mevedel-session-persistence"
+                  (session-dir &optional lifecycle-source
+                               session-override workspace))
+
+;; `mevedel-session-rewind'
+(declare-function mevedel-session-rewind-rewind
+                  "mevedel-session-rewind" (buffer target))
+(declare-function mevedel-session-rewind-rewind-checkpoint
+                  "mevedel-session-rewind"
                   (workspace checkpoint &optional buffer))
-(declare-function mevedel-session-persistence-segments
-                  "mevedel-session-persistence" (session live-buffer))
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-attempt-checkpoint
@@ -3243,17 +3248,19 @@ the render so user toggles survive streaming ticks."
     (data-buf source-start source-end &optional session)
   "Return DATA-BUF's variant switch for SOURCE-START..SOURCE-END, or nil.
 SESSION supplies live session context when DATA-BUF is archived."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when-let* ((session
                (or session
                    (buffer-local-value 'mevedel--session data-buf)))
               ((mevedel-session-save-path session))
               (fork-point
-               (mevedel-session-persistence-fork-point-at-source
+               (mevedel-session-artifacts-fork-point-at-source
                 data-buf source-start source-end))
               (fork-point-id (plist-get fork-point :fork-point-id))
               (variants
                (progn
-                 (require 'mevedel-session-persistence)
                  (mevedel-session-persistence-conversation-variants
                   session fork-point-id
                   mevedel-view--conversation-variant-sessions)))
@@ -4233,6 +4240,11 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
 (defun mevedel-view-directive-actions (directive)
   "Choose a state-correct action for the rendered DIRECTIVE turn."
   (interactive (list (get-text-property (point) 'mevedel-view-directive)))
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-fork)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-rewind)
   (pcase-let* ((`(,record ,workspace ,attempt ,attempt-index)
                 (or (mevedel-view--directive-metadata-context directive)
                     (user-error "Directive record is unavailable")))
@@ -4271,9 +4283,8 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
       (?r (mevedel-view-enter-directive-scope record 'retry nil workspace))
       (?p (mevedel--replace-patch-buffer
            (mevedel-directive-attempt-patch attempt)))
-      (?w (require 'mevedel-session-persistence)
-          (let ((checkpoint (mevedel-directive-attempt-checkpoint attempt)))
-            (mevedel-session-persistence-rewind-checkpoint
+      (?w (let ((checkpoint (mevedel-directive-attempt-checkpoint attempt)))
+            (mevedel-session-rewind-rewind-checkpoint
              workspace checkpoint
              (mevedel-view--directive-checkpoint-buffer checkpoint))))
       (?o (require 'mevedel-directive-activity)
@@ -5648,6 +5659,9 @@ When COLLAPSE-NEWEST is non-nil, collapse that turn too."
 
 (defun mevedel-view--settled-response-at-point ()
   "Return the stable settled response target at point."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((bounds (mevedel-view--turn-bounds))
          (role (and bounds
                     (get-text-property
@@ -5665,7 +5679,7 @@ When COLLAPSE-NEWEST is non-nil, collapse that turn too."
                  (consp source)
                  (buffer-live-p data-buffer))
       (user-error "Point is not on an assistant response"))
-    (or (mevedel-session-persistence-fork-point-at-source
+    (or (mevedel-session-artifacts-fork-point-at-source
          data-buffer (car source) (cdr source))
         (user-error "Assistant response is not a settled fork point"))))
 
@@ -5762,8 +5776,12 @@ continuation context."
 (defun mevedel-view-rewind-at-point ()
   "Rewind the current session to the settled assistant turn at point."
   (interactive)
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-fork)
   (require 'mevedel-session-persistence)
-  (when (mevedel-session-persistence-rewind
+  (require 'mevedel-session-rewind)
+  (when (mevedel-session-rewind-rewind
          mevedel--data-buffer (mevedel-view--settled-response-at-point))
     (mevedel-view-return-to-latest-segment)
     t))
@@ -5884,6 +5902,9 @@ continuation context."
 
 (defun mevedel-view--show-segment (number direction)
   "Project session segment NUMBER, landing according to DIRECTION."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((session (or (mevedel-view--segment-session)
                       (user-error "Active view has no mevedel session")))
          (current (or (mevedel-session-current-segment session) 1)))
@@ -5891,8 +5912,7 @@ continuation context."
         (mevedel-view-return-to-latest-segment)
       (let* ((new-buffer
               (progn
-                (require 'mevedel-session-persistence)
-                (mevedel-session-persistence-read-segment session number)))
+                (mevedel-session-artifacts-read-segment session number)))
              (old-number mevedel-view--historical-segment-number)
              (old-buffer mevedel-view--historical-segment-buffer)
              (old-state (mevedel-view--capture-segment-view-state))
@@ -5975,14 +5995,16 @@ continuation context."
 Interactively, offer every canonical segment, including missing and
 unreadable entries."
   (interactive)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((session (or (mevedel-view--segment-session)
                       (user-error "Active view has no mevedel session")))
          (latest (or (mevedel-session-current-segment session) 1))
          (displayed (or mevedel-view--historical-segment-number latest))
          (segments
           (progn
-            (require 'mevedel-session-persistence)
-            (mevedel-session-persistence-segments
+            (mevedel-session-artifacts-segments
              session mevedel--data-buffer)))
          (choices
           (mapcar
@@ -6355,6 +6377,9 @@ historical banner.  AGENT-TRANSCRIPT-P selects the headerless layout."
 SESSION-DATA-BUF supplies live session metadata.  RENDER-VIEW-BUF is
 used for agent transcripts.  DATA-TURN-START-POS identifies the live
 turn.  SAVED-STATES restores matching disclosure state."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (with-current-buffer data-buf
     (unless (mevedel-view--running-agent-transcript-buffer-p)
       (require 'mevedel-transcript-restore)
@@ -6413,7 +6438,6 @@ turn.  SAVED-STATES restores matching disclosure state."
                 (when (and session
                            (mevedel-session-save-path session)
                            (mevedel-session-workspace session))
-                  (require 'mevedel-session-persistence)
                   ;; Every settled turn carries a fork point, so this runs
                   ;; on every full re-render.  Enumerating the workspace
                   ;; live would cost several target round trips per
@@ -6421,7 +6445,7 @@ turn.  SAVED-STATES restores matching disclosure state."
                   ;; settled history, so they tolerate the last live
                   ;; listing (picker, resume, fork), and activating one
                   ;; enumerates live anyway.
-                  (when (mevedel-session-persistence--fork-point-spans
+                  (when (mevedel-session-artifacts-fork-point-spans
                          data-buf)
                     (mevedel-session-persistence-list-sessions
                      (mevedel-session-workspace session) 'cached))))

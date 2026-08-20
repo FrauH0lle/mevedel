@@ -75,7 +75,7 @@
          (dir "/ssh:user@host:/srv/project/.mevedel/sessions/s/tool-results")
          published)
     (cl-letf (((symbol-function
-                'mevedel-session-persistence-publish-text)
+                'mevedel-session-artifacts-publish-text)
                (lambda (actual-session path content &optional coding)
                  (setq published
                        (list actual-session path content coding)))))
@@ -160,7 +160,7 @@
           (should (equal logical (file-relative-name fixed save-path)))
           (should
            (equal bytes
-                  (mevedel-session-persistence-read-artifact
+                  (mevedel-session-artifacts-read-artifact
                    session logical)))
           (let ((record (with-temp-buffer
                           (insert bytes)

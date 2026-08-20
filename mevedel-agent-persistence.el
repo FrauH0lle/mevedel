@@ -49,9 +49,10 @@
 (declare-function mevedel-reminders-serialize-agent-templates
                   "mevedel-reminders" (reminders))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-artifact-present-p
-                  "mevedel-session-persistence" (session logical))
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifact-present-p
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--plain-data-p "mevedel-utilities" (value))
@@ -516,6 +517,9 @@ Invalid or missing conversation files reject only their own identity and its
 descendants.  When READONLY-P is nil, active persisted turns recover as
 interrupted without dispatching a provider request.  Return the number of
 dropped or recovered records."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (require 'mevedel-agent-control)
   (require 'mevedel-agent-conversation)
   (require 'mevedel-agents)
@@ -541,8 +545,7 @@ dropped or recovered records."
                            (mevedel-agent-persistence-transcript-path-p
                             relative save-path)
                            (progn
-                             (require 'mevedel-session-persistence)
-                             (mevedel-session-persistence-artifact-present-p
+                             (mevedel-session-artifacts-artifact-present-p
                               session relative)))
                 (signal 'mevedel-agent-persistence-invalid-data
                         (list (format "Invalid retained agent conversation: %s"

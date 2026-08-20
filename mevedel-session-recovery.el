@@ -26,31 +26,30 @@
                   "mevedel-session-control-transfer" (session))
 
 ;; `mevedel-session-durability'
-(declare-function mevedel-session-control-fs-delete-directory
-                  "mevedel-session-control-fs" (path))
-(declare-function mevedel-session-control-fs-delete-file
-                  "mevedel-session-control-fs" (path))
-(declare-function mevedel-session-control-fs-list-directory
-                  "mevedel-session-control-fs" (directory regexp))
-(declare-function mevedel-session-control-fs-make-directory
-                  "mevedel-session-control-fs" (path &optional parents))
-(declare-function mevedel-session-control-fs-path-exists-p
-                  "mevedel-session-control-fs" (path))
-(declare-function mevedel-session-control-fs-directory-p
-                  "mevedel-session-control-fs" (path))
-(declare-function mevedel-session-control-fs-run-program
-                  "mevedel-session-control-fs" (operations))
-(declare-function mevedel-session-control-fs-physical-path
-                  "mevedel-session-control-fs" (path))
-(declare-function mevedel-session-control-fs-write-file
-                  "mevedel-session-control-fs"
-                  (path content &optional coding-system))
 (declare-function mevedel-session-control-fs-create-file
-                  "mevedel-session-control-fs"
+                  "mevedel-session-durability"
+                  (path content &optional coding-system))
+(declare-function mevedel-session-control-fs-delete-directory
+                  "mevedel-session-durability" (path))
+(declare-function mevedel-session-control-fs-delete-file
+                  "mevedel-session-durability" (path))
+(declare-function mevedel-session-control-fs-directory-p
+                  "mevedel-session-durability" (path))
+(declare-function mevedel-session-control-fs-list-directory
+                  "mevedel-session-durability" (directory regexp))
+(declare-function mevedel-session-control-fs-make-directory
+                  "mevedel-session-durability" (path &optional parents))
+(declare-function mevedel-session-control-fs-path-exists-p
+                  "mevedel-session-durability" (path))
+(declare-function mevedel-session-control-fs-physical-path
+                  "mevedel-session-durability" (path))
+(declare-function mevedel-session-control-fs-run-program
+                  "mevedel-session-durability" (operations))
+(declare-function mevedel-session-control-fs-write-file
+                  "mevedel-session-durability"
                   (path content &optional coding-system))
 (declare-function mevedel-session-durability--assert-no-pid-lock
                   "mevedel-session-durability" (session-dir))
-(defvar mevedel-session-durability--client-id)
 (declare-function mevedel-session-durability--portable-session-p
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability--read-plist
@@ -66,7 +65,7 @@
                   (session-dir buffer-name &optional session))
 (declare-function mevedel-session-durability-lease-owned-p
                   "mevedel-session-durability" (session))
-
+(defvar mevedel-session-durability--client-id)
 (defvar mevedel-session-recovery--mutation-cache nil
   "Cons cell collecting sessions whose marker was read this mutation, or nil.
 
@@ -75,6 +74,11 @@ again when publication begins.  Nothing between those two points can install a
 marker, so the second read is a target round trip for an answer already held.
 A caller that spans one mutation binds this to a fresh `(list nil)'; outside
 such a binding every call reads the target.")
+
+;; `mevedel-structs'
+(declare-function mevedel-session-pending-publication
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 
 
 (defun mevedel-session-recovery-refresh-session-buffers (session)
@@ -93,11 +97,6 @@ recovery does not discover session buffers by scanning Emacs global state."
       (force-mode-line-update)))
   (mevedel-session-control-transfer-notify session 'refresh-status)
   nil)
-
-;; `mevedel-structs'
-(declare-function mevedel-session-pending-publication
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 
 
 (defun mevedel-session-recovery--root (session-dir)

@@ -178,17 +178,25 @@
 (declare-function mevedel-review-transform-outcome "mevedel-review"
 		  (skill-name outcome))
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority
+                  "mevedel-session-artifacts" (session))
+
+;; `mevedel-session-fork'
+(declare-function mevedel-session-fork-conversation-fork
+                  "mevedel-session-fork" (buffer target))
+(declare-function mevedel-session-fork-retarget-worktree-path
+                  "mevedel-session-fork" (session path))
+(declare-function mevedel-session-fork-worktree-fork
+                  "mevedel-session-fork" (buffer target))
+
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--assert-stable-source
-                  "mevedel-session-persistence"
-                  (session buffer operation))
-(declare-function mevedel-session-persistence--retarget-worktree-path
-		  "mevedel-session-persistence" (session path))
-(declare-function mevedel-session-persistence-conversation-fork
-                  "mevedel-session-persistence" (buffer target))
-(declare-function mevedel-session-persistence-worktree-fork
-		  "mevedel-session-persistence" (buffer target))
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-session-rewind'
+(declare-function mevedel-session-rewind-assert-stable-source
+                  "mevedel-session-rewind"
+                  (session buffer operation))
 
 ;; `mevedel-side-conversation'
 (declare-function mevedel-side-conversation-send
@@ -252,8 +260,6 @@
                   "mevedel-structs" (session))
 (declare-function mevedel-request-begin "mevedel-structs"
                   (session &optional directive-uuid))
-(declare-function mevedel-session-persistence-assert-new-mutation-authority
-                  "mevedel-session-persistence" (session))
 (declare-function mevedel-request-end "mevedel-structs" nil)
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x) t)
@@ -627,18 +633,22 @@ composer body.")
 
 (defun mevedel-view--arm-session-fork (fork-type)
   "Arm FORK-TYPE from the settled assistant response at point."
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-fork)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-rewind)
   (mevedel-view--ensure-interactive-chat-view)
   (let* ((target (mevedel-view-fork-point-at-point))
          (session (mevedel-view--session))
          (label (if (eq fork-type 'worktree) "worktree" "conversation"))
          reservation)
-    (require 'mevedel-session-persistence)
     (when (equal
            (plist-get target :fork-point-id)
            (mevedel-session-forked-from-fork-point-id session))
       (user-error
        "Fork the inherited response from Source; switch variants first"))
-    (mevedel-session-persistence--assert-stable-source
+    (mevedel-session-rewind-assert-stable-source
      session mevedel--data-buffer "forking")
     (when (eq fork-type 'worktree)
       (require 'mevedel-worktree)
@@ -1810,6 +1820,11 @@ carries prompting authority only, never skill invocation."
     (source-view input target snapshot)
   "Publish TARGET from SOURCE-VIEW, then submit INPUT in its Child.
 SNAPSHOT is the exact Source composer state transferred on publication."
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-fork)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-rewind)
   (let* ((fork-type (plist-get target :fork-type))
          (source-data
           (buffer-local-value 'mevedel--data-buffer source-view))
@@ -1820,13 +1835,12 @@ SNAPSHOT is the exact Source composer state transferred on publication."
            :test #'equal))
          (child-data
           (progn
-            (require 'mevedel-session-persistence)
             (pcase fork-type
               ('conversation
-               (mevedel-session-persistence-conversation-fork
+               (mevedel-session-fork-conversation-fork
                 source-data target))
               ('worktree
-               (mevedel-session-persistence-worktree-fork
+               (mevedel-session-fork-worktree-fork
                 source-data target))
               (_
                (error "Unknown session fork type: %S" fork-type)))))
@@ -1846,7 +1860,7 @@ SNAPSHOT is the exact Source composer state transferred on publication."
             referenced-grants
             (mapcar
              (lambda (path)
-               (mevedel-session-persistence--retarget-worktree-path
+               (mevedel-session-fork-retarget-worktree-path
                 child-session path))
              referenced-grants))
       (plist-put
@@ -1869,6 +1883,11 @@ SNAPSHOT is the exact Source composer state transferred on publication."
 
 (defun mevedel-view--retarget-worktree-mention-bindings (text session)
   "Retarget repository-local mention bindings in TEXT for SESSION."
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-fork)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-rewind)
   (require 'mevedel-mention-bindings)
   (let ((copy (mevedel-mention-bindings-copy-text text)))
     (dolist (range (mevedel-mention-bindings-ranges copy))
@@ -1880,7 +1899,7 @@ SNAPSHOT is the exact Source composer state transferred on publication."
         (when key
           (plist-put
            binding key
-           (mevedel-session-persistence--retarget-worktree-path
+           (mevedel-session-fork-retarget-worktree-path
             session (plist-get binding key)))
           (mevedel-mention-bindings-set
            (plist-get range :start)
@@ -1955,6 +1974,11 @@ Extracts text from the input zone, plans all bound `$skill' mentions,
 renders the original text in the history region, and dispatches either
 one coherent request or one leading fork command.  Slash commands retain
 their local dispatch path."
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-fork)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-rewind)
   (mevedel-view--ensure-interactive-chat-view)
   (mevedel-view--assert-live-tip t)
   (when mevedel-view--pending-input-edit
@@ -1981,8 +2005,7 @@ their local dispatch path."
                     (mevedel-view--bind-input-mentions session)
                   (mevedel-view--input-text))))
     (when session
-      (require 'mevedel-session-persistence)
-      (mevedel-session-persistence-assert-new-mutation-authority session))
+      (mevedel-session-artifacts-assert-new-mutation-authority session))
     (when (string-empty-p input)
       (user-error "Nothing to send"))
     (if mevedel-view--composer-scope
@@ -1996,8 +2019,7 @@ their local dispatch path."
           (user-error
            "Slash commands are unavailable while viewing a historical segment"))
 	(when (and fork-target (not slash-parsed))
-          (require 'mevedel-session-persistence)
-          (mevedel-session-persistence--assert-stable-source
+          (mevedel-session-rewind-assert-stable-source
            session mevedel--data-buffer "forking"))
 	(if (or active-request
 		(and (not slash-parsed)

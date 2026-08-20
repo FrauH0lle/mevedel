@@ -171,7 +171,8 @@
                                (mevedel-session-agent-registry session)))
             (should-not (mevedel-session-agent-transcripts session))
             (should-not
-             (directory-files-recursively root "[.]chat[.]org\\'"))
+             (directory-files-recursively
+              root "/agents/.*[.]chat[.]org\\'"))
             (dotimes (index 3)
               (let (result)
                 (mevedel-tool-ui--agent

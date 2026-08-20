@@ -62,6 +62,10 @@
 (declare-function mevedel-queue--unregister-entry-interaction
                   "mevedel-queue" (entry))
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority
+                  "mevedel-session-artifacts" (session))
+
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
@@ -92,8 +96,6 @@
 (declare-function mevedel-session-plan-metadata "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-persistence-assert-new-mutation-authority
-                  "mevedel-session-persistence" (session))
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x)
 		  t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -160,11 +162,13 @@
 (defun mevedel-plan-mode-enter (&optional session)
   "Enter a sticky Plan conversation for SESSION."
   (interactive)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let ((session (mevedel-plan-mode--current-session session)))
     (unless session
       (user-error "No mevedel session for Plan mode"))
-    (require 'mevedel-session-persistence)
-    (mevedel-session-persistence-assert-new-mutation-authority session)
+    (mevedel-session-artifacts-assert-new-mutation-authority session)
     (when (mevedel-session-directive-planning session)
       (user-error "Finish or cancel directive planning before entering Plan"))
     (when-let* ((goal (mevedel-session-goal session)))

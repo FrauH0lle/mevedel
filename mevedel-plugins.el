@@ -59,9 +59,9 @@
 (declare-function mevedel-menu "mevedel-menu" ())
 (declare-function mevedel-menu-open "mevedel-menu" (area))
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-publish-text
-                  "mevedel-session-persistence"
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-publish-text
+                  "mevedel-session-artifacts"
                   (session path content &optional coding))
 
 ;; `mevedel-skills-core'
@@ -456,6 +456,9 @@ Items include usable plugin manifests and visible metadata errors."
 
 (defun mevedel-plugins--write-state (state &optional workspace)
   "Persist plugin STATE for WORKSPACE."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((file (or (mevedel-plugins-state-file workspace)
                    (error "No workspace for plugin state")))
          (content (mevedel-plugins--state-text state)))
@@ -463,8 +466,7 @@ Items include usable plugin manifests and visible metadata errors."
         (let ((session (or (mevedel-plugins--state-session workspace)
                            (user-error
                             "Remote plugin state requires its live session"))))
-          (require 'mevedel-session-persistence)
-          (mevedel-session-persistence-publish-text
+          (mevedel-session-artifacts-publish-text
            session file content 'utf-8-unix))
       (make-directory (file-name-directory file) t)
       (with-temp-file file

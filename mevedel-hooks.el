@@ -18,8 +18,8 @@
 (require 'mevedel-structs)
 (require 'mevedel-utilities)
 
-;; `mevedel'
-(declare-function mevedel-version "mevedel" (&optional here message))
+;; `mevedel-utilities'
+(declare-function mevedel-version "mevedel-utilities" (&optional here message))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-hook-rules

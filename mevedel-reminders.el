@@ -98,11 +98,12 @@
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-artifact-present-p
-                  "mevedel-session-persistence" (session logical))
-(declare-function mevedel-session-persistence-read-artifact
-                  "mevedel-session-persistence"
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifact-present-p
+                  "mevedel-session-artifacts"
+                  (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-read-artifact
+                  "mevedel-session-artifacts"
                   (session logical &optional committed-only))
 
 ;; `mevedel-structs'
@@ -692,12 +693,14 @@ sparsely while that mode remains active."
 
 (defun mevedel-reminders--plan-reference-content (session)
   "Return bounded contents of SESSION's immutable accepted artifact."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when-let* ((path (mevedel-reminders--plan-path session)))
-    (require 'mevedel-session-persistence)
-    (when (mevedel-session-persistence-artifact-present-p session path)
+    (when (mevedel-session-artifacts-artifact-present-p session path)
       (let ((content
              (decode-coding-string
-              (mevedel-session-persistence-read-artifact session path)
+              (mevedel-session-artifacts-read-artifact session path)
               'utf-8-unix)))
         (substring content 0 (min 12000 (length content)))))))
 

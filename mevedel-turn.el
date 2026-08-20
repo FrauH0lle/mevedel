@@ -51,10 +51,12 @@
                   "mevedel-plan-handoff"
                   (fsm status &optional reason))
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-save
+                  "mevedel-session-artifacts"
+                  (session buffer &optional settled force))
+
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence"
-                  (session buffer &optional settled))
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session--save-failed)
 
@@ -234,6 +236,9 @@ Signal when the request is missing or its reservation is not the next turn."
 
 (defun mevedel--turn-autosave (fsm)
   "Persist the completed turn represented by FSM and refresh its view."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when-let* ((info (gptel-fsm-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
@@ -243,7 +248,7 @@ Signal when the request is missing or its reservation is not the next turn."
         (let (saved)
           (condition-case err
               (progn
-                (mevedel-session-persistence-save
+                (mevedel-session-artifacts-save
                  mevedel--session chat-buffer t)
                 (when (bound-and-true-p mevedel-session--save-failed)
                   (setq mevedel-session--save-failed nil)

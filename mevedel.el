@@ -83,6 +83,11 @@
 (require 'mevedel-session-recovery)
 (require 'mevedel-session-transfer)
 (require 'mevedel-session-publication)
+(require 'mevedel-session-codec)
+(require 'mevedel-session-artifacts)
+(require 'mevedel-session-persistence)
+(require 'mevedel-session-rewind)
+(require 'mevedel-session-fork)
 (require 'mevedel-session-save-as)
 (require 'mevedel-session-control-transfer)
 (require 'mevedel-view-interaction)
@@ -252,19 +257,6 @@ Can be one of the symbols:
 
 ;;
 ;;; Commands
-
-;;;###autoload
-(defun mevedel-version (&optional here message)
-  "Return the current version of mevedel.
-
-Interactively, or when MESSAGE is non-nil, show it in echo area.  With
-prefix argument, or when HERE is non-nil, insert it at point."
-  (interactive (list (or current-prefix-arg 'interactive)))
-  (let ((version "v0.5.0"))
-    (cond
-     ((or message (called-interactively-p 'any)) (message "mevedel %s" version))
-     (here (insert (format "mevedel %s" version)))
-     (t version))))
 
 ;;;###autoload
 (defun mevedel-implement-directive (&optional callback)

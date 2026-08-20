@@ -386,7 +386,7 @@
 				     'mevedel-preset--build-handlers)
 				    #'identity)
 				   ((symbol-function
-				     'mevedel-session-persistence--install-gptel-save-state-advice)
+                                     'mevedel-session-artifacts-install-gptel-save-state-advice)
 				    #'ignore)
 				   ((symbol-function 'mevedel-skills-install)
 				    #'ignore)
@@ -466,7 +466,7 @@
 				     'mevedel-preset--build-handlers)
 				    #'identity)
 				   ((symbol-function
-				     'mevedel-session-persistence--install-gptel-save-state-advice)
+                                     'mevedel-session-artifacts-install-gptel-save-state-advice)
 				    #'ignore)
 				   ((symbol-function 'mevedel-skills-install)
 				    (lambda (_session _buffer)
@@ -1682,7 +1682,7 @@
 					     (mevedel-transcript-audit-records
 					      (buffer-string)
 					      'directive-turn-boundary))))
-			       (mevedel-session-persistence-save
+                               (mevedel-session-artifacts-save
 				mevedel--session captured-chat)
 			       (let ((segment buffer-file-name))
 				 (with-temp-buffer
@@ -1930,7 +1930,7 @@
                                                       (buffer-string))))
                              (with-current-buffer captured-chat
                                (mevedel-request-end)
-                               (mevedel-session-persistence-save
+                               (mevedel-session-artifacts-save
                                 mevedel--session captured-chat))))
                      (when (buffer-live-p buf)
                        (kill-buffer buf))
@@ -2265,7 +2265,7 @@
                              (setq-local mevedel--session session)
                              (mevedel-request-begin session)
                              (cl-letf (((symbol-function
-                                         'mevedel-session-persistence-save)
+                                         'mevedel-session-artifacts-save)
                                         (lambda (s b)
                                           (setq saved
                                                 (list s b mevedel--current-request))
@@ -2291,7 +2291,7 @@
 		     (setq-local mevedel--session session)
 		     (setq-local mevedel-session--read-only-mode t)
 		     (cl-letf
-			 (((symbol-function 'mevedel-session-persistence-save)
+                         (((symbol-function 'mevedel-session-artifacts-save)
 			   (lambda (&rest _)
 			     (cl-incf save-count)))
 			  ((symbol-function 'display-warning)
@@ -2312,7 +2312,7 @@
 			     (setf (mevedel-session-goal session) goal)
 			     (setq-local mevedel--session session)
 			     (mevedel-request-begin session)
-			     (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                             (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
 			                #'ignore))
 			       (mevedel-abort (current-buffer)))
 			     (should (eq 'paused (mevedel-goal-status goal)))

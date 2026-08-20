@@ -222,7 +222,7 @@
                          'mevedel-agent-persistence-restore-tree)
                         (lambda (&rest _) 0))
                        ((symbol-function
-                         'mevedel-session-persistence--load-instructions)
+                         'mevedel-session-artifacts-load-instructions)
                         #'ignore))
                (mevedel-session-persistence-restore
                 (plist-get entry :save-path) nil nil workspace))))

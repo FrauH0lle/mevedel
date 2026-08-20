@@ -124,11 +124,14 @@
 (declare-function mevedel-plugins-slash-command "mevedel-plugins" (args))
 (autoload 'mevedel-plugins-slash-command "mevedel-plugins" nil nil)
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-refresh-visited-file-modtime-or-error
+                  "mevedel-session-artifacts" (&optional expected-texts))
+(declare-function mevedel-session-artifacts-start-fresh-segment
+                  "mevedel-session-artifacts"
+                  (session buffer &rest keys))
+
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--refresh-visited-file-modtime-or-error
-                  "mevedel-session-persistence" (&optional expected-texts))
-(declare-function mevedel-session-persistence-start-fresh-segment
-                  "mevedel-session-persistence" (session buffer &rest args))
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-side-conversation'
@@ -374,6 +377,9 @@ Routes through the lifecycle-aware permission transition path."
 
 (defun mevedel-cmd--clear (_args)
   "Start a new, empty chat segment."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when (and (bound-and-true-p mevedel--session)
              (mevedel-session-pending-input-p mevedel--session))
     (user-error
@@ -385,11 +391,10 @@ Routes through the lifecycle-aware permission transition path."
      ((and (bound-and-true-p mevedel--session)
            (mevedel-session-save-path mevedel--session)
            buffer-file-name)
-      (require 'mevedel-session-persistence)
-      (mevedel-session-persistence--refresh-visited-file-modtime-or-error)
+      (mevedel-session-artifacts-refresh-visited-file-modtime-or-error)
       (let ((inhibit-read-only t))
         (mevedel-cmd--clear-trim-bare-prefix prefix))
-      (mevedel-session-persistence-start-fresh-segment
+      (mevedel-session-artifacts-start-fresh-segment
        mevedel--session (current-buffer)
        :initial-text prefix)
       (mevedel--run-session-start-hooks "clear")
@@ -806,11 +811,13 @@ the deleted command followed the prompt prefix."
   "Refresh stale visited-file metadata before slash command edits.
 DELETE-START and REGION-END bound the command text.  AFTER-PREFIX means
 the deleted command followed the prompt prefix."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when (and buffer-file-name
              (bound-and-true-p mevedel--session)
              (mevedel-session-save-path mevedel--session))
-    (require 'mevedel-session-persistence)
-    (mevedel-session-persistence--refresh-visited-file-modtime-or-error
+    (mevedel-session-artifacts-refresh-visited-file-modtime-or-error
      (mevedel-skills--text-after-local-command-delete
       delete-start region-end after-prefix))))
 

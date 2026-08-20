@@ -395,7 +395,7 @@
   ,test
   (test)
   (let ((session (mevedel-session--create :name "main")) seen)
-    (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+    (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                (lambda (saved-session buffer)
                  (setq seen (list saved-session buffer)))))
       (mevedel-plan-handoff--persist session (current-buffer)))

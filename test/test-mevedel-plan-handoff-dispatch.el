@@ -68,7 +68,7 @@
                         gptel-prompt-prefix-alist '((fundamental-mode . "> "))))
           (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
                     ((symbol-function
-                      'mevedel-session-persistence-start-fresh-segment)
+                      'mevedel-session-artifacts-start-fresh-segment)
                      (lambda (&rest _)
                        (cl-incf rotations)
                        "segment-0002.chat.org"))
@@ -143,7 +143,7 @@
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
                   ((symbol-function
-                    'mevedel-session-persistence-start-fresh-segment)
+                    'mevedel-session-artifacts-start-fresh-segment)
                    (lambda (&rest _) (error "Rotation failed"))))
           (mevedel-plan-handoff--dispatch-accepted session data-buffer)
           (let ((retry
@@ -212,7 +212,7 @@
                                  :outcome
                                  (list :model-input input
                                        :transcript-input input)))))
-                    ((symbol-function 'mevedel-session-persistence-save)
+                    ((symbol-function 'mevedel-session-artifacts-save)
                      #'ignore)
                     ((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
                     ((symbol-function 'mevedel--implement-plan) #'ignore))
@@ -262,7 +262,7 @@
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
-                    ((symbol-function 'mevedel-session-persistence-save) #'ignore)
+                    ((symbol-function 'mevedel-session-artifacts-save) #'ignore)
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_) view-buffer))
                     ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
@@ -380,7 +380,7 @@
           (with-current-buffer data-buffer
             (setq-local mevedel--session session))
           (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
-                    ((symbol-function 'mevedel-session-persistence-save)
+                    ((symbol-function 'mevedel-session-artifacts-save)
                      #'ignore)
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_) view-buffer))
@@ -405,7 +405,7 @@
                            :implementation-retry))
             (should
              (mevedel-view--follow-up-auto-drain-blocked-p session))
-            (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+            (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                        #'ignore)
                       ((symbol-function 'run-at-time)
                        (lambda (_delay _repeat function &rest args)

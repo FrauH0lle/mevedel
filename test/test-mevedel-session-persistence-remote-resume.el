@@ -80,10 +80,10 @@
               ;; Stage a session saved while the original container was
               ;; still live: durable mutation normally fences the target,
               ;; which would acknowledge the replacement before resume.
-              (let ((mevedel-session-persistence--checking-incarnation t))
+              (let ((mevedel-session-artifacts--checking-incarnation t))
                 (mevedel-permission-add-session-resource-grant
                  session-a grant-path 'read)
-                (mevedel-session-persistence-save session-a owner)))
+                (mevedel-session-artifacts-save session-a owner)))
             (let ((session-id (mevedel-session-session-id session-a))
                   (session-dir (mevedel-session-save-path session-a)))
               (should
@@ -110,7 +110,7 @@
                        'mevedel-agent-persistence-restore-tree)
                       (lambda (&rest _) 0))
                      ((symbol-function
-                       'mevedel-session-persistence--load-instructions)
+                       'mevedel-session-artifacts-load-instructions)
                       #'ignore))
                   (setq restored
                         (mevedel-session-persistence-resume-id
@@ -140,7 +140,7 @@
                     (should-not
                      (mevedel-session-resource-grants session-b))
                     (let* ((text
-                            (mevedel-session-persistence-read-artifact
+                            (mevedel-session-artifacts-read-artifact
                              session-b "session.meta.el" t))
                            (sidecar
                             (with-temp-buffer

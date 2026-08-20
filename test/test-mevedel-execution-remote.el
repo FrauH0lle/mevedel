@@ -36,7 +36,7 @@
 (require 'tramp-container)
 (require 'tramp-sh)
 
-(declare-function mevedel-version "mevedel" (&optional here message))
+(declare-function mevedel-version "mevedel-utilities" (&optional here message))
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -457,12 +457,12 @@ connection charges for, so the program path is proved here too."
                'mevedel-session-publication--publish-critical-batches)
               (lambda (&rest _args)
                 (error "Injected real remote publication failure"))))
-          (mevedel-session-persistence-save session buffer))
+          (mevedel-session-artifacts-save session buffer))
       (error (setq failed t)))
     (should failed))
   (should (mevedel-session-pending-publication session))
   (should-error
-   (mevedel-session-persistence-assert-mutation-authority session buffer)
+   (mevedel-session-artifacts-assert-mutation-authority session buffer)
    :type 'user-error)
   (should (mevedel-session-publication-retry session))
   (should-not (mevedel-session-pending-publication session))
@@ -966,7 +966,7 @@ connection charges for, so the program path is proved here too."
           ;; This case classifies transport exit, not target fencing: the
           ;; mock method runs a local shell whose environment depends on
           ;; which caller opens it first, so keep the fence out of it.
-          (let ((mevedel-session-persistence--checking-incarnation t))
+          (let ((mevedel-session-artifacts--checking-incarnation t))
             (cl-letf
                 (((symbol-function 'mevedel-execution--remote-command)
                   (lambda (record _command)
@@ -1029,7 +1029,7 @@ connection charges for, so the program path is proved here too."
           (setq session (test-mevedel-execution--session remote-root))
           (cl-letf
               (((symbol-function
-                 'mevedel-session-persistence-publish-text)
+                 'mevedel-session-artifacts-publish-text)
                 (lambda (_session path content &optional coding)
                   (setq published-path path
                         published-content content
@@ -1067,7 +1067,7 @@ connection charges for, so the program path is proved here too."
           (setq session (test-mevedel-execution--session remote-root))
           (cl-letf
               (((symbol-function
-                 'mevedel-session-persistence-publish-text)
+                 'mevedel-session-artifacts-publish-text)
                 (lambda (&rest _)
                   (error "Publication failed"))))
             (mevedel-test--with-captured-diagnostics diagnostics
@@ -1169,7 +1169,7 @@ connection charges for, so the program path is proved here too."
           (setq session (test-mevedel-execution--session remote-root))
           (cl-letf
               (((symbol-function
-                 'mevedel-session-persistence-publish-text)
+                 'mevedel-session-artifacts-publish-text)
                 (lambda (&rest _) 'queued)))
             (setq result
                   (test-mevedel-execution--start-managed
@@ -1207,7 +1207,7 @@ connection charges for, so the program path is proved here too."
           ;; child unreaped: a held zombie whose pgrp stays the managed
           ;; group for as long as the holder lives.
           (cl-letf (((symbol-function
-                      'mevedel-session-persistence-publish-text)
+                      'mevedel-session-artifacts-publish-text)
                      (lambda (&rest _) 'queued)))
             (setq result
                   (test-mevedel-execution--start-managed
@@ -1260,7 +1260,7 @@ connection charges for, so the program path is proved here too."
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
           (setq session (test-mevedel-execution--session remote-root))
-          (mevedel-session-persistence-assert-mutation-authority session)
+          (mevedel-session-artifacts-assert-mutation-authority session)
           (should
            (mevedel-session-durability-set-unsettled-mutation session t))
           (should (mevedel-execution-unsettled-mutation-p session))
@@ -1447,7 +1447,7 @@ connection charges for, so the program path is proved here too."
   (require 'mevedel)
   (with-current-buffer buffer
     (insert "Remote publication transcript\n")
-    (should (mevedel-session-persistence-save session buffer)))
+    (should (mevedel-session-artifacts-save session buffer)))
   (let* ((save-path (mevedel-session-save-path session))
          (publication
           (mevedel-session-publication-read save-path))
@@ -1465,7 +1465,7 @@ connection charges for, so the program path is proved here too."
               :key (lambda (entry)
                      (plist-get (plist-get entry :summary) :session-id))))
     (with-current-buffer buffer
-      (should (mevedel-session-persistence-save session buffer t)))
+      (should (mevedel-session-artifacts-save session buffer t)))
     (clrhash mevedel-tool-media--store)
     (let ((restored
            (mevedel-tool-media-extract
@@ -1505,11 +1505,11 @@ connection charges for, so the program path is proved here too."
         '(:type fork-point :fork-point-id "real-remote-fork"
           :segment 1 :turn 1 :file-turn 1 :cum-turn 1
           :captured-file-turn 1)))
-      (mevedel-session-persistence-save session buffer))
+      (mevedel-session-artifacts-save session buffer))
     (require 'mevedel-worktree)
     (setq reservation (mevedel-worktree-fork-reservation session))
     (setq target (plist-put target :worktree-reservation reservation))
-    (setq child (mevedel-session-persistence-worktree-fork buffer target))
+    (setq child (mevedel-session-fork-worktree-fork buffer target))
     (should (buffer-live-p child))
     (let ((child-session (buffer-local-value 'mevedel--session child))
           (child-directory
@@ -1587,7 +1587,7 @@ connection charges for, so the program path is proved here too."
   (let ((session-id (mevedel-session-session-id session))
         (save-path (mevedel-session-save-path session)))
     (with-current-buffer buffer
-      (mevedel-session-persistence-save session buffer t)
+      (mevedel-session-artifacts-save session buffer t)
       (set-buffer-modified-p nil))
     (should
      (cl-find session-id
@@ -1669,7 +1669,7 @@ connection charges for, so the program path is proved here too."
               (setq-local mevedel--workspace workspace-a
                           mevedel--session session)
               (insert "Alias transcript\n")
-              (mevedel-session-persistence-save session buffer)
+              (mevedel-session-artifacts-save session buffer)
               (set-buffer-modified-p nil))
             (test-mevedel-execution-remote--stage "save alias A complete")
             (mevedel-session-durability-lease-release
@@ -1693,7 +1693,7 @@ connection charges for, so the program path is proved here too."
                                              :session-id))
                            :test #'equal)
                 (let* ((sessions-dir
-                        (mevedel-session-persistence--sessions-dir
+                        (mevedel-session-artifacts-sessions-dir
                          workspace-b))
                        (entries
                         (directory-files
@@ -1918,7 +1918,7 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
                    (mevedel-session-execution-target session) t 'off)
                   :status)))
             (insert "Transfer-only transcript\n")
-            (should (mevedel-session-persistence-save session buffer t))
+            (should (mevedel-session-artifacts-save session buffer t))
             (set-buffer-modified-p nil))
           (mevedel-session-durability-lease-release
            (mevedel-session-save-path session) session)
@@ -1960,7 +1960,7 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
                    (mevedel-session-execution-target session) t 'off)
                   :status)))
             (insert "Independent client recovery transcript\n")
-            (mevedel-session-persistence-save session buffer t)
+            (mevedel-session-artifacts-save session buffer t)
             (set-buffer-modified-p nil))
           (mevedel-session-durability-lease-release
            (mevedel-session-save-path session) session)
@@ -2018,7 +2018,7 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
       (ert-skip
        (format "%s persistent-volume fixture is not configured" method)))
     (with-current-buffer buffer
-      (mevedel-session-persistence-save session buffer t)
+      (mevedel-session-artifacts-save session buffer t)
       (set-buffer-modified-p nil))
     (let* ((old-incarnation
             (mevedel-execution-target-incarnation
@@ -2027,7 +2027,7 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
       (write-region "grant\n" nil grant nil 'silent)
       (mevedel-permission-add-session-resource-grant session grant 'read)
       (with-current-buffer buffer
-        (mevedel-session-persistence-save session buffer t)
+        (mevedel-session-artifacts-save session buffer t)
         (set-buffer-modified-p nil))
       (mevedel-session-durability-lease-release
        (mevedel-session-save-path session) session)

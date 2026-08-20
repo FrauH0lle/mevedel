@@ -656,7 +656,7 @@
             (((symbol-function 'mevedel-view-fork-point-at-point)
               (lambda () target))
              ((symbol-function
-               'mevedel-session-persistence--assert-stable-source)
+               'mevedel-session-rewind-assert-stable-source)
               (lambda (candidate buffer operation)
                 (setq checked (list candidate buffer operation)))))
           (mevedel-view-arm-conversation-fork))
@@ -723,7 +723,7 @@
             (((symbol-function 'mevedel-view-fork-point-at-point)
               (lambda () target))
              ((symbol-function
-               'mevedel-session-persistence--assert-stable-source)
+               'mevedel-session-rewind-assert-stable-source)
               #'ignore))
           (let ((error
                  (should-error
@@ -767,7 +767,7 @@
             (((symbol-function 'mevedel-view-fork-point-at-point)
               (lambda () target))
              ((symbol-function
-               'mevedel-session-persistence--assert-stable-source)
+               'mevedel-session-rewind-assert-stable-source)
               #'ignore)
              ((symbol-function 'mevedel-worktree-fork-preflight)
               (lambda (candidate)
@@ -907,7 +907,7 @@
               (goto-char (+ (mevedel-view--input-start) 3))
               (cl-letf
                   (((symbol-function
-                     'mevedel-session-persistence-conversation-fork)
+                     'mevedel-session-fork-conversation-fork)
                     (lambda (buffer fork-target)
                       (push (list 'materialized buffer fork-target) events)
                       child-data))
@@ -951,7 +951,7 @@
         (let ((before (mevedel-view--composer-snapshot session)))
           (cl-letf
               (((symbol-function
-                 'mevedel-session-persistence-conversation-fork)
+                 'mevedel-session-fork-conversation-fork)
                 (lambda (&rest _) (error "materialization failed"))))
             (should-error (mevedel-view-send)
                           :type 'error))
@@ -983,7 +983,7 @@
         (let ((before (mevedel-view--composer-snapshot session)))
           (cl-letf
               (((symbol-function
-                 'mevedel-session-persistence-worktree-fork)
+                 'mevedel-session-fork-worktree-fork)
                 (lambda (&rest _) (error "staging failed"))))
             (should-error (mevedel-view-send)))
           (should (eq reservation
@@ -1006,7 +1006,7 @@
             (((symbol-function 'mevedel-skills-plan-user-input)
               (lambda (&rest _) (user-error "Invalid skill syntax")))
              ((symbol-function
-               'mevedel-session-persistence-conversation-fork)
+               'mevedel-session-fork-conversation-fork)
               (lambda (&rest _)
                 (setq materialized t))))
           (should-error (mevedel-view-send)
@@ -1038,12 +1038,12 @@
               (insert "continue here")
               (cl-letf
                   (((symbol-function
-                     'mevedel-session-persistence-worktree-fork)
+                     'mevedel-session-fork-worktree-fork)
                     (lambda (buffer fork-target)
                       (setq called (list buffer fork-target))
                       child-data))
                    ((symbol-function
-                     'mevedel-session-persistence-conversation-fork)
+                     'mevedel-session-fork-conversation-fork)
                     (lambda (&rest _)
                       (ert-fail "Conversation materializer called")))
                    ((symbol-function 'mevedel-view--submit-planned-input)
@@ -1100,12 +1100,13 @@
   (test)
 
   :doc "setup renders the ask mode prompt"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (should (string= "\n> "
-                       (buffer-substring-no-properties
-                        mevedel-view--input-marker
-                        (mevedel-view--input-start))))))
+  (let ((mevedel-permission-mode 'ask))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (should (string= "\n> "
+                         (buffer-substring-no-properties
+                          mevedel-view--input-marker
+                          (mevedel-view--input-start)))))))
 
   :doc "refresh preserves input text and updates the mode"
   (mevedel-view-test--with-buffers
@@ -1705,7 +1706,7 @@
             (with-current-buffer view-buf
               (mevedel-view-history-add "older input")
               (cl-letf (((symbol-function
-                         'mevedel-session-persistence-write)
+                         'mevedel-session-codec-write)
                          (lambda (&rest _)
                            (error "Simulated history write failure")))
                         ((symbol-function 'display-warning)
@@ -4065,7 +4066,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (delete-directory root t)))
 
   :doc "queued follow-up stays visible across incremental in-flight rendering"
-  (mevedel-view-test--with-buffers
+  (let ((mevedel-permission-mode 'ask))
+    (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'file :id "vq-incremental" :root "/tmp/vq"
                 :name "vq"
@@ -4074,6 +4076,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                              :order nil :total-bytes 0)))
            (session (mevedel-session-create "main" ws))
            data-turn-start)
+      (setf (mevedel-session-permission-mode session) 'ask)
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--current-request
@@ -4108,10 +4111,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should partial)
           (should prompt)
           (should (< partial queued))
-          (should (< queued prompt))))))
+          (should (< queued prompt)))))))
 
   :doc "queued follow-up stays visible across in-flight full rerender"
-  (mevedel-view-test--with-buffers
+  (let ((mevedel-permission-mode 'ask))
+    (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'file :id "vq-full-rerender" :root "/tmp/vq"
                 :name "vq"
@@ -4119,6 +4123,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
            (session (mevedel-session-create "main" ws)))
+      (setf (mevedel-session-permission-mode session) 'ask)
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--current-request
@@ -4147,7 +4152,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should partial)
           (should prompt)
           (should (< partial queued))
-          (should (< queued prompt))))))
+          (should (< queued prompt)))))))
 
   :doc "pending-input UI shows the queue-management key hint"
   (mevedel-view-test--with-buffers

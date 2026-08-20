@@ -67,9 +67,11 @@
 (declare-function mevedel-prompt-submission-restore
                   "mevedel-prompt-submission" (submission))
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority
+                  "mevedel-session-artifacts" (session))
+
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-assert-new-mutation-authority
-                  "mevedel-session-persistence" (session))
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-skills-ui'
@@ -516,6 +518,9 @@ longer accepts the prepared input."
 (defun mevedel-view-send-follow-up ()
   "Queue the composer as a follow-up, or send normally while idle."
   (interactive)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (mevedel-view--ensure-interactive-chat-view)
   (when mevedel-view--side-conversation-p
     (user-error "/btw does not queue follow-ups; wait for the active response"))
@@ -537,8 +542,7 @@ longer accepts the prepared input."
                 mevedel-view--pending-skill-submission
                 (buffer-local-value 'mevedel--compaction-in-flight
                                     mevedel--data-buffer))))
-      (require 'mevedel-session-persistence)
-      (mevedel-session-persistence-assert-new-mutation-authority session)
+      (mevedel-session-artifacts-assert-new-mutation-authority session)
       (if (not occupied)
           (mevedel-view-send)
         (when (buffer-local-value 'mevedel-session--read-only-mode
@@ -563,6 +567,9 @@ longer accepts the prepared input."
 
 Each bound entry is planned and prepared as its own turn.  The queue entry is
 removed only when the resulting prompt reaches its transcript commit boundary."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (when (buffer-live-p data-buffer)
     (mevedel-session-durability-with-transaction
      (let* ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
@@ -578,8 +585,7 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                       (not (mevedel-view--follow-up-auto-drain-blocked-p
                             session))
                       (string-empty-p (mevedel-view--input-text)))
-             (require 'mevedel-session-persistence)
-             (mevedel-session-persistence-assert-new-mutation-authority
+             (mevedel-session-artifacts-assert-new-mutation-authority
               session)
              (when-let* ((queue (mevedel-view--pending-follow-ups session)))
                (let* ((workflow (mevedel-session-directive-planning session))
@@ -974,14 +980,16 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-save-edit ()
   "Validate and save the active pending-input composer edit."
   (interactive)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (unless mevedel-view--pending-input-edit
     (user-error "No pending-input edit is active"))
   (let* ((state mevedel-view--pending-input-edit)
          (context (plist-get state :context))
          (session (mevedel-pending-inputs--session context))
          (category (plist-get state :category)))
-    (require 'mevedel-session-persistence)
-    (mevedel-session-persistence-assert-new-mutation-authority session)
+    (mevedel-session-artifacts-assert-new-mutation-authority session)
     (when (plist-get state :saving)
       (user-error "Pending-input preparation is still running"))
     (condition-case err
@@ -1026,6 +1034,9 @@ an unrelated remote operation started by redisplay or another package included
 
 (defun mevedel-pending-inputs--move (offset)
   "Move selected pending input by OFFSET inside its category."
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (item (mevedel-pending-inputs--selected))
@@ -1037,8 +1048,7 @@ an unrelated remote operation started by redisplay or another package included
                              :key (lambda (entry) (plist-get entry :id))
                              :test #'equal))
          (target (and index (+ index offset))))
-    (require 'mevedel-session-persistence)
-    (mevedel-session-persistence-assert-new-mutation-authority session)
+    (mevedel-session-artifacts-assert-new-mutation-authority session)
     (unless (and target (>= target 0) (< target (length entries)))
       (user-error "Pending input is already at the category boundary"))
     (cl-rotatef (nth index entries) (nth target entries))
@@ -1081,6 +1091,9 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-make-steering ()
   "Convert the selected follow-up to steering after full preparation."
   (interactive)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (item (mevedel-pending-inputs--selected))
@@ -1109,8 +1122,7 @@ an unrelated remote operation started by redisplay or another package included
                  current
                  (append original-grants staged-grants)
                  :test #'equal)))))))
-    (require 'mevedel-session-persistence)
-    (mevedel-session-persistence-assert-new-mutation-authority session)
+    (mevedel-session-artifacts-assert-new-mutation-authority session)
     (unless (eq (plist-get item :category) 'follow-up)
       (user-error "Pending input is already steering"))
     (when (plist-get entry :scope)
