@@ -51,15 +51,10 @@
   (test)
   :doc "refuses direct invocation from historical segment inspection"
   (mevedel-view-test--with-buffers
-    (let ((historical (generate-new-buffer
-                       " *mevedel-compact-historical*")))
-      (unwind-protect
-          (with-current-buffer view-buf
-            (setq-local mevedel-view--historical-segment-number 1
-                        mevedel-view--historical-segment-buffer historical)
-            (should-error (mevedel-compact) :type 'user-error))
-        (when (buffer-live-p historical)
-          (kill-buffer historical)))))
+    (with-current-buffer view-buf
+      (cl-letf (((symbol-function 'mevedel-view-historical-segment-p)
+                 (lambda () t)))
+        (should-error (mevedel-compact) :type 'user-error))))
 
   :doc "loads facade-owned compaction gates without the umbrella"
   (let ((root (file-name-directory (locate-library "mevedel-compact")))

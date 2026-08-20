@@ -176,6 +176,9 @@
 (autoload 'mevedel-view--normalize-local-file-uri-path
   "mevedel-view-markdown")
 
+;; `mevedel-view-disclosure'
+(declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
+
 ;; `mevedel-view-render'
 (declare-function mevedel-view--after-header-position
                   "mevedel-view-render" ())
@@ -186,14 +189,16 @@
                   "mevedel-view-render" ())
 (declare-function mevedel-view--non-history-view-position-p
                   "mevedel-view-render" (pos))
-(declare-function mevedel-view-historical-segment-p
-                  "mevedel-view-render" ())
 (declare-function mevedel-view-next-display "mevedel-view-render" ())
 (declare-function mevedel-view-previous-display "mevedel-view-render" ())
 (declare-function mevedel-view-render-initialize
                   "mevedel-view-render" ())
-(declare-function mevedel-view-toggle-section "mevedel-view-render" ())
 (declare-function mevedel-view-toggle-transcript "mevedel-view-render" ())
+
+;; `mevedel-view-segments'
+(declare-function mevedel-view-historical-segment-p
+                  "mevedel-view-segments" ())
+
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--ensure-request-progress
                   "mevedel-view-stream" (&optional data-buf status))

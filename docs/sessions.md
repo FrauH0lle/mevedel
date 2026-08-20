@@ -799,6 +799,11 @@ to continue. Rewind preserves session preset settings but clears Goal state.
 
 ### Archived segment inspection
 
+`mevedel-view-segments.el` owns the ephemeral inspection buffer and switching
+state; `mevedel-session-artifacts.el` remains the sole owner of segment
+descriptors and bytes. Source-backed expand/collapse state within either
+projection remains owned by `mevedel-view-disclosure.el`.
+
 The session cockpit's Navigate submenu projects persisted segments in the
 existing view: `[` shows the previous segment, `]` shows the next, and `g`
 chooses one directly.

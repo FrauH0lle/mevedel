@@ -99,6 +99,8 @@
 (require 'mevedel-session-save-as)
 (require 'mevedel-session-control-transfer)
 (require 'mevedel-view-interaction)
+(require 'mevedel-view-disclosure)
+(require 'mevedel-view-segments)
 (require 'mevedel-view-render)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-input-files)

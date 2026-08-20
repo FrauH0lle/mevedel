@@ -349,6 +349,10 @@
 (declare-function mevedel-view-history-previous "mevedel-view-history" ())
 (declare-function mevedel-view-history-search "mevedel-view-history" ())
 
+;; `mevedel-view-disclosure'
+(declare-function mevedel-view-disclosure-source-range
+                  "mevedel-view-disclosure" (data-buffer start end))
+
 ;; `mevedel-view-input-files'
 (declare-function mevedel-view--activate-dropped-file-grants
                   "mevedel-view-input-files" (paths session))
@@ -381,15 +385,15 @@
                   "mevedel-view-render"
                   (text &optional kind hook-context prompt-summary-body
                         prompt-summary-source hook-audits guest-name))
-(declare-function mevedel-view--source-range
-                  "mevedel-view-render" (data-buffer start end))
 (declare-function mevedel-view-fork-point-at-point
-                  "mevedel-view-render" ())
-(declare-function mevedel-view-historical-segment-p
                   "mevedel-view-render" ())
 (declare-function mevedel-view-reset-agent-ephemeral-state
                   "mevedel-view-render" (&optional data-buf))
 (defvar mevedel-view--display-map)
+
+;; `mevedel-view-segments'
+(declare-function mevedel-view-historical-segment-p
+                  "mevedel-view-segments" ())
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--stop-request-progress
@@ -591,9 +595,13 @@ composer body.")
   "View position to restore when cancelling a historical session fork.")
 
 (defvar-local mevedel-view--historical-composer-overlay nil
-  "Overlay hiding the live composer during archived-segment inspection.")
+  "Overlay hiding the live composer during archived segment inspection.")
 
-(defun mevedel-view--set-historical-composer-visible (visible)
+(defun mevedel-view-composer-session-fork-armed-p ()
+  "Return non-nil when this view has an armed historical session fork."
+  (and mevedel-view--armed-session-fork t))
+
+(defun mevedel-view-composer-set-historical-visible (visible)
   "Show the live composer when VISIBLE, otherwise hide and lock it."
   (when (overlayp mevedel-view--historical-composer-overlay)
     (delete-overlay mevedel-view--historical-composer-overlay)
@@ -623,7 +631,7 @@ composer body.")
     (setq mevedel-view--armed-session-fork nil)
     (mevedel-view--interaction-unregister 'armed-session-fork)
     (when (mevedel-view-historical-segment-p)
-      (mevedel-view--set-historical-composer-visible nil)
+      (mevedel-view-composer-set-historical-visible nil)
       (when mevedel-view--armed-session-fork-return-point
         (goto-char
          (min mevedel-view--armed-session-fork-return-point
@@ -672,7 +680,7 @@ composer body.")
       (plist-put target :worktree-reservation reservation))
     (when (mevedel-view-historical-segment-p)
       (setq mevedel-view--armed-session-fork-return-point (point))
-      (mevedel-view--set-historical-composer-visible t))
+      (mevedel-view-composer-set-historical-visible t))
     (mevedel-view--interaction-register
      (list :kind 'preview
            :id 'armed-session-fork
@@ -977,6 +985,7 @@ all displayed windows plus the editable composer text around THUNK."
     (require 'mevedel-utilities)
     (require 'mevedel-view-history)
     (require 'mevedel-view-input-files)
+    (require 'mevedel-view-segments)
     (require 'mevedel-pending-inputs)
     (setq-local mevedel-mentions--agent-enabled-p
                 (not mevedel-view--side-conversation-p))
@@ -2377,7 +2386,7 @@ replaces INPUT only in the temporary request prompt."
 			(car (last
                               (mevedel-pipeline--render-data-blocks input)))))
              (setq prompt-summary-source
-                   (mevedel-view--source-range
+                   (mevedel-view-disclosure-source-range
                     data-buffer
                     (+ body-start (car block))
                     (+ body-start (cadr block)))))
@@ -2388,7 +2397,7 @@ replaces INPUT only in the temporary request prompt."
              (insert (mevedel--format-hook-audit-record audit))
              (push (append audit
                            (list :source
-                                 (mevedel-view--source-range
+                                 (mevedel-view-disclosure-source-range
                                   data-buffer audit-start (point))))
                    hook-audits-with-source)))
          (setq hook-audits-with-source (nreverse hook-audits-with-source))

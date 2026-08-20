@@ -12,10 +12,14 @@ buffer behavior for non-transcript surfaces.
 `mevedel-view-agent.el` owns agent transcript inspection, live agent status,
 and targeted handle refresh. `mevedel-view-interaction.el` owns interaction
 descriptor registration, ordering, callback overlays, and redraw.
-`mevedel-view-render.el` owns transcript rendering, folding, source mapping,
-and navigation. `mevedel-view-stream.el` owns request progress and streaming
-redraw scheduling; `mevedel-gptel-stream-bridge.el` owns private gptel stream
-compatibility. `mevedel-side-conversation.el` owns transient
+`mevedel-view-disclosure.el` owns source-backed disclosure identity, state,
+and expand/collapse actions. `mevedel-view-render.el` owns transcript
+projection, source mapping, and live transcript navigation.
+`mevedel-view-segments.el` owns archived segment buffers, switching, and
+ephemeral projection state.
+`mevedel-view-stream.el` owns request progress and streaming redraw scheduling;
+`mevedel-gptel-stream-bridge.el` owns private gptel stream compatibility.
+`mevedel-side-conversation.el` owns transient
 `/btw` conversations. The data buffer remains the model-visible transcript.
 
 ## Buffer Roles
@@ -153,7 +157,8 @@ Full rerenders parse the data buffer through
 `mevedel-transcript-segments`, after skipping gptel-org leading
 metadata and any leading compaction summary. `mevedel-view.el` owns the
 surrounding view coordination, while `mevedel-view-render.el` owns turn
-grouping and rendering. Transcript span classification, tool block recovery,
+grouping and projection and `mevedel-view-disclosure.el` owns source-backed
+fold state and actions. Transcript span classification, tool block recovery,
 and mailbox, reminder, hook-context, render-data, prompt, and ignored-range recognition live in
 `mevedel-transcript.el` so persistence and compaction use the same structural
 view of the buffer. Hidden audit record grammar and
@@ -466,6 +471,10 @@ commands require returning to the latest segment. Fork and Rewind still target
 the settled assistant response at point; arming a Fork temporarily reveals the
 composer, while cancelling hides it and stays on the archived segment.
 
+`mevedel-view-segments.el` owns this ephemeral inspection lifecycle and consumes
+the segment descriptors and verified bytes from `mevedel-session-artifacts.el`;
+it does not implement another storage or transcript parser.
+
 Arming a Fork adds a temporary interaction row naming the selected assistant
 turn and Fork type. It focuses the existing composer, and cancellation removes
 only the row while preserving the draft. The next accepted child prompt
@@ -705,15 +714,17 @@ Markdown links, local images, paths, and fenced source-panel projection are
 isolated in `mevedel-view-markdown.el`. Pipe tables remain raw fontified
 Markdown rather than undergoing a second parser and alignment pass.
 Audit disclosure formatting and toggling live in `mevedel-view-audit.el`;
-`mevedel-view-render.el` retains the surrounding turn orchestration.
+`mevedel-view-disclosure.el` owns its shared source-backed toggle state, and
+`mevedel-view-render.el` retains the surrounding turn projection.
 
 Tool-rendering caches are disposable UI caches, not just text caches.
 Cache keys must include session-side state that changes visible
 headers/status, and collapsed-header cache entries should omit large
 bodies so expansion can recompute body content when needed.
 
-Source-backed disclosure state is keyed from data-buffer coordinates and
-stable source anchors, not view-buffer positions. Rerenders should capture
+`mevedel-view-disclosure.el` keys source-backed disclosure state from
+data-buffer coordinates and stable source anchors, not view-buffer positions.
+Rerenders should capture
 and reapply collapse state, including temporary in-flight anchors that later
 settle, so expanded tool/response sections do not collapse again during
 live refreshes.

@@ -101,33 +101,40 @@
                   "mevedel-view-composer" (&optional arg))
 (defvar mevedel-view--input-marker)
 
+;; `mevedel-view-disclosure'
+(declare-function mevedel-view-disclosure-apply-rendering-state
+                  "mevedel-view-disclosure" (rendering source))
+(declare-function mevedel-view-disclosure-record-state
+                  "mevedel-view-disclosure" (source vtype collapsed))
+(declare-function mevedel-view-disclosure-section-bounds
+                  "mevedel-view-disclosure" ())
+(declare-function mevedel-view-disclosure-state-entry
+                  "mevedel-view-disclosure" (source vtype))
+(declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
+
 ;; `mevedel-view-render'
-(declare-function mevedel-view--add-display-region-properties
-                  "mevedel-view-render" (start end &optional type))
 (declare-function mevedel-view--debug-log "mevedel-view-render" (event &rest data))
 (declare-function mevedel-view--full-rerender "mevedel-view-render" ())
 (declare-function mevedel-view--insert-rendered-tool "mevedel-view-render" (rendering source))
-(declare-function mevedel-view--record-source-collapse-state "mevedel-view-render" (source vtype collapsed))
-(declare-function mevedel-view--rendering-with-collapse-state "mevedel-view-render" (rendering source))
-(declare-function mevedel-view--section-bounds "mevedel-view-render" ())
 (declare-function mevedel-view--segment-rendering "mevedel-view-render" (data-buf seg-start seg-end &optional collapsed-only))
-(declare-function mevedel-view--source-collapse-state-entry "mevedel-view-render" (source vtype))
 (declare-function mevedel-view--tool-call-parse "mevedel-view-render" (data-buf seg-start seg-end &optional raw))
 (declare-function mevedel-view-next-display "mevedel-view-render" ())
 (declare-function mevedel-view-previous-display "mevedel-view-render" ())
-(declare-function mevedel-view-toggle-section "mevedel-view-render" ())
+(declare-function mevedel-view-render-add-display-properties
+                  "mevedel-view-render"
+                  (start end &optional default-vtype))
 (declare-function mevedel-view-toggle-transcript "mevedel-view-render" ())
 
 ;; `mevedel-view-stream'
-(declare-function mevedel-view--in-flight-turn-start-position
+(declare-function mevedel-view-stream-in-flight-turn-start-position
                   "mevedel-view-stream" ())
-(declare-function mevedel-view--set-in-flight-turn-start
-                  "mevedel-view-stream" (position))
 (declare-function mevedel-view-stream-post-tool
                   "mevedel-view-stream" (args))
 (declare-function mevedel-view-stream-pre-tool
                   "mevedel-view-stream" (args))
 (declare-function mevedel-view-stream-schedule "mevedel-view-stream" ())
+(declare-function mevedel-view-stream-set-in-flight-turn-start
+                  "mevedel-view-stream" (position))
 (declare-function mevedel-view-stream-stop "mevedel-view-stream" ())
 (defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--in-flight-turn-start)
@@ -540,12 +547,12 @@ Also kill retained conversation data when KILL-RETAINED is non-nil."
           (setq source (get-text-property source-pos 'mevedel-view-source))
           (setq source-pos (1+ source-pos)))
         (when (and (consp source) (integer-or-marker-p (car source)))
-          (mevedel-view--set-in-flight-turn-start last-assistant)
+          (mevedel-view-stream-set-in-flight-turn-start last-assistant)
           (setq mevedel-view--data-turn-start
                 (with-current-buffer mevedel--data-buffer
                   (copy-marker (car source) nil))))))
-    (unless (mevedel-view--in-flight-turn-start-position)
-      (mevedel-view--set-in-flight-turn-start mevedel-view--input-marker)
+    (unless (mevedel-view-stream-in-flight-turn-start-position)
+      (mevedel-view-stream-set-in-flight-turn-start mevedel-view--input-marker)
       (setq mevedel-view--data-turn-start
             (with-current-buffer mevedel--data-buffer
               (copy-marker (point-max) nil))))))
@@ -1040,7 +1047,7 @@ collapsed marker; expanded row content is rendered from Agent handles."
           (remove-text-properties
            (point-min) (point-max)
            '(mevedel-view-source nil mevedel-view-source-key nil))
-          (mevedel-view--add-display-region-properties
+          (mevedel-view-render-add-display-properties
            (point-min) (point-max) 'agent-handle)
           (remove-text-properties
            (point-min) (point-max)
@@ -1153,18 +1160,18 @@ Return non-nil on success."
   (save-excursion
     (goto-char pos)
     (let* ((source (get-text-property pos 'mevedel-view-source))
-           (bounds (mevedel-view--section-bounds))
+           (bounds (mevedel-view-disclosure-section-bounds))
            (data-buf mevedel--data-buffer)
            (current-collapsed (and (get-text-property
                                     pos 'mevedel-view-collapsed)
                                    t))
-           (state (mevedel-view--source-collapse-state-entry
+           (state (mevedel-view-disclosure-state-entry
                    source 'agent-handle))
            (collapsed (if state (cdr state) current-collapsed))
            (turn-id (get-text-property pos 'mevedel-view-turn-id))
            (in-flight-after-section-p
             (and bounds
-                 (when-let* ((start (mevedel-view--in-flight-turn-start-position)))
+                 (when-let* ((start (mevedel-view-stream-in-flight-turn-start-position)))
                    (<= (car bounds) start (cdr bounds)))))
            (rendering
             (and bounds
@@ -1174,11 +1181,11 @@ Return non-nil on success."
                   data-buf (car source) (cdr source) collapsed))))
       (when (and bounds rendering)
         (unless state
-          (mevedel-view--record-source-collapse-state
+          (mevedel-view-disclosure-record-state
            source 'agent-handle collapsed))
         (let* ((view-start (car bounds))
                (view-end (cdr bounds))
-               (rendering (mevedel-view--rendering-with-collapse-state
+               (rendering (mevedel-view-disclosure-apply-rendering-state
                            (plist-put (copy-sequence rendering)
                                       :initially-collapsed-p collapsed)
                            source)))
@@ -1188,7 +1195,7 @@ Return non-nil on success."
               (let ((ins-start (point)))
                 (delete-region view-start view-end)
                 (mevedel-view--insert-rendered-tool rendering source)
-                (mevedel-view--add-display-region-properties
+                (mevedel-view-render-add-display-properties
                  ins-start (point) (plist-get rendering :vtype))
                 (when turn-id
                   (put-text-property ins-start (point)

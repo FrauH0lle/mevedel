@@ -235,7 +235,7 @@ the view has already inserted the in-flight markers."
   (and (not mevedel-view--agent-transcript-p)
        (not mevedel-view--request-progress-suppressed)
        (or mevedel-view--spinner-start-time
-           (mevedel-view--in-flight-turn-start-position)
+           (mevedel-view-stream-in-flight-turn-start-position)
            (let ((buf (or data-buf
                           (and (boundp 'mevedel--data-buffer)
                                mevedel--data-buffer))))
@@ -646,7 +646,7 @@ INFO is a plist with at least :name and :args."
       ;; `mevedel-view-stream-pre-tool' owns in-flight tool status lines.
       ;; Avoid creating a second "Calling ..." line before that hook renders
       ;; the animated pending-tool live tail.
-      (unless (and (mevedel-view--in-flight-turn-start-position)
+      (unless (and (mevedel-view-stream-in-flight-turn-start-position)
                    (markerp mevedel-view--data-turn-start)
                    (marker-position mevedel-view--data-turn-start))
         (let ((summary (mevedel-view--tool-status-string tool-name args)))
@@ -654,12 +654,12 @@ INFO is a plist with at least :name and :args."
   ;; Return nil so the hook does not interfere with tool execution.
   nil)
 
-(defun mevedel-view--in-flight-turn-start-position ()
+(defun mevedel-view-stream-in-flight-turn-start-position ()
   "Return the current in-flight turn start position, or nil."
   (when (markerp mevedel-view--in-flight-turn-start)
     (marker-position mevedel-view--in-flight-turn-start)))
 
-(defun mevedel-view--set-in-flight-turn-start (position)
+(defun mevedel-view-stream-set-in-flight-turn-start (position)
   "Set `mevedel-view--in-flight-turn-start' to POSITION as a marker.
 POSITION may be an integer or marker."
   (setq mevedel-view--in-flight-turn-start
@@ -729,7 +729,7 @@ POSITION may be an integer or marker."
 
 (defun mevedel-view-stream--schedule-execution-row-recovery (data-buffer)
   "Schedule one incremental render to recover a missing execution row."
-  (when (and (mevedel-view--in-flight-turn-start-position)
+  (when (and (mevedel-view-stream-in-flight-turn-start-position)
              (markerp mevedel-view--data-turn-start))
     (mevedel-view--schedule-render
      'incremental data-buffer mevedel-view-stream-render-delay)))
@@ -784,7 +784,7 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
 (defun mevedel-view--schedule-tool-boundary-render (data-buf)
   "Schedule a coalesced incremental render for DATA-BUF."
   (when (and (buffer-live-p data-buf)
-             (mevedel-view--in-flight-turn-start-position)
+             (mevedel-view-stream-in-flight-turn-start-position)
              (markerp mevedel-view--data-turn-start))
     (mevedel-view--schedule-render
      'incremental data-buf mevedel-view-tool-boundary-render-delay)))
@@ -807,7 +807,7 @@ window share one refresh instead of rebuilding the view per token."
       ;; Only schedule when a turn is in-flight.  Before the first
       ;; user send -- or after the final post-response cleanup -- the
       ;; incremental markers are nil and rendering would no-op.
-      (when (and (mevedel-view--in-flight-turn-start-position)
+      (when (and (mevedel-view-stream-in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--schedule-render
          'incremental data-buf mevedel-view-stream-render-delay))))
@@ -862,7 +862,7 @@ debounced so bursts of tool boundary hooks coalesce."
       ;; progress.
       (mevedel-view--ensure-request-progress data-buf)
       (mevedel-view--start-spinner-timer)
-      (when (and (mevedel-view--in-flight-turn-start-position)
+      (when (and (mevedel-view-stream-in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--refresh-pending-tool-lines)
         (mevedel-view--schedule-tool-boundary-render data-buf)
@@ -902,7 +902,7 @@ debounced so bursts of completed tool calls coalesce."
       (unless (or mevedel-view--pending-tool-calls
                   (mevedel-view--request-progress-visible-p))
         (mevedel-view--stop-spinner-timer))
-      (when (and (mevedel-view--in-flight-turn-start-position)
+      (when (and (mevedel-view-stream-in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--refresh-pending-tool-lines)
         (mevedel-view--schedule-tool-boundary-render data-buf)
@@ -965,7 +965,7 @@ they fall back to the history/status boundary rather than the input
           (when-let* ((marker (mevedel-view-stream-active-response-marker
                                info data-buffer)))
             (setq mevedel-view--data-turn-start (copy-marker marker nil))))
-        (unless (mevedel-view--in-flight-turn-start-position)
+        (unless (mevedel-view-stream-in-flight-turn-start-position)
           (setq mevedel-view--in-flight-turn-start
                 (copy-marker (mevedel-view--history-insertion-marker) nil)))
         (setq mevedel-view--request-progress-suppressed nil)
